@@ -3,7 +3,7 @@
 - 文档版本：v1.0
 - 更新日期：2026-08-17
 - 目标用户：熟悉 Swift、JavaScript 或 Web 技术的高级开发者
-- 计划阶段：Phase 2 提供实验性 SDK，Phase 3 稳定 API
+- 计划阶段：E1–E2 提供实验性 SDK，E5 稳定 API
 
 完整技术架构、运行时、市场和同步设计见 [扩展系统总体设计](./SYSTEM_DESIGN.md)，长期生态与 AI 接入模型见 [Inflow 扩展生态战略](../../product/ECOSYSTEM_STRATEGY.md)，Markdown 扩展解析规则见 [Markdown 语法扩展设计](./SYNTAX_EXTENSION_API.md)。本文保留产品级能力边界和开发者接口摘要。
 
@@ -132,10 +132,10 @@ flowchart LR
 
 ## 5. 扩展包
 
-建议扩展包使用 `.inflow-extension`，本质为签名目录或归档：
+扩展包统一使用 `.inflowx`，本质为签名 ZIP 归档：
 
 ```text
-example.inflow-extension/
+example.inflowx
 ├── manifest.json
 ├── README.md
 ├── icon.png
@@ -193,7 +193,7 @@ example.inflow-extension/
 
 ## 8. 发布与安装
 
-Phase 2 只支持用户从本地安装签名的低权限扩展。Phase 3 建设官方插件目录；高权限连接器只能通过官方插件市场分发，不允许侧载。
+E1–E2 只支持用户从本地安装签名的低权限扩展。E3 建设官方插件目录；高权限连接器到 E4 才开放且只能通过官方插件市场分发，不允许侧载。
 
 安装流程：
 

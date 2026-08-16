@@ -8,7 +8,7 @@
 - AppKit/TextKit 实现专业文本编辑，WKWebView 实现离线预览和 PDF。
 - `swift-markdown` 提供 Core GFM AST，自研 Renderer 和 SourceMap 统一驱动预览、定位、同步及导出。
 - 本地保存、Recovery、外部冲突和 Undo 独立于渲染与扩展。
-- Phase 0 采用模块化单体；第三方扩展平台后续进入隔离 XPC 进程。
+- P0 采用模块化单体；第三方扩展平台在 E0–E5 进入隔离 XPC 进程。
 
 ## 阅读路由
 

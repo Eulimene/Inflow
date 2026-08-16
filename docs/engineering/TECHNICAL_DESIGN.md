@@ -106,9 +106,9 @@ flowchart TB
 
 ### 4.2 Markdown 与 Web 资源
 
-- `swift-markdown`：Core CommonMark/GFM AST、源码范围和结构遍历。
-- Mermaid：随应用固定版本打包，渲染 `mermaid` 围栏块。
-- KaTeX：Core 的快速行内/块级数学渲染；更完整 LaTeX 交由后续 Domain Pack。
+- Swift Markdown 0.8.0：Core CommonMark/GFM AST、源码范围和结构遍历。
+- Mermaid 11.15.0：随应用固定版本打包，渲染 `mermaid` 围栏块。
+- KaTeX 0.18.1：Core 的快速行内/块级数学渲染；更完整 LaTeX 交由后续 Domain Pack。
 - 代码着色：随应用打包的轻量高亮库，语言按需注册。
 - 自研 AST-to-HTML Renderer：控制源码 ID、安全清洗、主题 token 和导出一致性。
 
@@ -269,7 +269,7 @@ struct WorkspaceEdit: Sendable {
 
 ### 7.3 即时渲染编辑
 
-Phase 1 在同一 TextBuffer 上增加 `RenderedEditorLayout`，不使用 WebView `contenteditable`：
+P1 在同一 TextBuffer 上增加 `RenderedEditorLayout`，不使用 WebView `contenteditable`：
 
 - 非当前块隐藏或弱化 Markdown 标记。
 - 标题、引用、列表、代码和表格通过 TextKit 属性与附件视图呈现。
@@ -320,7 +320,7 @@ struct MarkdownSnapshot: Sendable {
 
 ### 8.3 解析策略
 
-- Phase 0 使用后台全量 parse，输入 debounce 150 ms，旧任务取消。
+- P0 使用后台全量 parse，输入 debounce 150 ms，旧任务取消。
 - 解析输入是不可变 String 快照，绝不在后台访问 NSTextStorage。
 - 先验证 1 MB/10,000 行目标；如果全量 parse P95 超标，再增加块级分段缓存，不在首期引入第二套 Parser。
 - SourceRange 统一转换到 UTF-16 offset，供 NSTextView、WebView 和诊断共享。
@@ -394,14 +394,14 @@ struct MarkdownSnapshot: Sendable {
 - 用户主动滚动预览时设置 1 秒 suppression window。
 - 设置关闭后不发送同步事件。
 
-Phase 1 再实现预览到编辑器的反向同步，使用相同锚点模型，避免两个方向递归触发。
+P1 再实现预览到编辑器的反向同步，使用相同锚点模型，避免两个方向递归触发。
 
 ## 11. 文件、保存与恢复
 
 ### 11.1 打开
 
 - 由 `NSDocumentController` 处理 Finder、Open Panel 和应用打开事件。
-- 支持 UTF-8/UTF-8 BOM；其他编码先检测但不猜测后保存，无法确认时以只读方式提示编码选择（编码选择可在 P1 完善）。
+- 支持 UTF-8/UTF-8 BOM；记录并保留 BOM 与主换行风格。新文档为无 BOM + LF；混合换行保存前提示并统一为主风格。其他编码只读且禁止覆盖，转换在 P1 提供。
 - 读取时记录文件资源标识、修改时间、大小和内容 hash 作为 `FileRevision`。
 - 同一 canonical URL 只打开一次。
 
@@ -418,7 +418,7 @@ Phase 1 再实现预览到编辑器的反向同步，使用相同锚点模型，
 - `NSDocument.autosavesInPlace = true`。
 - `NSDocumentController.autosavingDelay` 由设置映射为 0.5/1/2/5 秒。
 - 用户关闭自动保存时，禁止 in-place autosave，但恢复快照仍运行。
-- 应用 resign active 和窗口关闭前请求保存；不阻塞主线程。
+- 应用 resign active 时请求保存。关闭行为严格执行 PRD 5.1.4：自动保存关闭时 dirty 文档必须询问；开启时等待保存，失败后询问；未命名非空文档始终询问；“不保存”清除会话快照。
 
 ### 11.4 恢复快照
 
@@ -437,6 +437,7 @@ Application Support/Inflow/Recovery/
 - file URL bookmark、最近成功 FileRevision。
 - documentVersion、时间、是否未命名。
 - selection、mode、scroll anchors 和窗口状态。
+- cleanShutdown、expiresAt；Save As 只迁移书签和 revision，不更换 documentID。
 
 策略：
 
@@ -450,14 +451,15 @@ Application Support/Inflow/Recovery/
 
 通过 NSDocument/FilePresenter 回调和 revision 校验处理：
 
-- 内存无修改：提示或按设置自动重新载入，保持语义位置。
-- 内存有修改：进入三方比较，禁止自动覆盖。
-- 文件被删除：保留内存文档并转为需要另存的状态。
+- 内存无修改：自动重新载入，保持语义位置。
+- 内存有修改：暂停自动保存并进入三方比较，只提供保存副本、重新载入、明确覆盖。
+- 明确覆盖前在同目录创建带时间戳冲突副本并二次确认；副本失败即禁止覆盖。
+- 文件被删除：保留内存文档并暂停自动保存，只允许另存为或经二次确认重建。
 - 权限丢失：转只读，允许另存。
 
 ## 12. 本地版本历史
 
-Phase 2 建立与 Recovery 分离的 VersionStore：
+P3 建立与 Recovery 分离的 VersionStore：
 
 - Recovery 用于崩溃保护，不能关闭。
 - VersionStore 用于用户浏览，可关闭和设置容量。
@@ -470,14 +472,14 @@ Phase 2 建立与 Recovery 分离的 VersionStore：
 
 ### 13.1 当前文档
 
-- Phase 0 使用 NSTextFinder 或自定义 FindCoordinator 接入系统查找栏。
+- P0 使用 NSTextFinder 或自定义 FindCoordinator 接入系统查找栏；纯预览发起查找固定切到分栏。
 - 支持字面值、大小写、当前/全部替换。
 - 替换全部预先计算不重叠 ranges，并作为一个 WorkspaceEdit。
 - P1 加入正则、选择范围和结果预览。
 
 ### 13.2 工作区
 
-Phase 1 引入 `WorkspaceSession`：
+P1 引入 `WorkspaceSession`：
 
 - 根目录必须由用户选择并保存 security-scoped bookmark。
 - 文件树使用异步目录枚举，不读取隐藏/排除目录。
@@ -514,10 +516,11 @@ enum LinkTarget: Sendable {
 
 1. 对 URL 做 percent-decoding 和路径标准化，但不跟随未经验证的符号链接越出授权根目录。
 2. 相对路径以当前文档目录为基准，工作区内路径以 security-scoped root 校验。
-3. `#fragment` 使用当前 RenderProfile 的 HeadingSlugger 解析；Parser、预览和导航共享同一 slug 实现。
-4. Markdown 目标交给 `NSDocumentController`/WorkspaceSession 打开，加载完成后通过 SourceMap 定位标题。
-5. 非 Markdown 文件只有在授权范围内才交给 `NSWorkspace` 打开。
-6. HTTP/HTTPS 交给系统浏览器；危险 scheme、可执行目标和越权路径返回 blocked。
+3. 单文件授权不足时，由 `ScopeAuthorizationCoordinator` 首次请求包含目录并持久化书签；拒绝状态按目录记忆，不自动重复提示。
+4. `#fragment` 使用 PRD 5.14 固定的 `gfm-0.29` slug；Parser、预览、导出和导航共享同一实现。
+5. Markdown 目标交给 `NSDocumentController`/WorkspaceSession 打开，加载完成后通过 SourceMap 定位标题。
+6. 非 Markdown 文件只有在授权范围内才交给 `NSWorkspace` 打开。
+7. HTTP/HTTPS 交给系统浏览器；危险 scheme、可执行目标和越权路径返回 blocked。
 
 `NavigationCoordinator` 为每个窗口维护前进/后退栈：
 
@@ -557,17 +560,17 @@ struct RenderProfile: Sendable, Codable {
 
 - 从 MarkdownSnapshot 生成完整 HTML。
 - 内联主题 CSS、代码样式、数学所需样式和已渲染 SVG。
-- 本地图片可选择 data URL 内联；自包含导出默认内联并设置总大小提示。
+- 自包含 HTML 必须内联字体、CSS、本地图片、数学和 Mermaid 结果；远程图片关闭时使用占位，开启时内联成功结果，失败先汇总供继续或取消；100 MiB 为硬上限。
 - 不包含运行时脚本，不依赖 CDN。
-- 先写入任务临时目录，验证后移动到用户目标。
+- 在目标同卷创建隐藏临时文件，验证后通过文件协调原子替换；禁止跨卷移动结果。
 
 ### 15.3 PDF
 
 - 创建独立离屏 WKWebView，加载与预览相同的完成 HTML。
 - 等待字体、图片、公式和 Mermaid readiness barrier。
-- 通过 WKWebView PDF API/print operation 生成 PDF Data。
+- P0 仅通过 `WKWebView.createPDF` 生成 PDF Data。
 - 深色 profile 写入明确的页面背景和 `print-color-adjust: exact` 等打印样式，不切换浅色主题。
-- P0 使用当前主题和正文宽度；P1 加纸张、边距、页眉页脚、元数据和分页选项。
+- P0 固定 A4、20 mm 四边距和 100% 缩放，并实现 PRD 5.12 的分页规则；P1 加可配置纸张、边距、页眉页脚和元数据。
 - 导出超时或节点失败时列出问题，由用户选择继续或取消，不生成半成品目标。
 
 ## 16. 设置系统
@@ -594,7 +597,7 @@ struct RenderProfile: Sendable, Codable {
 - `ConnectorRegistry`：保存后事件和远端候选版本。
 - `AICapabilityRegistry`：Provider、Action、Context 和 Tool。
 
-Phase 0 只定义内部协议和官方实现，不加载第三方包。直到文档事务、权限 Broker、XPC Host、崩溃隔离和签名验证完成后才开放 SDK。
+P0 只定义内部协议和官方实现，不加载第三方包。直到文档事务、权限 Broker、XPC Host、崩溃隔离和签名验证完成后才开放 SDK。
 
 ### 17.1 XPC Host
 
@@ -615,7 +618,7 @@ Core 只包含可选市场界面和安装管理器：
 
 ## 18. AI 接入预留
 
-AI 不写入 Phase 0 Core 业务，只预留稳定协议：
+AI 不写入 P0 Core 业务，只预留稳定协议：
 
 - `DocumentSnapshot`：不可变、带 documentVersion。
 - `ContextEnvelope`：用户可检查的选区/文档/文件上下文。
@@ -738,7 +741,7 @@ System Policy、权限和工具列表只由 Core 产生。文档和外部数据�
 - Release：Archive、签名、Notarization、staple、DMG/ZIP、Gatekeeper 验证。
 - 只构建 `arm64`，CI 和发布机必须为 Apple Silicon。
 - 生成 SBOM、第三方许可证清单和 Web 资源版本清单。
-- 更新机制在工程初始化阶段创建 ADR；建议采用签名更新 feed，但不与 Core 业务耦合。
+- P0 使用官网手动更新；首次自动更新发布前创建签名更新器 ADR，不与 Core 业务耦合。
 
 ## 25. 分阶段实施
 
@@ -763,13 +766,14 @@ System Policy、权限和工具列表只由 Core 产生。文档和外部数据�
 
 - GFM HTML、主题、分栏、纯预览。
 - 标题定位、编辑到预览滚动同步。
-- Mermaid、数学、代码着色。
+- Mermaid、数学。
+- 本地链接、相对资源目录授权与固定标题 slug。
 - HTML/PDF 导出。
 
 ### T3：P0 稳定与发布
 
 - 故障注入、性能、VoiceOver、安全和本地化。
-- 签名、公证、安装包和更新 ADR。
+- 签名、公证、安装包和手动更新入口。
 - MVP 验收文档全部通过。
 
 ### T4：Typora 迁移能力
@@ -777,7 +781,7 @@ System Policy、权限和工具列表只由 Core 产生。文档和外部数据�
 - 即时渲染编辑 `⌘4`。
 - 工作区、文件树、标签、大纲、全文搜索。
 - 表格 UI、任务列表、Smart Paste、图片资源。
-- 脚注、TOC、YAML、Alerts、主题和专注写作。
+- 脚注、TOC、YAML、Alerts、代码着色、主题和专注写作。
 
 ### T5：领先能力
 
@@ -815,7 +819,7 @@ System Policy、权限和工具列表只由 Core 产生。文档和外部数据�
 | SourceRange 与 UTF-16 映射 | 定位错误 | 重复标题、Emoji、组合字符测试 |
 | WebView DOM patch | 闪烁/位置漂移 | 稳定 ID 与语义锚点原型 |
 | NSDocument 与自定义自动保存 | 重复保存/状态错乱 | 保存中继续输入、失败和外部变化测试 |
-| 深色 PDF 背景 | 打印结果不一致 | createPDF/print 两条路径对比 |
+| 深色 PDF 背景 | 导出结果不一致 | `createPDF` 的 A4/深色/分页 fixture 快照 |
 | App Sandbox 相对图片 | 授权失效 | 文件/目录书签与重启测试 |
 | JavaScriptCore 外部扩展 | 公证/安全限制 | T6 前独立签名原型，不影响 P0 |
 | 即时渲染 round-trip | 源码损坏 | 每个结构的可逆属性测试 |
@@ -825,8 +829,8 @@ System Policy、权限和工具列表只由 Core 产生。文档和外部数据�
 1. 在开发机接受 Xcode 26.6 License；当前命令行构建因此被阻止。
 2. 创建 Apple Developer ID Application/Installer 证书和公证凭据。
 3. 确认 Bundle ID、Team ID 和最终最低系统版本。
-4. 确认 Mermaid、KaTeX、代码高亮和 swift-markdown 的精确版本及许可证。
-5. 完成 T0 五项原型后再冻结 Phase 0 依赖。
+4. 复核 Swift Markdown 0.8.0、Mermaid 11.15.0、KaTeX 0.18.1 与 P1 代码高亮库的许可证。
+5. T0 开始前将已冻结的 CommonMark/GFM 规范与依赖版本及校验值写入 `RenderManifest`。
 
 ## 29. 交付判定
 
