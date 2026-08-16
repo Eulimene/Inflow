@@ -60,3 +60,69 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode user data
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# Xcode build products
+DerivedData/
+build/
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Dependency managers
+Pods/
+Carthage/Build/
+
+# Code coverage and test results
+*.profdata
+*.profraw
+*.xcresult
+coverage/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local
+Secrets.xcconfig
+Local.xcconfig
+
+# Signing, notarization, and credentials
+*.p12
+*.cer
+*.mobileprovision
+*.provisionprofile
+*.key
+*.pem
+notarytool-profile.json
+
+# Extension development artifacts
+*.inflowx
+extension-dist/
+extension-cache/
+
+# Temporary files
+tmp/
+temp/
+.inflow-local/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*~
