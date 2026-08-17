@@ -85,9 +85,12 @@ Alice -> Bob: Hello
   "contributes": {
     "syntax": [
       {
+        "schemaVersion": 1,
         "id": "com.example.callout",
         "kind": "blockDirective",
         "names": ["example:callout"],
+        "nodeType": "directiveBlock",
+        "attributesSchema": "schemas/callout-attributes.schema.json",
         "fallback": "source",
         "capabilities": {
           "preview": true,
@@ -101,6 +104,23 @@ Alice -> Bob: Hello
 }
 ```
 
+`SyntaxContributionSchema v1` 的稳定协议等价于：
+
+```ts
+interface SyntaxContributionV1 {
+  schemaVersion: 1;
+  id: string;
+  kind: "fencedBlock" | "blockDirective" | "standardNode" | "inlineDelimiter";
+  names: string[];
+  nodeType: "fence" | "directiveBlock" | "definition" | "reference" | "inlineComponent";
+  attributesSchema: string;
+  fallback: "source" | "innerMarkdown" | "codeFence";
+  capabilities: { preview: boolean; instantEditing: boolean; export: boolean; diagnostics: boolean };
+  references?: { defines?: string[]; uses?: string[]; namespace: string };
+  conflicts?: string[];
+}
+```
+
 每项扩展语法必须声明：
 
 - 全局唯一 ID。
@@ -109,6 +129,7 @@ Alice -> Bob: Hello
 - 源码回退策略。
 - 支持预览、即时编辑、导出和诊断中的哪些能力。
 - 与其他语法扩展的已知冲突。
+- 引用定义或引用使用角色；所有 ID 解析必须交给 Core `ReferenceRegistry`。
 
 ## 5. 统一 AST
 
@@ -129,8 +150,10 @@ interface ExtensionSyntaxNode {
 
 - `sourceRange` 必须精确映射原文，用于点击定位、滚动同步和诊断。
 - `attributes` 必须符合插件清单声明的 Schema。
-- `children` 只能包含核心或已注册扩展节点。
+- `children` 只能包含核心或已注册扩展节点。节点实例由 Core 按 `SyntaxContributionSchema v1` 创建和持有，扩展不能注入任意 AST 对象。
 - AST 是只读派生数据，不能成为新的文档保存格式。
+
+跨插件定义与引用统一进入 Core-owned `ReferenceRegistry`。Registry 以文档、命名空间、规范化 ID 和源码顺序建立索引，处理重复定义、未解析引用、跨扩展依赖、重命名诊断与导出锚点；扩展只能声明 node 的 `definesReference`/`usesReference` 字段，不能维护并行引用数据库或自行决定冲突优先级。
 
 ## 6. 渲染接口
 
@@ -314,12 +337,12 @@ LaTeX Domain Pack 在此基础上增加：
 数学环境继续采用用户熟悉的 LaTeX 内容：
 
 ```markdown
-$$
+:::equation {#eq:identity}
 \begin{align}
   a^2 + b^2 &= c^2 \\ 
   e^{i\pi} + 1 &= 0
 \end{align}
-$$ {#eq:identity}
+:::
 ```
 
 学术结构使用可降级块级指令：
@@ -332,7 +355,7 @@ For a right triangle, $a^2 + b^2 = c^2$.
 As shown in @thm:pythagoras and @eq:identity, ...
 ```
 
-未安装插件时，数学内容仍是普通块级公式，定理内容仍以源码或内部 Markdown 展示。
+编号公式使用可降级 `:::equation` 指令；Core 的 `$$` 数学仍严格要求开始/结束分隔符独占行且不携带属性。未安装插件时，公式和定理指令仍以可读源码或内部 Markdown 展示。
 
 ### 17.3 宏和包配置
 

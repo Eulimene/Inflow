@@ -215,7 +215,7 @@ com.example.terminology.inflowx
 - `manifest.json` 使用固定 JSON Schema，未知关键字段导致安装失败。
 - 发布包不允许动态依赖；所有运行时代码必须在包内。
 - `content-manifest.json` 使用规范 JSON，按 UTF-8 路径字典序列出 payload 文件的路径、字节数和 SHA-256；`META-INF/content-manifest.json` 自身及 `META-INF/signatures/` 不进入列表，签名直接覆盖规范 JSON 字节。安装器只允许“清单列出的 payload + 这两个 META-INF 位置”，拒绝其他文件，从而避免任何摘要自引用。
-- 三类安装路径：开发包可无签名且只在持续标识的开发者模式加载；本地签名包必须含 `developer.sig` 且只允许低权限能力；市场包必须同时含开发者和市场签名，高权限能力还需类型审核。市场添加 `market.sig` 不改变 payload 哈希或开发者签名。
+- 三类安装路径：开发包可无签名且只在持续标识的开发者模式加载；E1 本地签名包使用本地自签发布者证书，首次安装展示 SHA-256 公钥指纹、包 ID 与权限并要求用户确认，后续更新必须由同一密钥签名，密钥变化视为新发布者重新确认，且只允许低权限能力；市场包必须同时含平台认证的开发者签名和市场签名，高权限能力还需类型审核。市场添加 `market.sig` 不改变 payload 哈希或开发者签名。
 
 ## 6. Manifest
 
@@ -245,7 +245,8 @@ com.example.terminology.inflowx
         "title": "Check Terminology"
       }
     ],
-    "diagnostics": ["terminology"]
+    "diagnostics": ["terminology"],
+    "syntax": []
   },
   "permissions": [
     "document.read",
@@ -275,7 +276,9 @@ com.example.terminology.inflowx
 
 ### 6.3 贡献点
 
-清单可声明 `themes`、`commands`、`diagnostics`、`fenceRenderers`、`exporters`、`views`、`settings`、`connector`、`aiProvider`、`aiActions`、`contextProviders` 和 `aiTools`。未声明的贡献点不能在运行时动态添加。
+清单可声明 `themes`、`commands`、`diagnostics`、版本化 `syntax`、`fenceRenderers`、`exporters`、`views`、`settings`、`connector`、`aiProvider`、`aiActions`、`contextProviders` 和 `aiTools`。`syntax` 项必须符合 `SyntaxContributionSchema v1`，声明全局 ID、kind、定界符/指令名、Core-owned 语义节点类型、属性 Schema、fallback、capabilities、引用定义/使用角色和冲突集合；未声明的贡献点不能在运行时动态添加。
+
+扩展不能把自定义对象直接插入 Core AST。Parser 只从版本化 Schema 选择 Core-owned `ExtensionSyntaxNode` 变体，并把定义/引用统一登记到 Core `ReferenceRegistry`；Registry 负责命名空间、重复 ID、跨扩展解析、诊断和导出锚点，插件只能提交声明和渲染结果。
 
 ## 7. API 模型
 
@@ -452,7 +455,7 @@ stateDiagram-v2
 - `Extension State`：扩展私有结构化状态，按扩展 ID 隔离。
 - `Cache`：可随时删除，不参与备份。
 - `Credentials`：Keychain 中由核心持有，扩展只获得不透明 Credential ID。
-- `Sync Metadata`：文件版本、远端 ETag、提交 SHA、待上传队列。唯一允许的正文副本是 Core-owned 加密同步基线；扩展只能持有 opaque baseline ID，其他正文缓存禁止。
+- `Sync Metadata`：文件版本、远端 ETag、提交 SHA、待上传 operation 队列。Core 为每个待上传操作保存加密、不可变的 pending snapshot（正文、资源清单和内容 hash）；扩展只能持有 opaque operation/snapshot/baseline ID，其他正文缓存禁止。
 
 扩展卸载时默认保留设置 30 天以便重装，用户可选择立即删除。凭据和同步授权默认立即撤销。
 
@@ -470,13 +473,13 @@ sequenceDiagram
     U->>I: ⌘S / 自动保存
     I->>I: 本地原子写入成功
     I-->>U: 已保存到本地
-    I->>C: savedVersion(SavedSnapshotHandle, baselineID, hash)
-    C->>I: openResourceStream(handle, resourceID/range)
+    I->>C: enqueue(operationID, snapshotID, handle, baselineID, resources[])
+    C->>I: openResourceStream(operationID, handle, resourceID/range)
     I-->>C: 受限只读字节流
     C->>R: 条件上传(if-match / base SHA)
     alt 上传成功
       R-->>C: remote revision
-      C->>I: syncSucceeded(revision)
+      C->>I: acknowledge(operationID, snapshotID, remoteRevision, uploadedHashes[])
     else 远端也已修改
       R-->>C: conflict + remote content
       C->>I: submitRemoteCandidate(baselineID, remote)
@@ -504,7 +507,9 @@ sequenceDiagram
 
 窗口标题只显示本地保存状态；同步状态使用独立图标和文字，不能混为一个“已保存”指示。
 
-`SavedSnapshotHandle` 是 Core 在本地保存成功后签发的不可变、不透明能力句柄，只绑定一个已保存版本、连接器、工作区和短 TTL。连接器可通过 `ResourceStream` 按范围流式读取该版本正文及清单声明的附件，不能读取当前编辑缓冲区、恢复快照、任意文件路径或其他工作区资源；Core 可随时撤销句柄，并对累计字节、并发和有效期执行预算。正文和附件都不复制进扩展私有存储。
+每次本地保存形成 Core-owned `SyncOperation`：稳定 `operationID`、不可变 `snapshotID`、`baselineID`、正文 hash 和逐项 `resources[] { resourceID, hash, byteCount }`。正文及资源以工作区密钥加密保存在 pending snapshot 中，直到收到完全匹配 operation/snapshot 及所有已上传 hash 的 ACK；崩溃、离线、认证失败或扩展更新不能删除它。ACK 不完整、过期或指向其他 snapshot 时拒绝清理。
+
+`SavedSnapshotHandle` 是针对一个 pending snapshot、连接器和工作区的短期不透明能力句柄。连接器可按范围流式读取正文/附件并提交断点 token；句柄过期时只能用同一 `operationID/snapshotID` 向 Core 续签，不能换取最新编辑内容。远端候选也通过 Core 限额的写入流提交，完成 hash 校验后才成为候选版本。Core 可撤销句柄并限制累计字节、并发和有效期；正文和附件不复制进扩展私有存储。用户明确取消同步或清除 pending 数据前必须列出尚未 ACK 的操作并二次确认。
 
 ### 12.3 冲突策略
 
@@ -544,7 +549,7 @@ AI 扩展不能自行拼接和发送任意上下文。Context Broker 汇总 Acti
 
 Provider 声明模型 ID、能力、上下文长度、流式和结构化输出、本地或远程执行、网络域名、数据保留、训练政策和可选价格估算。远程请求由 Broker 代发，Provider 不读取真实 API Key。
 
-E4 本地推理由可选、独立安装、签名并公证的 Inflow AI Companion 提供，通过短期、单用户、单请求能力令牌和认证 XPC 接入；若平台约束要求 Unix domain socket，socket 仅当前用户可访问并执行同等双向身份校验。Companion 与模型资源不进入 Core 包，下载和更新由 Companion 在用户明确操作后完成。
+E4 本地推理由可选、独立安装、签名并公证的 Inflow AI Companion 提供。Companion 的 `Model Manager` 可联网下载模型但永不获得 Context Envelope、prompt 或输出；它校验发布者签名/hash 后把模型以只读文件描述符交给禁用网络 entitlement 的 `Inference Worker`。只有 Worker 通过短期、单用户、单请求能力令牌和认证 XPC 接收正文。两个角色使用不同进程、容器权限和审计日志；Companion 与模型资源不进入 Core 包。
 
 每次调用取“模型声明上限、Provider 审核上限、Core 上限”的最小值：默认上下文最多 2 MiB、输出最多 256 KiB、每个 Provider 同时 1 个生成请求。流式取消须在 2 秒内确认并停止产生 token；超时后 Core 撤销能力令牌、关闭流并终止对应 Companion 请求或远程 Broker 任务。Companion 必须声明模型内存/CPU 预算并由独立进程执行，超限只终止推理，不影响编辑器。
 
@@ -595,6 +600,8 @@ AI 会话由 Core-owned `AISessionStore` 保存到应用容器内的加密 SQLit
 5. 客户端验证每个 payload 哈希、规范清单、发布者证书链、对应安装路径所需签名和撤回列表。
 
 密钥轮换优先由旧密钥和平台共同认证新 `keyID`；私钥丢失时必须经身份复核、冷却期和公开安全通知后由平台签发替代证书。发布者转移要求原发布者、新发布者和平台三方确认，并在客户端更新前展示身份变化。证书到期、撤销和包级撤回应进入同一透明日志。开发者模式可使用自签名证书和 TOFU，但必须持久显示未认证警告，且不能据此进入市场或获得高权限。
+
+E1 的本地签名信任完全离线：用户确认的指纹按 publisher/package namespace 存入本地 Trust Store，不要求 Inflow 账号或平台证书。该信任只解锁主题、诊断、编辑命令等低权限类别，不能申请网络、凭据、同步、AI Tool 或其他高权限。E3 迁移到市场时必须用平台认证证书重新签名；客户端将其视为身份升级，展示旧/新指纹及平台证书并由用户确认一次，不静默继承本地 TOFU 信任。
 
 连接器必须人工审核；普通主题和低权限扩展可以采用自动审核加抽查。
 
@@ -746,7 +753,7 @@ AI 会话由 Core-owned `AISessionStore` 保存到应用容器内的加密 SQLit
 
 ### E1：低风险开放
 
-- 主题、只读诊断、开发者模式、本地签名扩展。
+- 主题、只读诊断、开发者模式、用户确认指纹的本地自签低权限扩展和本地 Trust Store；不要求账号。
 - SDK 合约测试、资源预算和崩溃隔离。
 
 ### E2：内容扩展

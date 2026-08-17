@@ -353,7 +353,7 @@ struct MarkdownSnapshot: Sendable {
 
 - 围栏语言为 `mermaid` 时产生 `DiagramNode`。
 - 使用内容 hash + Mermaid 版本 + 主题作为缓存 key。
-- 源码发送到可销毁的无网络 RenderHelper worker；worker 每次只处理一个 job，严格使用 `SanitizerManifest` 的配置、内存、单块/文档预算和硬截止时间，超时由宿主终止进程。
+- 源码发送到一任务一进程、无网络的 `RenderHelper.xpc` WebKit realm；`RenderSupervisor` 按 `SanitizerManifest` 限制全局进程池、队列、RSS 和截止时间，并以经 audit token 验证的 PID 强制终止超时进程。具体可执行性必须由 T0 `RenderHelperIsolation` ADR 证明。
 - 最终 SVG 必须再次清洗，禁止 `foreignObject`、CSS、外部资源、脚本、事件和导航。
 - 失败时显示源码位置、简短错误和“在编辑器中定位”。
 
@@ -410,7 +410,7 @@ P1 再实现预览到编辑器的反向同步，使用相同锚点模型，避�
 - 每个 `DocumentSession` 唯一持有一个 actor `SaveCoordinator`；队列项只保存保存来源、目标路径、最低目标 documentVersion 和关闭屏障等意图，不在入队时冻结 `expectedRevision` 或 Data。
 - 同路径、尚未开始的保存意图合并到最高最低目标版本；物理写入开始时从当前 buffer 捕获满足目标的最新不可变 snapshot，并以 Coordinator 的 `committedRevision` 建立 guard。连续内部保存成功后更新该 revision，不会把自己的 R1 误判为外部修改。
 - `NSDocument` 是文档保存的唯一物理写入所有者，通过 override `writeSafely(to:ofType:for:)` 完成 staging、文件协调和最终替换。`SaveCoordinator` 不调用 `replaceItemAt`、不创建 replacement directory，也不维护第二套提交点；它只负责意图合并、捕获 snapshot、版本/revision guard、self-write token 和完成状态。
-- `NSDocument.writeSafely` 开始前以 Coordinator 的 `committedRevision` 建立 guard，并在系统协调写入回调中提交前再次比较；非 self-write revision 变化即中止。Save As 从入队到完成暂停原路径自动保存，成功回调后由 `NSDocument` 更新 `fileURL`，Coordinator 再更新 revision；失败则保持原路径。
+- 调用 `super.writeSafely` 前以 Coordinator 的 `committedRevision` 建立一次可实现的 guard；不假设 AppKit 暴露“最终替换前”回调。随后由 `NSDocument` 原生协调与冲突机制完成唯一 safe write，完成回调再读取并记录最终 `FileRevision`。T0 必须在 guard 后外部改写、协调冲突和替换竞态 fixture 中证明不会静默覆盖；若失败，须另立 `DocumentWriteTransaction` ADR 并完整接管协调、替换、属性、change count 与 `fileURL` 后才能进入 T1。Save As 从入队到完成暂停原路径自动保存，成功回调后由 `NSDocument` 更新 `fileURL`，Coordinator 再更新 revision；失败则保持原路径。
 - `SaveCoordinator` 按单调 `documentVersion` 提交；旧完成回调不得覆盖新 revision 或清除新 dirty 状态。
 - 只有 `savedVersion == currentBufferVersion` 且目标仍为当前文档 URL 时才清除 edited 状态并允许关闭；否则保持 dirty，关闭屏障继续等待下一次保存或展示失败选择。
 - 保存失败保留 buffer 和恢复快照，显示重试/另存为。
@@ -449,13 +449,14 @@ Application Support/Inflow/Recovery/
 - 变更后最迟 5 秒写入；每个 documentID 的 actor 串行分配严格递增的 snapshotGeneration。晚到的过期任务只可删除自身临时 blob，不得更新索引。
 - 提交顺序固定为：写 blob 临时文件并 `fsync` → 原子重命名为最终 blob → SQLite 事务插入 snapshot 行并更新 session head → 提交事务。索引永不引用未完成 blob；事务失败时最终 blob 作为 orphan 留待启动清扫。
 - 每次打开/恢复文档先生成随机 `sessionEpoch`，在接受编辑和排队快照前创建 journal 并同步写入 `start(epoch, baseFileRevision, baseSavedVersion)`。普通会话因此从开始即有 journal；`start` 失败时 Recovery 进入明确降级状态并阻止把会话标为可自动恢复。
-- 每个 session journal 是独立追加写日志；事件固定为 `start / saveCommitted / discard / clean`。每条记录包含 sequence、documentID、sessionEpoch、操作、documentVersion、snapshotGeneration、FileRevision、时间、前一记录 hash 和 CRC32C；追加必须 `fsync`，损坏尾部截断到最后有效记录。
-- 每次 NSDocument safe-save 成功后，先追加 `saveCommitted(epoch, savedVersion, FileRevision)` 并同步，再镜像 SQLite 的 `lastCommittedDocumentVersion/lastCommittedFileRevision`。恢复中心只展示 generation 对应的 documentVersion 严格高于持久保存水位的内容。
-- “不保存/放弃恢复”先追加 `discard(epoch, throughGeneration)` 并同步，再镜像 SQLite，随后使当前 epoch 失效、取消并排空对应任务，最后异步删除 blob。所有快照任务在写 blob、重命名和提交索引前都必须校验 epoch 仍为 active 且 generation 高于 discard 水位，晚到任务不能复活内容。
+- 每个 session journal 是独立追加写日志；事件固定为 `start / savePrepared / saveCommitted / retire / discard / consume / clean`。每条记录包含 sequence、documentID、sessionEpoch、操作、documentVersion、snapshotGeneration、目标 URL 身份、预期/实际 FileRevision、contentHash、关联新 epoch、时间、前一记录 hash 和 CRC32C；追加必须 `fsync`，损坏尾部截断到最后有效记录。
+- 保存开始前追加并同步 `savePrepared(epoch, version, targetIdentity, contentHash)`；`NSDocument` safe-save 成功后追加并同步 `saveCommitted(epoch, version, actualFileRevision, contentHash)`，再镜像 SQLite 水位。若崩溃发生在二者之间，启动时读取磁盘 hash/revision 对账：与 prepared 内容完全一致则补记 committed，否则保留相应快照并标记“保存结果不确定”，绝不只凭回调或日志声称已保存。
+- “不保存/放弃恢复”先在 Recovery actor 内原子标记 epoch 为 `retiring`、停止接收并取消/排空该 epoch 的任务，再追加并同步 `retire(epoch)` 与 `discard(epoch, throughGeneration)`；`retire` 单独出现即足以禁止自动恢复，UI 只在两项 journal 事件均 fsync 后确认丢弃。随后镜像 SQLite，最后异步删除 blob。所有快照任务在写 blob、重命名和提交索引前均校验 epoch 为 active，晚到任务不能复活内容。
+- 成功应用旧 epoch 的恢复内容前创建并同步新 epoch 的 `start`；应用成功后在旧 journal 追加并同步 `consume(oldEpoch, newEpoch, throughGeneration)`。旧 epoch 此后不再作为恢复候选，后续编辑和快照只归属新 epoch；应用失败则不写 consume，允许重试。
 - clean shutdown 先停止接收新任务并等待队列排空，再追加 `clean(epoch, throughGeneration)` 并镜像 SQLite；超过 2 秒仍未排空则不写 clean，保留恢复入口并允许退出。下次会话必须使用新 epoch，旧 epoch 的晚到任务一律自弃。
 - 相同内容 hash 可复用只读 blob，但每个 snapshot 索引仍记录独立 generation。正常保存不立即删除当前或更新 generation 的恢复记录，待 clean shutdown/tombstone 协议处理。
 - 启动时扫描未关闭 session；原文件已改变时以未命名副本恢复。
-- 启动及 SQLite 重建必须先回放有效 journal，得到每个 epoch 的 start、保存水位、discard 和 clean，再扫描 blob。存在有效 start 且未 clean 的 epoch可自动恢复“高于 saveCommitted 且高于 discard”的快照；无 start、epoch 不匹配或 journal 校验失败的 blob 才进入人工恢复隔离区。
+- 启动及 SQLite 重建必须先回放有效 journal，按状态机处理 prepared/committed、retired/discarded、consumed/clean，并以磁盘 hash/revision 对账未决保存，再扫描 blob。只有 active、未 clean、未 consume 的有效 epoch 可自动恢复高于 committed/discard 水位的快照；无 start、epoch 不匹配或 journal 校验失败的 blob 才进入人工恢复隔离区。
 
 ### 11.5 外部修改
 
@@ -574,7 +575,7 @@ struct RenderProfile: Sendable, Codable {
 
 - 从 MarkdownSnapshot 生成完整 HTML。
 - 内联主题 CSS、代码样式、数学所需样式和已渲染 SVG。
-- 自包含 HTML 必须内联字体、CSS、本地图片、数学和 Mermaid 结果；P0 不获取远程图片，统一使用占位；100 MiB 为硬上限。
+- 自包含 HTML 必须内联字体、CSS、本地图片、数学和 Mermaid 结果；P0 不获取远程图片，统一使用占位；100 MiB 为硬上限。源码和 raw HTML 中的 `data:` 始终拒绝，只有 Core 按 `ExportResourcePolicy v1` 对已验证 PNG/JPEG 重新编码或读取固定 hash 内置字体后，才可在最终 staging 生成 data URI。
 - 不包含运行时脚本，不依赖 CDN。
 - 使用系统为导出目标提供的同卷 item replacement directory；目标已存在时协调 `replaceItemAt`，目标不存在时在同卷完成原子 rename。保存面板关闭后若原本不存在的目标被其他进程创建，禁止覆盖并重新询问“替换 / 重新选择 / 取消”。不在相邻目录自行创建隐藏文件，禁止跨卷移动结果。
 
@@ -745,7 +746,7 @@ System Policy、权限和工具列表只由 Core 产生。文档和外部数据�
 - 典型 1 MB 文档内存目标 ≤ 300 MB。
 - 1 MB/10,000 行必须运行完整 P0 预览和高亮，禁止降级。
 
-发布门槛冷启动采用 process-cold，10 次且不丢弃首次；reboot-cold 仅记录参考值。延迟指标至少 30 次并使用 nearest-rank P95。测试工具固定 signpost 名称，fixture 包括长段落、大量标题、表格、代码、公式、Mermaid 和混合中文输入，并在报告记录每个 fixture SHA-256。
+发布门槛冷启动是独立指标，采用 process-cold 10 次且不丢弃首次，报告全部结果、中位数与最大值；reboot-cold 仅记录参考值。除冷启动外的延迟指标至少 30 次并使用 nearest-rank P95。测试工具固定 signpost 名称，fixture 包括长段落、大量标题、表格、代码、公式、Mermaid 和混合中文输入，并在报告记录每个 fixture SHA-256。
 
 ## 24. CI/CD 与发布
 
@@ -768,9 +769,19 @@ System Policy、权限和工具列表只由 Core 产生。文档和外部数据�
 - 以 cmark-gfm 0.29.0.gfm.13 为契约的方言 fixture、ParseOptions/偏差表和标题 slug 原型。
 - WKWebView DOM patch、标题定位和 PDF A4/边距/深色输出路径对比原型。
 - URL/Image policy、Mermaid SVG 与 KaTeX 输出清洗、可终止 RenderHelper、资源预算和安全快照原型；验证主 target/helper 零网络 entitlement 后冻结 `SanitizerManifest`。
-- NSDocument 唯一 safe-save 所有权、SaveCoordinator 连续保存、自动保存关闭、Save As、外部修改，以及含 `start/saveCommitted/discard/clean`、epoch 和数据库重建的恢复 journal 原型。
+- NSDocument 唯一 safe-save 所有权、SaveCoordinator 连续保存、自动保存关闭、Save As、外部修改，以及含 `start/savePrepared/saveCommitted/retire/discard/consume/clean`、epoch、磁盘对账和数据库重建的恢复 journal 原型。
 
-退出条件：原型达到性能/可靠性最低指标；P0-D04、P0-D05、P0-D07 转为 Accepted；`MarkdownDialectManifest`、`SanitizerManifest`、`RenderManifest` 和 PDF ADR 冻结。任一条件未满足时不得开始 T1。
+T0 逐原型退出矩阵：
+
+| 原型 | 必须归档的证据 | 失败时动作 |
+| --- | --- | --- |
+| Parser/slug | cmark commit/options、零未解释偏差、GitHub capture 与 slug oracle hash | D04 保持 Reopened |
+| Save/Recovery | guard 后外部改写 fixture、prepared/committed 对账、retire/consume/重建故障矩阵 | 修订保存/日志 ADR，不进入 T1 |
+| Render/Sanitizer | `RenderHelperIsolation` ADR、PID 强杀、WebKit 子进程退出、RSS/队列背压、URL/Image/Export golden | D05 保持 Reopened |
+| PDF | 三条候选路径的同一 A4/20 mm/深色/无丢失 golden 与选择理由 | D07 保持 Conditional |
+| 性能 | 固定 fixture hash、signpost、10 次 process-cold 与其余指标至少 30 次报告 | 未达门槛则继续 T0 优化 |
+
+全部矩阵项通过、原型达到性能/可靠性最低指标、P0-D04/P0-D05/P0-D07 转为 Accepted，并冻结 `MarkdownDialectManifest`、`SanitizerManifest`、`RenderManifest`、`RenderHelperIsolation` 与 PDF ADR 后，T0 才退出。任一条件未满足时不得开始 T1。
 
 ### T1：P0 文档内核
 

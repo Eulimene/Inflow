@@ -293,7 +293,7 @@ P0 用户契约以 Swift Markdown 0.8.0 锁定的 swift-cmark 0.8.0 / cmark-gfm 
 
 首版支持导出：
 
-1. HTML：生成单个自包含 `.html` 文件，内联字体、主题与代码样式、本地图片、公式及 Mermaid 结果，不含运行时脚本或外部依赖。P0 不获取远程图片，统一输出标明 URL 的占位。P0 最大输出体积为 100 MiB，预计超限时禁止写出。
+1. HTML：生成单个自包含 `.html` 文件，内联字体、主题与代码样式、本地图片、公式及 Mermaid 结果，不含运行时脚本或外部依赖。源码中的 `data:` 仍按危险输入拒绝；只有 Core 对已通过图片策略的 PNG/JPEG 和固定 hash 内置字体按 `ExportResourcePolicy v1` 生成的 data URI 可进入最终导出 staging。P0 不获取远程图片，统一输出标明 URL 的占位。P0 最大输出体积为 100 MiB，预计超限时禁止写出。
 2. PDF：P0 只冻结 A4、四边 20 mm、当前主题、深色背景和无内容丢失；导出正文宽度为 `min(用户正文宽度, A4 可打印 CSS 宽度)`，不承诺固定 100% 缩放或高级分页。实现路径由 T0 原型条件决定：优先验证 `WKWebView.createPDF`；若不能稳定满足输出契约，则允许使用 `NSPrintOperation` 或独立分页管线。孤行控制、页眉页脚、自定义纸张/边距、结构块整体换页等增强分页进入 P1。P0-D07 在 PDF ADR 和 golden fixture 通过前保持 Conditional。
 
 导出通过“文件 > 导出”进入，使用系统保存面板。导出不改变当前 Markdown 文件路径或保存状态。最终 staging 使用系统为目标提供的 item replacement directory；目标已存在时协调替换，不存在时同卷原子 rename。保存面板关闭后若目标被其他进程新建，必须重新确认替换或另选目标。无法获得同卷 staging 时终止导出，失败不产生残缺目标文件。
@@ -409,7 +409,7 @@ Inflow 支持标准 Markdown 本地导航，不要求用户写入 Inflow 私有�
 
 ### 9.2 性能指标
 
-在基准设备（Apple M1、8 GB 内存）的 Release 构建上，延迟类指标每项执行至少 30 次并报告中位数与 nearest-rank P95。发布门槛中的冷启动统一为 process-cold：每次终止全部 Inflow/WebContent 进程后启动，共 10 次，不丢弃首次；reboot-cold 只在发布前记录参考值，不作为可持续 CI 门槛。测试固定 signpost 名称、fixture 文件及 SHA-256。内存为应用进程与全部 WebContent 子进程的 resident memory 总和，取任务稳定 10 秒后的峰值：
+在基准设备（Apple M1、8 GB 内存）的 Release 构建上，除冷启动外的延迟类指标每项执行至少 30 次并报告中位数与 nearest-rank P95。冷启动是独立指标，统一采用 process-cold：每次终止全部 Inflow/WebContent 进程后启动，共 10 次，不丢弃首次，报告 10 次全部结果、中位数与最大值；reboot-cold 只在发布前记录参考值，不作为可持续 CI 门槛。测试固定 signpost 名称、fixture 文件及 SHA-256。内存为应用进程与全部 WebContent 子进程的 resident memory 总和，取任务稳定 10 秒后的峰值：
 
 - 冷启动至可输入：不超过 2 秒。
 - 打开 1 MB / 10,000 行普通 Markdown：不超过 2 秒。
@@ -524,7 +524,7 @@ Markdown 源码是文档事实来源。渲染 HTML、语法高亮结果、标题
 16. UTF-8 BOM、LF、CRLF 和混合换行 fixture 保存后符合 5.1.2，非 UTF-8 文件不会被直接覆盖。
 17. 外部修改与删除的每个分支均不静默覆盖或自动重建，明确覆盖前能创建冲突副本。
 18. HTML 超限、远程资源占位及 PDF A4/边距/深色/无内容丢失 fixture 均符合 5.12，失败不留下残缺目标。
-19. P0-D04、P0-D05、P0-D07 均已转为 Accepted；`MarkdownDialectManifest`、`SanitizerManifest`、`RenderManifest` 与 PDF 路径 ADR 已冻结并由对应 T0 golden fixture 验证。任何一项仍为 Reopened/Conditional 时禁止 P0 发布。
+19. P0-D04、P0-D05、P0-D07 均已转为 Accepted；`MarkdownDialectManifest`、`SanitizerManifest`、`RenderManifest`、`RenderHelperIsolation` ADR 与 PDF 路径 ADR 已冻结并由对应 T0 fixture 验证。任何一项仍为 Reopened/Conditional 时禁止 P0 发布。
 
 ## 13. 测试样例集合
 

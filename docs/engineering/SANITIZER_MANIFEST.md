@@ -22,6 +22,12 @@ P0 主应用及渲染 helper 均不授予 outgoing-network entitlement。预览�
 - 单文件最大 25 MiB、单边最大 16,384 px、总像素最大 40 MP、解码后内存最大 160 MiB；每文档图片解码内存总预算 320 MiB，同时最多 2 个解码任务。超过任一限制立即停止解码并占位。
 - 解码在可销毁的无网络 ImageDecodeHelper 中进行；禁止增量无限流、嵌套容器、多帧和颜色配置文件触发外部资源。helper 崩溃或越限只影响对应图片。
 
+## ExportResourcePolicy v1
+
+- `URLPolicy` 继续拒绝 Markdown 源码、raw HTML 和扩展输出提供的所有 `data:` URI；导出器不得把它们当作已验证资源。
+- 只有 Core 从 `ImageDecodePolicy` 已通过的本地 PNG/JPEG 重新编码得到的字节，以及应用包内按固定 hash 登记的字体，才能由导出器生成 `data:image/png`、`data:image/jpeg` 或对应字体 MIME URI。生成记录携带 Core-owned provenance，普通字符串不能伪造。
+- 生成 URI 只写入最终自包含 HTML staging，不回流 AST、预览 DOM、剪贴板或文档源码；仍计入单资源、文档解码预算和 100 MiB HTML 输出上限。公式与 Mermaid 以已清洗的内联标记/SVG 写入，不开放任意 data/blob 资源。
+
 ## Mermaid SVG
 
 - Mermaid 11.15.0 固定 `securityLevel: strict`、`htmlLabels: false`，不接受文档内覆盖安全配置。
@@ -41,8 +47,12 @@ P0 生成内容不能贡献任意 CSS；只使用应用内置、带版本 hash �
 
 ## 可终止渲染边界
 
-Mermaid 与 KaTeX 不在长期存活的预览 WebView 中直接执行同步 JavaScript。Core 将每个渲染 job 发送到无文件、无网络权限的独立 RenderHelper worker；每个 worker 内存硬上限 128 MiB，并只处理一个 job。达到截止时间、内存或输出上限时由宿主终止整个 worker，丢弃全部结果并重建干净 worker；协作式 Promise 取消不计作硬超时实现。
+Mermaid 与 KaTeX 不在长期存活的预览 WebView 中直接执行同步 JavaScript。实现固定为一任务一进程的 `RenderHelper.xpc`：helper 内使用随应用锁定的 WebKit JavaScript/DOM realm，禁止导航、网络、文件和持久化数据存储；进程只接收一个 job，返回序列化结果后退出，不复用 realm。
+
+主应用外的 `RenderSupervisor` 维护全应用最多 2 个运行 worker、最多 32 个排队 job 和 256 MiB worker RSS 总上限；超过队列上限立即背压并显示占位。Supervisor 从 XPC audit token 校验并记录专属 worker PID，使用独立 watchdog 计时；达到截止时间、单进程 128 MiB RSS、全局 RSS 或输出上限时，通过平台允许的进程终止 API 对该 PID 执行强制终止，等待退出确认后丢弃结果。仅取消 XPC connection、JavaScript Promise 或 WKWebView navigation 不算硬终止。
+
+上述 PID 获取、强制终止、sandbox entitlement、WebKit 子进程归属及 RSS 统计必须由 T0 `RenderHelperIsolation` ADR 和可重复 fixture 在 macOS 14+ Release sandbox 中证明；证明失败时 P0-D05 保持 Reopened，不得以软截止时间替代“硬超时”。
 
 ## 冻结门槛
 
-测试至少覆盖 URL 多重编码/危险 scheme、raw HTML 转义、远程图片零请求、本地 SVG/data URI/伪造 MIME/像素炸弹、Mermaid 脚本/事件/CSS/`foreignObject`/外部资源、KaTeX trust 命令/宏炸弹/`maxSize`、worker 强制终止、节点/尺寸/内存/文档预算和错误降级。T0 必须证明无 outgoing-network entitlement、网络请求计数为零、超时后 worker 已终止，并审核 golden diff。这些条件是 P0-D05 转 Accepted 的强制门槛；任何规则、限额或依赖变化必须提升 manifestVersion。
+测试至少覆盖 URL 多重编码/危险 scheme、raw HTML 转义、远程图片零请求、本地 SVG/data URI/伪造 MIME/像素炸弹、ExportResource provenance 伪造、Mermaid 脚本/事件/CSS/`foreignObject`/外部资源、KaTeX trust 命令/宏炸弹/`maxSize`、worker 强制终止、队列背压、节点/尺寸/RSS/文档预算和错误降级。T0 必须证明无 outgoing-network entitlement、网络请求计数为零、超时后 worker 及其 WebKit 子进程已退出，并审核 golden diff 与 `RenderHelperIsolation` ADR。这些条件是 P0-D05 转 Accepted 的强制门槛；任何规则、限额或依赖变化必须提升 manifestVersion。
