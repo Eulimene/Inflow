@@ -12,6 +12,9 @@
 
 ## 阅读路由
 
+- [Markdown 方言 Manifest](./MARKDOWN_DIALECT_MANIFEST.md)：P0 Parser 事实来源、options 与偏差表。
+- [Sanitizer Manifest](./SANITIZER_MANIFEST.md)：P0 HTML/URL 清洗规则与冻结门槛。
+
 - Core 工程、数据流、存储、测试或发布：[产品技术方案](./TECHNICAL_DESIGN.md)
 - 插件、SDK、语法、市场、同步或 AI：[扩展文档入口](./extensions/README.md)
 - 功能范围存在疑问：[产品 PRD](../product/PRD.md)

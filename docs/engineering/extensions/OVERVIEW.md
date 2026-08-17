@@ -22,7 +22,7 @@ Inflow 的扩展系统用于让高级开发者适配专业写作场景，同时�
 
 1. 没有扩展时，Inflow 仍是功能完整的 Markdown 编辑器。
 2. 扩展崩溃、超时或升级失败不能导致编辑器崩溃、内容丢失或无法保存。
-3. 扩展默认没有文件、网络、剪贴板、进程执行或文档写入权限；网络只对经审核的连接器扩展按域名授权。
+3. 扩展默认没有文件、网络、剪贴板、进程执行或文档写入权限；网络只对经审核的连接器和远程 AI Provider 通过结构化 `network.services` Broker 授权。
 4. 每项敏感能力必须在安装时声明，并在首次使用时由用户授权。
 5. 扩展 API 版本化，旧扩展失效时提供明确原因，而不是静默异常。
 6. Markdown 源码始终由 Inflow 核心持有，扩展通过受控事务提出修改。
@@ -89,7 +89,7 @@ Inflow 的扩展系统用于让高级开发者适配专业写作场景，同时�
 - 连接器不得拦截 `⌘S`、延迟本地保存、修改恢复快照或把云端状态冒充成本地保存状态。
 - 上传失败不影响本地文件，界面分别显示“已保存到本地”和“云端待同步/同步失败”。
 - 下载远端变更后，连接器提交候选版本，由 Inflow 核心完成外部修改检查、差异展示和冲突解决。
-- 连接器不能静默采用最后写入者覆盖策略。双方均有修改时必须保留两个版本并提示用户合并。
+- 连接器统一调用 `submitRemoteCandidate(baselineID, remote)`。双方修改但文本范围不重叠时，Core 可三方自动合并、通知用户并写入版本历史；重叠文本、删除、重命名和二进制冲突必须人工确认并保留候选版本。
 - 卸载或停用连接器后，本地文档、附件和版本历史保持完整可用。
 
 GitHub 连接器至少支持：选择仓库与分支、限定工作区子目录、拉取、提交和推送、提交信息模板、冲突预览。它不在编辑器内提供完整 Git 客户端，不包含分支管理、Rebase、Issue 或 Pull Request 工作台。
@@ -105,7 +105,7 @@ GitHub 连接器至少支持：选择仓库与分支、限定工作区子目录�
 - 修改核心撤销栈、文件权限或安全作用域书签。
 - 在编辑器进程内加载动态库或执行第三方原生代码。
 - 拦截键盘输入、系统密码、全局剪贴板或其他应用内容。
-- 静默联网、启动任意进程、执行 Shell 命令或安装其他软件；经用户授权的连接器只能访问清单声明的 HTTPS 域名。
+- 静默联网、启动任意进程、执行 Shell 命令或安装其他软件；只有经审核的连接器和远程 AI Provider 可通过 Broker 访问清单声明的 HTTPS 域名。
 - 替换内置安全清洗器或放宽预览 WebView 安全策略。
 - 隐藏保存错误、诊断、权限提示或扩展身份。
 
@@ -132,36 +132,10 @@ flowchart LR
 
 ## 5. 扩展包
 
-扩展包统一使用 `.inflowx`，本质为签名 ZIP 归档：
-
-```text
-example.inflowx
-├── manifest.json
-├── README.md
-├── icon.png
-├── main.js
-├── resources/
-└── signatures/
-```
-
-清单至少包含：
-
-```json
-{
-  "identifier": "com.example.terminology",
-  "name": "Terminology Checker",
-  "version": "1.0.0",
-  "apiVersion": "1",
-  "entryPoint": "main.js",
-  "contributes": {
-    "diagnostics": ["terminology"]
-  },
-  "permissions": ["document.read"]
-}
-```
+扩展包统一使用单文件 `.inflowx` ZIP；目录结构、Manifest Schema、内容哈希清单与签名算法只有 [系统设计第 5–6 节](./SYSTEM_DESIGN.md#5-扩展包格式) 一份规范。签名覆盖规范化文件哈希清单，签名目录自身不进入被签内容。
 
 - `identifier` 全局唯一且安装后不可更改。
-- `apiVersion` 指定兼容的 Inflow 扩展 API。
+- `engines.extensionApi` 指定兼容的 Inflow 扩展 API。
 - `contributes` 声明扩展点，未声明的能力不可调用。
 - `permissions` 使用最小权限；安装界面用自然语言解释用途。
 - 生产环境扩展需要开发者签名。开发者模式允许本地未签名扩展，但持续显示状态标识。
@@ -176,8 +150,8 @@ example.inflowx
 | `workspace.read` | 需授权 | 读取当前用户已授权工作区 |
 | `export.write` | 每次确认 | 写入用户在保存面板选定的目标 |
 | `clipboard.read` | 每次确认 | 只在用户触发命令后读取 |
-| `network.domains` | 仅审核连接器可申请 | 只允许访问清单列出的 HTTPS 域名；安装及新增域名时单独确认 |
-| `credentials` | 仅审核连接器可申请 | 凭据由 Inflow 写入 Keychain，扩展只能请求授权调用，不能导出令牌 |
+| `network.services` | 仅审核连接器/远程 AI Provider 可申请 | 只允许 Broker 访问清单列出的 HTTPS 域名；安装及新增域名时单独确认 |
+| `credentials.use` | 仅审核连接器/远程 AI Provider 可申请 | 凭据由 Inflow 本地应用写入 Keychain，Broker 代为使用；扩展不能读取或导出令牌 |
 | `sync.workspace` | 仅审核连接器可申请 | 接收已保存版本并提交远端候选版本，不获得恢复快照 |
 | `process.execute` | 永不开放 | 禁止执行命令或启动子进程 |
 
@@ -193,7 +167,7 @@ example.inflowx
 
 ## 8. 发布与安装
 
-E1–E2 只支持用户从本地安装签名的低权限扩展。E3 建设官方插件目录；高权限连接器到 E4 才开放且只能通过官方插件市场分发，不允许侧载。
+E1–E2 支持开发者模式包和本地签名低权限包。E3 市场只提供免费公开扩展，用户可匿名浏览安装，仅发布者需要账号；官方连接器和示例 AI Provider 在 E4 验证。第三方高权限扩展、付费、用户许可证账号和企业身份到 E5 才开放。
 
 安装流程：
 

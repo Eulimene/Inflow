@@ -119,7 +119,11 @@ flowchart TB
 - 只暴露版本化的 `inflow` SDK 对象；底层通过 XPC 与 Broker 通信。
 - Host 被终止后可以重建，扩展不得把关键状态只保存在内存。
 
-选择 JavaScript/TypeScript 作为首个 SDK，是为了降低开发门槛并避免加载第三方原生代码。后续可以增加 WebAssembly 计算模块，但它使用相同权限代理，不能获得 WASI 文件、网络或进程能力。
+选择 JavaScript/TypeScript 作为首个 SDK，是为了降低开发门槛并避免加载第三方原生代码。E2 增加审核 WebAssembly 内容引擎，但它使用相同权限代理，不能获得 WASI 文件、网络或进程能力。
+
+#### 3.3.1 E2 WebAssembly 原型 Manifest
+
+E2 仅加载随 Inflow 发布并由 Inflow 官方签名的模块。`runtime.modules[]` 必须声明 `path`、`sha256`、`imports`、`memoryMiB`、`cpuTimeoutMs`、`maxOutputBytes` 和 `readonlyResources[]`。安装器拒绝未声明导入、可变资源路径和超过 128 MiB 内存/2,000 ms CPU/2 MiB 输出的配置；Host 只映射清单内只读资源。模块只能返回 SVG 字节和结构化诊断，SVG 仍经过 Core Sanitizer。第三方 WASM 在 E2 不可安装。
 
 ### 3.4 Capability Broker
 
@@ -142,7 +146,7 @@ Broker 是唯一敏感能力入口：
 | 单篇导出 | 是 | 否 | 否 | 市场；开发模式可侧载 |
 | 声明式侧栏 | 是 | 通过事务 | 否 | 市场；开发模式可侧载 |
 | 同步连接器 | 是 | 只能提交远端候选版本 | 受限 | 仅官方市场 |
-| AI Model Provider | 是 | 否 | 本地或受限 | 仅市场；本地 Provider 可开发模式测试 |
+| AI Model Provider | 是 | 否 | 本地 XPC 或受限 HTTPS | E4 仅官方 Local Model Bridge/示例远程 Provider；第三方到 E5 |
 | AI Action / Context | 是 | 通过建议事务 | 由 Provider 负责 | 市场；低权限版本可开发模式测试 |
 | AI Tool | 是 | 通过确认事务 | 不直接开放 | 仅市场，高权限审核 |
 
@@ -197,7 +201,11 @@ com.example.terminology.inflowx
 ├── locales/
 │   ├── en.json
 │   └── zh-Hans.json
-└── signature.json
+└── META-INF/
+    ├── content-manifest.json
+    └── signatures/
+        ├── developer.sig
+        └── market.sig
 ```
 
 包要求：
@@ -206,7 +214,8 @@ com.example.terminology.inflowx
 - 解压后大小、文件数和单文件大小受限。
 - `manifest.json` 使用固定 JSON Schema，未知关键字段导致安装失败。
 - 发布包不允许动态依赖；所有运行时代码必须在包内。
-- 整包计算 SHA-256 内容摘要，并由开发者签名；市场再附加市场签名。
+- `content-manifest.json` 使用规范 JSON，按 UTF-8 路径字典序列出 payload 文件的路径、字节数和 SHA-256；`META-INF/content-manifest.json` 自身及 `META-INF/signatures/` 不进入列表，签名直接覆盖规范 JSON 字节。安装器只允许“清单列出的 payload + 这两个 META-INF 位置”，拒绝其他文件，从而避免任何摘要自引用。
+- 三类安装路径：开发包可无签名且只在持续标识的开发者模式加载；本地签名包必须含 `developer.sig` 且只允许低权限能力；市场包必须同时含开发者和市场签名，高权限能力还需类型审核。市场添加 `market.sig` 不改变 payload 哈希或开发者签名。
 
 ## 6. Manifest
 
@@ -342,7 +351,7 @@ const result = await inflow.documents.applyEdit(edit);
 | `workspace.resources` | 指定工作区附件 | 每个工作区首次使用 |
 | `clipboard.read` | 单次用户操作 | 每次 |
 | `export.write` | 保存面板选择的目标 | 每次 |
-| `network.domains` | 清单 HTTPS 域名 | 安装时与域名变更时 |
+| `network.services` | 仅受审连接器/远程 AI Provider 的清单 HTTPS 域名 | 安装时与域名变更时 |
 | `credentials.use` | 指定服务账号 | 登录与首次使用时 |
 | `sync.workspace` | 指定工作区 | 每个同步配置 |
 | `ai.context.selection` | 当前选区 | 每次 Action 或会话授权 |
@@ -391,7 +400,7 @@ stateDiagram-v2
 ### 9.1 安装
 
 1. 下载到隔离临时目录。
-2. 验证包结构、摘要、双签名、撤回状态、API 和系统版本。
+2. 验证包结构、内容哈希清单，以及安装路径要求的签名：开发者模式可无签名，本地签名包验开发者签名，市场包验双签名；同时检查撤回状态、API 和系统版本。
 3. 静态扫描代码和资源，检查禁用语法、远程依赖和危险内容。
 4. 展示贡献点、权限、发布者和数据去向。
 5. 用户确认后原子移动到版本目录。
@@ -443,7 +452,7 @@ stateDiagram-v2
 - `Extension State`：扩展私有结构化状态，按扩展 ID 隔离。
 - `Cache`：可随时删除，不参与备份。
 - `Credentials`：Keychain 中由核心持有，扩展只获得不透明 Credential ID。
-- `Sync Metadata`：文件版本、远端 ETag、提交 SHA、待上传队列；不得存正文副本，必要缓存需加密并有期限。
+- `Sync Metadata`：文件版本、远端 ETag、提交 SHA、待上传队列。唯一允许的正文副本是 Core-owned 加密同步基线；扩展只能持有 opaque baseline ID，其他正文缓存禁止。
 
 扩展卸载时默认保留设置 30 天以便重装，用户可选择立即删除。凭据和同步授权默认立即撤销。
 
@@ -497,8 +506,9 @@ sequenceDiagram
 
 - 不允许无提示的 last-write-wins。
 - 文本冲突由核心三方合并：共同基线、本地版本、远端版本。
-- 无冲突修改可自动合并，但合并结果必须进入本地版本历史。
-- 有冲突时生成临时候选文档并显示逐块差异。
+- 共同基线由 Core 在每次同步成功后保存为按工作区密钥加密的只读快照，连接器只能通过 opaque baseline ID 请求合并，不能直接读取基线正文。基线保留到下一次同步成功后 30 天，或工作区解除同步/用户清除同步数据时立即删除；容量计入工作区同步缓存配额。
+- Connector 只能调用 `submitRemoteCandidate(baselineID, remote)`，Core 校验 baseline 所属工作区和候选版本。
+- 非重叠文本修改可自动三方合并，完成后通知用户并写入本地版本历史；重叠文本、删除、重命名和二进制冲突必须生成临时候选并人工确认。
 - 用户可选择合并、保留本地、保留远端或另存两份。
 - 图片等二进制资源冲突默认保留两份并重命名，不能猜测合并。
 
@@ -540,7 +550,11 @@ Action 只能返回：
 - `Diagnostics`：进入统一问题面板。
 - `ToolProposal`：等待核心校验和用户确认的工具调用。
 
-### 12A.4 Prompt Injection 防护
+### 12A.4 AI Session Store
+
+AI 会话由 Core-owned `AISessionStore` 保存到应用容器内的加密 SQLite WAL 数据库；每个会话记录 owner extension、Provider、模型、创建/访问时间、expiresAt 和 opaque session ID。默认 TTL 30 天，用户可关闭保存、选择关闭时删除或缩短期限。扩展不能直接访问数据库，只能在当前授权范围内通过 session ID 追加或读取自身会话；工作区解绑、Provider 卸载、权限撤销或用户清除 AI 数据时删除关联记录。密钥保存在 Keychain，日志和崩溃报告不得包含会话正文。
+
+### 12A.5 Prompt Injection 防护
 
 - 文档、网页、引用资料和模型响应全部标记为不可信数据。
 - System Policy、权限和工具列表只能由 Inflow Core 生成。
@@ -564,10 +578,10 @@ Action 只能返回：
 ### 13.2 信任链
 
 1. 开发者注册并验证身份，获得发布者密钥。
-2. 开发者签名 `.inflowx` 并上传。
+2. 开发者生成包含 `content-manifest.json` 与 `developer.sig` 的本地签名 `.inflowx` 并上传。
 3. 市场执行自动扫描、权限审查和人工复核。
-4. 通过后附加市场签名并写入透明发布日志。
-5. 客户端同时验证内容摘要、开发者签名、市场签名和撤回列表。
+4. 通过后在签名目录附加 `market.sig` 并写入透明发布日志，不改变 payload 哈希清单。
+5. 客户端验证每个 payload 哈希、规范清单、对应安装路径所需签名和撤回列表。
 
 连接器必须人工审核；普通主题和低权限扩展可以采用自动审核加抽查。
 
@@ -726,21 +740,21 @@ Action 只能返回：
 
 - 编辑命令、围栏渲染、单篇导出、声明式侧栏。
 - 受控文本事务、内容清洗和 UI Schema。
+- 仅开放 Inflow 官方签名的 WebAssembly 内容引擎原型，第三方模块不得安装。Manifest 的 `runtime.modules` 必须列出模块 SHA-256、导入函数 allowlist、只读资源；导入仅含确定性内存/字符串接口，不含 WASI、时钟、随机、文件、网络或进程。每实例内存 128 MiB、CPU 2 秒、输出 2 MiB，预览只返回经清洗 SVG；Full LaTeX 仅能使用此路径，PDF 只作为导出结果。
 
-### E3：插件市场
+### E3：免费插件市场
 
-- 发布者、审核、双签名、目录、更新、透明日志和撤回。
+- 免费公开扩展、匿名浏览安装、发布者账号、审核、双签名、目录、更新、透明日志和撤回；不含支付、用户许可证账号或企业身份。
 - 普通扩展进入市场，连接器仍为内部测试。
 
-### E4：连接器
+### E4：受审联网与 AI
 
-- 权限代理、Keychain、限域 HTTPS、同步状态机和三方合并。
-- 先发布官方 GitHub 连接器验证模型，再开放第三方连接器审核。
+- 权限代理、Keychain、限域 HTTPS、加密同步基线、同步状态机和三方合并。
+- 先发布官方 GitHub 连接器和官方示例 Model Provider，验证 Connector 与 AI Capability 模型；第三方高权限扩展仍不开放。
 
 ### E5：稳定生态
 
-- 稳定 API 1.0、兼容策略、市场治理、灰度与安全响应机制。
-- 根据真实需求评估 WebAssembly 计算扩展和更多声明式组件。
+- 稳定 API 1.0、第三方连接器/AI Provider/受控 Tool、兼容策略、付费与企业目录、市场治理、灰度和安全响应机制。
 
 ## 20. 上线门槛
 
@@ -766,9 +780,9 @@ Action 只能返回：
 | 原生第三方代码 | 禁止加载到应用或 Host |
 | UI | 原生声明式组件，不允许任意网页侧栏 |
 | 文档修改 | 版本化、原子、可撤销文本事务 |
-| 网络 | 普通扩展禁止；审核连接器限域代理 |
+| 网络 | 普通扩展禁止；受审连接器和远程 AI Provider 通过 `network.services` Broker 限域代理 |
 | 凭据 | 核心持有于 Keychain，扩展不可导出 |
-| 分发 | 低权限开发扩展可侧载；连接器仅官方市场 |
+| 分发 | 开发包仅开发者模式；低权限本地签名包可侧载；高权限扩展仅市场且需类型审核 |
 | 市场 | 可选、无广告、离线不影响编辑 |
 | 本地保存 | 永远优先且不受连接器阻塞 |
 | CLI | 不属于编辑器扩展系统 |

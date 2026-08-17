@@ -2,7 +2,7 @@
 
 - 文档版本：v1.0
 - 更新日期：2026-08-17
-- 状态：工程设计基线
+- 状态：T0 风险原型工程基线；T1 尚未授权
 - 目标平台：Apple Silicon，macOS 14+
 - 当前本机环境：Xcode 26.6（开始开发前需要接受 Xcode License）
 
@@ -35,7 +35,7 @@
 | 分发 | Developer ID 签名、Apple 公证、独立安装包 |
 | Mac App Store | 暂不分发 |
 | 沙盒 | 启用 App Sandbox，使用用户选择文件权限和安全作用域书签 |
-| 网络 | Core 默认不联网；远程图片由用户开启；后续连接器限域代理 |
+| 网络 | P0 Core 不因文档内容联网；P1 远程图片和后续连接器/AI 使用独立受控能力 |
 | PDF 深色主题 | 保持深色页面背景和对应前景色 |
 | CLI | 不属于编辑器本体 |
 | AI | 后续扩展生态能力，不作为 Core 依赖 |
@@ -101,12 +101,12 @@ flowchart TB
 - SwiftUI：工具栏、设置、侧栏、状态视图、恢复中心和普通业务界面。
 - AppKit：`NSDocument`、`NSWindowController`、菜单响应链和文本编辑器。
 - TextKit 2 优先：文本布局、选择、输入法、拼写和可访问性；若某些大文档场景表现不稳定，局部回退到 TextKit 1 适配器，不改变上层接口。
-- WebKit：离线预览、Mermaid、数学、代码渲染和 PDF 输出。
+- WebKit：离线预览、Mermaid、数学和代码渲染；PDF 是否直接使用 WebKit 由 T0 条件 ADR 决定。
 - JavaScriptCore：未来扩展 Host 的脚本运行时，不用于 Core 编辑器业务逻辑。
 
 ### 4.2 Markdown 与 Web 资源
 
-- Swift Markdown 0.8.0：Core CommonMark/GFM AST、源码范围和结构遍历。
+- Swift Markdown 0.8.0 + swift-cmark 0.8.0：Core AST、源码范围和结构遍历；事实来源、options 和偏差表见 [MarkdownDialectManifest](./MARKDOWN_DIALECT_MANIFEST.md)。
 - Mermaid 11.15.0：随应用固定版本打包，渲染 `mermaid` 围栏块。
 - KaTeX 0.18.1：Core 的快速行内/块级数学渲染；更完整 LaTeX 交由后续 Domain Pack。
 - 代码着色：随应用打包的轻量高亮库，语言按需注册。
@@ -121,7 +121,7 @@ flowchart TB
 - 恢复索引、本地版本和工作区索引：系统 SQLite3，封装在内部持久化模块。
 - 快照正文：Application Support 中按文档 ID 保存的压缩 blob，SQLite 只存元数据。
 - 账号凭据：后续连接器/AI 使用 macOS Keychain。
-- 临时导出：系统临时目录中的任务目录，成功后原子移动到目标位置。
+- 渲染 scratch：系统临时目录中的任务目录；最终导出 staging 必须位于目标同卷，验证后协调原子替换。
 
 ## 5. 工程结构
 
@@ -334,8 +334,8 @@ struct MarkdownSnapshot: Sendable {
 - 只加载应用内置 HTML shell 和自定义 `inflow-resource://` scheme。
 - 禁止任意导航、新窗口、下载、摄像头、麦克风和剪贴板访问。
 - Content Security Policy 默认 `default-src 'none'`，仅放行内置 style/script/image/font scheme。
-- 远程图片关闭时不产生 HTTP 请求；开启后通过 Core 图片代理加载，不直接让文档 HTML 自由联网。
-- 原始 HTML 经过白名单清洗，移除 script、事件属性、危险 URL 和 iframe。
+- P0 远程图片只产生占位，不发出 HTTP 请求；受控加载进入 P1。
+- P0 raw HTML 全部转义为源码；allowlist 清洗进入 P1。
 
 ### 9.2 HTML Renderer
 
@@ -353,15 +353,15 @@ struct MarkdownSnapshot: Sendable {
 
 - 围栏语言为 `mermaid` 时产生 `DiagramNode`。
 - 使用内容 hash + Mermaid 版本 + 主题作为缓存 key。
-- 在 Web 内容进程中异步渲染 SVG，设置单块超时和输出大小限制。
-- 禁止 Mermaid 配置中的外部链接或不安全 HTML。
+- 在 Web 内容进程中异步渲染 SVG，严格使用 `SanitizerManifest` 的配置、单块/文档预算和超时。
+- 最终 SVG 必须再次清洗，禁止 `foreignObject`、CSS、外部资源、脚本、事件和导航。
 - 失败时显示源码位置、简短错误和“在编辑器中定位”。
 
 ### 9.4 数学
 
 - Core 支持 `$...$`、`$$...$$` 和转义美元符号。
 - Parser 先识别数学节点，KaTeX 只负责渲染，不参与全文 Markdown 解析。
-- 宏默认使用安全白名单并限制递归。
+- 固定 KaTeX `trust: false`、`strict: error` 与 `SanitizerManifest` 的展开、节点、尺寸和文档预算。
 - 错误公式显示源码和诊断，其他节点继续渲染。
 - 完整 LaTeX/TikZ 属于后续 Academic Domain Pack。
 
@@ -401,24 +401,26 @@ P1 再实现预览到编辑器的反向同步，使用相同锚点模型，避�
 ### 11.1 打开
 
 - 由 `NSDocumentController` 处理 Finder、Open Panel 和应用打开事件。
-- 支持 UTF-8/UTF-8 BOM；记录并保留 BOM 与主换行风格。新文档为无 BOM + LF；混合换行保存前提示并统一为主风格。其他编码只读且禁止覆盖，转换在 P1 提供。
+- 支持 UTF-8/UTF-8 BOM；记录并保留 BOM 与主换行风格。新文档为无 BOM + LF；混合换行在首次编辑前由 `LineEndingDecision` 一次性选择，决定前保持只读并暂停自动保存。无效 UTF-8 不创建 TextBuffer，只显示不支持编码及 Finder 定位/复制原文件/取消；识别与转换在 P1 提供。
 - 读取时记录文件资源标识、修改时间、大小和内容 hash 作为 `FileRevision`。
 - 同一 canonical URL 只打开一次。
 
 ### 11.2 保存
 
-- `NSDocument` 获取指定 documentVersion 的不可变 UTF-8 Data 快照。
-- 保存前比较磁盘 `FileRevision`；若磁盘已变化且内存也 Dirty，进入冲突流程。
-- 使用 `NSDocument` safe write，不依赖目标路径形态；系统可能提供临时写入 URL。
-- 成功后只有当当前 buffer version 等于写入 version 才清除 edited 状态；保存期间的新输入继续保持 Dirty。
+- 每个 `DocumentSession` 唯一持有一个 actor `SaveCoordinator`；队列项只保存保存来源、目标路径、最低目标 documentVersion 和关闭屏障等意图，不在入队时冻结 `expectedRevision` 或 Data。
+- 同路径、尚未开始的保存意图合并到最高最低目标版本；物理写入开始时从当前 buffer 捕获满足目标的最新不可变 snapshot，并以 Coordinator 的 `committedRevision` 建立 guard。连续内部保存成功后更新该 revision，不会把自己的 R1 误判为外部修改。
+- `NSDocument` 负责 safe write。协调写入开始前及系统 replacement directory 提交前，在 `NSFileCoordinator` 区间内再次比较 guard；配合单次 self-write token 过滤对应 FilePresenter 通知。非 self-write revision 变化才进入冲突流程。
+- 普通保存 staging 使用系统 item replacement directory，并通过 `replaceItemAt`/`NSDocument` safe write 替换；不假设单文件授权可在相邻目录创建任意隐藏文件。Save As 从入队到完成暂停原路径自动保存，成功后原子切换 URL/bookmark/revision，失败则保持原路径。
+- `SaveCoordinator` 按单调 `documentVersion` 提交；旧完成回调不得覆盖新 revision 或清除新 dirty 状态。
+- 只有 `savedVersion == currentBufferVersion` 且目标仍为当前文档 URL 时才清除 edited 状态并允许关闭；否则保持 dirty，关闭屏障继续等待下一次保存或展示失败选择。
 - 保存失败保留 buffer 和恢复快照，显示重试/另存为。
 
 ### 11.3 自动保存
 
-- `NSDocument.autosavesInPlace = true`。
-- `NSDocumentController.autosavingDelay` 由设置映射为 0.5/1/2/5 秒。
-- 用户关闭自动保存时，禁止 in-place autosave，但恢复快照仍运行。
-- 应用 resign active 时请求保存。关闭行为严格执行 PRD 5.1.4：自动保存关闭时 dirty 文档必须询问；开启时等待保存，失败后询问；未命名非空文档始终询问；“不保存”清除会话快照。
+- `MarkdownDocument` 子类以 `override class var autosavesInPlace: Bool { true }` 声明 AppKit 能力；不得把只读类型属性当作实例设置。
+- 自动保存开启时 `NSDocumentController.autosavingDelay` 映射为 0.5/1/2/5 秒；关闭时设置为 `0`，同时取消尚未开始的自动保存意图。
+- 用户关闭自动保存时，`SaveCoordinator` 拒绝自动保存来源的请求，但恢复快照仍运行；应用 resign active 也不得静默写盘。
+- 自动保存开启时，应用 resign active 可向同一协调器提交自动保存。关闭行为严格执行 PRD 5.1.4，并以 `SaveCoordinator` 的关闭屏障等待精确版本。
 
 ### 11.4 恢复快照
 
@@ -427,6 +429,8 @@ P1 再实现预览到编辑器的反向同步，使用相同锚点模型，避�
 ```text
 Application Support/Inflow/Recovery/
 ├── index.sqlite
+├── sessions/
+│   └── <document-id>.journal
 └── blobs/
     └── <document-id>/<snapshot-id>.bin
 ```
@@ -438,14 +442,18 @@ Application Support/Inflow/Recovery/
 - documentVersion、时间、是否未命名。
 - selection、mode、scroll anchors 和窗口状态。
 - cleanShutdown、expiresAt；Save As 只迁移书签和 revision，不更换 documentID。
+- sessionGeneration、snapshotGeneration、discardedThroughGeneration 和 blob checksum。
 
 策略：
 
-- 变更后最迟 5 秒写入，使用后台 actor 串行化。
-- 相同内容 hash 不重复写 blob。
-- 正常保存后保留一个短期确认快照，确认应用稳定后清理。
+- 变更后最迟 5 秒写入；每个 documentID 的 actor 串行分配严格递增的 snapshotGeneration。晚到的过期任务只可删除自身临时 blob，不得更新索引。
+- 提交顺序固定为：写 blob 临时文件并 `fsync` → 原子重命名为最终 blob → SQLite 事务插入 snapshot 行并更新 session head → 提交事务。索引永不引用未完成 blob；事务失败时最终 blob 作为 orphan 留待启动清扫。
+- 每个 session journal 是独立追加写日志；每条记录包含 sequence、documentID、sessionGeneration、操作（discard/clean）、throughGeneration、时间、前一记录 hash 和 CRC32C。追加记录必须 `fsync`，损坏尾部截断到最后有效记录。
+- “不保存/放弃恢复”先把 discard tombstone 追加并同步到 journal，再镜像到 SQLite，随后取消并排空该 generation 及更早任务，最后异步删除 blob。晚到任务必须同时检查 journal/SQLite watermark，不得复活快照。
+- clean shutdown 先停止接收新任务并等待队列排空，再将 clean tombstone 写入 journal 并镜像到 SQLite；超过 2 秒仍未排空则不标 clean，保留恢复入口并允许退出。
+- 相同内容 hash 可复用只读 blob，但每个 snapshot 索引仍记录独立 generation。正常保存不立即删除当前或更新 generation 的恢复记录，待 clean shutdown/tombstone 协议处理。
 - 启动时扫描未关闭 session；原文件已改变时以未命名副本恢复。
-- 恢复索引损坏时可从 blob header 重建。
+- 启动及 SQLite 重建必须先回放所有有效 session journal，得到 discard/clean watermark，再扫描 blob；只允许从校验通过且 generation 高于 journal tombstone 的 blob header 重建。journal 缺失或校验失败的 session 不自动恢复旧 blob，转入人工恢复隔离区。
 
 ### 11.5 外部修改
 
@@ -456,6 +464,8 @@ Application Support/Inflow/Recovery/
 - 明确覆盖前在同目录创建带时间戳冲突副本并二次确认；副本失败即禁止覆盖。
 - 文件被删除：保留内存文档并暂停自动保存，只允许另存为或经二次确认重建。
 - 权限丢失：转只读，允许另存。
+- 自动 reload 捕获开始时的 `documentVersion` 与磁盘 `FileRevision`，读取完成、应用到 buffer 前再次校验两者；期间出现本地输入或新的磁盘 revision 即取消本次 reload。自身保存通知由 `SaveCoordinator` 的 self-write token 排除。
+- 永久冲突副本需要相邻目录权限；单文件授权不足时才请求包含目录。拒绝后禁止明确覆盖，但普通安全保存仍可继续。
 
 ## 12. 本地版本历史
 
@@ -495,7 +505,7 @@ P1 引入 `WorkspaceSession`：
 - 未命名文件粘贴图片时先保存文档或暂存到受控草稿附件区。
 - 粘贴/拖放图片按设置复制到附件目录，再以相对路径插入 Markdown。
 - 文件名冲突使用稳定后缀，不覆盖已有附件。
-- 远程图片默认不加载；开启后经限域/限大小代理获取。
+- P0 远程图片始终占位；P1 如开放则必须经隔离、限域、限大小代理。
 - 资源移动先建立引用变更计划，用户确认后修改文件和 Markdown；失败时报告已完成/未完成步骤并尽量回滚。
 
 ### 14.1 本地链接导航
@@ -517,7 +527,7 @@ enum LinkTarget: Sendable {
 1. 对 URL 做 percent-decoding 和路径标准化，但不跟随未经验证的符号链接越出授权根目录。
 2. 相对路径以当前文档目录为基准，工作区内路径以 security-scoped root 校验。
 3. 单文件授权不足时，由 `ScopeAuthorizationCoordinator` 首次请求包含目录并持久化书签；拒绝状态按目录记忆，不自动重复提示。
-4. `#fragment` 使用 PRD 5.14 固定的 `gfm-0.29` slug；Parser、预览、导出和导航共享同一实现。
+4. `#fragment` 使用 PRD 5.14 固定的 `github-compatible-heading-slug-v1`；Parser、预览、导出和导航共享同一实现，raw HTML `id` 不参与。
 5. Markdown 目标交给 `NSDocumentController`/WorkspaceSession 打开，加载完成后通过 SourceMap 定位标题。
 6. 非 Markdown 文件只有在授权范围内才交给 `NSWorkspace` 打开。
 7. HTTP/HTTPS 交给系统浏览器；危险 scheme、可执行目标和越权路径返回 blocked。
@@ -552,7 +562,7 @@ struct RenderProfile: Sendable, Codable {
     let markdownDialect: MarkdownDialect
     let mermaidEnabled: Bool
     let mathEnabled: Bool
-    let remoteImagesAllowed: Bool
+    let remoteImagesAllowed: Bool // P0 固定 false；P1 才可配置
 }
 ```
 
@@ -560,17 +570,17 @@ struct RenderProfile: Sendable, Codable {
 
 - 从 MarkdownSnapshot 生成完整 HTML。
 - 内联主题 CSS、代码样式、数学所需样式和已渲染 SVG。
-- 自包含 HTML 必须内联字体、CSS、本地图片、数学和 Mermaid 结果；远程图片关闭时使用占位，开启时内联成功结果，失败先汇总供继续或取消；100 MiB 为硬上限。
+- 自包含 HTML 必须内联字体、CSS、本地图片、数学和 Mermaid 结果；P0 不获取远程图片，统一使用占位；100 MiB 为硬上限。
 - 不包含运行时脚本，不依赖 CDN。
-- 在目标同卷创建隐藏临时文件，验证后通过文件协调原子替换；禁止跨卷移动结果。
+- 使用系统为导出目标提供的同卷 item replacement directory，验证后通过文件协调替换；不在相邻目录自行创建隐藏文件，禁止跨卷移动结果。
 
 ### 15.3 PDF
 
 - 创建独立离屏 WKWebView，加载与预览相同的完成 HTML。
 - 等待字体、图片、公式和 Mermaid readiness barrier。
-- P0 仅通过 `WKWebView.createPDF` 生成 PDF Data。
+- T0 先验证 `WKWebView.createPDF`；若无法满足 PRD 的 A4、边距和分页 golden fixture，则切换为 `NSPrintOperation` 或独立分页管线。ADR 记录选择及失败证据，P0 只验收输出契约。
 - 深色 profile 写入明确的页面背景和 `print-color-adjust: exact` 等打印样式，不切换浅色主题。
-- P0 固定 A4、20 mm 四边距和 100% 缩放，并实现 PRD 5.12 的分页规则；P1 加可配置纸张、边距、页眉页脚和元数据。
+- P0 固定 A4、20 mm 四边距，正文宽度取用户设置与可打印 CSS 宽度的较小值；只保证主题、深色背景和无内容丢失。高级分页、自定义纸张/边距和页眉页脚进入 P1。
 - 导出超时或节点失败时列出问题，由用户选择继续或取消，不生成半成品目标。
 
 ## 16. 设置系统
@@ -586,7 +596,7 @@ struct RenderProfile: Sendable, Codable {
 
 ## 17. 扩展系统落地
 
-扩展详细设计以 `EXTENSION_SYSTEM_DESIGN.md` 为准。本工程的预留点：
+扩展详细设计以 [扩展系统总体设计](./extensions/SYSTEM_DESIGN.md) 为准。本工程的预留点：
 
 - `SyntaxRegistry`：围栏、块指令和后续受限行内节点。
 - `CommandRegistry`：格式和编辑事务命令。
@@ -688,7 +698,7 @@ System Policy、权限和工具列表只由 Core 产生。文档和外部数据�
 - FileRevision、保存状态机和冲突判定。
 - Recovery schema、快照去重、清理和索引重建。
 - ResourceResolver 路径与安全边界。
-- RenderProfile 和 HTML 清洗。
+- RenderProfile、raw HTML 转义、Mermaid SVG 与 KaTeX Markup 清洗。
 
 ### 23.2 Golden Tests
 
@@ -729,8 +739,9 @@ System Policy、权限和工具列表只由 Core 产生。文档和外部数据�
 - 模式切换 P95 ≤ 150 ms。
 - 输入主线程卡顿不得超过 100 ms。
 - 典型 1 MB 文档内存目标 ≤ 300 MB。
+- 1 MB/10,000 行必须运行完整 P0 预览和高亮，禁止降级。
 
-测试 fixture 包括长段落、大量标题、表格、代码、公式、Mermaid 和混合中文输入。
+发布门槛冷启动采用 process-cold，10 次且不丢弃首次；reboot-cold 仅记录参考值。延迟指标至少 30 次并使用 nearest-rank P95。测试工具固定 signpost 名称，fixture 包括长段落、大量标题、表格、代码、公式、Mermaid 和混合中文输入，并在报告记录每个 fixture SHA-256。
 
 ## 24. CI/CD 与发布
 
@@ -750,10 +761,12 @@ System Policy、权限和工具列表只由 Core 产生。文档和外部数据�
 - Xcode Workspace、本地 Packages、测试和签名配置。
 - NSTextView 10,000 行输入/高亮原型。
 - swift-markdown 解析与 SourceRange 基准。
-- WKWebView DOM patch、标题定位和 PDF 深色导出原型。
-- NSDocument 自动保存、外部修改和恢复原型。
+- 以 cmark-gfm 0.29.0.gfm.13 为契约的方言 fixture、ParseOptions/偏差表和标题 slug 原型。
+- WKWebView DOM patch、标题定位和 PDF A4/边距/深色输出路径对比原型。
+- Mermaid SVG 与 KaTeX 输出清洗、资源预算和安全快照原型；冻结 `SanitizerManifest`。
+- NSDocument/SaveCoordinator 连续保存、自动保存关闭、Save As、外部修改、replacement directory 和恢复 journal 原型。
 
-退出条件：五项原型达到性能/可靠性最低指标，关键技术无阻塞。
+退出条件：原型达到性能/可靠性最低指标；P0-D04、P0-D05、P0-D07 转为 Accepted；`MarkdownDialectManifest`、`SanitizerManifest`、`RenderManifest` 和 PDF ADR 冻结。任一条件未满足时不得开始 T1。
 
 ### T1：P0 文档内核
 
@@ -802,7 +815,7 @@ System Policy、权限和工具列表只由 Core 产生。文档和外部数据�
 1. AppKit NSDocument + SwiftUI 混合架构。
 2. TextKit 2 与回退策略。
 3. swift-markdown 作为 Core Parser。
-4. WKWebView 作为预览和 PDF 渲染器。
+4. WKWebView 作为预览器；PDF 输出路径由 T0 条件 ADR 选择。
 5. KaTeX/Mermaid 离线资源选择。
 6. SQLite + blob 的恢复存储。
 7. arm64-only 与 macOS 14 deployment target。
@@ -819,7 +832,7 @@ System Policy、权限和工具列表只由 Core 产生。文档和外部数据�
 | SourceRange 与 UTF-16 映射 | 定位错误 | 重复标题、Emoji、组合字符测试 |
 | WebView DOM patch | 闪烁/位置漂移 | 稳定 ID 与语义锚点原型 |
 | NSDocument 与自定义自动保存 | 重复保存/状态错乱 | 保存中继续输入、失败和外部变化测试 |
-| 深色 PDF 背景 | 导出结果不一致 | `createPDF` 的 A4/深色/分页 fixture 快照 |
+| PDF 路径无法控制纸张/边距 | 输出不满足契约 | T0 对 `createPDF`、`NSPrintOperation`/分页管线跑同一 A4/20 mm/深色/无丢失 fixture，并以 ADR 条件选择 |
 | App Sandbox 相对图片 | 授权失效 | 文件/目录书签与重启测试 |
 | JavaScriptCore 外部扩展 | 公证/安全限制 | T6 前独立签名原型，不影响 P0 |
 | 即时渲染 round-trip | 源码损坏 | 每个结构的可逆属性测试 |
@@ -830,7 +843,7 @@ System Policy、权限和工具列表只由 Core 产生。文档和外部数据�
 2. 创建 Apple Developer ID Application/Installer 证书和公证凭据。
 3. 确认 Bundle ID、Team ID 和最终最低系统版本。
 4. 复核 Swift Markdown 0.8.0、Mermaid 11.15.0、KaTeX 0.18.1 与 P1 代码高亮库的许可证。
-5. T0 开始前将已冻结的 CommonMark/GFM 规范与依赖版本及校验值写入 `RenderManifest`。
+5. T0 输入为未冻结的 MarkdownDialect/Sanitizer/Render Manifest 草案；T0 退出时写入精确依赖 commit、选项、校验值、偏差结论并冻结。
 
 ## 29. 交付判定
 

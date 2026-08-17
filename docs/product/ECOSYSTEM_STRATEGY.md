@@ -95,7 +95,7 @@ AI 能力拆成四类，避免每个插件重复实现账号、上下文和编�
 
 ### 5.1 Model Provider
 
-- 本地 Provider 在 E4 仅通过用户明确配置的 `localhost` HTTP 服务连接，并由 Broker 固定端口/来源与禁用外网重定向；内嵌推理或 XPC 宿主需另立 ADR。
+- 本地 Provider 在 E4 只由官方、Inflow 签名的 Local Model Bridge XPC 承载，运行时禁用网络 entitlement。外部签名模型应用通过能力令牌 Unix domain socket 接入留到 E5；普通 localhost HTTP 不能冒充本地 Provider。
 - 远程 Provider 连接用户选择的云模型 API。
 - 声明模型列表、上下文长度、结构化输出、流式响应和价格元数据。
 - API Key 由 Inflow Keychain 保存，Provider 通过 Broker 代发请求。
@@ -139,15 +139,15 @@ sequenceDiagram
 ## 6. AI 数据与隐私
 
 - AI 默认关闭；没有安装 Provider 时不显示残缺 AI 工作区。
-- 只有 Broker 验证请求目标与全部重定向均为 loopback、且 Provider 声明不代理云服务时，才显示“数据不离开设备”；否则按远程 Provider 披露数据流。
+- 只有代码由 Inflow 签名/审核、传输仅经过受控 XPC 或 Unix socket、运行时网络 entitlement 被禁用且审计未发现转发时，才显示“数据不离开设备”；不能仅凭 Provider 声明。其他情况按远程 Provider 披露数据流。
 - 远程模型说明接收方、域名、内容范围、保留和训练策略。
 - 上下文范围为仅选区、当前文档或用户选择的工作区文件。
 - 永不默认发送恢复快照、未打开文件、凭据、完整路径或活动日志。
 - 发送前可隐藏 Front Matter 字段、链接参数、邮箱和自定义敏感模式。
 - Inflow 首期不代理收费或抽取 Token 费用，用户使用供应商账号。
-- AI 会话默认本地保存，可选择不保存、关闭时清除或设置期限。
+- AI 会话由 Core-owned `AISessionStore` 加密保存，默认 TTL 30 天；用户可选择不保存、关闭时清除或缩短期限。工作区解绑、Provider 卸载或用户清除 AI 数据时删除关联会话；扩展只能通过 opaque session ID 访问自身获授权会话。
 
-付费插件、企业私有目录和 Inflow 账号的关系在 E3 市场阶段决策。E0–E2 不要求 Inflow 账号；在该决策完成前不得承诺统一购买、许可证同步或企业目录登录。
+E0–E2 不要求 Inflow 账号；E3 用户可匿名浏览和安装免费公开扩展，仅发布者需要账号。付费、用户许可证账号、许可证同步和企业私有目录统一进入 E5 决策与实施。
 
 ## 7. AI 结果安全
 
@@ -170,8 +170,8 @@ sequenceDiagram
 ## 9. 商业与市场原则
 
 - 市场基础搜索和安装不要求购买 Inflow 云服务。
-- 免费、一次性付费、订阅和自带 API Key 可作为未来模式，但必须披露。
-- Inflow 首期不托管第三方模型调用、不代售 Token、不接触 API Key。
+- E3 只提供免费扩展；一次性付费、订阅和企业许可证可在 E5 评估。自带 API Key 可用于 E4 受审远程 Provider，必须披露费用与数据流。
+- Inflow 服务端首期不托管第三方模型调用、不代售 Token、也不接收 API Key；本地应用将用户密钥保存在 Keychain，并由 Broker 代发请求。
 - 付费扩展不能获得更高技术权限。
 - 排名优先考虑质量、稳定性、权限克制和兼容性，不出售竞价排名。
 - 官方与第三方扩展明确区分，但使用同一公开 API。
@@ -197,12 +197,12 @@ sequenceDiagram
 
 ## 12. 路线图
 
-- Ecosystem 0：Extension Host、权限 Broker、事务、签名和内部扩展。
-- Ecosystem 1：主题、诊断、命令、围栏渲染、侧栏和本地侧载。
-- Ecosystem 2：插件市场、发布者、审核、更新和撤回。
-- Ecosystem 3：Model Provider、AI Action、Context Broker 和本地会话。
-- Ecosystem 4：GitHub 与云存储连接器、同步和三方合并。
-- Ecosystem 5：第三方 AI Provider、Context Provider、受控 Tool、付费和企业私有目录。
+- E0：Extension Host、权限 Broker、事务、签名和内部扩展。
+- E1：主题、只读诊断、开发者模式和本地签名扩展。
+- E2：编辑命令、围栏渲染、WASM 内容引擎、单篇导出和声明式侧栏。
+- E3：免费公开插件市场、匿名浏览安装、发布者账号、审核、更新、透明日志和撤回；不含支付、用户许可证账号或企业身份。
+- E4：受审联网能力，包括官方连接器、Model Provider、AI Action、Context Broker 和本地会话。
+- E5：稳定 API、第三方连接器/AI Provider、受控 Tool、付费、企业私有目录和市场治理。
 
 ## 13. 成功指标
 
@@ -219,6 +219,6 @@ Inflow 的生态应扩大“用户能够用 Markdown 完成什么”，而不是
 
 ## 15. 领域能力包
 
-生态除单一功能插件外，还支持 Domain Pack。领域包把一组标准扩展点组合为完整专业体验，例如 Academic Writing Pack 可以同时贡献 LaTeX 环境、定理、交叉引用、BibTeX、诊断、补全和 `.tex` 导出。
+生态除单一功能插件外，还支持 Domain Pack 市场元包。元包把多个独立签名、独立版本和独立授权的子扩展组合为完整专业体验，例如 Academic Writing Pack 可组合 LaTeX 环境、定理、交叉引用、BibTeX、诊断、补全和 `.tex` 导出。
 
-领域包不是拥有额外权限的“超级插件”。每项贡献仍独立声明、可关闭、可降级，并经过同样的审核和资源限制。语法与 LaTeX 示例见 [Markdown 语法扩展设计](../engineering/extensions/SYNTAX_EXTENSION_API.md)。
+元包自身没有代码或权限，也不继承子扩展的最高权限。每个子扩展分别展示权限、授权、运行、更新和卸载；语法与 LaTeX 示例见 [Markdown 语法扩展设计](../engineering/extensions/SYNTAX_EXTENSION_API.md)。
