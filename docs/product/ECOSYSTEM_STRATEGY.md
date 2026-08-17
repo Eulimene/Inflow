@@ -95,7 +95,7 @@ AI 能力拆成四类，避免每个插件重复实现账号、上下文和编�
 
 ### 5.1 Model Provider
 
-- 本地 Provider 在 E4 只由官方、Inflow 签名的 Local Model Bridge XPC 承载，运行时禁用网络 entitlement。外部签名模型应用通过能力令牌 Unix domain socket 接入留到 E5；普通 localhost HTTP 不能冒充本地 Provider。
+- 本地 Provider 在 E4 只由可选、独立安装、Inflow 签名并公证的 **Inflow AI Companion** 承载；它通过短期能力令牌和认证 XPC（必要时使用仅当前用户可访问的 Unix domain socket）接入，不随 Core 打包。模型资源只由 Companion 在用户明确操作后下载和更新，Core 在未安装 Companion 时保持完整可用；普通 localhost HTTP 不能冒充本地 Provider。E5 才评估第三方签名模型应用。
 - 远程 Provider 连接用户选择的云模型 API。
 - 声明模型列表、上下文长度、结构化输出、流式响应和价格元数据。
 - API Key 由 Inflow Keychain 保存，Provider 通过 Broker 代发请求。

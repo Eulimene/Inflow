@@ -146,7 +146,7 @@ Broker 是唯一敏感能力入口：
 | 单篇导出 | 是 | 否 | 否 | 市场；开发模式可侧载 |
 | 声明式侧栏 | 是 | 通过事务 | 否 | 市场；开发模式可侧载 |
 | 同步连接器 | 是 | 只能提交远端候选版本 | 受限 | 仅官方市场 |
-| AI Model Provider | 是 | 否 | 本地 XPC 或受限 HTTPS | E4 仅官方 Local Model Bridge/示例远程 Provider；第三方到 E5 |
+| AI Model Provider | 是 | 否 | AI Companion 能力通道或受限 HTTPS | E4 仅独立签名、公证的官方 Inflow AI Companion/示例远程 Provider；第三方到 E5 |
 | AI Action / Context | 是 | 通过建议事务 | 由 Provider 负责 | 市场；低权限版本可开发模式测试 |
 | AI Tool | 是 | 通过确认事务 | 不直接开放 | 仅市场，高权限审核 |
 
@@ -470,14 +470,16 @@ sequenceDiagram
     U->>I: ⌘S / 自动保存
     I->>I: 本地原子写入成功
     I-->>U: 已保存到本地
-    I->>C: savedVersion(document, hash)
+    I->>C: savedVersion(SavedSnapshotHandle, baselineID, hash)
+    C->>I: openResourceStream(handle, resourceID/range)
+    I-->>C: 受限只读字节流
     C->>R: 条件上传(if-match / base SHA)
     alt 上传成功
       R-->>C: remote revision
       C->>I: syncSucceeded(revision)
     else 远端也已修改
       R-->>C: conflict + remote content
-      C->>I: submitRemoteCandidate(base, remote)
+      C->>I: submitRemoteCandidate(baselineID, remote)
       I-->>U: 显示差异与合并选择
     else 断网或认证失败
       C->>I: queued / authRequired
@@ -501,6 +503,8 @@ sequenceDiagram
 - `error`：非瞬时错误，需要用户操作。
 
 窗口标题只显示本地保存状态；同步状态使用独立图标和文字，不能混为一个“已保存”指示。
+
+`SavedSnapshotHandle` 是 Core 在本地保存成功后签发的不可变、不透明能力句柄，只绑定一个已保存版本、连接器、工作区和短 TTL。连接器可通过 `ResourceStream` 按范围流式读取该版本正文及清单声明的附件，不能读取当前编辑缓冲区、恢复快照、任意文件路径或其他工作区资源；Core 可随时撤销句柄，并对累计字节、并发和有效期执行预算。正文和附件都不复制进扩展私有存储。
 
 ### 12.3 冲突策略
 
@@ -540,6 +544,12 @@ AI 扩展不能自行拼接和发送任意上下文。Context Broker 汇总 Acti
 
 Provider 声明模型 ID、能力、上下文长度、流式和结构化输出、本地或远程执行、网络域名、数据保留、训练政策和可选价格估算。远程请求由 Broker 代发，Provider 不读取真实 API Key。
 
+E4 本地推理由可选、独立安装、签名并公证的 Inflow AI Companion 提供，通过短期、单用户、单请求能力令牌和认证 XPC 接入；若平台约束要求 Unix domain socket，socket 仅当前用户可访问并执行同等双向身份校验。Companion 与模型资源不进入 Core 包，下载和更新由 Companion 在用户明确操作后完成。
+
+每次调用取“模型声明上限、Provider 审核上限、Core 上限”的最小值：默认上下文最多 2 MiB、输出最多 256 KiB、每个 Provider 同时 1 个生成请求。流式取消须在 2 秒内确认并停止产生 token；超时后 Core 撤销能力令牌、关闭流并终止对应 Companion 请求或远程 Broker 任务。Companion 必须声明模型内存/CPU 预算并由独立进程执行，超限只终止推理，不影响编辑器。
+
+远程调用前展示模型、接收方、上下文范围及可用的费用估算；完成后将输入/输出 token、供应商返回费用、模型和时间写入最长保留 30 天的本地审计记录，不记录 prompt 正文。无法提供价格时必须明确显示“费用未知”，不能推断为免费。
+
 ### 12A.3 Action 输出
 
 Action 只能返回：
@@ -561,6 +571,7 @@ AI 会话由 Core-owned `AISessionStore` 保存到应用容器内的加密 SQLit
 - 内容中的指令不能新增权限、切换 Provider 或批准工具。
 - 工具参数按 Schema、资源范围和当前文档版本重新校验。
 - 有副作用的工具调用默认逐次确认，扩展不能伪造用户手势。
+- 安全测试必须覆盖文档、远程检索内容、工具输出和模型响应中的间接 Prompt Injection，以及跨轮次持久化、编码混淆、伪造系统消息和诱导泄露上下文；测试不得允许内容改变权限、工具清单、费用确认或数据边界。
 
 ## 13. 插件市场
 
@@ -577,11 +588,13 @@ AI 会话由 Core-owned `AISessionStore` 保存到应用容器内的加密 SQLit
 
 ### 13.2 信任链
 
-1. 开发者注册并验证身份，获得发布者密钥。
-2. 开发者生成包含 `content-manifest.json` 与 `developer.sig` 的本地签名 `.inflowx` 并上传。
-3. 市场执行自动扫描、权限审查和人工复核。
+1. 开发者在本地生成 Ed25519 私钥并保存在 Keychain；私钥不上传。平台验证发布者身份和域名控制后，为公钥签发包含 `publisherID`、`keyID`、算法、有效期和包命名空间的 `PublisherCertificate`。
+2. 开发者生成包含 `content-manifest.json`、发布者证书链与引用 `keyID` 的 `developer.sig` 的本地签名 `.inflowx` 并上传。
+3. 市场验证证书、签名和命名空间，执行自动扫描、权限审查和人工复核。
 4. 通过后在签名目录附加 `market.sig` 并写入透明发布日志，不改变 payload 哈希清单。
-5. 客户端验证每个 payload 哈希、规范清单、对应安装路径所需签名和撤回列表。
+5. 客户端验证每个 payload 哈希、规范清单、发布者证书链、对应安装路径所需签名和撤回列表。
+
+密钥轮换优先由旧密钥和平台共同认证新 `keyID`；私钥丢失时必须经身份复核、冷却期和公开安全通知后由平台签发替代证书。发布者转移要求原发布者、新发布者和平台三方确认，并在客户端更新前展示身份变化。证书到期、撤销和包级撤回应进入同一透明日志。开发者模式可使用自签名证书和 TOFU，但必须持久显示未认证警告，且不能据此进入市场或获得高权限。
 
 连接器必须人工审核；普通主题和低权限扩展可以采用自动审核加抽查。
 
@@ -750,7 +763,7 @@ AI 会话由 Core-owned `AISessionStore` 保存到应用容器内的加密 SQLit
 ### E4：受审联网与 AI
 
 - 权限代理、Keychain、限域 HTTPS、加密同步基线、同步状态机和三方合并。
-- 先发布官方 GitHub 连接器和官方示例 Model Provider，验证 Connector 与 AI Capability 模型；第三方高权限扩展仍不开放。
+- 先发布官方 GitHub 连接器、独立 Inflow AI Companion 和官方示例远程 Model Provider，验证 Connector 与 AI Capability 模型；第三方高权限扩展仍不开放。
 
 ### E5：稳定生态
 
