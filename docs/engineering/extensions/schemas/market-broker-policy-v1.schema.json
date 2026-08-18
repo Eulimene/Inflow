@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.inflow.local/extensions/market-broker-policy-v1.schema.json",
+  "title": "Inflow Market Broker Policy v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "policyVersion", "authority", "phase", "origin", "proxyRule", "endpoints", "dns", "tls", "redirects", "budgets", "responseRules"],
+  "properties": {
+    "$schema": { "const": "./schemas/market-broker-policy-v1.schema.json" },
+    "policyVersion": { "const": 1 },
+    "authority": { "const": "normative" },
+    "phase": { "const": "E3" },
+    "origin": { "const": "https://market.inflow.app:443" },
+    "proxyRule": { "const": "system-and-custom-proxy-overrides-forbidden" },
+    "endpoints": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/catalog" },
+          { "$ref": "#/$defs/extensionDetail" },
+          { "$ref": "#/$defs/packageDownload" },
+          { "$ref": "#/$defs/revocations" },
+          { "$ref": "#/$defs/reports" }
+        ]
+      }
+    },
+    "dns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resolveEachConnection", "pinResolvedAddressThroughTLS", "maximumAnswers", "rejectAddressClasses"],
+      "properties": {
+        "resolveEachConnection": { "const": true },
+        "pinResolvedAddressThroughTLS": { "const": true },
+        "maximumAnswers": { "const": 8 },
+        "rejectAddressClasses": {
+          "const": ["unspecified", "loopback", "private", "link-local", "multicast", "carrier-grade-nat", "documentation", "benchmark", "reserved", "unix-socket"]
+        }
+      }
+    },
+    "tls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimumVersion", "systemTrustOnly", "hostnameVerification", "clientCertificates"],
+      "properties": {
+        "minimumVersion": { "const": "TLS1.2" },
+        "systemTrustOnly": { "const": true },
+        "hostnameVerification": { "const": true },
+        "clientCertificates": { "const": false }
+      }
+    },
+    "redirects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maximumHops", "followServerReturnedURLs"],
+      "properties": {
+        "maximumHops": { "const": 0 },
+        "followServerReturnedURLs": { "const": false }
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestBodyBytes", "responseCompressedBytes", "responseDecompressedBytes", "decompressionRatio", "wallClockSeconds", "requestsPerOperation"],
+      "properties": {
+        "requestBodyBytes": { "const": 1048576 },
+        "responseCompressedBytes": { "const": 67108864 },
+        "responseDecompressedBytes": { "const": 268435456 },
+        "decompressionRatio": { "const": 20 },
+        "wallClockSeconds": { "const": 120 },
+        "requestsPerOperation": { "const": 64 }
+      }
+    },
+    "responseRules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["acceptedContentTypes", "unknownFieldRule", "signatureRequiredFor", "packageStreamDestination"],
+      "properties": {
+        "acceptedContentTypes": { "const": ["application/json", "application/vnd.inflow.extension+zip"] },
+        "unknownFieldRule": { "const": "reject-for-signed-records" },
+        "signatureRequiredFor": { "const": ["catalog", "market-release-record", "pack-release-record", "revocation-list"] },
+        "packageStreamDestination": { "const": "bounded-read-only-stream-to-extension-manager" }
+      }
+    }
+  },
+  "$defs": {
+    "endpointBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "method", "pathTemplate", "responseKind"],
+      "properties": {
+        "id": { "type": "string" },
+        "method": { "enum": ["GET", "POST"] },
+        "pathTemplate": { "type": "string" },
+        "responseKind": { "enum": ["signed-json", "signed-package-stream", "unsigned-report-receipt"] }
+      }
+    },
+    "catalog": {
+      "allOf": [
+        { "$ref": "#/$defs/endpointBase" },
+        { "properties": { "id": { "const": "catalog" }, "method": { "const": "GET" }, "pathTemplate": { "const": "/catalog" }, "responseKind": { "const": "signed-json" } } }
+      ]
+    },
+    "extensionDetail": {
+      "allOf": [
+        { "$ref": "#/$defs/endpointBase" },
+        { "properties": { "id": { "const": "extension-detail" }, "method": { "const": "GET" }, "pathTemplate": { "const": "/extensions/{packageID}" }, "responseKind": { "const": "signed-json" } } }
+      ]
+    },
+    "packageDownload": {
+      "allOf": [
+        { "$ref": "#/$defs/endpointBase" },
+        { "properties": { "id": { "const": "package-download" }, "method": { "const": "GET" }, "pathTemplate": { "const": "/extensions/{packageID}/versions/{version}/download" }, "responseKind": { "const": "signed-package-stream" } } }
+      ]
+    },
+    "revocations": {
+      "allOf": [
+        { "$ref": "#/$defs/endpointBase" },
+        { "properties": { "id": { "const": "revocations" }, "method": { "const": "GET" }, "pathTemplate": { "const": "/revocations" }, "responseKind": { "const": "signed-json" } } }
+      ]
+    },
+    "reports": {
+      "allOf": [
+        { "$ref": "#/$defs/endpointBase" },
+        { "properties": { "id": { "const": "reports" }, "method": { "const": "POST" }, "pathTemplate": { "const": "/reports" }, "responseKind": { "const": "unsigned-report-receipt" } } }
+      ]
+    }
+  }
+}

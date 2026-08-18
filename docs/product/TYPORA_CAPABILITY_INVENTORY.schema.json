@@ -1,0 +1,628 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inflow.app/schemas/typora-capability-inventory-v2.schema.json",
+  "title": "Inflow Typora Capability Inventory",
+  "description": "Machine contract for Typora evidence, Inflow requirement mappings, alignment status, and public exceptions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "inventoryVersion",
+    "generatedAt",
+    "sourceOfTruth",
+    "inventoryStatus",
+    "benchmark",
+    "coverage",
+    "evidenceRegistry",
+    "capabilities",
+    "exceptions"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "./TYPORA_CAPABILITY_INVENTORY.schema.json"
+    },
+    "schemaVersion": {
+      "const": 2
+    },
+    "inventoryVersion": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*\\.[0-9]+\\.[0-9]+$"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sourceOfTruth": {
+      "const": true
+    },
+    "inventoryStatus": {
+      "enum": [
+        "evidence_baseline",
+        "testing",
+        "frozen"
+      ]
+    },
+    "benchmark": {
+      "$ref": "#/$defs/benchmark"
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "evidenceRegistry": {
+      "$ref": "#/$defs/evidenceRegistry"
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/capability"
+      }
+    },
+    "exceptions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/exception"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "inventoryStatus": {
+            "const": "frozen"
+          }
+        },
+        "required": [
+          "inventoryStatus"
+        ]
+      },
+      "then": {
+        "properties": {
+          "capabilities": {
+            "items": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "aligned",
+                    "exception"
+                  ]
+                }
+              },
+              "required": [
+                "status"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "os",
+        "architecture"
+      ],
+      "properties": {
+        "os": {
+          "type": "string",
+          "minLength": 1
+        },
+        "architecture": {
+          "enum": [
+            "arm64",
+            "x86_64"
+          ]
+        }
+      }
+    },
+    "benchmark": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "product",
+        "build",
+        "channel",
+        "platform",
+        "releaseURL",
+        "capturedDate"
+      ],
+      "properties": {
+        "product": {
+          "const": "Typora"
+        },
+        "build": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "channel": {
+          "enum": [
+            "stable",
+            "dev"
+          ]
+        },
+        "platform": {
+          "$ref": "#/$defs/platform"
+        },
+        "releaseURL": {
+          "type": "string",
+          "format": "uri"
+        },
+        "capturedDate": {
+          "type": "string",
+          "format": "date"
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capabilityRefs",
+        "exclusions"
+      ],
+      "properties": {
+        "capabilityRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/capabilityRef"
+          }
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/coverageExclusion"
+          }
+        }
+      }
+    },
+    "capabilityRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requirementID",
+        "capabilityIDs"
+      ],
+      "properties": {
+        "requirementID": {
+          "type": "string",
+          "pattern": "^INF-P[0-3]-[A-Z]+-[0-9]{3}$"
+        },
+        "capabilityIDs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+          }
+        }
+      }
+    },
+    "coverageExclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requirementID",
+        "reason",
+        "owner"
+      ],
+      "properties": {
+        "requirementID": {
+          "type": "string",
+          "pattern": "^INF-P[0-3]-[A-Z]+-[0-9]{3}$"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "evidenceRegistry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "corpora",
+        "operationSamples"
+      ],
+      "properties": {
+        "corpora": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/corpusEvidence"
+          }
+        },
+        "operationSamples": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/operationEvidence"
+          }
+        }
+      }
+    },
+    "evidenceEnvironment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "os",
+        "architecture",
+        "typoraBuild",
+        "settingsProfile",
+        "locale"
+      ],
+      "properties": {
+        "os": {
+          "type": "string",
+          "minLength": 1
+        },
+        "architecture": {
+          "enum": [
+            "arm64",
+            "x86_64"
+          ]
+        },
+        "typoraBuild": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "settingsProfile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "locale": {
+          "type": "string",
+          "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$"
+        }
+      }
+    },
+    "corpusEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "corpusID",
+        "sha256",
+        "artifactURI",
+        "environment",
+        "result",
+        "capturedDate",
+        "owner"
+      ],
+      "properties": {
+        "corpusID": {
+          "type": "string",
+          "pattern": "^TYP-CORPUS-[A-Z0-9-]+$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+        },
+        "artifactURI": {
+          "type": "string",
+          "format": "uri-reference"
+        },
+        "environment": {
+          "$ref": "#/$defs/evidenceEnvironment"
+        },
+        "result": {
+          "enum": [
+            "passed",
+            "failed",
+            "pending"
+          ]
+        },
+        "capturedDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "operationEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operationSampleID",
+        "sha256",
+        "artifactURI",
+        "environment",
+        "result",
+        "capturedDate",
+        "owner"
+      ],
+      "properties": {
+        "operationSampleID": {
+          "type": "string",
+          "pattern": "^TYP-OP-[A-Z0-9-]+$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+        },
+        "artifactURI": {
+          "type": "string",
+          "format": "uri-reference"
+        },
+        "environment": {
+          "$ref": "#/$defs/evidenceEnvironment"
+        },
+        "result": {
+          "enum": [
+            "passed",
+            "failed",
+            "pending"
+          ]
+        },
+        "capturedDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capabilityID",
+        "requirementID",
+        "category",
+        "typoraPlatform",
+        "typoraBuild",
+        "settingsProfile",
+        "officialEvidenceURL",
+        "evidenceDate",
+        "expectedBehavior",
+        "inflowPath",
+        "owner",
+        "status",
+        "corpusIDs",
+        "operationSampleIDs",
+        "exceptionID"
+      ],
+      "properties": {
+        "capabilityID": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+        },
+        "requirementID": {
+          "type": "string",
+          "pattern": "^INF-(P[0-3]|SCOPE)-[A-Z]+-[0-9]{3}$"
+        },
+        "category": {
+          "enum": [
+            "editing",
+            "markdown",
+            "diagram",
+            "workspace",
+            "resource",
+            "writing",
+            "content",
+            "theme",
+            "export",
+            "file",
+            "settings",
+            "reliability",
+            "navigation",
+            "math"
+          ]
+        },
+        "typoraPlatform": {
+          "$ref": "#/$defs/platform"
+        },
+        "typoraBuild": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "settingsProfile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "officialEvidenceURL": {
+          "type": "string",
+          "format": "uri"
+        },
+        "evidenceDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "expectedBehavior": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inflowPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "evidence_captured",
+            "testing",
+            "aligned",
+            "exception",
+            "blocked"
+          ]
+        },
+        "corpusIDs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "operationSampleIDs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "exceptionID": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^TYP-EXC-[0-9]{3}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "evidence_captured"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "corpusIDs": {
+                "maxItems": 0
+              },
+              "operationSampleIDs": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "aligned"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "anyOf": [
+              {
+                "properties": {
+                  "corpusIDs": {
+                    "minItems": 1
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "operationSampleIDs": {
+                    "minItems": 1
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "exception"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "exceptionID": {
+                "type": "string"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "exceptionID": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "exception": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exceptionID",
+        "capabilityID",
+        "requirementID",
+        "status",
+        "permanent",
+        "reason",
+        "alternativePath",
+        "userImpact",
+        "owner",
+        "reviewDate"
+      ],
+      "properties": {
+        "exceptionID": {
+          "type": "string",
+          "pattern": "^TYP-EXC-[0-9]{3}$"
+        },
+        "capabilityID": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$"
+        },
+        "requirementID": {
+          "type": "string",
+          "pattern": "^INF-(P[0-3]|SCOPE)-[A-Z]+-[0-9]{3}$"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "superseded"
+          ]
+        },
+        "permanent": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "alternativePath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "userImpact": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewDate": {
+          "type": "string",
+          "format": "date"
+        }
+      }
+    }
+  }
+}

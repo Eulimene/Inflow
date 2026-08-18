@@ -1,16 +1,100 @@
-# Data Protection Policy
+# Data Protection Policy（冻结契约）
 
-- policyVersion：1
-- 适用：Recovery（P0）、Sync pending/baseline（E4）、AI Session（E4）
+- policyVersion：2
+- 契约状态：Frozen；Release canary 与最终 Archive entitlement 证据仍为 OPEN
+- 适用：Recovery（P0）、Workspace Index（P1）、Extension State（E1/E2）、Sync pending/baseline（E4）、AI Session（E4）
+- 机器密钥权威：[`KEYCHAIN_POLICY.json`](./KEYCHAIN_POLICY.json)
+- 日志与 canary：[`LOGGING_POLICY.md`](./LOGGING_POLICY.md)
 
-## 密钥与算法
+## 1. 数据域与最小 key 边界
 
-每个数据域使用独立随机 256-bit master key，存于 Keychain，`kSecAttrSynchronizable=false`、ThisDeviceOnly、仅指定签名 Core/Broker access group 可读。正文/blob 以分块 AES-256-GCM 加密；每块使用随机 96-bit nonce，AAD 绑定 policyVersion、domain、document/workspace/session ID、blob ID、chunk index 和明文长度。content ID/去重键使用域密钥派生的 HMAC-SHA-256，不暴露正文裸 hash。
+禁止宽泛的 Core/Broker 共用 access group。五个持久域分别拥有独立随机 256-bit KEK 与独立 Keychain access group：`recovery`、`workspaceIndex`、`extensionState`、`sync`、`aiSession`。各域只由 Main App 内对应的 Recovery/Workspace Index/State/Sync/AI Session store owner 使用；独立的 Render/Image/PDF Postflight/Network/AI Manager/AI Worker、扩展 Host 和普通扩展 target 均没有上述 KEK 权限。Main App 在某阶段只获得该阶段实际启用 store 的 access group，不能预领未来域。
 
-SQLite 只存密文 payload 和非敏感索引；正文禁止进入 WAL、rollback journal、FTS、日志或崩溃报告。临时明文优先使用内存或 unlink 后的受限 FD，禁止写系统通用 temp；导出 staging 是用户主动输出事务，不复用 Store 密钥。
+所有 Keychain item 固定 `kSecAttrSynchronizable=false`、ThisDeviceOnly、不可导出，并绑定最终签名 target 的最小 access group。实际 Team ID/application-identifier prefix 从 Release Archive 签名读取，不硬编码在文档；CI 将归一化后的最终 entitlements 与 `KEYCHAIN_POLICY.json` 做精确映射。Debug entitlement、源码 `.entitlements` 文件或 target 名称都不能替代 Archive 证据。
 
-## 生命周期
+层级固定为：
 
-密钥按版本标识；轮换采用新写新 key、后台逐 blob 重加密、旧 key 仅在迁移完成后删除。删除域数据时先删除 key（crypto-erase），再异步清除 blob/SQLite/WAL/shm；备份默认排除 Recovery、Sync pending 和 AI Session。损坏或认证失败绝不返回部分明文，隔离记录并提供删除/人工恢复入口。
+```text
+domain KEK（Keychain）
+  └─ AES-256-GCM wrap namespace DEK
+       └─ HKDF-SHA-256 派生每 blob 加密 key / content-ID HMAC key
+```
 
-Recovery key 丢失只影响恢复副本，不影响用户文件；Sync/AI 撤权立即删除对应域 key。Release 测试必须扫描容器、WAL/temp、日志和 crash fixture，证明不存在已知明文 canary。
+namespace 为 Recovery document + store generation、Workspace Index workspace identity + authorization generation、Extension State extension + workspace、Sync workspace 或 AI session。DEK 是随机 256-bit，持久化时只保存被 KEK 包裹的密文。普通 worker 至多接收一次性 operation key 或已解密的有界内存流，不接收 KEK/DEK。
+
+## 2. KDF purpose labels 与 key 使用
+
+HKDF-SHA-256 的 `info` 必须是 UTF-8、带长度前缀的以下固定 label 之一，再连接 length-prefixed domain/namespace/blob IDs；不得拼接含歧义的裸字符串：
+
+```text
+com.inflow.dataprotection/v1/kek-wrap
+com.inflow.dataprotection/v1/blob-encryption
+com.inflow.dataprotection/v1/content-id
+com.inflow.dataprotection/v1/index-token
+com.inflow.dataprotection/v1/journal-record
+```
+
+- KEK 只派生 `kek-wrap` key；wrap nonce 为随机 96-bit，AAD 绑定 policyVersion、domain、namespace ID、DEK version 和 store generation。
+- blob encryption key 从 namespace DEK、每 blob 随机 256-bit `blobSalt` 与 `blob-encryption` label 派生；不同 blob 不共享派生 key。
+- content ID 与索引 token 使用分别派生的 HMAC-SHA-256 key；不持久化正文裸 hash、绝对路径裸 hash 或跨域可关联 token。
+- `journal-record` 只从 Recovery `(opaqueDocumentID, storeGeneration)` namespace DEK 派生；精确 salt/info/AAD/wire 与 tail-anchor 顺序由 [SaveRecovery ADR 第 5 节](./SAVE_RECOVERY_ADR.md) 唯一冻结。tail anchor 使用该 label 后追加 length-prefixed role `tail-anchor`，record 追加 role `record`，两者不共享派生 key。
+- 所有随机数来自 `SecRandomCopyBytes` 或等价系统 CSPRNG；nonce 冲突检测到即拒绝整次写入，不重试复用 key/nonce 对。
+
+## 3. 加密容器 v2
+
+Recovery/State/Sync/AI blob 使用同一 framing，算法固定为 AES-256-GCM + HKDF-SHA-256。header 是确定性编码，不接受未知 required field：
+
+```text
+BlobHeaderV2 {
+  magic="IFEB", formatVersion=2, policyVersion,
+  headerLength, totalContainerLength,
+  domain, namespaceID, blobID, storeGeneration,
+  KEKVersion, DEKVersion, algorithms,
+  blobSalt, wrappedDEKNonce, wrappedDEKCiphertext, wrappedDEKTag,
+  compression, chunkPlaintextLimit, chunkCount, plaintextTotalLength
+}
+```
+
+header 除 wrap ciphertext/tag 外的 canonical bytes 是 DEK wrap 的 AAD；完整 canonical header 的 SHA-256 为 `headerDigest`。每块独立保存：
+
+```text
+ChunkV2 { index, plaintextLength, ciphertextLength, nonce, ciphertext, tag }
+AAD = headerDigest || index || plaintextLength || ciphertextLength || isFinal
+```
+
+必须在释放任何明文前验证：
+
+1. 文件实际总长度等于 `totalContainerLength`，header/chunk 长度相加无溢出且完全消费输入。
+2. `chunkCount >= 1`，index 从 0 连续且唯一，只有最后一块 `isFinal=true`。
+3. 各块明文长度不超过 header 限额，总和精确等于 `plaintextTotalLength`；压缩输出还须满足域预算与最大解压比。
+4. DEK unwrap、每块 tag、headerDigest 与所有 AAD 全部成功；任一失败时整份 blob 认证失败，不返回已通过的前缀明文。
+5. 末尾追加、删除块、重排、重复、跨 blob 拼接、修改总长度/chunk count 或降级 policy/algorithm 均失败。
+
+authenticated header、总长度、chunk count 和 final 标志共同提供抗截断规则。解密 API 只有 `complete(bytes)` 或 `failure(reason)`，没有“尽力恢复部分内容”分支。
+
+## 4. 明文与索引边界
+
+- Recovery 的正文、bookmark、路径/文件名、内容 hash、选择、mode、scroll/window state 和相对引用信息全部在加密 payload 内。journal 中 target 只保存域 HMAC/opaque identity；SQLite 仅保存 store generation、opaque IDs、状态机水位、大小和时间 bucket。
+- Workspace Index 的 SQLite/WAL、标题、相对路径与任何可反推文件的字段都由 `workspaceIndex` wrapped DEK 加密；可检索列只使用该 workspace 独立派生的 opaque path ID/HMAC token，不保存裸路径、跨 workspace 可关联 token 或正文副本。
+- Sync pending/baseline 的路径、mutation payload 与资源清单均加密；Network Broker 不拥有 store key，也不得按路径读取 store。
+- AI prompt、response、解析中间结果与 diff 只由 Main App 内的 Core AI Session owner 用有界内存持有；Provider Host、Network Broker、外部 AI Model Manager 和 Model Worker 不获得持久域 key，也不得持久化这些明文。
+- E1/E2 扩展默认只可持久化 Schema 声明的标量；正文、选区、渲染输出、bookmark、路径与 token 不得写入普通 Extension State。只有 document/workspace 权限撤销、扩展卸载或终态 `Revoked` 必须删除对应 namespace DEK 包装和 state；普通 disable/停用只撤销运行 capability，不 crypto-erase 持久偏好。
+- SQLite/WAL/rollback journal/FTS、日志、指标、crash breadcrumb 和系统通用 temp 禁止出现上述明文或稳定裸 hash。
+
+## 5. 临时明文与本地链接 clone
+
+P0 render body 不创建命名 scratch，不写系统 temp。渲染进程间传输只允许有界内存，或先创建 `0600 + O_CLOEXEC` 受限 FD、在写入正文 **之前**立即 unlink 后再传递 FD；创建/unlink 失败即取消 job。关闭时清零可控 buffer 并截断 FD；不得把该机制当作 durable store。
+
+导出 staging 是用户主动输出事务，只能位于系统返回的目标同卷 replacement directory，不复用本策略的 Store key。为把已验证 PNG/JPEG/PDF 交给只接受路径的外部应用，可从已验证 FD 创建 app-owned immutable clone；clone 位于容器内 `Application Support/Inflow/LinkOpenClones/<leaseID>`，父目录 `0700`、随机名称、禁止备份。创建阶段用 `O_EXCL + O_NOFOLLOW + 0600` 直接从 FD 复制，随后 `fsync`、复核 length/hash、记录 clone identity，再 `fchmod(0400)` 并尽可能设置 user-immutable flag；只有封存全部成功后才交给外部应用。它只在用户单击后创建，默认 TTL 10 分钟、应用启动时清扫；不得复用为渲染 scratch、文档事实来源或后续保存目标。
+
+## 6. 生命周期与故障
+
+KEK/DEK 均带单调版本。轮换按“新写新版本 → 后台逐 blob 完整认证后重加密 → 索引原子切换 → 无引用后删除旧包装/旧 key”执行；中断可从旧版本继续。删除域或 namespace 时先删除对应 KEK/DEK wrapper（crypto-erase），再异步清理 blob/SQLite/WAL/shm；Recovery、Workspace Index、Sync pending、AI Session、Extension State 与 LinkOpenClones 默认排除备份。Workspace 撤销授权/忘记时删除对应 `workspaceIndex` DEK wrapper；普通关闭索引只停止任务，是否清除索引由用户的“清除索引”动作决定。
+
+Recovery key 丢失只影响恢复副本，不影响用户 `.md` 文件。Keychain locked 与永久 missing 必须按 `SAVE_RECOVERY_ADR.md` 区分：locked 不删旧 key；confirmed missing 隔离旧密文并创建新 store generation，期间进入明显的 recovery-degraded 状态但仍允许 named 文件保存。Sync/AI 撤权立即删除相应 namespace wrapper/凭据；认证失败隔离整份记录并只提供删除或显式人工恢复入口。
+
+## 7. Release 证据门槛
+
+Release fixture 必须把随机 canary 放入正文、路径、bookmark、fragment、选择、window state、Workspace Index title/path/token 输入、AI response 与扩展 State 拒绝样本，然后扫描 app container、SQLite/WAL/shm、Recovery journal/blob/anchor、Workspace Index store、LinkOpenClones、可访问 temp、应用日志与 crash fixture。扫描至少覆盖原 UTF-8/UTF-16、percent/base64 变体和已知压缩 framing；完整规则以 LoggingPolicy 为准。
+
+还必须验证：最终 Archive access groups 与 `KEYCHAIN_POLICY.json` 精确相符；header/长度/块数/截断/拼接/nonce/tag/KDF label 负面 corpus 全部失败且不释放部分明文；key locked/missing/rotation/crypto-erase 强杀矩阵可恢复。证据未生成时本 Policy 仍可作为冻结实现契约，但 T0/P0 对应安全门禁保持 OPEN。

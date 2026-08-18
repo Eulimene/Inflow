@@ -1,0 +1,104 @@
+{
+  "$schema": "./schemas/typed-adapter-policy-v1.schema.json",
+  "catalogVersion": 1,
+  "authority": "normative",
+  "undeclaredAdapterRule": "disabled",
+  "policies": [
+    {
+      "policyVersion": 1,
+      "policyID": "com.inflow.network.github-sync.v1",
+      "adapterID": "com.inflow.connector.github",
+      "adapterVersion": "1.0.0",
+      "phase": "E4",
+      "operations": ["authorize", "fetch-baseline", "put", "delete", "move", "commit", "check-revision"],
+      "endpoints": [
+        {
+          "endpointID": "github-device-code",
+          "origin": "https://github.com:443",
+          "methods": ["POST"],
+          "pathTemplates": ["/login/device/code"],
+          "requestContentTypes": ["application/x-www-form-urlencoded"],
+          "responseContentTypes": ["application/json", "application/x-www-form-urlencoded"],
+          "credentialScope": "none"
+        },
+        {
+          "endpointID": "github-device-token",
+          "origin": "https://github.com:443",
+          "methods": ["POST"],
+          "pathTemplates": ["/login/oauth/access_token"],
+          "requestContentTypes": ["application/x-www-form-urlencoded"],
+          "responseContentTypes": ["application/json", "application/x-www-form-urlencoded"],
+          "credentialScope": "none"
+        },
+        {
+          "endpointID": "github-repository",
+          "origin": "https://api.github.com:443",
+          "methods": ["GET"],
+          "pathTemplates": ["/repos/{owner}/{repo}", "/repos/{owner}/{repo}/git/ref/heads/{branch}", "/repos/{owner}/{repo}/git/commits/{sha}", "/repos/{owner}/{repo}/git/trees/{sha}", "/repos/{owner}/{repo}/git/blobs/{sha}"],
+          "requestContentTypes": [],
+          "responseContentTypes": ["application/json"],
+          "credentialScope": "github-repository-token"
+        },
+        {
+          "endpointID": "github-git-write",
+          "origin": "https://api.github.com:443",
+          "methods": ["POST", "PATCH"],
+          "pathTemplates": ["/repos/{owner}/{repo}/git/blobs", "/repos/{owner}/{repo}/git/trees", "/repos/{owner}/{repo}/git/commits", "/repos/{owner}/{repo}/git/refs/heads/{branch}"],
+          "requestContentTypes": ["application/json"],
+          "responseContentTypes": ["application/json"],
+          "credentialScope": "github-repository-token"
+        }
+      ],
+      "endpointGraph": [
+        { "operation": "authorize", "from": "core", "to": "github-device-code" },
+        { "operation": "authorize", "from": "github-device-code", "to": "github-device-token" },
+        { "operation": "fetch-baseline", "from": "core", "to": "github-repository" },
+        { "operation": "check-revision", "from": "core", "to": "github-repository" },
+        { "operation": "put", "from": "core", "to": "github-git-write" },
+        { "operation": "delete", "from": "core", "to": "github-git-write" },
+        { "operation": "move", "from": "core", "to": "github-git-write" },
+        { "operation": "commit", "from": "core", "to": "github-git-write" }
+      ],
+      "dns": {
+        "resolveEachConnection": true,
+        "pinResolvedAddressThroughTLS": true,
+        "rejectAddressClasses": ["unspecified", "loopback", "private", "link-local", "multicast", "carrier-grade-nat", "documentation", "benchmark", "reserved", "unix-socket"],
+        "maximumAnswers": 8
+      },
+      "tls": {
+        "minimumVersion": "TLS1.2",
+        "systemTrustOnly": true,
+        "hostnameVerification": true,
+        "clientCertificates": false
+      },
+      "redirects": {
+        "maximumHops": 0,
+        "allowedEdges": [],
+        "stripCredentialsOnOriginChange": true,
+        "revalidateEveryHop": true
+      },
+      "credentials": {
+        "scopes": [
+          {
+            "scope": "github-repository-token",
+            "endpointIDs": ["github-repository", "github-git-write"],
+            "headers": ["Authorization"]
+          }
+        ],
+        "neverForwardHeaders": ["Cookie", "Proxy-Authorization"]
+      },
+      "budgets": {
+        "requestBodyBytes": 67108864,
+        "responseCompressedBytes": 33554432,
+        "responseDecompressedBytes": 67108864,
+        "decompressionRatio": 20,
+        "wallClockSeconds": 120,
+        "requestsPerOperation": 512
+      },
+      "responseURLPolicy": {
+        "followServerReturnedURLs": false,
+        "allowedFieldMappings": []
+      }
+    }
+  ]
+}

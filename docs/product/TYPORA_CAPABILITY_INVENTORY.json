@@ -1,0 +1,1066 @@
+{
+  "$schema": "./TYPORA_CAPABILITY_INVENTORY.schema.json",
+  "schemaVersion": 2,
+  "inventoryVersion": "1.2.0",
+  "generatedAt": "2026-08-18T00:00:00+08:00",
+  "sourceOfTruth": true,
+  "inventoryStatus": "evidence_baseline",
+  "benchmark": {
+    "product": "Typora",
+    "build": "1.14.6",
+    "channel": "stable",
+    "platform": {
+      "os": "macOS 14 or later",
+      "architecture": "arm64"
+    },
+    "releaseURL": "https://typora.io/releases/stable",
+    "capturedDate": "2026-08-18"
+  },
+  "coverage": {
+    "capabilityRefs": [
+      {
+        "requirementID": "INF-P0-FILE-001",
+        "capabilityIDs": [
+          "file.document-lifecycle"
+        ]
+      },
+      {
+        "requirementID": "INF-P0-MODE-001",
+        "capabilityIDs": [
+          "editing.source-mode"
+        ]
+      },
+      {
+        "requirementID": "INF-P0-MARKDOWN-001",
+        "capabilityIDs": [
+          "markdown.gfm-core"
+        ]
+      },
+      {
+        "requirementID": "INF-P0-THEME-001",
+        "capabilityIDs": [
+          "theme.builtin-appearance"
+        ]
+      },
+      {
+        "requirementID": "INF-P0-SETTINGS-001",
+        "capabilityIDs": [
+          "settings.editor-preferences"
+        ]
+      },
+      {
+        "requirementID": "INF-P0-EDIT-001",
+        "capabilityIDs": [
+          "editing.core-commands",
+          "editing.search-replace",
+          "writing.spell-language"
+        ]
+      },
+      {
+        "requirementID": "INF-P0-RECOVERY-001",
+        "capabilityIDs": [
+          "recovery.autosave-versioning"
+        ]
+      },
+      {
+        "requirementID": "INF-P0-NAV-001",
+        "capabilityIDs": [
+          "navigation.links-outline"
+        ]
+      },
+      {
+        "requirementID": "INF-P0-EXPORT-001",
+        "capabilityIDs": [
+          "export.native-single-document"
+        ]
+      },
+      {
+        "requirementID": "INF-P0-DIAGRAM-001",
+        "capabilityIDs": [
+          "diagram.mermaid",
+          "math.inline-block"
+        ]
+      },
+      {
+        "requirementID": "INF-P1-MODE-001",
+        "capabilityIDs": [
+          "editing.instant-rendered"
+        ]
+      },
+      {
+        "requirementID": "INF-P1-WORKSPACE-001",
+        "capabilityIDs": [
+          "workspace.file-management"
+        ]
+      },
+      {
+        "requirementID": "INF-P1-EDIT-001",
+        "capabilityIDs": [
+          "editing.clickable-task-list",
+          "editing.code-fence-tools",
+          "editing.interactive-structures",
+          "editing.smart-paste",
+          "editing.syntax-highlighting"
+        ]
+      },
+      {
+        "requirementID": "INF-P1-MARKDOWN-001",
+        "capabilityIDs": [
+          "markdown.extended-writing"
+        ]
+      },
+      {
+        "requirementID": "INF-P1-RESOURCE-001",
+        "capabilityIDs": [
+          "resource.image-operations",
+          "resource.image-workflow"
+        ]
+      },
+      {
+        "requirementID": "INF-P1-CONTENT-001",
+        "capabilityIDs": [
+          "content.scripted-network-html",
+          "content.structured-html",
+          "resource.remote-image-loading"
+        ]
+      },
+      {
+        "requirementID": "INF-P1-WRITING-001",
+        "capabilityIDs": [
+          "writing.focus-typewriter",
+          "writing.statistics"
+        ]
+      },
+      {
+        "requirementID": "INF-P1-EXPORT-001",
+        "capabilityIDs": [
+          "export.print-long-image"
+        ]
+      },
+      {
+        "requirementID": "INF-P1-THEME-001",
+        "capabilityIDs": [
+          "theme.builtin-six"
+        ]
+      },
+      {
+        "requirementID": "INF-P2-EXPORT-001",
+        "capabilityIDs": [
+          "export.advanced-single-document"
+        ]
+      },
+      {
+        "requirementID": "INF-P2-DIALECT-001",
+        "capabilityIDs": [
+          "diagram.legacy-sequence-flow",
+          "markdown.emoji",
+          "markdown.highlight",
+          "markdown.subscript",
+          "markdown.superscript",
+          "math.advanced-academic"
+        ]
+      },
+      {
+        "requirementID": "INF-P2-THEME-001",
+        "capabilityIDs": [
+          "theme.arbitrary-css"
+        ]
+      },
+      {
+        "requirementID": "INF-P2-PARITY-001",
+        "capabilityIDs": [
+          "export.pandoc-formats",
+          "resource.image-upload"
+        ]
+      }
+    ],
+    "exclusions": [
+      {
+        "requirementID": "INF-P0-PLATFORM-001",
+        "reason": "Sandboxing, distribution provenance, vulnerability gates, accessibility and resource budgets are Inflow release controls rather than a Typora user-capability benchmark.",
+        "owner": "Release PM"
+      },
+      {
+        "requirementID": "INF-P3-HEALTH-001",
+        "reason": "The document health center is an Inflow differentiation target, not a Typora migration-parity claim.",
+        "owner": "Quality PM"
+      },
+      {
+        "requirementID": "INF-P3-PROFILE-001",
+        "reason": "A shared semantic rendering profile across preview, diagnostics and export is an Inflow differentiation target, not a Typora migration-parity claim.",
+        "owner": "Rendering PM"
+      },
+      {
+        "requirementID": "INF-P3-HISTORY-001",
+        "reason": "Inflow's Recovery-isolated local version timeline is a differentiated lifecycle contract and is not claimed as direct Typora parity.",
+        "owner": "Reliability PM"
+      },
+      {
+        "requirementID": "INF-P3-MERGE-001",
+        "reason": "Interactive block-level three-way merge is an Inflow differentiation target, not a Typora migration-parity claim.",
+        "owner": "Collaboration PM"
+      },
+      {
+        "requirementID": "INF-P3-RESOURCE-001",
+        "reason": "Resource governance and previewed structural batch edits are Inflow differentiation targets, not Typora migration-parity claims.",
+        "owner": "Resource PM"
+      }
+    ]
+  },
+  "evidenceRegistry": {
+    "corpora": [],
+    "operationSamples": []
+  },
+  "capabilities": [
+    {
+      "capabilityID": "file.document-lifecycle",
+      "requirementID": "INF-P0-FILE-001",
+      "category": "file",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-default-file-management",
+      "officialEvidenceURL": "https://support.typora.io/File-Management/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Users can create, open, save, rename, move and manage Markdown documents through the native file and sidebar workflows.",
+      "inflowPath": "P0 native document lifecycle with conflict-safe open, save, Save As and external-change handling.",
+      "owner": "Document PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "editing.source-mode",
+      "requirementID": "INF-P0-MODE-001",
+      "category": "editing",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-default-writing",
+      "officialEvidenceURL": "https://support.typora.io/Shortcut-Keys/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "The View menu exposes a keyboard-accessible source-code mode in addition to Typora's live rendered editing surface.",
+      "inflowPath": "P0 exposes explicit source editing, split live preview and preview-only modes with stable shortcuts and first-window defaults.",
+      "owner": "Editor PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "theme.builtin-appearance",
+      "requirementID": "INF-P0-THEME-001",
+      "category": "theme",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-builtin-themes",
+      "officialEvidenceURL": "https://support.typora.io/About-Themes/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Built-in themes are selectable from the Themes menu and macOS can use separate light- and dark-mode choices.",
+      "inflowPath": "P0 ships deterministic light and dark built-in preview themes with a follow-system choice.",
+      "owner": "Theme PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "settings.editor-preferences",
+      "requirementID": "INF-P0-SETTINGS-001",
+      "category": "settings",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-default-preferences",
+      "officialEvidenceURL": "https://support.typora.io/Quick-Start/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Discoverable preferences control recurring editor behaviors such as word-count visibility and appearance choices.",
+      "inflowPath": "P0 provides a typed Settings contract for mode defaults, font size, editor aids, navigation and file-opening behavior.",
+      "owner": "Settings PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "editing.core-commands",
+      "requirementID": "INF-P0-EDIT-001",
+      "category": "editing",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-default-keymap",
+      "officialEvidenceURL": "https://support.typora.io/Shortcut-Keys/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Keyboard-accessible commands insert or transform headings, lists, tables, code, math, links and inline formatting while standard edit operations remain available.",
+      "inflowPath": "P0 source editor offers undo, redo, find, replace and reversible Markdown-format assistance.",
+      "owner": "Editor PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "editing.search-replace",
+      "requirementID": "INF-P0-EDIT-001",
+      "category": "editing",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-search-default",
+      "officialEvidenceURL": "https://support.typora.io/Search/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Current-document find and replace expose match navigation, case controls and a documented regular-expression path.",
+      "inflowPath": "P0 provides literal current-document find/replace with case control; later parity work may add regex only under a PRD requirement and fixture.",
+      "owner": "Editor PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "writing.spell-language",
+      "requirementID": "INF-P0-EDIT-001",
+      "category": "writing",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-system-spellcheck",
+      "officialEvidenceURL": "https://support.typora.io/Spellcheck/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "On macOS, spelling and grammar controls use the system editing path and can be enabled or disabled from discoverable menus.",
+      "inflowPath": "P0 exposes macOS system spell checking as an independent setting without changing Markdown bytes.",
+      "owner": "Editor PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "recovery.autosave-versioning",
+      "requirementID": "INF-P0-RECOVERY-001",
+      "category": "reliability",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-autosave-enabled",
+      "officialEvidenceURL": "https://support.typora.io/Auto-Save/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Typora documents an autosave path intended to reduce loss of edits during ordinary document work.",
+      "inflowPath": "P0 separates user-file saving from encrypted Recovery and defines named, unnamed, conflict and degraded-protection behavior explicitly.",
+      "owner": "Reliability PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "navigation.links-outline",
+      "requirementID": "INF-P0-NAV-001",
+      "category": "navigation",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-default-navigation",
+      "officialEvidenceURL": "https://support.typora.io/Links/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Markdown links, relative file targets, in-document anchors and outline navigation have discoverable open or jump behavior.",
+      "inflowPath": "P0 provides policy-checked local links, exact fragment matching, heading navigation and source/preview position mapping.",
+      "owner": "Navigation PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "editing.instant-rendered",
+      "requirementID": "INF-P1-MODE-001",
+      "category": "editing",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-default-writing",
+      "officialEvidenceURL": "https://support.typora.io/Quick-Start/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Markdown marks are hidden or revealed around the active content while the document remains editable.",
+      "inflowPath": "Reversible instant-rendered editing mode with byte-predictable Markdown and document-scoped undo.",
+      "owner": "Editor PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "markdown.gfm-core",
+      "requirementID": "INF-P0-MARKDOWN-001",
+      "category": "markdown",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-gfm-baseline",
+      "officialEvidenceURL": "https://support.typora.io/Markdown-Reference/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Core GFM writing and reading paths cover headings, emphasis, links, lists, tasks, code, tables, and images.",
+      "inflowPath": "P0 source editor and frozen cmark-gfm dialect contract.",
+      "owner": "Markdown PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "markdown.extended-writing",
+      "requirementID": "INF-P1-MARKDOWN-001",
+      "category": "markdown",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-markdown-extensions-enabled",
+      "officialEvidenceURL": "https://support.typora.io/Markdown-Reference/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Footnotes, TOC, YAML front matter, and GitHub-style alerts have discoverable editing and rendered-reading paths.",
+      "inflowPath": "P1 versioned dialect extensions shared by editing, preview, and export.",
+      "owner": "Markdown PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "markdown.highlight",
+      "requirementID": "INF-P2-DIALECT-001",
+      "category": "markdown",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-inline-extensions-enabled",
+      "officialEvidenceURL": "https://support.typora.io/Markdown-Reference/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "When the documented Markdown extension is enabled, text wrapped in double equals signs is rendered as highlighted text.",
+      "inflowPath": "P2 dialect compatibility must provide an explicit, configurable highlight syntax path or publish a dedicated exception before parity can be claimed.",
+      "owner": "Compatibility PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "markdown.superscript",
+      "requirementID": "INF-P2-DIALECT-001",
+      "category": "markdown",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-inline-extensions-enabled",
+      "officialEvidenceURL": "https://support.typora.io/Markdown-Reference/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "When the documented Markdown extension is enabled, caret-delimited text is rendered as superscript.",
+      "inflowPath": "P2 dialect compatibility must provide an explicit, configurable superscript syntax path or publish a dedicated exception before parity can be claimed.",
+      "owner": "Compatibility PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "markdown.subscript",
+      "requirementID": "INF-P2-DIALECT-001",
+      "category": "markdown",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-inline-extensions-enabled",
+      "officialEvidenceURL": "https://support.typora.io/Markdown-Reference/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "When the documented Markdown extension is enabled, tilde-delimited text is rendered as subscript.",
+      "inflowPath": "P2 dialect compatibility must provide an explicit, configurable subscript syntax path or publish a dedicated exception before parity can be claimed.",
+      "owner": "Compatibility PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "markdown.emoji",
+      "requirementID": "INF-P2-DIALECT-001",
+      "category": "markdown",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-inline-extensions-enabled",
+      "officialEvidenceURL": "https://support.typora.io/Markdown-Reference/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Emoji shortcodes have a rendered path with autocomplete, while direct UTF-8 emoji remains ordinary document text.",
+      "inflowPath": "P2 dialect compatibility must define shortcode parsing and export semantics; ordinary UTF-8 emoji remains available independently.",
+      "owner": "Compatibility PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "diagram.mermaid",
+      "requirementID": "INF-P0-DIAGRAM-001",
+      "category": "diagram",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-diagrams-enabled",
+      "officialEvidenceURL": "https://support.typora.io/Draw-Diagrams-With-Markdown/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Mermaid fences render supported flow, sequence, class, state, and other diagram families and remain visible in supported exports.",
+      "inflowPath": "P0 offline Mermaid renderer with fixed version, budgets, sanitizer, fallback, and export parity.",
+      "owner": "Rendering PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "math.inline-block",
+      "requirementID": "INF-P0-DIAGRAM-001",
+      "category": "math",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-math-enabled",
+      "officialEvidenceURL": "https://support.typora.io/Markdown-Reference/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Inline math and fenced math blocks have rendered writing paths in the documented Markdown dialect.",
+      "inflowPath": "P0 renders inline and block math offline under fixed budgets, sanitization and export-parity rules.",
+      "owner": "Rendering PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "math.advanced-academic",
+      "requirementID": "INF-P2-DIALECT-001",
+      "category": "math",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-math-advanced",
+      "officialEvidenceURL": "https://support.typora.io/Math/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Math writing supports documented equation references, numbering modes, optional packages and explicit refresh/error-recovery paths.",
+      "inflowPath": "P2 dialect compatibility owns advanced math numbering, reference and package semantics beyond the P0 inline/block baseline.",
+      "owner": "Compatibility PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "diagram.legacy-sequence-flow",
+      "requirementID": "INF-P2-DIALECT-001",
+      "category": "diagram",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-diagrams-enabled",
+      "officialEvidenceURL": "https://support.typora.io/Draw-Diagrams-With-Markdown/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Legacy sequence and flow fences render through their documented diagram syntaxes.",
+      "inflowPath": "P2 migration-compatible renderer or a separately published exception; Mermaid fences do not silently stand in for these dialects.",
+      "owner": "Compatibility PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "workspace.file-management",
+      "requirementID": "INF-P1-WORKSPACE-001",
+      "category": "workspace",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-file-sidebar-default",
+      "officialEvidenceURL": "https://support.typora.io/File-Management/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Users can open folders, browse files and outlines, search, quickly open, and perform common file operations.",
+      "inflowPath": "P1 workspace window with file tree, tabs, outline, full-text search, quick open, permissions, and conflict handling.",
+      "owner": "Workspace PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "editing.clickable-task-list",
+      "requirementID": "INF-P1-EDIT-001",
+      "category": "editing",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-task-list-default",
+      "officialEvidenceURL": "https://support.typora.io/Task-List/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Task-list checkboxes can be toggled directly and update the corresponding Markdown task state.",
+      "inflowPath": "P1 clickable task items produce explicit, reversible Markdown edits through the shared document undo model.",
+      "owner": "Editor PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "editing.code-fence-tools",
+      "requirementID": "INF-P1-EDIT-001",
+      "category": "editing",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-code-fence-default",
+      "officialEvidenceURL": "https://support.typora.io/Code-Fences/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Fenced code exposes language selection, syntax coloring, copy actions, line-number and long-line display controls.",
+      "inflowPath": "P1 code-fence tools add syntax coloring and explicit code-block interactions without changing source unless the user invokes an edit command.",
+      "owner": "Editor PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "editing.interactive-structures",
+      "requirementID": "INF-P1-EDIT-001",
+      "category": "editing",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-default-writing",
+      "officialEvidenceURL": "https://support.typora.io/Table-Editing/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Tables have direct row, column, alignment and cell-editing controls in the rendered writing surface.",
+      "inflowPath": "P1 provides graphical table operations and clickable task items while preserving explicit Markdown edits and undo.",
+      "owner": "Editor PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "editing.smart-paste",
+      "requirementID": "INF-P1-EDIT-001",
+      "category": "editing",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-smart-paste-default",
+      "officialEvidenceURL": "https://support.typora.io/Copy-and-Paste/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Rich clipboard HTML can be converted into Markdown on paste, with an explicit plain-text or Markdown-source paste path.",
+      "inflowPath": "P1 Smart Paste presents a bounded, reviewable conversion path and preserves a plain-text alternative.",
+      "owner": "Editor PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "editing.syntax-highlighting",
+      "requirementID": "INF-P1-EDIT-001",
+      "category": "editing",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-code-fence-highlighting",
+      "officialEvidenceURL": "https://support.typora.io/Markdown-Reference/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "A language identifier on a fenced code block activates syntax highlighting for the rendered code block.",
+      "inflowPath": "P1 adds code syntax coloring and bidirectional source/preview synchronization under the shared document version model.",
+      "owner": "Editor PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "resource.image-workflow",
+      "requirementID": "INF-P1-RESOURCE-001",
+      "category": "resource",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-relative-image-paths",
+      "officialEvidenceURL": "https://support.typora.io/Images/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Users can select, drag, paste, and organize images with configurable relative-path behavior.",
+      "inflowPath": "P1 image paste, attachment directory, relative references, and previewed resource moves; uploads remain an ecosystem boundary.",
+      "owner": "Resource PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "resource.image-operations",
+      "requirementID": "INF-P1-RESOURCE-001",
+      "category": "resource",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-relative-image-paths",
+      "officialEvidenceURL": "https://support.typora.io/Images/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Inserted images can be copied, moved, renamed or downloaded through document-aware operations that update their Markdown paths.",
+      "inflowPath": "P1 provides previewed attachment copy/move operations with relative-reference updates and a single reversible document edit.",
+      "owner": "Resource PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "writing.focus-typewriter",
+      "requirementID": "INF-P1-WRITING-001",
+      "category": "writing",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-default-writing",
+      "officialEvidenceURL": "https://support.typora.io/Focus-and-Typewriter-Mode/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Focus mode deemphasizes non-active content and typewriter mode keeps the active line near a stable viewport position.",
+      "inflowPath": "P1 focus and typewriter modes that preserve source, selection, accessibility, and undo behavior.",
+      "owner": "Editor PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "writing.statistics",
+      "requirementID": "INF-P1-WRITING-001",
+      "category": "writing",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-word-count-visible",
+      "officialEvidenceURL": "https://support.typora.io/Word-Count/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Document and selection statistics expose words, characters, lines and estimated reading time through a discoverable status path.",
+      "inflowPath": "P1 provides word, character, paragraph, selection and reading-time statistics without persisting derived counts into Markdown.",
+      "owner": "Editor PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "content.structured-html",
+      "requirementID": "INF-P1-CONTENT-001",
+      "category": "content",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-html-default",
+      "officialEvidenceURL": "https://support.typora.io/HTML/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Documented HTML elements can participate in editing and rendered reading where the product permits them.",
+      "inflowPath": "P1 versioned structural-tag allowlist with sanitization shared by preview and export.",
+      "owner": "Security PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "content.scripted-network-html",
+      "requirementID": "INF-P1-CONTENT-001",
+      "category": "content",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-html-default",
+      "officialEvidenceURL": "https://support.typora.io/HTML/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Some HTML and embedded media paths can load or execute content beyond plain Markdown rendering.",
+      "inflowPath": "Core intentionally excludes arbitrary scripts, iframes, and document-triggered network media; sanitized structural HTML and explicit links are the alternative.",
+      "owner": "Security PM",
+      "status": "exception",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": "TYP-EXC-001"
+    },
+    {
+      "capabilityID": "resource.remote-image-loading",
+      "requirementID": "INF-P1-CONTENT-001",
+      "category": "resource",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-remote-images-enabled",
+      "officialEvidenceURL": "https://support.typora.io/Images/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Markdown image sources may refer to remote URLs and have a rendered or user-invoked download path.",
+      "inflowPath": "P1 may load remote images only after explicit user opt-in through the versioned URL and image policies; the P0 default remains an offline placeholder.",
+      "owner": "Security PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "export.print-long-image",
+      "requirementID": "INF-P1-EXPORT-001",
+      "category": "export",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-print-and-image-export",
+      "officialEvidenceURL": "https://support.typora.io/Export/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "The document can be printed or exported as an image, and PDF export exposes paper, margin, theme and page-break controls.",
+      "inflowPath": "P1 adds system print, bounded long-image output and enhanced postflighted PDF options.",
+      "owner": "Export PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "theme.builtin-six",
+      "requirementID": "INF-P1-THEME-001",
+      "category": "theme",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-builtin-themes",
+      "officialEvidenceURL": "https://support.typora.io/About-Themes/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Typora ships six built-in themes selectable from the Themes menu.",
+      "inflowPath": "P1 ships at least six built-in themes and controlled design tokens shared by preview and export, without arbitrary CSS or external resources.",
+      "owner": "Theme PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "theme.arbitrary-css",
+      "requirementID": "INF-P2-THEME-001",
+      "category": "theme",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-custom-theme-folder",
+      "officialEvidenceURL": "https://support.typora.io/About-Themes/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Users can install or modify CSS theme files and related font or image resources.",
+      "inflowPath": "P1 design tokens and P2 ThemePolicy-constrained theme packages with isolated font decoding; unrestricted CSS and network resources remain excluded.",
+      "owner": "Theme PM",
+      "status": "exception",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": "TYP-EXC-002"
+    },
+    {
+      "capabilityID": "export.native-single-document",
+      "requirementID": "INF-P0-EXPORT-001",
+      "category": "export",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-export-default",
+      "officialEvidenceURL": "https://support.typora.io/Export/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "The current document can be exported to native HTML and PDF paths and to a rendered image path.",
+      "inflowPath": "P0 self-contained HTML and postflighted PDF; long-image and enhanced export options enter later requirement IDs.",
+      "owner": "Export PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "export.advanced-single-document",
+      "requirementID": "INF-P2-EXPORT-001",
+      "category": "export",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-advanced-export",
+      "officialEvidenceURL": "https://support.typora.io/Export/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "HTML can be exported with or without styles and with an outline, and a successful prior export can be repeated from the document workflow.",
+      "inflowPath": "P2 adds controlled styled or unstyled outline HTML, portable document packaging, repeat export and additional single-document formats.",
+      "owner": "Export PM",
+      "status": "evidence_captured",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": null
+    },
+    {
+      "capabilityID": "export.pandoc-formats",
+      "requirementID": "INF-P2-PARITY-001",
+      "category": "export",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-pandoc-configured",
+      "officialEvidenceURL": "https://support.typora.io/Export/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "With Pandoc installed, users can import and export additional document formats from the editor workflow.",
+      "inflowPath": "A discoverable signed Converter Companion or ecosystem tool handles broad cross-format conversion; Core never probes for or executes Pandoc.",
+      "owner": "Export PM",
+      "status": "exception",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": "TYP-EXC-003"
+    },
+    {
+      "capabilityID": "resource.image-upload",
+      "requirementID": "INF-P2-PARITY-001",
+      "category": "resource",
+      "typoraPlatform": {
+        "os": "macOS 14 or later",
+        "architecture": "arm64"
+      },
+      "typoraBuild": "1.14.6",
+      "settingsProfile": "typora-1.14.6-macos-image-uploader-configured",
+      "officialEvidenceURL": "https://support.typora.io/Upload-Image/",
+      "evidenceDate": "2026-08-18",
+      "expectedBehavior": "Configured third-party uploaders can receive local image paths and return remote URLs for selected, bulk or insertion-time upload workflows.",
+      "inflowPath": "Image upload remains a separately installed ecosystem tool; Core accepts the resulting standard URL but never launches arbitrary uploader commands.",
+      "owner": "Resource PM",
+      "status": "exception",
+      "corpusIDs": [],
+      "operationSampleIDs": [],
+      "exceptionID": "TYP-EXC-004"
+    }
+  ],
+  "exceptions": [
+    {
+      "exceptionID": "TYP-EXC-001",
+      "capabilityID": "content.scripted-network-html",
+      "requirementID": "INF-P1-CONTENT-001",
+      "status": "active",
+      "permanent": true,
+      "reason": "Arbitrary document scripts, iframes, and implicit network media conflict with the Core offline and content-safety boundary.",
+      "alternativePath": "Use sanitized structural HTML, static local resources admitted by policy, or explicit user-opened external links.",
+      "userImpact": "Interactive embeds and document-triggered remote media do not execute inside the Core preview or export.",
+      "owner": "Security PM",
+      "reviewDate": "2026-08-18"
+    },
+    {
+      "exceptionID": "TYP-EXC-002",
+      "capabilityID": "theme.arbitrary-css",
+      "requirementID": "INF-P2-THEME-001",
+      "status": "active",
+      "permanent": true,
+      "reason": "Unrestricted CSS, imports, URLs, and untrusted fonts would bypass deterministic rendering and resource policy.",
+      "alternativePath": "Use P1 design tokens or a P2 ThemePolicy-constrained theme package whose optional fonts pass isolated decoding.",
+      "userImpact": "Existing Typora CSS themes require conversion to the supported declarative theme format and unsupported rules are reported rather than executed.",
+      "owner": "Theme PM",
+      "reviewDate": "2026-08-18"
+    },
+    {
+      "exceptionID": "TYP-EXC-003",
+      "capabilityID": "export.pandoc-formats",
+      "requirementID": "INF-P2-PARITY-001",
+      "status": "active",
+      "permanent": true,
+      "reason": "Broad import, export, CLI, and external executable discovery are outside the single-document Core boundary.",
+      "alternativePath": "Install a separately signed Converter Companion or ecosystem conversion tool with an explicit handoff path.",
+      "userImpact": "DOCX, RTF, ODT, EPUB, and LaTeX conversion is not performed by the Core app but remains available through a separate tool.",
+      "owner": "Export PM",
+      "reviewDate": "2026-08-18"
+    },
+    {
+      "exceptionID": "TYP-EXC-004",
+      "capabilityID": "resource.image-upload",
+      "requirementID": "INF-P2-PARITY-001",
+      "status": "active",
+      "permanent": true,
+      "reason": "Passing user file paths to arbitrary uploader applications, scripts or cloud services conflicts with the Core offline and process-trust boundary.",
+      "alternativePath": "Install a separately signed upload or publishing tool, then paste or return its standard URL through an explicit handoff.",
+      "userImpact": "Core does not provide automatic, selected-image or bulk cloud upload; upload requires a separately installed tool and explicit user action.",
+      "owner": "Resource PM",
+      "reviewDate": "2026-08-18"
+    }
+  ]
+}

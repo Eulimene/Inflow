@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inflow.local/schemas/sanitizer-evidence-v1.schema.json",
+  "title": "Inflow Sanitizer Release evidence v1",
+  "type": "object",
+  "properties": {
+    "evidenceFormatVersion": { "const": 1 },
+    "sanitizerManifestVersion": { "const": 1 },
+    "evidenceStatus": { "const": "passed" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "sourceRevision": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "not": { "pattern": "^0{40}$" }
+    },
+    "releaseBuildID": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "artifacts": {
+      "type": "object",
+      "properties": {
+        "compiledPolicyAllowlist": { "$ref": "#/$defs/artifact" },
+        "negativeCorpusIndex": { "$ref": "#/$defs/artifact" },
+        "testExecutable": { "$ref": "#/$defs/artifact" },
+        "finalArchive": { "$ref": "#/$defs/artifact" },
+        "archiveEntitlementMatrix": { "$ref": "#/$defs/artifact" },
+        "renderManifest": { "$ref": "#/$defs/artifact" },
+        "goldenIndex": { "$ref": "#/$defs/artifact" },
+        "pdfPostflightHelperExecutable": { "$ref": "#/$defs/artifact" },
+        "pdfPostflightCorpusResults": { "$ref": "#/$defs/artifact" }
+      },
+      "required": [
+        "compiledPolicyAllowlist",
+        "negativeCorpusIndex",
+        "testExecutable",
+        "finalArchive",
+        "archiveEntitlementMatrix",
+        "renderManifest",
+        "goldenIndex",
+        "pdfPostflightHelperExecutable",
+        "pdfPostflightCorpusResults"
+      ],
+      "additionalProperties": false
+    },
+    "caseResults": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "caseID": { "type": "string", "pattern": "^[A-Z0-9][A-Z0-9._-]{2,127}$" },
+          "category": {
+            "enum": [
+              "url",
+              "fragment",
+              "local-link",
+              "image",
+              "html",
+              "csp",
+              "mermaid",
+              "katex",
+              "preview-bridge",
+              "process-isolation",
+              "resource-budget",
+              "pdf-postflight",
+              "entitlement"
+            ]
+          },
+          "expectedClassification": {
+            "enum": ["allow", "block", "placeholder", "plainText", "notFound", "terminateJob", "rejectBuild"]
+          },
+          "actualClassification": {
+            "enum": ["allow", "block", "placeholder", "plainText", "notFound", "terminateJob", "rejectBuild"]
+          },
+          "passed": { "const": true },
+          "fixtureSha256": { "$ref": "#/$defs/sha256" },
+          "resultSha256": { "$ref": "#/$defs/sha256" }
+        },
+        "required": [
+          "caseID",
+          "category",
+          "expectedClassification",
+          "actualClassification",
+          "passed",
+          "fixtureSha256",
+          "resultSha256"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "expectedClassification": { "const": "allow" },
+              "actualClassification": { "const": "allow" }
+            }
+          },
+          {
+            "properties": {
+              "expectedClassification": { "const": "block" },
+              "actualClassification": { "const": "block" }
+            }
+          },
+          {
+            "properties": {
+              "expectedClassification": { "const": "placeholder" },
+              "actualClassification": { "const": "placeholder" }
+            }
+          },
+          {
+            "properties": {
+              "expectedClassification": { "const": "plainText" },
+              "actualClassification": { "const": "plainText" }
+            }
+          },
+          {
+            "properties": {
+              "expectedClassification": { "const": "notFound" },
+              "actualClassification": { "const": "notFound" }
+            }
+          },
+          {
+            "properties": {
+              "expectedClassification": { "const": "terminateJob" },
+              "actualClassification": { "const": "terminateJob" }
+            }
+          },
+          {
+            "properties": {
+              "expectedClassification": { "const": "rejectBuild" },
+              "actualClassification": { "const": "rejectBuild" }
+            }
+          }
+        ]
+      }
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "result": { "const": "all-cases-passed" },
+        "failedCaseCount": { "const": 0 },
+        "skippedCaseCount": { "const": 0 },
+        "unknownClassificationCount": { "const": 0 }
+      },
+      "required": [
+        "result",
+        "failedCaseCount",
+        "skippedCaseCount",
+        "unknownClassificationCount"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "evidenceFormatVersion",
+    "sanitizerManifestVersion",
+    "evidenceStatus",
+    "generatedAt",
+    "sourceRevision",
+    "releaseBuildID",
+    "artifacts",
+    "caseResults",
+    "summary"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "not": { "pattern": "^0{64}$" }
+    },
+    "artifact": {
+      "type": "object",
+      "properties": {
+        "packageRelativePath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "allOf": [
+            { "not": { "pattern": "^/" } },
+            { "not": { "pattern": "^[A-Za-z]:" } },
+            { "not": { "pattern": "(^|/)[.][.](/|$)" } }
+          ]
+        },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "byteLength": { "type": "integer", "minimum": 1 }
+      },
+      "required": ["packageRelativePath", "sha256", "byteLength"],
+      "additionalProperties": false
+    }
+  }
+}

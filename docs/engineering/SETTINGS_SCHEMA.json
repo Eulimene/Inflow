@@ -1,0 +1,261 @@
+{
+  "manifestFormatVersion": 1,
+  "schemaVersion": 2,
+  "unknownKeyPolicy": "quarantine",
+  "invalidValuePolicy": "useDefaultWithoutPersistentRewrite",
+  "keys": {
+    "autosave.enabled": {
+      "type": "boolean",
+      "default": true,
+      "scopes": ["global"],
+      "availableFrom": "P0",
+      "reset": true
+    },
+    "autosave.delaySeconds": {
+      "type": "number",
+      "default": 1,
+      "enum": [0.5, 1, 2, 5],
+      "scopes": ["global"],
+      "availableFrom": "P0",
+      "reset": 1
+    },
+    "files.markdownOpenBehavior": {
+      "type": "string",
+      "default": "newWindow",
+      "enum": ["newWindow", "workspaceTab"],
+      "valueAvailableFrom": {
+        "newWindow": "P0",
+        "workspaceTab": "P1"
+      },
+      "scopes": ["global"],
+      "availableFrom": "P0",
+      "reset": "newWindow"
+    },
+    "app.lastUsedMode": {
+      "type": "string",
+      "default": "split",
+      "enum": ["editor", "split", "preview", "instant"],
+      "valueAvailableFrom": {
+        "editor": "P0",
+        "split": "P0",
+        "preview": "P0",
+        "instant": "P1"
+      },
+      "scopes": ["global"],
+      "availableFrom": "P0",
+      "reset": "split"
+    },
+    "editor.fontSize": {
+      "type": "number",
+      "default": 15,
+      "minimum": 12,
+      "maximum": 28,
+      "finite": true,
+      "scopes": ["global", "workspace"],
+      "availableFrom": "P0",
+      "reset": 15
+    },
+    "editor.syntaxHighlighting.enabled": {
+      "type": "boolean",
+      "default": true,
+      "scopes": ["global", "workspace"],
+      "availableFrom": "P0",
+      "reset": true
+    },
+    "editor.spellcheck.enabled": {
+      "type": "boolean",
+      "default": true,
+      "scopes": ["global", "workspace"],
+      "availableFrom": "P0",
+      "reset": true
+    },
+    "editor.wrap.enabled": {
+      "type": "boolean",
+      "default": true,
+      "scopes": ["global", "workspace"],
+      "availableFrom": "P0",
+      "reset": true
+    },
+    "preview.contentWidth": {
+      "type": "number",
+      "default": 760,
+      "minimum": 600,
+      "maximum": 1200,
+      "finite": true,
+      "scopes": ["global", "workspace"],
+      "availableFrom": "P0",
+      "reset": 760
+    },
+    "preview.theme": {
+      "type": "string",
+      "default": "system",
+      "enum": ["system", "light", "dark"],
+      "scopes": ["global", "workspace"],
+      "availableFrom": "P0",
+      "reset": "system"
+    },
+    "preview.scrollSync.enabled": {
+      "type": "boolean",
+      "default": true,
+      "scopes": ["global", "workspace"],
+      "availableFrom": "P0",
+      "reset": true
+    },
+    "preview.headingClickToSource.enabled": {
+      "type": "boolean",
+      "default": true,
+      "scopes": ["global", "workspace"],
+      "availableFrom": "P0",
+      "reset": true
+    },
+    "rendering.mermaid.enabled": {
+      "type": "boolean",
+      "default": true,
+      "scopes": ["global", "workspace"],
+      "availableFrom": "P0",
+      "reset": true
+    },
+    "rendering.math.enabled": {
+      "type": "boolean",
+      "default": true,
+      "scopes": ["global", "workspace"],
+      "availableFrom": "P0",
+      "reset": true
+    },
+    "window.newWindowSplitRatio": {
+      "type": "number",
+      "default": 0.5,
+      "minimum": 0.25,
+      "maximum": 0.75,
+      "finite": true,
+      "scopes": ["global"],
+      "availableFrom": "P0",
+      "reset": 0.5
+    },
+    "window.mode": {
+      "type": "string",
+      "defaultFrom": "app.lastUsedMode",
+      "enum": ["editor", "split", "preview", "instant"],
+      "valueAvailableFrom": {
+        "editor": "P0",
+        "split": "P0",
+        "preview": "P0",
+        "instant": "P1"
+      },
+      "scopes": ["windowRestoration"],
+      "availableFrom": "P0",
+      "preferenceReset": "preserve"
+    },
+    "window.splitRatio": {
+      "type": "number",
+      "defaultFrom": "window.newWindowSplitRatio",
+      "minimum": 0.25,
+      "maximum": 0.75,
+      "finite": true,
+      "scopes": ["windowRestoration"],
+      "availableFrom": "P0",
+      "preferenceReset": "preserve"
+    },
+    "window.sidebarVisible": {
+      "type": "boolean",
+      "default": true,
+      "scopes": ["windowRestoration"],
+      "availableFrom": "P0",
+      "preferenceReset": "preserve"
+    },
+    "window.focusRegion": {
+      "type": "string",
+      "defaultExpression": "focusForMode(window.mode)",
+      "enum": ["editor", "preview", "sidebar"],
+      "scopes": ["windowRestoration"],
+      "availableFrom": "P0",
+      "preferenceReset": "preserve"
+    },
+    "window.editorScrollAnchor": {
+      "type": ["opaqueRestorationState", "null"],
+      "default": null,
+      "scopes": ["windowRestoration"],
+      "availableFrom": "P0",
+      "preferenceReset": "preserve"
+    },
+    "window.previewScrollAnchor": {
+      "type": ["opaqueRestorationState", "null"],
+      "default": null,
+      "scopes": ["windowRestoration"],
+      "availableFrom": "P0",
+      "preferenceReset": "preserve"
+    },
+    "versionStore.enabled": {
+      "type": "boolean",
+      "default": true,
+      "scopes": ["global", "workspace"],
+      "availableFrom": "P3",
+      "reset": true
+    },
+    "versionStore.retentionDays": {
+      "type": "integer",
+      "default": 30,
+      "minimum": 1,
+      "maximum": 3650,
+      "scopes": ["global", "workspace"],
+      "availableFrom": "P3",
+      "reset": 30
+    },
+    "versionStore.maxBytes": {
+      "type": "integer",
+      "default": 524288000,
+      "minimum": 104857600,
+      "scopes": ["global", "workspace"],
+      "availableFrom": "P3",
+      "reset": 524288000
+    }
+  },
+  "documentProperties": [
+    "document.encoding",
+    "document.BOM",
+    "document.lineEnding"
+  ],
+  "migrations": [
+    {
+      "from": 1,
+      "to": 2,
+      "operations": [
+        {
+          "op": "setIfMissing",
+          "key": "app.lastUsedMode",
+          "value": "split"
+        },
+        {
+          "op": "moveByScope",
+          "fromKey": "window.splitRatio",
+          "fromScope": "global",
+          "toKey": "window.newWindowSplitRatio",
+          "toScope": "global"
+        },
+        {
+          "op": "renameIfDestinationMissing",
+          "fromKey": "editor.spellcheck",
+          "toKey": "editor.spellcheck.enabled"
+        },
+        {
+          "op": "renameIfDestinationMissing",
+          "fromKey": "editor.wrap",
+          "toKey": "editor.wrap.enabled"
+        },
+        {
+          "op": "renameIfDestinationMissing",
+          "fromKey": "rendering.mermaid",
+          "toKey": "rendering.mermaid.enabled"
+        },
+        {
+          "op": "renameIfDestinationMissing",
+          "fromKey": "rendering.math",
+          "toKey": "rendering.math.enabled"
+        },
+        {
+          "op": "validateAllAndAtomicallyReplace"
+        }
+      ]
+    }
+  ]
+}

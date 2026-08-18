@@ -1,25 +1,141 @@
-# Typora Capability Inventory
+# Typora Capability Inventory（机器生成阅读视图）
 
-- inventoryVersion：1
-- 状态：Draft；P1/P2 排期前冻结具体 build 与 corpus hash
-- 用途：对标证据的机器可读事实来源；版本归属仍只在 PRD
+> 请勿手工编辑本文件。权威数据来自 [`TYPORA_CAPABILITY_INVENTORY.json`](./TYPORA_CAPABILITY_INVENTORY.json)；运行 `python3 scripts/generate_typora_inventory_view.py` 重新生成。
 
-每条能力必须导出为 JSON/CSV，字段固定为：`capabilityID, category, typoraPlatform, typoraBuild, settingsProfile, officialEvidenceURL, corpusIDs, operationSampleIDs, expectedBehavior, inflowPath, owner, status, exceptionID`。测试平台固定 Apple Silicon 与 PRD 支持的 macOS；Typora build、设置导出和测试日期不得留空。
+## 基线
 
-## 必须覆盖的差距
+| 字段 | 值 |
+| --- | --- |
+| Inventory 版本 | `1.2.0` |
+| 数据状态 | `evidence_baseline` |
+| 基准产品 | Typora `1.14.6` / `stable` |
+| 平台 | macOS 14 or later / `arm64` |
+| 证据捕获日 | `2026-08-18` |
+| 生成时间 | `2026-08-18T00:00:00+08:00` |
 
-| Capability | Typora 证据/行为 | Inflow 等价路径或例外 |
+`evidence_captured` 只表示 build/平台标签、settings profile 标识、官方 URL/日期和 owner 已登记；不表示可复现设置工件已冻结、行为已验证、corpus 已通过或能力已 `aligned`。
+
+## PRD 封闭世界覆盖
+
+已映射 `23` 条 requirement，显式排除 `6` 条；两者必须恰好覆盖 PRD 第 11 节所有非 DoD `INF-P0`–`INF-P3` feature ID。
+
+### 能力映射
+
+| Requirement ID | Capability refs | 状态 |
 | --- | --- | --- |
-| Mermaid/sequence/flow 围栏 | Typora 官方 diagram 文档与冻结 fixture | Mermaid 由 Core；`sequence`/`flow` 由迁移兼容 renderer 或公开 exception，不能默认为已对齐 |
-| 普通 HTML/媒体/iframe | Typora HTML 文档与安全设置 profile | P1 结构化 allowlist；脚本、任意 iframe/媒体网络能力列入安全 exception ledger |
-| Pandoc 导入/多格式导出 | Typora Export/Markdown Reference | 独立签名 Converter Companion/生态工具提供可发现的迁移路径；不打包进 Core，CLI 是明确 exception |
-| 编辑/文件/工作区/主题 | 官方文档 + Top 30 操作样本 | 对应 Core 路径与版本验收 |
+| `INF-P0-FILE-001` | `file.document-lifecycle` | `evidence_captured` |
+| `INF-P0-MODE-001` | `editing.source-mode` | `evidence_captured` |
+| `INF-P0-MARKDOWN-001` | `markdown.gfm-core` | `evidence_captured` |
+| `INF-P0-THEME-001` | `theme.builtin-appearance` | `evidence_captured` |
+| `INF-P0-SETTINGS-001` | `settings.editor-preferences` | `evidence_captured` |
+| `INF-P0-EDIT-001` | `editing.core-commands`<br>`editing.search-replace`<br>`writing.spell-language` | `evidence_captured` |
+| `INF-P0-RECOVERY-001` | `recovery.autosave-versioning` | `evidence_captured` |
+| `INF-P0-NAV-001` | `navigation.links-outline` | `evidence_captured` |
+| `INF-P0-EXPORT-001` | `export.native-single-document` | `evidence_captured` |
+| `INF-P0-DIAGRAM-001` | `diagram.mermaid`<br>`math.inline-block` | `evidence_captured` |
+| `INF-P1-MODE-001` | `editing.instant-rendered` | `evidence_captured` |
+| `INF-P1-WORKSPACE-001` | `workspace.file-management` | `evidence_captured` |
+| `INF-P1-EDIT-001` | `editing.clickable-task-list`<br>`editing.code-fence-tools`<br>`editing.interactive-structures`<br>`editing.smart-paste`<br>`editing.syntax-highlighting` | `evidence_captured` |
+| `INF-P1-MARKDOWN-001` | `markdown.extended-writing` | `evidence_captured` |
+| `INF-P1-RESOURCE-001` | `resource.image-operations`<br>`resource.image-workflow` | `evidence_captured` |
+| `INF-P1-CONTENT-001` | `content.scripted-network-html`<br>`content.structured-html`<br>`resource.remote-image-loading` | `evidence_captured`, `exception` |
+| `INF-P1-WRITING-001` | `writing.focus-typewriter`<br>`writing.statistics` | `evidence_captured` |
+| `INF-P1-EXPORT-001` | `export.print-long-image` | `evidence_captured` |
+| `INF-P1-THEME-001` | `theme.builtin-six` | `evidence_captured` |
+| `INF-P2-EXPORT-001` | `export.advanced-single-document` | `evidence_captured` |
+| `INF-P2-DIALECT-001` | `diagram.legacy-sequence-flow`<br>`markdown.emoji`<br>`markdown.highlight`<br>`markdown.subscript`<br>`markdown.superscript`<br>`math.advanced-academic` | `evidence_captured` |
+| `INF-P2-THEME-001` | `theme.arbitrary-css` | `exception` |
+| `INF-P2-PARITY-001` | `export.pandoc-formats`<br>`resource.image-upload` | `exception` |
 
-## 语料与比较方法
+### 覆盖排除
 
-- Migration Corpus 至少包含官方规范样例、真实 README/技术文档/中文长文、公式/图表/HTML、资源路径与恶意负例；每个 fixture 记录来源许可和 SHA-256。
-- “无需修改”指原 Markdown 字节不变即可完成目标阅读/编辑任务；允许视觉抗锯齿差异，不允许结构、文本、链接目标、公式或图表语义差异。
-- 渲染比较使用 DOM/语义树断言加固定环境截图；操作比较使用录制任务步骤、成功条件与耗时。Top 30 来源必须记录匿名研究样本、样本数、统计期和选择方法，不能由团队主观挑选。
-- Exception Ledger 公开记录能力、原因（安全/平台/产品边界）、替代路径、用户影响和是否永久。任意脚本、CLI、完整 Git 工作台等不能计作已对齐。
+| Requirement ID | 排除理由 | Owner |
+| --- | --- | --- |
+| `INF-P0-PLATFORM-001` | Sandboxing, distribution provenance, vulnerability gates, accessibility and resource budgets are Inflow release controls rather than a Typora user-capability benchmark. | Release PM |
+| `INF-P3-HEALTH-001` | The document health center is an Inflow differentiation target, not a Typora migration-parity claim. | Quality PM |
+| `INF-P3-PROFILE-001` | A shared semantic rendering profile across preview, diagnostics and export is an Inflow differentiation target, not a Typora migration-parity claim. | Rendering PM |
+| `INF-P3-HISTORY-001` | Inflow's Recovery-isolated local version timeline is a differentiated lifecycle contract and is not claimed as direct Typora parity. | Reliability PM |
+| `INF-P3-MERGE-001` | Interactive block-level three-way merge is an Inflow differentiation target, not a Typora migration-parity claim. | Collaboration PM |
+| `INF-P3-RESOURCE-001` | Resource governance and previewed structural batch edits are Inflow differentiation targets, not Typora migration-parity claims. | Resource PM |
 
-P2 DoD：Inventory 无无主/无证据条目；非 exception 能力全部通过，95% corpus 无需修改，Top 30 任务完成率 ≥90%。
+## 能力证据记录
+
+| Capability ID | Requirement ID | 状态 | 官方证据 | Owner |
+| --- | --- | --- | --- | --- |
+| `diagram.mermaid` | `INF-P0-DIAGRAM-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Draw-Diagrams-With-Markdown/) | Rendering PM |
+| `math.inline-block` | `INF-P0-DIAGRAM-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Markdown-Reference/) | Rendering PM |
+| `editing.core-commands` | `INF-P0-EDIT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Shortcut-Keys/) | Editor PM |
+| `editing.search-replace` | `INF-P0-EDIT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Search/) | Editor PM |
+| `writing.spell-language` | `INF-P0-EDIT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Spellcheck/) | Editor PM |
+| `export.native-single-document` | `INF-P0-EXPORT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Export/) | Export PM |
+| `file.document-lifecycle` | `INF-P0-FILE-001` | `evidence_captured` | [Typora Support](https://support.typora.io/File-Management/) | Document PM |
+| `markdown.gfm-core` | `INF-P0-MARKDOWN-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Markdown-Reference/) | Markdown PM |
+| `editing.source-mode` | `INF-P0-MODE-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Shortcut-Keys/) | Editor PM |
+| `navigation.links-outline` | `INF-P0-NAV-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Links/) | Navigation PM |
+| `recovery.autosave-versioning` | `INF-P0-RECOVERY-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Auto-Save/) | Reliability PM |
+| `settings.editor-preferences` | `INF-P0-SETTINGS-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Quick-Start/) | Settings PM |
+| `theme.builtin-appearance` | `INF-P0-THEME-001` | `evidence_captured` | [Typora Support](https://support.typora.io/About-Themes/) | Theme PM |
+| `content.scripted-network-html` | `INF-P1-CONTENT-001` | `exception` | [Typora Support](https://support.typora.io/HTML/) | Security PM |
+| `content.structured-html` | `INF-P1-CONTENT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/HTML/) | Security PM |
+| `resource.remote-image-loading` | `INF-P1-CONTENT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Images/) | Security PM |
+| `editing.clickable-task-list` | `INF-P1-EDIT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Task-List/) | Editor PM |
+| `editing.code-fence-tools` | `INF-P1-EDIT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Code-Fences/) | Editor PM |
+| `editing.interactive-structures` | `INF-P1-EDIT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Table-Editing/) | Editor PM |
+| `editing.smart-paste` | `INF-P1-EDIT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Copy-and-Paste/) | Editor PM |
+| `editing.syntax-highlighting` | `INF-P1-EDIT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Markdown-Reference/) | Editor PM |
+| `export.print-long-image` | `INF-P1-EXPORT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Export/) | Export PM |
+| `markdown.extended-writing` | `INF-P1-MARKDOWN-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Markdown-Reference/) | Markdown PM |
+| `editing.instant-rendered` | `INF-P1-MODE-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Quick-Start/) | Editor PM |
+| `resource.image-operations` | `INF-P1-RESOURCE-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Images/) | Resource PM |
+| `resource.image-workflow` | `INF-P1-RESOURCE-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Images/) | Resource PM |
+| `theme.builtin-six` | `INF-P1-THEME-001` | `evidence_captured` | [Typora Support](https://support.typora.io/About-Themes/) | Theme PM |
+| `workspace.file-management` | `INF-P1-WORKSPACE-001` | `evidence_captured` | [Typora Support](https://support.typora.io/File-Management/) | Workspace PM |
+| `writing.focus-typewriter` | `INF-P1-WRITING-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Focus-and-Typewriter-Mode/) | Editor PM |
+| `writing.statistics` | `INF-P1-WRITING-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Word-Count/) | Editor PM |
+| `diagram.legacy-sequence-flow` | `INF-P2-DIALECT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Draw-Diagrams-With-Markdown/) | Compatibility PM |
+| `markdown.emoji` | `INF-P2-DIALECT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Markdown-Reference/) | Compatibility PM |
+| `markdown.highlight` | `INF-P2-DIALECT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Markdown-Reference/) | Compatibility PM |
+| `markdown.subscript` | `INF-P2-DIALECT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Markdown-Reference/) | Compatibility PM |
+| `markdown.superscript` | `INF-P2-DIALECT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Markdown-Reference/) | Compatibility PM |
+| `math.advanced-academic` | `INF-P2-DIALECT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Math/) | Compatibility PM |
+| `export.advanced-single-document` | `INF-P2-EXPORT-001` | `evidence_captured` | [Typora Support](https://support.typora.io/Export/) | Export PM |
+| `export.pandoc-formats` | `INF-P2-PARITY-001` | `exception` | [Typora Support](https://support.typora.io/Export/) | Export PM |
+| `resource.image-upload` | `INF-P2-PARITY-001` | `exception` | [Typora Support](https://support.typora.io/Upload-Image/) | Resource PM |
+| `theme.arbitrary-css` | `INF-P2-THEME-001` | `exception` | [Typora Support](https://support.typora.io/About-Themes/) | Theme PM |
+
+## Corpus / 操作样本登记
+
+- Corpus：`0` 条
+- Operation sample：`0` 条
+
+当前没有冻结 corpus 或操作样本，因此 Inventory 不宣称任何能力已 `aligned`。新增证据时必须登记非全零 SHA-256、完整环境与 `passed | failed | pending` 结果。
+
+## 公开 Exception Ledger
+
+| Exception ID | Capability ID | Requirement ID | 状态 | 理由 |
+| --- | --- | --- | --- | --- |
+| `TYP-EXC-001` | `content.scripted-network-html` | `INF-P1-CONTENT-001` | `active` | Arbitrary document scripts, iframes, and implicit network media conflict with the Core offline and content-safety boundary. |
+| `TYP-EXC-002` | `theme.arbitrary-css` | `INF-P2-THEME-001` | `active` | Unrestricted CSS, imports, URLs, and untrusted fonts would bypass deterministic rendering and resource policy. |
+| `TYP-EXC-003` | `export.pandoc-formats` | `INF-P2-PARITY-001` | `active` | Broad import, export, CLI, and external executable discovery are outside the single-document Core boundary. |
+| `TYP-EXC-004` | `resource.image-upload` | `INF-P2-PARITY-001` | `active` | Passing user file paths to arbitrary uploader applications, scripts or cloud services conflicts with the Core offline and process-trust boundary. |
+
+## 机器门禁
+
+生成器会强制校验：
+
+- PRD 非 DoD feature ID 必须恰好出现在一条 capability mapping 或一条带 reason/owner 的 coverage exclusion 中。
+- Benchmark 机器覆盖区与 capability ID 必须双向闭集，高亮/上标/下标/Emoji 等明列能力不得被宽泛 parity 项隐藏。
+- capability、requirement、exception 和 evidence ID 必须唯一且双向引用一致。
+- `evidence_captured` 不得引用 corpus/sample；`testing` 必须引用已登记证据。
+- `aligned` 必须引用 Registry 中环境一致且结果全为 `passed` 的 corpus/sample。
+- Registry 拒绝全零 SHA-256、不完整环境、无效结果和无人引用的孤儿证据。
+
+从仓库根目录执行生成视图、内存负例和全局 JSON Schema/引用校验：
+
+```sh
+python3 scripts/generate_typora_inventory_view.py --check
+python3 scripts/generate_typora_inventory_view.py --self-test
+python3 scripts/validate_docs.py
+```
+
+P1–P3 范围和 DoD 仍只由 [PRD](./PRD.md) 定义；Inventory 不扩大产品范围。

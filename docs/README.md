@@ -15,16 +15,21 @@ Inflow 是仅支持 Apple Silicon 的原生 macOS Markdown 编辑器，离线和
 | 设计插件或扩展 SDK | [扩展文档入口](./engineering/extensions/README.md) | 能力边界、系统设计或语法 API |
 | 讨论 AI、同步和市场生态 | [扩展生态战略](./product/ECOSYSTEM_STRATEGY.md) | 扩展系统设计 |
 | 查询最终产品决策 | [PRD](./product/PRD.md) | 对标路线、技术方案 |
+| 核对本轮复审结论 | [前置产品复审处置台账](./FINAL_REVIEW_CLOSURE.md) | 各规范落点与证据 gate |
 
 ## 当前正式基线
 
-- 产品基线：[PRD v2.0](./product/PRD.md)
-- P0 决策状态：[P0 决策记录](./product/P0_DECISIONS.md)（当前仅授权 T0，P0 未冻结）
-- 工程基线：[产品技术方案 v1.0](./engineering/TECHNICAL_DESIGN.md)
+- 产品基线：[PRD v2.1](./product/PRD.md)
+- 复审定稿：[30 项处置台账](./FINAL_REVIEW_CLOSURE.md)（契约已闭环；T0 证据仍开放，T1 未授权）
+- P0 决策状态：[P0 决策记录](./product/P0_DECISIONS.md)（当前仅授权继续 T0 原型验证，P0 未冻结）
+- 工程基线：[产品技术方案 v1.1-final](./engineering/TECHNICAL_DESIGN.md)
 - T0 工件：[Markdown 方言](./engineering/MARKDOWN_DIALECT_MANIFEST.md)、[Render](./engineering/RENDER_MANIFEST.md)、[Sanitizer](./engineering/SANITIZER_MANIFEST.md)、[Save/Recovery ADR](./engineering/SAVE_RECOVERY_ADR.md)、[Render Isolation ADR](./engineering/RENDER_HELPER_ISOLATION_ADR.md)、[PDF ADR](./engineering/PDF_PATH_ADR.md)
-- 横切契约：[Settings Schema](./engineering/SETTINGS_SCHEMA.md)、[Data Protection](./engineering/DATA_PROTECTION_POLICY.md)
+- 横切契约：[Settings Schema](./engineering/SETTINGS_SCHEMA.json)、[Data Protection](./engineering/DATA_PROTECTION_POLICY.md)、[Keychain Policy](./engineering/KEYCHAIN_POLICY.json)、[Logging Policy](./engineering/LOGGING_POLICY.json)、[Performance Manifest](./engineering/PERFORMANCE_MANIFEST.json)
+- 需求追踪：[P0–P3 Requirement Traceability](./engineering/REQUIREMENT_TRACEABILITY.json)（68 个 feature/DoD ID；当前证据全部 OPEN）
+- 发布/主题机器合同：[Release Manifest schema](./engineering/RELEASE_MANIFEST.schema.json)、[Theme Policy schema](./engineering/THEME_POLICY.schema.json)
 - 扩展产品边界：[扩展能力规范](./engineering/extensions/OVERVIEW.md)
 - 扩展实现基线：[扩展系统总体设计](./engineering/extensions/SYSTEM_DESIGN.md)
+- E3 市场网络合同：[Market Broker Policy](./engineering/extensions/MARKET_BROKER_POLICY.json)（[Schema](./engineering/extensions/schemas/market-broker-policy-v1.schema.json)）
 
 ## 已确认决策摘要
 
@@ -51,11 +56,14 @@ Inflow 是仅支持 Apple Silicon 的原生 macOS Markdown 编辑器，离线和
 ```text
 docs/
 ├── README.md
+├── FINAL_REVIEW_CLOSURE.md
 ├── product/
 │   ├── README.md
 │   ├── PRD.md
 │   ├── P0_DECISIONS.md
 │   ├── TYPORA_BENCHMARK.md
+│   ├── TYPORA_CAPABILITY_INVENTORY.json
+│   ├── TYPORA_CAPABILITY_INVENTORY.schema.json
 │   ├── TYPORA_CAPABILITY_INVENTORY.md
 │   └── ECOSYSTEM_STRATEGY.md
 └── engineering/
@@ -67,13 +75,33 @@ docs/
     ├── SAVE_RECOVERY_ADR.md
     ├── RENDER_HELPER_ISOLATION_ADR.md
     ├── PDF_PATH_ADR.md
+    ├── SETTINGS_SCHEMA.json
     ├── SETTINGS_SCHEMA.md
     ├── DATA_PROTECTION_POLICY.md
+    ├── KEYCHAIN_POLICY.json
+    ├── LOGGING_POLICY.json
+    ├── LOGGING_POLICY.md
+    ├── PERFORMANCE_MANIFEST.json
+    ├── RECOVERY_JOURNAL_EVENT.schema.json
+    ├── RENDER_MANIFEST.schema.json
+    ├── SANITIZER_EVIDENCE.schema.json
+    ├── REQUIREMENT_TRACEABILITY.json
+    ├── REQUIREMENT_TRACEABILITY.schema.json
+    ├── REQUIREMENT_TRACEABILITY.md
+    ├── RELEASE_MANIFEST.schema.json
+    ├── THEME_POLICY.schema.json
     └── extensions/
         ├── README.md
         ├── OVERVIEW.md
         ├── SYSTEM_DESIGN.md
+        ├── PHASE_PROCESS_MATRIX.json
         ├── PHASE_PROCESS_MATRIX.md
+        ├── IPC_TRUST_MATRIX.json
+        ├── MARKET_BROKER_POLICY.json
+        ├── TYPED_ADAPTER_POLICIES.json
+        ├── AI_RUNTIME_MANIFEST.json
         ├── AI_RUNTIME_MANIFEST.md
-        └── SYNTAX_EXTENSION_API.md
+        ├── EXTENSION_KEYCHAIN_PROJECTION.json
+        ├── SYNTAX_EXTENSION_API.md
+        └── schemas/
 ```

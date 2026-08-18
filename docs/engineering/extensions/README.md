@@ -34,7 +34,15 @@
 - GitHub/云同步状态机、AI Provider 和 Prompt Injection 防护。
 - SDK、DevKit、测试、安全和实施路线。
 
-阶段与进程的唯一基线见 [Phase/Process Matrix](./PHASE_PROCESS_MATRIX.md)；AI 模型和费用硬边界见 [AI Runtime Manifest](./AI_RUNTIME_MANIFEST.md)。
+机器权威：
+
+- 阶段/target：[PHASE_PROCESS_MATRIX.json](./PHASE_PROCESS_MATRIX.json)（[可读投影](./PHASE_PROCESS_MATRIX.md)）。
+- listener/peer：[IPC_TRUST_MATRIX.json](./IPC_TRUST_MATRIX.json)。
+- E3 市场固定端点、DNS/TLS 与预算：[MARKET_BROKER_POLICY.json](./MARKET_BROKER_POLICY.json)。
+- E4 endpoint graph：[TYPED_ADAPTER_POLICIES.json](./TYPED_ADAPTER_POLICIES.json)。
+- AI 模型/费用/内存：[AI_RUNTIME_MANIFEST.json](./AI_RUNTIME_MANIFEST.json)（[可读说明](./AI_RUNTIME_MANIFEST.md)）。
+- 全局密钥权威：[../KEYCHAIN_POLICY.json](../KEYCHAIN_POLICY.json)；生态 target 映射：[EXTENSION_KEYCHAIN_PROJECTION.json](./EXTENSION_KEYCHAIN_PROJECTION.json)。
+- Syntax/Content Tree/Market/Pack 等 closed schemas：[schemas/](./schemas/)；规则解释见对应设计章节。
 
 ### 第三层：Markdown 语法
 
@@ -54,4 +62,5 @@
 1. `OVERVIEW.md` 决定能否开放某类能力。
 2. `SYSTEM_DESIGN.md` 决定扩展如何安全运行。
 3. `SYNTAX_EXTENSION_API.md` 决定新增 Markdown 语法如何解析和降级。
-4. 如与 Core 产品范围冲突，以 [PRD](../../product/PRD.md) 为准。
+4. 上列 Markdown 解释机制；同一工程字段冲突时，以本页列出的 machine authority/schema 为准，Markdown 必须修正，不能手工覆盖 JSON。
+5. 如与 Core 产品范围冲突，以 [PRD](../../product/PRD.md) 为准；PRD 不替代工程安全 Schema。

@@ -1,0 +1,158 @@
+{
+  "contractVersion": 1,
+  "evidenceStatus": "OPEN",
+  "productRequirementSource": "PRD 9.2 / INF-P0-DOD-011",
+  "benchmarkEnvironment": {
+    "configuration": "Release",
+    "architecture": "arm64",
+    "deviceModel": "Apple M1",
+    "physicalMemoryBytes": 8589934592,
+    "powerMode": "AC",
+    "thermalStateRequired": "nominal",
+    "backgroundWorkPolicy": "recordAndInvalidateOnInterference",
+    "recordRequired": [
+      "macOSBuild",
+      "hardwareModelIdentifier",
+      "physicalMemoryBytes",
+      "displayScale",
+      "locale",
+      "inputMethod",
+      "powerSource",
+      "thermalState",
+      "releaseBuildID",
+      "sourceRevision"
+    ]
+  },
+  "statistics": {
+    "percentileMethod": "nearest-rank",
+    "discardFirstRun": false,
+    "rounding": "none-before-threshold-comparison",
+    "reportAllRawSamples": true,
+    "rebootCold": "reference-only"
+  },
+  "processSampling": {
+    "machineTargetAuthority": "extensions/PHASE_PROCESS_MATRIX.json",
+    "requiredMachineTargetIDs": ["main-app", "render-image-helpers", "pdf-postflight-helper"],
+    "leadTimeMilliseconds": 1000,
+    "tailTimeAfterLastOwnedPIDExitMilliseconds": 1000,
+    "maximumSampleIntervalMilliseconds": 100,
+    "ownershipEvidence": [
+      "codeSigningDesignatedRequirement",
+      "auditToken",
+      "supervisorParentChildRegistry",
+      "pidStartIdentity"
+    ],
+    "processNameIsOwnershipEvidence": false,
+    "aggregate": "sum-concurrent-rss-across-complete-owned-process-tree-then-take-peak",
+    "includeRoles": [
+      "Main",
+      "PreviewWebContent",
+      "RenderSupervisor",
+      "RenderWorker",
+      "ImageDecodeHelper",
+      "PDFPostflightHelper",
+      "otherInflowOwnedDescendant"
+    ],
+    "shortLivedPIDPolicy": "include-even-if-observed-in-only-one-sample",
+    "missingPIDOwnershipPolicy": "invalidate-run"
+  },
+  "fixtures": {
+    "primaryDocument": {
+      "logicalSizeBytes": 1048576,
+      "lineCount": 10000,
+      "requiredContent": [
+        "longParagraphs",
+        "manyHeadings",
+        "tables",
+        "codeBlocks",
+        "katex",
+        "mermaid",
+        "mixedChineseInput",
+        "localPNG",
+        "localJPEG"
+      ],
+      "minimumLocalImageCount": 20,
+      "localImagesMustExerciseBudgetBoundary": true,
+      "fullP0Preview": true,
+      "syntaxHighlighting": true,
+      "degradedModeAllowed": false,
+      "requiredGeneratedEvidence": ["fixtureSha256", "fixtureGeneratorVersion", "imageSha256List"]
+    },
+    "blankWindow": {
+      "documentBytes": 0,
+      "requiredGeneratedEvidence": ["fixtureSha256", "fixtureGeneratorVersion"]
+    }
+  },
+  "signposts": {
+    "coldBlankWindow": ["processStart", "editorAcceptsInput"],
+    "warmOpenDocument": ["openIntentAccepted", "editorAcceptsInput"],
+    "processColdOpenDocument": ["processStart", "editorAcceptsInput"],
+    "inputToPreview": ["textMutationCommitted", "matchingGenerationPresented"],
+    "modeSwitch": ["modeIntentAccepted", "targetModeInteractive"],
+    "mainThreadStall": ["runLoopResponsiveBegin", "runLoopResponsiveEnd"]
+  },
+  "metrics": {
+    "coldBlankWindow": {
+      "iterations": 10,
+      "processState": "process-cold",
+      "unit": "milliseconds",
+      "thresholds": { "medianMaximum": 1500, "maxMaximum": 2000 }
+    },
+    "warmOpenDocument": {
+      "minimumIterations": 30,
+      "processState": "warm",
+      "fixture": "primaryDocument",
+      "unit": "milliseconds",
+      "thresholds": { "medianMaximum": 1500, "p95Maximum": 2000 }
+    },
+    "processColdOpenDocument": {
+      "iterations": 10,
+      "processState": "process-cold",
+      "fixture": "primaryDocument",
+      "unit": "milliseconds",
+      "thresholds": { "medianMaximum": 2500, "maxMaximum": 3000 }
+    },
+    "inputToPreview": {
+      "minimumIterations": 30,
+      "fixture": "primaryDocument",
+      "unit": "milliseconds",
+      "thresholds": { "p95Maximum": 300 }
+    },
+    "modeSwitch": {
+      "minimumIterations": 30,
+      "fixture": "primaryDocument",
+      "unit": "milliseconds",
+      "thresholds": { "p95Maximum": 150 }
+    },
+    "mainThreadStallWhileTyping": {
+      "minimumIterations": 30,
+      "fixture": "primaryDocument",
+      "unit": "milliseconds",
+      "thresholds": { "maxMaximum": 100 }
+    },
+    "ownedProcessTreeResidentPeak": {
+      "minimumIterations": 30,
+      "fixture": "primaryDocument",
+      "unit": "bytes",
+      "thresholds": { "maxMaximum": 314572800 }
+    }
+  },
+  "generatedResultRequirements": {
+    "format": "canonical-json-utf8",
+    "requiredArtifactHashes": [
+      "performanceContractSha256",
+      "releaseBuildSha256",
+      "fixtureSha256",
+      "fixtureGeneratorSha256",
+      "signpostDefinitionSha256",
+      "samplerExecutableSha256",
+      "rawSamplesSha256",
+      "processOwnershipEvidenceSha256"
+    ],
+    "hashFormat": "lowercase-sha256-64hex-nonzero",
+    "allMetricsMustPass": true,
+    "skippedOrInvalidRunPolicy": "fail-unless-rerun-to-required-valid-count",
+    "placeholderHashPolicy": "fail",
+    "publishEvidenceOnlyAfterThresholdValidation": true
+  }
+}

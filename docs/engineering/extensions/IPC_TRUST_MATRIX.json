@@ -1,0 +1,120 @@
+{
+  "$schema": "./schemas/ipc-trust-matrix-v1.schema.json",
+  "matrixVersion": 1,
+  "authority": "normative",
+  "requestEnvelope": {
+    "encoding": "canonical-cbor",
+    "requiredFields": ["protocolVersion", "requestID", "method", "deadlineUnixMillis", "connectionNonce", "sequence", "bodySHA256", "body"],
+    "hashInput": ["protocolVersion", "requestID", "method", "deadlineUnixMillis", "connectionNonce", "sequence", "bodySHA256"],
+    "forbiddenAuthorityClaimsInBody": ["extensionID", "pid", "auditToken", "uid", "auditSessionID"],
+    "unknownFieldRule": "reject",
+    "replayRule": "connectionNonce-and-sequence-must-be-unused-and-strictly-increasing",
+    "expiryRule": "reject-after-deadline-or-capability-expiry"
+  },
+  "peerChecks": [
+    "designated-requirement",
+    "team-identifier",
+    "bundle-identifier",
+    "audit-token",
+    "effective-uid-equals-console-session-owner",
+    "audit-session-equals-app-session",
+    "connection-challenge-response",
+    "request-body-hash",
+    "deadline",
+    "replay-cache"
+  ],
+  "listeners": [
+    {
+      "id": "extension-manager-control",
+      "target": "extension-manager",
+      "authorizedPeers": ["main-app"],
+      "additionalChecks": ["user-session-nonce"],
+      "capability": "manager-session-capability"
+    },
+    {
+      "id": "package-verifier-job",
+      "target": "package-verifier",
+      "authorizedPeers": ["extension-manager"],
+      "additionalChecks": ["single-use-job-capability", "source-fd-identity", "trust-snapshot-hash"],
+      "capability": "verification-job-capability"
+    },
+    {
+      "id": "extension-host-control",
+      "target": "extension-host",
+      "authorizedPeers": ["extension-manager"],
+      "additionalChecks": ["single-dedicated-client", "launch-ticket", "package-payload-hash", "grant-hash", "reject-second-extension-handle"],
+      "capability": "launch-capability"
+    },
+    {
+      "id": "local-capability-broker-api",
+      "target": "local-capability-broker",
+      "authorizedPeers": ["main-app", "extension-host"],
+      "additionalChecks": ["launch-capability-for-host", "extension-handle-from-peer-context", "current-grant-hash", "document-or-workspace-scope"],
+      "capability": "broker-operation-capability"
+    },
+    {
+      "id": "market-broker-api",
+      "target": "market-broker",
+      "authorizedPeers": ["main-app", "extension-manager"],
+      "additionalChecks": ["market-operation-capability", "fixed-origin-operation", "signed-sequence-floor"],
+      "capability": "market-operation-capability"
+    },
+    {
+      "id": "network-credential-broker-api",
+      "target": "network-credential-broker",
+      "authorizedPeers": ["main-app"],
+      "additionalChecks": ["one-shot-stream-capability", "typed-adapter-policy-hash", "operation-budget", "stream-direction"],
+      "capability": "network-operation-capability"
+    },
+    {
+      "id": "ai-model-manager-api",
+      "target": "ai-model-manager",
+      "authorizedPeers": ["main-app"],
+      "additionalChecks": ["model-catalog-policy-hash", "download-budget"],
+      "capability": "model-download-capability"
+    },
+    {
+      "id": "ai-model-store-publish",
+      "target": "ai-model-store",
+      "authorizedPeers": ["ai-model-manager"],
+      "additionalChecks": ["single-use-publish-capability", "source-fd-identity", "expected-model-hash"],
+      "capability": "model-publish-capability"
+    },
+    {
+      "id": "ai-model-store-lease",
+      "target": "ai-model-store",
+      "authorizedPeers": ["main-app"],
+      "additionalChecks": ["model-version", "model-manifest-hash", "lease-expiry"],
+      "capability": "model-lease-capability"
+    },
+    {
+      "id": "ai-inference-worker-control",
+      "target": "ai-inference-worker",
+      "authorizedPeers": ["main-app"],
+      "additionalChecks": ["single-request-capability", "context-envelope-hash", "leased-model-fd-identity", "resource-budget"],
+      "capability": "inference-request-capability"
+    },
+    {
+      "id": "render-image-helper-job",
+      "target": "render-image-helpers",
+      "authorizedPeers": ["main-app"],
+      "additionalChecks": ["single-job-capability", "input-fd-identity", "generation", "resource-budget"],
+      "capability": "render-image-job-capability"
+    },
+    {
+      "id": "pdf-postflight-helper-job",
+      "target": "pdf-postflight-helper",
+      "authorizedPeers": ["main-app"],
+      "additionalChecks": ["single-job-capability", "candidate-pdf-fd-identity", "export-envelope-hash", "pdf-postflight-policy-hash", "resource-budget"],
+      "capability": "pdf-postflight-job-capability"
+    }
+  ],
+  "runtimeInvariants": [
+    "manifest-identifier-is-never-an-ipc-authority",
+    "extension-handle-is-server-issued-and-connection-bound",
+    "one-active-extension-handle-has-one-dedicated-manager-client-and-one-distinct-host-process",
+    "no-listener-authorizes-from-request-body-identity",
+    "all-capabilities-are-nonce-bound-expiring-and-single-purpose",
+    "callbacks-use-the-originating-authenticated-connection-and-do-not-open-an-unlisted-reverse-listener"
+  ]
+}

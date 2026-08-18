@@ -1,0 +1,136 @@
+{
+  "policyVersion": 2,
+  "authority": "normative-global",
+  "archiveEvidenceStatus": "OPEN",
+  "accessGroupPrefixSource": "finalArchive.applicationIdentifierPrefix",
+  "wildcardAccessGroups": "forbidden",
+  "unlistedAccessGroups": "forbidden",
+  "defaultKeyAttributes": {
+    "synchronizable": false,
+    "thisDeviceOnly": true,
+    "exportable": false,
+    "accessibility": "whenUnlockedThisDeviceOnly"
+  },
+  "accessGroups": {
+    "recovery-kek": {
+      "logicalSuffix": "com.inflow.keys.recovery.core",
+      "availableFrom": "P0",
+      "allowedSignedTargets": ["main-app"],
+      "secretClasses": ["recovery-domain-kek"]
+    },
+    "workspace-index-kek": {
+      "logicalSuffix": "com.inflow.keys.workspace-index.core",
+      "availableFrom": "P1",
+      "allowedSignedTargets": ["main-app"],
+      "secretClasses": ["workspace-index-domain-kek"]
+    },
+    "extension-state-kek": {
+      "logicalSuffix": "com.inflow.keys.extension-state.core",
+      "availableFrom": "E1",
+      "allowedSignedTargets": ["main-app"],
+      "secretClasses": ["extension-state-domain-kek"]
+    },
+    "sync-kek": {
+      "logicalSuffix": "com.inflow.keys.sync.core",
+      "availableFrom": "E4",
+      "allowedSignedTargets": ["main-app"],
+      "secretClasses": ["sync-domain-kek"]
+    },
+    "ai-session-kek": {
+      "logicalSuffix": "com.inflow.keys.ai-session.core",
+      "availableFrom": "E4",
+      "allowedSignedTargets": ["main-app"],
+      "secretClasses": ["ai-session-domain-kek"]
+    },
+    "extension-trust-key": {
+      "logicalSuffix": "com.inflow.keys.extension-trust.manager",
+      "availableFrom": "E1",
+      "allowedSignedTargets": ["extension-manager"],
+      "secretClasses": ["local-trust-store-authentication-key"]
+    },
+    "network-service-credentials": {
+      "logicalSuffix": "com.inflow.credentials.network-broker",
+      "availableFrom": "E4",
+      "allowedSignedTargets": ["network-credential-broker"],
+      "secretClasses": ["typed-service-oauth-token", "typed-service-api-key"]
+    },
+    "model-source-credentials": {
+      "logicalSuffix": "com.inflow.credentials.model-manager",
+      "availableFrom": "E4",
+      "allowedSignedTargets": ["ai-model-manager"],
+      "secretClasses": ["fixed-model-source-token"]
+    }
+  },
+  "signedTargets": {
+    "main-app": {
+      "requiredGroupsByPhase": {
+        "P0": ["recovery-kek"],
+        "P1": ["workspace-index-kek"],
+        "E1": ["extension-state-kek"],
+        "E4": ["sync-kek", "ai-session-kek"]
+      }
+    },
+    "extension-manager": {
+      "requiredGroupsByPhase": {
+        "E1": ["extension-trust-key"]
+      }
+    },
+    "network-credential-broker": {
+      "requiredGroupsByPhase": {
+        "E4": ["network-service-credentials"]
+      }
+    },
+    "ai-model-manager": {
+      "requiredGroupsByPhase": {
+        "E4": ["model-source-credentials"]
+      }
+    },
+    "render-image-helpers": { "requiredGroupsByPhase": {} },
+    "pdf-postflight-helper": { "requiredGroupsByPhase": {} },
+    "extension-host": { "requiredGroupsByPhase": {} },
+    "package-verifier": { "requiredGroupsByPhase": {} },
+    "local-capability-broker": { "requiredGroupsByPhase": {} },
+    "market-broker": { "requiredGroupsByPhase": {} },
+    "ai-model-store": { "requiredGroupsByPhase": {} },
+    "ai-inference-worker": { "requiredGroupsByPhase": {} }
+  },
+  "wrappedDEKs": {
+    "recovery": {
+      "kekAccessGroup": "recovery-kek",
+      "scope": "document-and-store-generation",
+      "cryptoEraseTriggers": ["recovery-data-clear", "document-forget", "confirmed-key-loss-store-quarantine"]
+    },
+    "workspaceIndex": {
+      "kekAccessGroup": "workspace-index-kek",
+      "scope": "workspace-identity-and-authorization-generation",
+      "cryptoEraseTriggers": ["workspace-permission-revocation", "workspace-forget", "workspace-index-clear"]
+    },
+    "extensionState": {
+      "kekAccessGroup": "extension-state-kek",
+      "scope": "installed-package-workspace-and-grant-generation",
+      "cryptoEraseTriggers": ["extension-uninstall", "permission-revocation", "extension-revocation"]
+    },
+    "sync": {
+      "kekAccessGroup": "sync-kek",
+      "scope": "workspace-and-connector-generation",
+      "cryptoEraseTriggers": ["workspace-unlink", "sync-data-clear", "connector-revocation"]
+    },
+    "aiSession": {
+      "kekAccessGroup": "ai-session-kek",
+      "scope": "ai-session",
+      "cryptoEraseTriggers": ["session-expiry", "provider-uninstall", "ai-permission-revocation", "ai-data-clear"]
+    }
+  },
+  "releaseValidation": {
+    "input": "codesign entitlements extracted from every executable in the final notarization candidate Archive",
+    "phaseAggregation": "for each signed target take the union of groups required at or before the built product and ecosystem phase",
+    "normalizeApplicationIdentifierPrefix": true,
+    "requireEachArchiveExecutableMapsToExactlyOneLogicalTarget": true,
+    "targetFamilyMayMapMultipleExecutablesOnlyWhenPhaseProcessMatrixDeclaresIt": true,
+    "rejectUnmappedExecutable": true,
+    "rejectUnmappedKeychainAccessGroup": true,
+    "rejectTargetWithMissingOrAdditionalGroup": true,
+    "rejectGroupGrantedToUnlistedTarget": true,
+    "debugOrSourceEntitlementsAreEvidence": false
+  }
+}

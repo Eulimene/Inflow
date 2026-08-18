@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.inflow.local/extensions/extension-content-tree-v1.schema.json",
+  "title": "Inflow Extension Content Tree v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["treeVersion", "root"],
+  "properties": {
+    "treeVersion": { "const": 1 },
+    "root": { "$ref": "#/$defs/root" }
+  },
+  "$defs": {
+    "root": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "children"],
+      "properties": {
+        "kind": { "const": "root" },
+        "children": { "type": "array", "maxItems": 2048, "items": { "$ref": "#/$defs/block" } }
+      }
+    },
+    "block": {
+      "oneOf": [
+        { "$ref": "#/$defs/paragraph" },
+        { "$ref": "#/$defs/codeBlock" },
+        { "$ref": "#/$defs/stack" },
+        { "$ref": "#/$defs/callout" },
+        { "$ref": "#/$defs/list" },
+        { "$ref": "#/$defs/table" },
+        { "$ref": "#/$defs/artifact" }
+      ]
+    },
+    "inline": {
+      "oneOf": [
+        { "$ref": "#/$defs/text" },
+        { "$ref": "#/$defs/span" }
+      ]
+    },
+    "text": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "text"],
+      "properties": {
+        "kind": { "const": "text" },
+        "text": { "type": "string", "maxLength": 65536 }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "style", "children"],
+      "properties": {
+        "kind": { "const": "span" },
+        "style": { "enum": ["strong", "emphasis", "inlineCode", "subtle", "warning"] },
+        "children": { "type": "array", "maxItems": 1024, "items": { "$ref": "#/$defs/inline" } }
+      }
+    },
+    "paragraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "children"],
+      "properties": {
+        "kind": { "const": "paragraph" },
+        "children": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/inline" } }
+      }
+    },
+    "codeBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "text"],
+      "properties": {
+        "kind": { "const": "codeBlock" },
+        "text": { "type": "string", "maxLength": 1048576 },
+        "language": { "type": "string", "pattern": "^[A-Za-z0-9_+.-]{1,64}$" }
+      }
+    },
+    "stack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "spacing", "children"],
+      "properties": {
+        "kind": { "const": "stack" },
+        "spacing": { "enum": ["none", "compact", "normal", "loose"] },
+        "children": { "type": "array", "maxItems": 1024, "items": { "$ref": "#/$defs/block" } }
+      }
+    },
+    "callout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "tone", "children"],
+      "properties": {
+        "kind": { "const": "callout" },
+        "tone": { "enum": ["info", "success", "warning", "danger", "neutral"] },
+        "title": { "type": "string", "maxLength": 256 },
+        "children": { "type": "array", "maxItems": 1024, "items": { "$ref": "#/$defs/block" } }
+      }
+    },
+    "list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ordered", "items"],
+      "properties": {
+        "kind": { "const": "list" },
+        "ordered": { "type": "boolean" },
+        "items": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/block" } }
+        }
+      }
+    },
+    "table": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "rows"],
+      "properties": {
+        "kind": { "const": "table" },
+        "rows": {
+          "type": "array",
+          "maxItems": 512,
+          "items": {
+            "type": "array",
+            "maxItems": 64,
+            "items": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/inline" } }
+          }
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "artifactHandle", "accessibilityLabel", "intrinsicWidth", "intrinsicHeight"],
+      "properties": {
+        "kind": { "const": "artifact" },
+        "artifactHandle": { "type": "string", "pattern": "^artifact:[A-Za-z0-9_-]{22,128}$" },
+        "accessibilityLabel": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "intrinsicWidth": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "intrinsicHeight": { "type": "integer", "minimum": 1, "maximum": 16384 }
+      }
+    }
+  }
+}

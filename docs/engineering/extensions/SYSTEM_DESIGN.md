@@ -1,8 +1,8 @@
 # Inflow 扩展系统总体设计
 
-- 文档版本：v1.0
-- 更新日期：2026-08-17
-- 状态：架构基线
+- 文档版本：v1.1
+- 更新日期：2026-08-18
+- 状态：Accepted（E1–E4 执行契约）
 - 适用平台：Apple Silicon，macOS 14+
 - 分发前提：Developer ID 签名、公证、非 Mac App Store
 
@@ -14,6 +14,10 @@
 - 实现同步或 AI：读取第 12、12A 节。
 - 实现市场和治理：读取第 13、16–20 节。
 - 语法扩展的 Parser 细节不在本文展开，进入 [语法扩展设计](./SYNTAX_EXTENSION_API.md)。
+- 阶段/target、IPC peer、Keychain 与 typed network 的机器权威分别是
+  [Phase/Process Matrix](./PHASE_PROCESS_MATRIX.json)、[IPC Trust Matrix](./IPC_TRUST_MATRIX.json)、
+  [全局 Keychain Policy](../KEYCHAIN_POLICY.json)、[生态 target 投影](./EXTENSION_KEYCHAIN_PROJECTION.json)
+  与 [Typed Adapter Policies](./TYPED_ADAPTER_POLICIES.json)。
 
 ## 1. 系统定位
 
@@ -69,6 +73,7 @@ flowchart TB
 
     subgraph Control["本地控制进程（无网络）"]
       Manager["ExtensionManager.xpc"]
+      Verifier["PackageVerifier.xpc\n每 job 一次性"]
       Broker["LocalCapabilityBroker.xpc"]
     end
 
@@ -78,9 +83,16 @@ flowchart TB
       HC["Connector Host\n更严格配额"]
     end
 
-    subgraph Network["E4 独立联网进程"]
-      NB["NetworkCredentialBroker.xpc\n唯一 network entitlement"]
+    subgraph Network["分阶段独立联网进程"]
+      MB["E3 MarketBroker.xpc\n固定市场 origin"]
+      NB["E4 NetworkCredentialBroker.xpc\ntyped adapter only"]
       Adapters["官方 typed service adapters"]
+    end
+
+    subgraph AI["E4 本地 AI"]
+      MM["AI Model Manager\n仅 download staging"]
+      MS["AIModelStore.xpc\nimmutable CAS owner"]
+      IW["Inference Worker\n每 request 一次性"]
     end
 
     subgraph System["系统服务"]
@@ -91,6 +103,7 @@ flowchart TB
     end
 
     UI --> Core
+    Manager --> Verifier
     Manager --> H1
     Manager --> H2
     Manager --> HC
@@ -100,8 +113,12 @@ flowchart TB
     Broker --> Guard
     Guard --> Core
     Broker --> FS
-    Broker --> KC
-    Broker --> NB
+    NB --> KC
+    Core --> NB
+    Manager --> MB
+    MM --> MS
+    MS --> IW
+    Core --> IW
     NB --> Adapters
     Adapters --> Net
     Adapters --> Store
@@ -110,22 +127,46 @@ flowchart TB
 ### 3.1 主应用
 
 - 保有当前文档内容、文档版本号、撤销栈、文件协调器和恢复快照。
-- 渲染扩展返回的内容必须经过清洗后才能进入预览。
+- 渲染扩展只返回 closed-world `ExtensionContentTreeV1`；Core 校验整棵树与 artifact handle 后才进入预览。
 - 声明式 UI 由主应用原生渲染，扩展不能注入 AppKit/SwiftUI View。
 - 主应用不等待扩展完成本地保存。
 
 ### 3.2 Extension Manager
 
-- 负责发现、安装、签名校验、启用、停用、更新和卸载。
-- 根据激活事件启动 Extension Host，不在应用启动时加载所有扩展。
+- 负责发现、安装事务、签名/receipt policy、启用、停用、更新和卸载；不解析 ZIP、JSON、CSS、字体或 SVG。
+- 根据激活事件为每个扩展创建一个专属 `ExtensionHostLauncherClient` 和新的 `NSXPCConnection`，从不复用 launcher/client、connection 或 Host；不在应用启动时加载所有扩展。
 - 管理 API 兼容性、崩溃计数、隔离状态、权限和资源配额。
 - 生成用户可见的扩展健康状态。
-- 启动 Host 时签发一次性 `LaunchCapability`，绑定 extensionID、package payload hash、签名等级、PID、audit token、专属 XPC endpoint、权限 grant hash 和过期时间。Broker 从已认证 peer context 取得身份并忽略请求 payload 自报的 extensionID；PID/audit token/package hash 任一变化即撤销连接。
+- 启动前先签发一次性 `LaunchTicket { extensionHandle, packagePayloadHash, signerClass, grantHash, endpointHash, launchNonce, expiresAt }`。Host hello 后 Manager 从 audit token 取得真实 PID/UID/session/designated requirement，才换发 connection-bound `LaunchCapability`；Capability 绑定上述字段、PID、audit-token digest、专属 endpoint 与 expiry，并在首次成功绑定后消费 Ticket。
+- `extensionHandle` 是 Manager 随安装 generation 生成的 opaque runtime identity；Manifest `identifier` 只作已签名 metadata/展示，不进入请求 payload 充当授权身份。Host/Broker 从认证 peer context 取得 handle。
+- 运行时必须证明 N 个 active extension handle 对应 N 个不同 PID 和 audit token；Host 拒绝第二个 handle/客户端绑定，同一 PID 出现两个 handle 时 Manager fail closed 并阻断里程碑。不能仅依赖 `NSXPCConnection` 的通常行为推断隔离。
+
+### 3.2.1 一次性 PackageVerifier
+
+每次安装/更新启动一个新的 `PackageVerifier.xpc` 进程，job 完成、超时或失败即终止整棵进程树。
+Verifier 只有 source read-only FD、job-private 0700/noexec staging CAS 和只读 public trust snapshot；它
+没有 Keychain、Trust Store、用户文档或最终安装目录权限。所有 ZIP、I-JSON/JCS、Schema、CSS、字体、
+SVG、WASM import 与静态代码解析都在该 disposable target 内完成。
+
+Verifier 不接收可重开的 source path。它按 FD identity 读包，把验证后的 payload 复制到 job-private
+CAS，返回 closed-world `VerificationReceipt { jobID, sourceIdentity, casRootIdentity, packageSHA256,
+contentManifestSHA256, payloadEntries[], scanPolicySHA256, trustSnapshotSHA256, issuedAt, expiresAt }` 及 CAS root FD。Manager 只验证 receipt
+的 canonical Schema、authenticated XPC peer、single-use job capability、expiry/policy 与市场/本地
+trust decision，并把 receipt hash 写入安装事务；Verifier 不持长期或临时签名 key。移动到版本目录前，Manager 通过 CAS root FD 对每个
+entry 再算 size/hash 并与 receipt 精确比较，任何变化即丢弃整个 job。最终安装只使用该 FD tree
+原子 materialize，不按 payload path 回到下载目录；Verifier 永远没有最终 move 权限。
+这里 `expiresAt` 必须严格晚于 `issuedAt` 且 TTL 不超过 5 分钟；`payloadEntries`
+必须与 content manifest 的 payload path 集合一一相等，空集、重复 path、缺失/多余 entry、
+全零 SHA-256 或 source/CAS identity 不符都使整个 receipt 失效，不允许部分安装。
+
+Receipt 的机器契约为
+[`package-verification-receipt-v1.schema.json`](./schemas/package-verification-receipt-v1.schema.json)；
+实现不得增加“兼容性”未知字段或用路径替代其中的 resource identity。
 
 ### 3.3 Extension Host
 
 - 使用应用内置 JavaScriptCore 运行 ES Module。
-- 一个激活扩展对应一个独立 Host 进程；主题扩展无需 Host。
+- 一个激活扩展对应一个专属 client、connection 和独立 Host 进程；主题扩展无需 Host。
 - 不暴露浏览器 DOM、Node.js、文件系统、网络、`eval`、动态模块下载或原生 FFI。
 - 只暴露版本化的 `inflow` SDK 对象；底层通过 XPC 与 Broker 通信。
 - Host 被终止后可以重建，扩展不得把关键状态只保存在内存。
@@ -134,17 +175,22 @@ flowchart TB
 
 #### 3.3.1 E2 WebAssembly 原型 Manifest
 
-E2 仅加载随 Inflow 发布并由 Inflow 官方签名的模块。`runtime.modules[]` 必须声明 `path`、`sha256`、`imports`、`memoryMiB`、`cpuTimeoutMs`、`maxOutputBytes` 和 `readonlyResources[]`。安装器拒绝未声明导入、可变资源路径和超过 128 MiB 内存/2,000 ms CPU/2 MiB 输出的配置；Host 只映射清单内只读资源。模块只能返回 SVG 字节和结构化诊断，SVG 仍经过 Core Sanitizer。第三方 WASM 在 E2 不可安装。
+E2 仅加载随 Inflow 发布并由 Inflow 官方签名的模块。`runtime.modules[]` 必须声明 `path`、`sha256`、`imports`、`memoryMiB`、`cpuTimeoutMs`、`maxOutputBytes` 和 `readonlyResources[]`。安装器拒绝未声明导入、可变资源路径和超过 128 MiB 内存/2,000 ms CPU/2 MiB 输出的配置；Host 只映射清单内只读资源。模块对公共渲染 API 只能返回 `ExtensionContentTreeV1` 和结构化诊断。Domain Pack 若包含 SVG，必须是 `PackReleaseRecord`/component content manifest 中精确 hash 的只读 asset，由 Core 一次性 sanitizer/postflight 后签发 generation-bound artifact handle，再由 Content Tree 引用；Host 不返回任意 SVG 字节。第三方 WASM 在 E2 不可安装。
 
 ### 3.4 Capability Broker
 
-Broker 是唯一敏感能力入口：
+Local Broker 是扩展本地敏感能力入口：
 
-- 校验扩展 ID、签名等级、声明权限、用户授权和当前用户手势。
+- 从已认证 peer context 取得 `extensionHandle`，校验 signer class、声明权限、grant generation、用户授权和当前用户手势；忽略并拒绝 payload 自报身份。
 - 将 `document.read` 限定为当前文档快照，将 `workspace.read` 限定到授权根目录。
-- 代理 Keychain 凭据使用，令牌不返回扩展运行时。
-- Local Broker 自身无 network entitlement。E4 只有独立 `NetworkCredentialBroker.xpc` 可联网，且首期只暴露官方类型化 GitHub/云存储/远程 AI adapter；不接受扩展提供任意 URL/method/header。
+- Local Broker 无 Keychain access group 和 network entitlement；服务凭据只由 E4 `NetworkCredentialBroker.xpc` 的专属 access group 使用，令牌不返回 Host/Core。
+- E3 `MarketBroker.xpc` 只访问固定市场 origin；E4 `NetworkCredentialBroker.xpc` 只执行已在 [Typed Adapter Policies](./TYPED_ADAPTER_POLICIES.json) 声明的 endpoint graph。不接受扩展提供 URL/method/header；未声明 adapter 默认 disabled。
 - 记录敏感调用审计事件，供用户在设置中查看。
+
+所有 listener 必须执行 [IPC Trust Matrix](./IPC_TRUST_MATRIX.json)：designated requirement、Team/
+bundle ID、audit token、UID/session、connection challenge、canonical body hash、expiry 和 replay cache。
+消息使用 closed-world canonical CBOR envelope，未知字段拒绝；`requestID` 或 TLS 本身不能替代 nonce/
+sequence。任何 listener 都不得从 body 中的 `extensionID`、PID、UID 或 audit token 声明授权。
 
 E5 若开放通用 `NetworkServicePolicy`，必须先冻结端口 allowlist、拒绝 loopback/private/link-local/multicast/Unix socket、每次 DNS 解析后 IP 分类、连接时 re-resolve/绑定、防 DNS rebinding、系统/自定义 proxy 规则、逐跳重定向重新授权、跨 origin 清除 Authorization/cookie、TLS/响应/解压预算和 SSRF corpus。在此之前清单域名不能直接变成通用 HTTP 能力。
 
@@ -165,7 +211,10 @@ E5 若开放通用 `NetworkServicePolicy`，必须先冻结端口 allowlist、�
 
 ### 4.1 主题
 
-提供编辑器 token、预览 CSS、代码配色和打印样式。禁止 JavaScript、远程字体、远程图片和 `@import` 网络资源。主题损坏时回退到内置主题。
+E1 主题只提交 closed Schema 的 design token 值和有限色值/代码配色枚举；Core 把这些值编译进内置
+编辑器、预览与打印模板。E1 包不接受 CSS 字节、字体、图片、URL、`@import` 或 JavaScript，未知
+token/值直接拒绝，主题损坏时回退内置主题。未来 P2 受限主题包必须另有机器 `ThemePolicy`、隔离字体
+解码和负面 corpus；在该 Policy Accepted 前，不能把“主题扩展”解释为任意 CSS 导入。
 
 ### 4.2 诊断
 
@@ -177,7 +226,11 @@ E5 若开放通用 `NetworkServicePolicy`，必须先冻结端口 allowlist、�
 
 ### 4.4 围栏与语法渲染
 
-首期只开放围栏代码块，例如 `plantuml` 或领域图表。返回清洗后的 SVG、HTML 片段或声明式渲染树，并必须提供纯文本降级。随后开放块级指令、预定义扩展节点和受限行内语法；完整解析、冲突和降级规则见 [Markdown 语法扩展设计](./SYNTAX_EXTENSION_API.md)。
+E2 stable v1 只开放 Core CommonMark 围栏代码块与带命名空间的 block directive。公共 Host 只能返回
+[`ExtensionContentTreeV1`](./schemas/extension-content-tree-v1.schema.json) 和结构化诊断，并必须提供
+源码/纯文本降级；HTML、SVG、CSS、URL 和路径不属于返回 Schema，直接拒绝。预定义扩展节点和行内
+语法属于 v2/Experimental；完整 EBNF、优先级、引用和降级规则见
+[Markdown 语法扩展设计](./SYNTAX_EXTENSION_API.md)。
 
 ### 4.5 单篇导出
 
@@ -225,10 +278,11 @@ com.example.terminology.inflowx
 
 - `PackagePolicy v1`：ZIP 最大 50 MiB、解压总量 200 MiB、5,000 entries、单文件 50 MiB、压缩比 100:1、路径 UTF-8 字节 ≤512、层级 ≤20。拒绝 encrypted/data-descriptor ambiguity、重复 ZIP entry、absolute/`..`/NUL、symlink/hardlink/device、NFC 或 Unicode casefold 后重复路径。
 - JSON 必须是 UTF-8、无 BOM、I-JSON 子集，拒绝重复 key/NaN/Infinity；签名输入使用 RFC 8785 JCS canonicalization。ZIP 字节本身不作为签名事实来源。
-- `manifest.json` 使用固定 JSON Schema，未知关键字段导致安装失败。
+- 所有安全/运行 JSON（Manifest、content manifest、签名 envelope、release/pack record、权限、runtime module）均为 closed-world Schema：`additionalProperties/unevaluatedProperties=false`，未知字段、enum、version 和重复字段一律拒绝，不再区分“未知关键/非关键字段”。唯一可前向保留的位置是显式 `metadata.extensions` map；key 必须是 `x-<reverse-domain>`，总计 ≤16 KiB，仅允许 I-JSON 展示 metadata，仍进入签名，但不得影响代码、权限、路径、URL、hash、依赖、激活或更新。
 - 发布包不允许动态依赖；所有运行时代码必须在包内。
-- `content-manifest.json` 使用规范 JSON，按 UTF-8 路径字典序列出 payload 文件的路径、字节数和 SHA-256；`META-INF/content-manifest.json` 自身及 `META-INF/signatures/` 不进入列表，签名直接覆盖规范 JSON 字节。安装器只允许“清单列出的 payload + 这两个 META-INF 位置”，拒绝其他文件，从而避免任何摘要自引用。
+- `content-manifest.json` 使用规范 JSON，按 UTF-8 路径字典序列出 payload 文件的路径、字节数和 SHA-256；`META-INF/content-manifest.json` 自身及 `META-INF/signatures/` 不进入列表，签名直接覆盖规范 JSON 字节。安装器只允许“清单逐项列出的 payload + 精确已知的 `META-INF/content-manifest.json`、`META-INF/signatures/developer.sig` 及市场路径下的 `market.sig`”，任何未知 ZIP entry、目录占位、签名文件或尾随数据均拒绝，从而避免摘要自引用与 parser differential。
 - 三类安装路径：开发包可无签名且只在持续标识的开发者模式加载；E1 本地签名包使用本地自签发布者证书，首次安装展示 SHA-256 公钥指纹、包 ID 与权限并要求用户确认，后续更新必须由同一密钥签名，密钥变化视为新发布者重新确认，且只允许低权限能力；市场包必须同时含平台认证的开发者签名和市场签名，高权限能力还需类型审核。市场添加 `market.sig` 不改变 payload 哈希或开发者签名。
+- 以上解析全部由 3.2.1 的 disposable `PackageVerifier` 完成。Manager 只消费 closed receipt、做 trust decision，并在最终 materialize 前从 private CAS FD tree 重算全部 hash；任何 source/CAS identity 变化都不是“重试”，而是创建新 job。
 
 ## 6. Manifest
 
@@ -271,6 +325,7 @@ com.example.terminology.inflowx
 ### 6.1 标识和版本
 
 - `identifier` 使用反向域名，全局唯一，发布后不可更换。
+- `identifier` 只用于包/市场命名和展示；runtime authority 是 Manager 签发、peer-bound 的 opaque `extensionHandle`，SDK 请求不得携带 `extensionID` 选择身份。
 - 扩展和 API 使用语义化版本。
 - `engines` 必须给出兼容范围；不兼容扩展不启动。
 
@@ -298,10 +353,14 @@ com.example.terminology.inflowx
 ### 7.1 通信协议
 
 - Extension Host 与 Broker 使用 XPC 传输具名消息。
-- SDK 对开发者暴露 Promise API；协议负载使用具备 Schema 的 Codable 数据。
-- 每个请求包含 `requestID`、`apiVersion`、截止时间和取消令牌；`extensionID` 即使出现也只作诊断，授权身份只来自经 audit token 验证的 `LaunchCapability` peer context。
+- SDK 对开发者暴露 Promise API；wire 使用 closed-world Schema 的 canonical CBOR，不接受多态对象或宽松 Codable fallback。
+- 每个请求完整 envelope 为 `{ protocolVersion, requestID, method, deadlineUnixMillis, connectionNonce, sequence, bodySHA256, body }`；listener 验证 canonical envelope hash、严格递增且未使用的 sequence、deadline 与 replay cache。取消是同一连接上的具名、已认证请求，不是可伪造的 body flag。
+- `extensionID`、PID、UID、audit token 等自报身份字段在 body 中禁止并按未知字段拒绝。授权身份只来自 audit-token/designated-requirement 验证后的 peer context 与 connection-bound `LaunchCapability`；业务若需指向扩展，使用 Broker 签发、scope-bound 的 opaque handle。
 - 大文档不重复传整份文本；使用只读快照句柄和分块读取。
 - 主应用不会接受扩展提供的对象引用、闭包或原生句柄。
+
+所有 target/peer/method capability 的允许边见 [IPC_TRUST_MATRIX.json](./IPC_TRUST_MATRIX.json)。新增 listener
+或 peer 必须先提升其 `matrixVersion`；未登记 edge 即使双方同 Team ID 也拒绝。
 
 ### 7.2 文档快照
 
@@ -405,11 +464,17 @@ stateDiagram-v2
     Suspended --> Activated: 再次触发
     Activated --> Quarantined: 连续崩溃或违规
     Quarantined --> Installed: 用户重新启用
+    Downloaded --> Revoked: 已撤回 release/hash
+    Verified --> Revoked: 撤回更新到达
+    Installed --> Revoked: 撤回更新到达
+    Activated --> Revoked: 撤回更新到达
+    Quarantined --> Revoked: 撤回更新到达
     Installed --> Updating: 有签名更新
     Updating --> Installed: 原子替换成功
     Updating --> Installed: 失败并回滚
     Installed --> Uninstalled
     Quarantined --> Uninstalled
+    Revoked --> Uninstalled
     Uninstalled --> [*]
 ```
 
@@ -445,9 +510,17 @@ stateDiagram-v2
 - 连续 5 次超时。
 - 输出超过限制或重复提交非法事务。
 - 尝试访问未声明能力。
-- 市场签名撤回或安全公告要求禁用。
 
 隔离不会卸载扩展或删除其数据，用户可查看原因、导出诊断并选择重新启用。
+
+### 9.5 Revoked 终态
+
+`Revoked` 与可恢复的 `Quarantined` 分开存储。匹配已验签 revocation 的 exact package hash、developer
+certificate 或 release sequence 时，Manager 立即撤销 LaunchCapability、终止 Host、crypto-erase
+其 extension State，并把该 release 置为不可覆盖终态；UI 不提供“仍然启用/重新信任”。离线时使用
+最高已验签 revocation sequence，绝不接受回滚。只有安装 sequence 更高、hash 不同且未撤回的新
+`MarketReleaseRecord` 才能恢复该 package ID；它是一次新安装/权限确认，不把旧 release 从 Revoked
+改回 Installed。安全撤回不删除用户 Markdown 或 Core-owned 标准导出。
 
 ## 10. 资源与性能预算
 
@@ -457,20 +530,27 @@ stateDiagram-v2
 | 单次前台调用 | 2 秒 | 10 秒 |
 | 后台任务 | 不允许 | 单次 60 秒，可续约 |
 | 单次返回负载 | 4 MB | 8 MB |
-| 持久化状态 | 20 MB | 高信任连接器/Provider 无任意 State；只持 opaque operation/session ID |
+| 持久化状态 | E1/E2 仅 64 KiB declared scalar preferences | 连接器/Provider 无任意 State；只持 opaque operation/session ID |
 | 日志 | 5 MB 结构化循环 | 仅 Core-owned 结构化 event ID/计数/错误码，无自由文本和 payload |
 
 围栏渲染和导出可申请长任务令牌，必须显示进度并支持取消。资源限制先节流，再终止 Host；永不阻塞主应用输入线程。
 
 ## 11. 状态与数据存储
 
-- `Extension Preferences`：由核心保存的 JSON 值，容量小、可随扩展卸载选择删除。
-- `Extension State`：扩展私有结构化状态，按扩展 ID 隔离。
-- `Cache`：可随时删除，不参与备份。
-- `Credentials`：Keychain 中由核心持有，扩展只获得不透明 Credential ID。
+- `Extension Preferences/State`：E1/E2 只允许 Manifest closed Schema 声明的 boolean、bounded number、enum 或 ≤256 字节的 bounded preference string，总规范编码 ≤64 KiB；禁止自由字符串、array/object/blob、文档派生正文、路径、bookmark、hash、选区或渲染结果。Core 按 installed package + grant generation 隔离并全记录 AEAD 加密，扩展只经 typed getter/setter 访问。
+- `Cache`：E1/E2 公共扩展没有持久 cache。Core 自有、含内容的 cache 必须分域加密且可随时删除；Host 内存 cache 随进程终止。
+- `Credentials`：服务凭据只存在对应最小 Keychain access group；Host 仅获得 operation-bound opaque Credential ID，Local Broker/Core 不读取 token。
 - `Sync Metadata`：文件版本、远端 ETag、提交 SHA、待上传 operation 队列。Core 为每个待上传操作保存加密、不可变的 pending snapshot（正文、资源清单和内容 hash）；扩展只能持有 opaque operation/snapshot/baseline ID，其他正文缓存禁止。
 
-扩展卸载时默认保留设置 30 天以便重装，用户可选择立即删除。凭据和同步授权默认立即撤销。
+全局机器权威见 [工程 Keychain Policy](../KEYCHAIN_POLICY.json)，本目录
+[生态 target 投影](./EXTENSION_KEYCHAIN_PROJECTION.json) 只把该权威映射到具体 target/access group，
+不得定义第二套 key lifecycle：Recovery、Workspace Index、Sync、AI session 与 Extension
+State 使用不同 KEK；workspace/session/package 使用 wrapped DEK；Workspace Index 使用 `workspace-index-kek` 包装 workspace/authorization-generation 范围 DEK，Recovery journal 的 body、bookmark、
+path、hash、window state 和 metadata 作为完整 AEAD record 加密。每个 target 只能声明 Policy 列出的
+最小 access group，wildcard/shared Core-Broker group 禁止。
+
+卸载、`Revoked`、document/workspace 权限撤销时立即删除对应 Extension State 密文并 crypto-erase
+DEK；同步解绑/Provider 卸载按各域 trigger 删除。不得以“便于重装”为由保留内容类或 grant-bound state。
 
 ## 12. 同步连接器设计
 
@@ -481,23 +561,31 @@ sequenceDiagram
     participant U as 用户
     participant I as Inflow Core
     participant C as Connector Host
+    participant N as NetworkCredentialBroker
     participant R as 远端服务
 
     U->>I: ⌘S / 自动保存
+    I->>I: fsync preallocated dirty-head marker
     I->>I: 本地原子写入成功
     I-->>U: 已保存到本地
-    I->>C: enqueue(metadata + opaque IDs)
-    C->>I: submitUploadPlan(operationID, typed adapter request)
-    I->>R: Network Broker 直接流式发送 approved snapshot/resources
+    I->>I: materialize encrypted mutations/snapshot
+    I->>C: enqueue(opaque IDs + mutation metadata)
+    C->>I: submitUploadPlan(operationID, policyID, opaque IDs)
+    I->>N: one-shot capability + bounded plaintext pipe
+    I->>I: store owner decrypts into pipe
+    N->>R: typed endpoint graph + mutationID idempotency key
     alt 上传成功
-      R-->>C: remote revision
-      C->>I: acknowledge(operationID, snapshotID, remoteRevision, uploadedHashes[])
+      R-->>N: path-level receipts
+      N-->>I: bounded response pipe
+      I->>I: validate and durably ACK each mutation receipt
+      I-->>C: opaque completion metadata
     else 远端也已修改
-      R-->>C: conflict + remote content
-      C->>I: submitRemoteCandidate(baselineID, remote)
+      R-->>N: conflict receipt + remote stream
+      N-->>I: bounded response pipe
+      I->>I: create Core-owned remote candidate
       I-->>U: 显示差异与合并选择
     else 断网或认证失败
-      C->>I: queued / authRequired
+      N-->>I: typed offline / authRequired
       I-->>U: 本地已保存，云端待同步
     end
 ```
@@ -519,9 +607,80 @@ sequenceDiagram
 
 窗口标题只显示本地保存状态；同步状态使用独立图标和文字，不能混为一个“已保存”指示。
 
-每次待同步状态使用 Core-owned `SyncOperation`：稳定 `operationID`、不可变 `snapshotID`、`baselineID`、正文 hash 和逐项 `resources[] { resourceID, relativePath, kind, state: present|tombstone, hash?, byteCount }`。未开始上传的同一文档操作按 latest-only 合并；已 in-flight 操作保留至精确 ACK，内容寻址加密去重并执行 [Data Protection Policy](../DATA_PROTECTION_POLICY.md)。默认每工作区 1 GiB/1,000 operations、全应用 5 GiB；磁盘压力先暂停同步并通知，永不阻塞或回滚本地保存。
+每次待同步状态使用 Core-owned `SyncOperation { operationID, snapshotID, baselineID, saveGeneration,
+mutations[] }`。每项 mutation 是 closed discriminated schema：
 
-连接器不读取明文 snapshot/resource。它只提交声明式 `UploadPlan`（typed adapter、远端路径、条件 revision 和 opaque IDs），Core 校验后由 Network Broker 从加密 pending store 解密并直接流式发送；响应正文也直接流入 Core 限额候选 sink。连接器只能读取结构化状态/错误和不透明断点 token，不能写 Extension State、Cache 或自由日志旁路正文。ACK 使用 `{operationID,snapshotID,resources:[{resourceID,hash}],remoteRevision}`，同 hash 不同路径仍按 resourceID 区分。
+```ts
+type RevisionCondition =
+  | { kind: "absent" }
+  | { kind: "exactRevision"; revision: string };
+
+type SyncMutation =
+  | { mutationID: string; kind: "put"; oldPath?: string; newPath: string;
+      resourceID: string; contentHash: string; byteCount: number; condition: RevisionCondition }
+  | { mutationID: string; kind: "delete"; oldPath: string; newPath?: never;
+      resourceID: string; condition: { kind: "exactRevision"; revision: string } }
+  | { mutationID: string; kind: "move"; oldPath: string; newPath: string;
+      resourceID: string; contentHash: string; condition: { kind: "exactRevision"; revision: string } };
+
+interface SyncOperation {
+  schemaVersion: 1;
+  kind: "syncOperation";
+  operationID: string;
+  snapshotID: string;
+  baselineID: string;
+  saveGeneration: number;
+  mutations: SyncMutation[];
+}
+```
+
+`SyncOperation`、mutation、receipt envelope 和 dirty intent 的唯一 wire/store Schema 为
+[`sync-protocol-v1.schema.json`](./schemas/sync-protocol-v1.schema.json)；上面的 TypeScript 只是可读投影。
+
+`mutationID` 是远端 idempotency key；重复请求必须返回同一 receipt，不得二次执行 delete/move。路径是
+Core 规范化的 workspace-relative UTF-8 path；Broker 不接受 connector 拼接 URL。未开始上传的同一路径
+可 latest-only 合并，但已 in-flight mutation 保留到精确 receipt。
+
+Core/store owner 持有 Sync KEK 并解密 pending snapshot/resource，经 nonce-bound、authenticated、
+single-use pipe 按 operation byte/time budget 流给 `NetworkCredentialBroker`；Broker 无文件权限、无 Sync
+KEK、不能打开 pending store。响应也经独立 one-shot pipe 直接进入 Core 限额 sink。Connector 只提交
+`UploadPlan { operationID, policyID, expectedPolicyHash, mutationIDs, opaqueAccountHandle }`，读取结构化
+status/error/opaque resume token，不能直接接触 plaintext、写 State/Cache 或使用自由日志。
+
+ACK 是路径/Mutation 级：
+
+```ts
+interface SyncReceiptEnvelope {
+  schemaVersion: 1;
+  kind: "syncReceiptEnvelope";
+  operationID: string;
+  snapshotID: string;
+  policyHash: string;
+  receipts: Array<{
+    mutationID: string;
+    status: "applied" | "alreadyApplied" | "conflict" | "rejected";
+    oldPath?: string;
+    newPath?: string;
+    remoteRevision?: string;
+    remoteContentHash?: string;
+    idempotencyReceipt: string;
+  }>;
+}
+```
+
+Core 校验 operation/snapshot/policy/mutation/path/condition 后，先 durable 写 receipt 再逐项清除已 ACK
+payload；`conflict/rejected` 不视为成功，operation 未全部 `applied/alreadyApplied` 前不得整份清除。同
+hash 不同路径仍是不同 mutation。Envelope 必须对当次请求的每个 `mutationID`
+恰好返回一个 receipt；重复、缺失、额外 ID，或 ID 对应的 old/new path 与已冻结 mutation
+不一致时，Core 原子拒绝整个 envelope，不用其中的“成功”子集清除 payload。
+
+磁盘压力下，历史 quota 不能吞掉同步脏事实。每个已授权 workspace 预分配、排除 1 GiB/1,000
+operation 历史配额的加密 fixed-size `dirty-head` slot；本地保存前先 fsync
+`{workspaceHandle, saveGeneration, state: rescanRequired}`，保存失败则按 generation 对账丢弃，保存成功
+后再 materialize 完整 mutations。若 snapshot 因磁盘满无法 materialize，保留/合并 dirty-head、暂停
+同步并显著提示，重启或空间恢复后 Core 全量 rescan 授权 workspace 与 baseline 重建 mutation。极端 I/O
+故障导致 slot 也不能写时仍允许本地保存，但必须把同步标为 `durability-failed` 且持续提示，绝不显示
+idle。默认历史 quota 仍为每工作区 1 GiB/1,000 operations、全应用 5 GiB。
 
 ### 12.3 冲突策略
 
@@ -549,23 +708,56 @@ sequenceDiagram
 - 本地删除默认进入远端回收站或延迟删除，不立即永久删除。
 - 连接器无法提供版本条件写入时，不得宣称支持安全双向同步，只能提供单向备份模式。
 
+### 12.6 E4 Typed Adapter Network Policy
+
+[TYPED_ADAPTER_POLICIES.json](./TYPED_ADAPTER_POLICIES.json) 是 E4 唯一网络 allowlist，Schema 为
+[`typed-adapter-policy-v1`](./schemas/typed-adapter-policy-v1.schema.json)。每个发布 adapter 必须冻结
+`adapterID/version → operations → endpointID graph`，以及每 endpoint 的 exact HTTPS origin:443、path
+template、method、content type 和 credential scope；正文/远端数据不能提供或覆盖这些值。当前只声明
+GitHub sync v1；云存储与远程 AI 在各自 concrete service policy 加入并经 CI/corpus 前均为 disabled，
+不能用“官方 adapter”或 Manifest domain 作为通用豁免。
+
+每个 policy 同时冻结：每连接 DNS resolve、A/AAAA 分类与最大答案数、连接到 TLS 完成期间的 IP
+binding、TLS 最低版本/system trust/hostname、上传/压缩响应/解压后/ratio/时长/请求数预算、redirect
+最大跳数与逐跳 edge。任一跳跨 origin 时先清除 credential/cookie，再按目标 endpoint credential
+scope 重新决定；未声明 edge 拒绝。服务端返回 URL 永不直接跟随，只允许 policy 把特定响应字段映射
+到既有 endpointID，再以 typed identifiers 重新构造 path；GitHub v1 显式禁止所有 redirect 和 server-
+returned URL follow。DNS 命中 unspecified/loopback/private/link-local/multicast/CGNAT/documentation/
+benchmark/reserved 或 Unix socket 时拒绝，IPv4-mapped IPv6 先归一化再分类。
+
+Policy JSON、实现的路由表和 release 内 hash 必须一致。测试覆盖 DNS rebinding、双栈答案变化、逐跳
+redirect、credential stripping、chunked/错误 Content-Length、gzip/br bomb、慢响应、服务端 URL 注入、
+Unicode/path placeholder 注入和 request cancellation。
+
 ## 12A. AI 扩展执行模型
 
 ### 12A.1 Context Broker
 
-AI 扩展不能自行拼接、读取或发送任意上下文。Context Broker 汇总 Action 输入、Provider 能力和用户批准的数据范围，生成不可变 Context Envelope，其中包含任务、来源范围、用户选择的文件、脱敏结果、目标模型、域名和预计大小。远程 Provider 只返回声明式请求模板；Network Broker 直接把 approved Envelope 流式编码到官方 typed adapter，Provider Host 不接触正文。
+AI 扩展不能自行拼接、读取或发送任意上下文。Context Broker 汇总 Action 输入、Provider 能力和用户批准的数据范围，生成不可变 Context Envelope，其中包含任务、来源范围、用户选择的文件、脱敏结果、目标模型、adapter policy ID/hash 和预计大小。远程 Provider 只返回声明式操作参数；Core 按具体 Typed Adapter Policy 编码 approved Envelope，经一次性流交给 Network Broker，Provider Host 不接触正文。
 
 调用前用户可以检查并排除上下文项。恢复快照、凭据、完整本地路径和扩展日志永不进入 Envelope。
 
 ### 12A.2 Provider 协议
 
-Provider 声明模型 ID、能力、上下文长度、流式和结构化输出、本地或远程执行、网络域名、数据保留、训练政策和可选价格估算。远程请求由 Broker 代发，Provider 不读取真实 API Key。
+Provider 声明模型 ID、能力、上下文长度、流式和结构化输出、本地或远程执行、typed adapter
+policy ID、数据保留、训练政策和可验证价格表 generation。远程请求由 Broker 代发，Provider 不读取
+真实 API Key；无 concrete policy entry 的 Provider 在 E4 disabled。
 
-E4 本地推理由可选、独立安装、签名并公证的 Inflow AI Companion 提供。Companion 的 `Model Manager` 可联网下载模型但永不获得 Context Envelope、prompt 或输出；它校验发布者签名/hash 后把模型以只读文件描述符交给禁用网络 entitlement 的 `Inference Worker`。只有 Worker 通过短期、单用户、单请求能力令牌和认证 XPC 接收正文。两个角色使用不同进程、容器权限和审计日志；Companion 与模型资源不进入 Core 包。
+E4 本地推理由可选、独立安装、签名并公证的 Inflow AI Companion 提供。`AI Model Manager` 只有
+固定模型源网络与 download staging；它不拥有发布后的 model store，也永不获得 Context Envelope、
+prompt 或输出。独立禁网 `AIModelStore.xpc` 对 staging FD 重新验签/hash，复制、fsync 并发布
+versioned immutable CAS，发布后 Manager 无 inode/namespace 写权。Core 向 Store 申请 expiring read-only
+FD lease，再把 lease 与单请求 capability 交给禁网、每 request 独立的 Inference Worker。
 
-AI Runtime 的模型生命周期、content-addressed store、二次 hash、CPU/RAM/quota、token/cost cap 和取消规则以版本化 `AI_RUNTIME_MANIFEST.md` 为准。该 Manifest Accepted 前 E4 只允许官方内部原型，任何 AI Action/Context/Provider 均不可作为普通开发包或 E1 本地签名包侧载。
+Worker/Network Broker 的 response 只能写入 authenticated、bounded、one-shot Core sink。Core 是
+response plaintext、解析和 diff 的唯一 owner；它自行形成 Action output，Provider/Worker 不能把 patch
+标为受信。完整 ModelStore、设备准入、内存、response 和费用契约以 Accepted
+[AI Runtime Manifest](./AI_RUNTIME_MANIFEST.json) 为准。
 
-远程调用前展示模型、接收方、上下文范围及可用的费用估算；完成后将输入/输出 token、供应商返回费用、模型和时间写入最长保留 30 天的本地审计记录，不记录 prompt 正文。无法提供价格时必须明确显示“费用未知”，不能推断为免费。
+远程/本地调用前，Core-owned 全局 `AICostLedger` 跨所有窗口原子 reserve worst-case token/cost，余额
+不足不发送；完成按 receipt settle，取消/启动失败 release，重复操作幂等并可崩溃恢复。调用 UI 展示
+模型、接收方、上下文范围及估算；完成后审计输入/输出 token、供应商费用、模型和时间，最长 30 天且
+不记录正文。价格未知必须逐次确认，不能自动连续或推断免费。
 
 ### 12A.3 Action 输出
 
@@ -577,9 +769,17 @@ Action 只能返回：
 - `Diagnostics`：进入统一问题面板。
 - `ToolProposal`：等待核心校验和用户确认的工具调用。
 
+这些判别对象由 Core 对原始 response 解析后创建；Provider/Worker wire response 只是 untrusted token/
+bytes，不能直接提交上述对象或绕过 Core diff/schema/权限校验。
+
 ### 12A.4 AI Session Store
 
-AI 会话由 Core-owned `AISessionStore` 保存；密文 SQLite/WAL/blob、域密钥、nonce/AAD、轮换、备份排除和 crypto-erase 必须执行 [Data Protection Policy](../DATA_PROTECTION_POLICY.md)。每个会话记录 owner、Provider、模型、时间、expiresAt 和 opaque session ID，默认 TTL 30 天。扩展不能直接访问数据库或自由日志；工作区解绑、Provider 卸载、撤权或清除数据时删除域 key 和关联记录。
+AI 会话由 Core-owned `AISessionStore` 保存；SQLite/WAL/blob 全部加密，AI session KEK、per-session
+wrapped DEK、nonce/AAD、轮换、备份排除和 crypto-erase 执行
+[全局 Keychain Policy](../KEYCHAIN_POLICY.json)、[生态 target 投影](./EXTENSION_KEYCHAIN_PROJECTION.json)
+与 [Data Protection Policy](../DATA_PROTECTION_POLICY.md)。
+每个会话记录 owner、Provider、模型、时间、expiresAt 和 opaque session ID，默认 TTL 30 天。扩展不能
+访问数据库或自由日志；Provider 卸载、AI 撤权、TTL 或清除数据时删除 DEK 和关联记录。
 
 ### 12A.5 Prompt Injection 防护
 
@@ -591,6 +791,14 @@ AI 会话由 Core-owned `AISessionStore` 保存；密文 SQLite/WAL/blob、域�
 - 安全测试必须覆盖文档、远程检索内容、工具输出和模型响应中的间接 Prompt Injection，以及跨轮次持久化、编码混淆、伪造系统消息和诱导泄露上下文；测试不得允许内容改变权限、工具清单、费用确认或数据边界。
 
 ## 13. 插件市场
+
+E3 的在线市场只经独立 `MarketBroker.xpc`；唯一机器网络权威是
+[`MARKET_BROKER_POLICY.json`](./MARKET_BROKER_POLICY.json)，其冻结 `https://market.inflow.app:443`、
+exact path/method、DNS/TLS、响应类型和预算，并在 release 中计入 policy hash；拒绝 redirect、
+proxy override、服务端返回 URL follow 和其他 origin。每连接重新 DNS 分类并绑定到 TLS 完成，拒绝所有
+本地/私有/特殊地址，响应/解压/时长有硬预算。Broker 无插件目录、用户文件、Keychain 或 Extension
+State 权限，只把签名 catalog/record/revocation 与 package bytes 经 bounded read-only stream 交给
+Main App/Manager；连接器、AI 和普通扩展不能调用该 listener。E3 不借用尚未出现的 E4 Network Broker。
 
 ### 13.1 产品结构
 
@@ -608,8 +816,14 @@ AI 会话由 Core-owned `AISessionStore` 保存；密文 SQLite/WAL/blob、域�
 1. 开发者在本地生成 Ed25519 私钥并保存在 Keychain；私钥不上传。平台验证发布者身份和域名控制后，为公钥签发包含 `publisherID`、`keyID`、算法、有效期和包命名空间的 `PublisherCertificate`。
 2. 开发者生成包含 `content-manifest.json`、发布者证书链与引用 `keyID` 的 `developer.sig` 的本地签名 `.inflowx` 并上传。
 3. 市场验证证书、签名和命名空间，执行自动扫描、权限审查和人工复核。
-4. 通过后在签名目录附加 `market.sig` 并写入透明发布日志，不改变 payload 哈希清单。
-5. 客户端验证每个 payload 哈希、规范清单、发布者证书链、对应安装路径所需签名和撤回列表。
+4. 通过后在签名目录附加 `market.sig`，同时生成 closed-world `MarketReleaseRecord`，绑定 package/content-manifest hash、developer certificate hash、audit level、channel、最低 build、状态和 package 单调 `releaseSequence`，并写入透明发布日志；不改变 payload 哈希清单。
+5. 客户端验证每个 payload 哈希、规范清单、发布者证书链、对应安装路径所需签名、release record、最高已知 sequence/checkpoint 和撤回列表。
+
+`MarketReleaseRecord` 的机器 Schema 为
+[`market-release-record-v1.schema.json`](./schemas/market-release-record-v1.schema.json)。记录 RFC 8785
+JCS 字节由市场 Ed25519 detached signature 签名。`Released` 才可新装；`Withdrawn` 停止新装但不强制
+停止既有 hash；`Revoked` 进入 9.5 不可用户覆盖的终态。相同或更低 sequence、hash/certificate/audit/
+channel 任一不匹配、未知 status/field 均拒绝。
 
 密钥轮换优先由旧密钥和平台共同认证新 `keyID`；私钥丢失时必须经身份复核、冷却期和公开安全通知后由平台签发替代证书。发布者转移要求原发布者、新发布者和平台三方确认，并在客户端更新前展示身份变化。证书到期、撤销和包级撤回应进入同一透明日志。开发者模式可使用自签名证书和 TOFU，但必须持久显示未认证警告，且不能据此进入市场或获得高权限。
 
@@ -630,17 +844,27 @@ E1 的本地签名信任完全离线：用户确认的指纹按 publisher/packag
 - 低权限且不增加权限的补丁版本可自动更新。
 - 新增权限、域名或账号范围必须人工确认。
 - 连接器更新先灰度发布，异常率超过阈值自动停止分发。
-- 安全撤回可自动停用扩展，但不能删除用户文档或扩展产生的标准 Markdown。
+- 安全撤回把 exact release/certificate 置为 `Revoked` 并立即终止运行，不允许用户重新启用；不能删除用户文档或扩展产生的标准 Markdown。
 
 ### 13.5 市场服务最小 API
 
+下表是 [Market Broker Policy](./MARKET_BROKER_POLICY.json) 的可读投影；冲突时 JSON 为准，
+未先提升 `policyVersion` 不得增加 origin、endpoint、method 或预算。
+
 - `GET /catalog`：分页目录与兼容性。
-- `GET /extensions/{id}`：详情与版本。
-- `GET /extensions/{id}/versions/{version}/download`：短期下载地址。
+- `GET /extensions/{packageID}`：详情与版本。
+- `GET /extensions/{packageID}/versions/{version}/download`：同一固定 origin 直接返回 package stream，不返回可跟随 URL。
 - `GET /revocations`：签名与版本撤回列表。
 - `POST /reports`：用户举报。
 
-目录响应和撤回列表都必须签名，客户端缓存最后一次可信结果。市场离线不会影响已安装扩展运行。
+目录响应、Market/Pack ReleaseRecord 和撤回列表都必须签名，客户端缓存最高 sequence/checkpoint 与
+最后可信结果。Domain Pack 不能只交付版本范围：市场按具体 build/API cohort 求解后生成
+[`PackReleaseRecord v1`](./schemas/pack-release-record-v1.schema.json)，精确绑定 pack/publisher/sequence、
+resolver、每个 component version/package/content hash/publisher key/role、每个 SVG/PNG asset 的
+exact path/hash/byteCount 和 resolution hash；客户端只
+安装该已验签 resolution，不重新求解。市场离线不会影响未撤回的已安装扩展运行。
+同一 record 内 `packageID` 不得重复，同一 component 内 `assetPath` 不得重复；
+全零 hash、空 components、重复组件/资产键或 resolution hash 不匹配均原子拒绝。
 
 E3 初始市场是官方/邀请制 curated marketplace：发布者注册、公钥登记、上传和审核状态可由人工运营工具完成，不对任意第三方开放自助上传。对第三方开放前必须补齐版本化控制面 API（publisher/key register/rotate/recover、upload、scan/review status、release/withdraw）、透明日志 inclusion/consistency proof，以及签名 checkpoint `{treeSize,rootHash,issuedAt,expiresAt,sequence}`。客户端持久化最高 sequence/treeSize，拒绝回滚、过期 checkpoint、无 inclusion proof 的 release/revocation；应用 release manifest 也必须单调签名。上述门槛未通过时不得把 E3 描述为开放市场。
 
@@ -714,7 +938,7 @@ E3 初始市场是官方/邀请制 curated marketplace：发布者注册、公�
 | 偷取 GitHub Token | 凭据留在 Keychain；Broker 代发请求 |
 | 偷传文档 | 普通扩展无网络；连接器限域名、范围和审计 |
 | 任意代码执行 | 无 Node、Shell、FFI、动态下载；独立 Host |
-| XSS 或预览逃逸 | HTML/SVG/CSS 清洗、CSP、禁脚本 |
+| XSS 或预览逃逸 | 公共输出仅 closed Content Tree；exact-hash SVG asset 经 Core sanitizer/postflight；CSP 禁脚本 |
 | 文档损坏 | 版本化文本事务、原子应用、一次撤销 |
 | 供应链攻击 | 双签名、内容摘要、透明日志、撤回列表 |
 | 更新提权 | 新权限与域名必须重新授权 |
@@ -740,16 +964,21 @@ E3 初始市场是官方/邀请制 curated marketplace：发布者注册、公�
 ### 18.2 安全测试
 
 - 包路径穿越、压缩炸弹、签名替换和依赖投毒。
+- PackageVerifier source/CAS identity 替换、receipt replay/expiry、最终 move 前 hash 变化及安装目录/Keychain 沙箱拒绝。
 - 未授权文件、网络、Keychain、剪贴板和进程访问。
-- HTML/SVG/CSS 注入与 WebView 导航。
+- 所有 listener 的 designated requirement/audit token/UID/session/nonce/sequence/body hash/expiry/replay 组合负面 corpus。
+- Content Tree 未知字段/超预算/伪造 handle，以及 exact-hash SVG asset 注入与 WebView 导航。
 - 恶意连接器域名跳转、DNS 重绑定和令牌导出。
 
 ### 18.3 故障测试
 
 - Host 崩溃、死循环、内存超限和输出超限。
 - 安装、更新和数据迁移中断后的回滚。
+- Revoked 与 Quarantined 分流、离线 revocation sequence 回滚及旧 hash 重新启用尝试。
 - 断网、认证过期、远端限流和服务端错误。
 - 本地与远端同时修改、删除和重命名。
+- Sync reserve slot/dirty-head、put/delete/move 幂等 receipt、逐路径 ACK 中断和磁盘满重建。
+- AI model publish/lease/GC 竞态、跨窗口 cost reserve/settle 崩溃恢复及不同物理内存准入。
 
 ### 18.4 兼容性测试
 
@@ -760,7 +989,7 @@ E3 初始市场是官方/邀请制 curated marketplace：发布者注册、公�
 
 ## 19. 分阶段实施
 
-阶段能力、分发等级、进程和 entitlement 的唯一事实来源为 [Phase/Process Matrix](./PHASE_PROCESS_MATRIX.md)。本设计各章节描述目标机制，不得据此提前开放某能力；E2 官方 WASM、E3 curated 市场、E4 typed 网络/AI 和 E5 第三方高权限门槛均以矩阵为准。
+阶段能力、分发等级、进程和 entitlement 的唯一机器事实来源为 [Phase/Process Matrix JSON](./PHASE_PROCESS_MATRIX.json)；[Markdown](./PHASE_PROCESS_MATRIX.md) 只是可读投影。本设计各章节描述目标机制，不得据此提前开放某能力；E2 官方 WASM、E3 curated 市场、E4 typed 网络/AI 和 E5 第三方高权限门槛均以矩阵为准。
 
 ## 20. 上线门槛
 
@@ -776,18 +1005,23 @@ E3 初始市场是官方/邀请制 curated marketplace：发布者注册、公�
 8. 同步冲突测试中静默覆盖次数为零。
 9. 扩展权限、活动、故障和同步状态对用户可见。
 10. 禁用所有扩展后，文档源码保持完整可读。
+11. N 个 active extension handle 的运行证据为 N 个不同 Host PID/audit token，且 IPC replay/expiry/body-hash 负面测试通过。
+12. PackageVerifier 每 job 一次性，不能访问安装目录/Keychain；CAS 在最终 move 前的 re-hash 替换测试为零绕过。
+13. E2 公共渲染输出只有 Content Tree；HTML/SVG/CSS、未知字段和伪造 artifact handle 均 fail closed。
+14. E3 MarketBroker fixed-origin/Revoked 与 E4 typed adapter endpoint graph 的机器 policy/负面 corpus 均通过。
+15. Sync 逐 mutation receipt/dirty-head 恢复，以及 AI immutable ModelStore/global ledger/8 GB 准入均有崩溃与并发证据。
 
 ## 21. 已确定的关键决策
 
 | 决策 | 结论 |
 | --- | --- |
-| 运行位置 | 每个可执行扩展独立进程 |
+| 运行位置 | 每扩展专属 client/connection/Host；N handles 必须观测到 N distinct PID/audit token |
 | 首个运行时 | JavaScriptCore + TypeScript SDK |
 | 原生第三方代码 | 禁止加载到应用或 Host |
 | UI | 原生声明式组件，不允许任意网页侧栏 |
 | 文档修改 | 版本化、原子、可撤销文本事务 |
-| 网络 | 普通扩展禁止；受审连接器和远程 AI Provider 通过 `network.services` Broker 限域代理 |
-| 凭据 | 核心持有于 Keychain，扩展不可导出 |
+| 网络 | 普通扩展禁止；E3 MarketBroker 固定 origin；E4 连接器/远程 AI 仅走机器声明的 typed endpoint graph |
+| 凭据 | 每服务专属 Broker 最小 Keychain access group，Host/Core 不读取或导出 token |
 | 分发 | 开发包仅开发者模式；低权限本地签名包可侧载；高权限扩展仅市场且需类型审核 |
 | 市场 | 可选、无广告、离线不影响编辑 |
 | 本地保存 | 永远优先且不受连接器阻塞 |
@@ -798,6 +1032,6 @@ E3 初始市场是官方/邀请制 curated marketplace：发布者注册、公�
 1. JavaScriptCore Host 在 128 MB 内存预算下处理大文档语法树的性能。
 2. XPC 分块快照和增量语法树的序列化成本。
 3. SwiftUI/AppKit 中声明式扩展侧栏的组件边界和可访问性。
-4. HTML/SVG/CSS 清洗器对 Mermaid 类复杂输出的兼容性。
+4. Content Tree 表达能力，以及 PackReleaseRecord exact-hash SVG asset sanitizer 对领域图表的兼容性。
 5. GitHub 三方合并、重命名检测和附件同步的冲突体验。
 6. Developer ID + Hardened Runtime 下外部扩展包、独立 Host 与动态脚本解释的签名及公证验证。

@@ -1,8 +1,8 @@
 # Inflow：Typora 对标与差异化路线
 
-- 文档版本：v1.0
-- 更新日期：2026-08-17
-- 基准产品：Typora 1.14
+- 文档版本：v1.1
+- 更新日期：2026-08-18
+- 基准产品：Typora 1.14.6（macOS Apple Silicon）
 - 适用范围：Inflow 完整产品路线，不等同于首个 MVP
 
 ## 阅读指南
@@ -96,7 +96,7 @@ Inflow 采用“能力全面对标、体验重点超越”的策略：
 ### 3.5 主题与显示
 
 - 提供不少于 6 套高质量内置主题，并可为浅色、深色分别指定主题。
-- 支持用户 CSS 主题导入、即时预览、错误回退和安全校验。
+- 主题迁移不以执行 Typora 任意 CSS 为等价条件：P1 产品/E1 生态只提供 design token；P2 才提供受机器 `ThemePolicy` 限制的声明式主题包、即时预览和错误回退，字体必须经隔离解码。任意 CSS、`@import`、网络 URL 和未验证字体是公开安全 exception，不伪装为已对齐。
 - 编辑器与导出可选择同一主题或分别指定。
 - 支持正文宽度、字号、行高、段落间距和代码字体设置。
 - 支持侧栏、大纲、状态栏、浮动工具栏和标签栏的显示开关。
@@ -112,6 +112,50 @@ Inflow 采用“能力全面对标、体验重点超越”的策略：
 | 生态工具 | DOCX、RTF、ODT、EPUB、LaTeX 等批量转换；不打包进编辑器 |
 
 编辑器本体只提供与“检查和分享当前文档”直接相关的原生导出，不探测 Pandoc、不调用外部命令，也不展示发布入口。跨格式批量转换属于独立生态工具。
+
+### 3.7 机器能力覆盖审计
+
+下表把第 3.1–3.6 节的每组明列语义映射到 [Inventory JSON](./TYPORA_CAPABILITY_INVENTORY.json) 中的机器 capability。一个 requirement ID 可共用多个 capability，但不能用宽泛的“parity”项隐藏未登记能力。本区段的 capability ID 集合由生成器与 Inventory 做双向闭集校验。
+
+<!-- inventory-capability-coverage:start -->
+
+| Benchmark 明列语义 | Inventory capability |
+| --- | --- |
+| 3.1 即时渲染编辑 | `editing.instant-rendered` |
+| 3.1 源码编辑与分栏预览 | `editing.source-mode`；分栏是 Inflow 产品路径，仍由同一 `INF-P0-MODE-001` 覆盖 |
+| 3.1 格式操作与撤销/重做 | `editing.core-commands` |
+| 3.1 查找替换 | `editing.search-replace` |
+| 3.1 拼写与语言 | `writing.spell-language` |
+| 3.1 专注模式与打字机模式 | `writing.focus-typewriter` |
+| 3.1 字数、字符、段落、阅读时长和选区统计 | `writing.statistics` |
+| 3.1 Smart Paste | `editing.smart-paste` |
+| 3.1 可发现设置与外观选择 | `settings.editor-preferences` |
+| 3.2 基础 GFM 语法 | `markdown.gfm-core` |
+| 3.2 脚注、TOC、YAML Front Matter、水平线、标题 ID 与 Alerts | `markdown.extended-writing`、`navigation.links-outline` |
+| 3.2 高亮、上标、下标、Emoji | `markdown.highlight`、`markdown.superscript`、`markdown.subscript`、`markdown.emoji` |
+| 3.2 原始 HTML 与脚本/网络边界 | `content.structured-html`、`content.scripted-network-html` |
+| 3.2 代码块语言、着色、复制、行号与长行显示 | `editing.code-fence-tools`、`editing.syntax-highlighting` |
+| 3.2 图形化表格 | `editing.interactive-structures` |
+| 3.2 可点击任务列表 | `editing.clickable-task-list` |
+| 3.2 行内/块公式与编号/引用等高级学术语义 | `math.inline-block`、`math.advanced-academic` |
+| 3.2 Mermaid 与 legacy sequence/flow 方言 | `diagram.mermaid`、`diagram.legacy-sequence-flow` |
+| 3.3 单文件、文件监听、冲突与恢复 | `file.document-lifecycle`、`recovery.autosave-versioning` |
+| 3.3 文件夹、多文档、大纲、全文搜索与快速打开 | `workspace.file-management`、`navigation.links-outline` |
+| 3.4 图片插入、路径和资源目录 | `resource.image-workflow` |
+| 3.4 图片复制、移动、重命名、文档移动与引用更新 | `resource.image-operations` |
+| 3.4 远程图片显式授权加载/下载 | `resource.remote-image-loading` |
+| 3.4 图床上传 | `resource.image-upload` (`exception`) |
+| 3.4 断链、未引用/重复资源与批量结构修复 | Inflow 差异化 `INF-P3-RESOURCE-001`，在 Inventory coverage 中带 reason/owner 显式 exclusion，不伪装成 Typora parity capability |
+| 3.5 浅/深色与跟随系统 | `theme.builtin-appearance` |
+| 3.5 六套内置主题 | `theme.builtin-six` |
+| 3.5 任意 CSS/字体/网络资源主题 | `theme.arbitrary-css` (`exception`) |
+| 3.5 正文宽度、字号、显示开关与辅助选项 | `settings.editor-preferences`、`writing.focus-typewriter` |
+| 3.6 自包含 HTML 与基础 PDF | `export.native-single-document` |
+| 3.6 系统打印、长图与增强 PDF | `export.print-long-image` |
+| 3.6 无样式/大纲 HTML、可移植包与再次导出 | `export.advanced-single-document` |
+| 3.6 Pandoc/外部批量转换 | `export.pandoc-formats` (`exception`) |
+
+<!-- inventory-capability-coverage:end -->
 
 ## 4. Inflow 的领先能力
 
@@ -175,9 +219,9 @@ Inflow 维护可重建的资源索引，帮助用户安全移动文档和附件�
 
 本文只维护 Typora 能力差距、迁移风险和领先机会，不定义版本路线。所有 P0–P3 归属、完成条件及变更只引用 [PRD 第 11–12 节](./PRD.md)。
 
-## 6. 产品指标
+## 6. 产品指标（measurement contract OPEN）
 
-所有指标的数据定义、Typora build/平台/设置、官方证据、语料和 exception ledger 由机器可读 [Typora Capability Inventory](./TYPORA_CAPABILITY_INVENTORY.md) 提供；本文不以空白能力矩阵替代证据。
+[Typora Capability Inventory JSON](./TYPORA_CAPABILITY_INVENTORY.json) 当前只提供能力目录、Typora build/平台标签、settings profile 标识、官方证据 URL/日期、owner、证据登记表和 exception ledger；当前 registry 为空，不包含可执行的 metrics、Migration Corpus 定义、Top 30 抽样方法、任务步骤或成功条件。下列数值是 PRD 的 OPEN 产品目标；在未来 schemaVersion 显式建模 measurement contract、登记非零 hash 工件并产生候选构建结果前，不得宣称指标已冻结或通过。能力的阶段归属仍只引用 PRD 稳定 requirement ID。
 
 ### 对标指标
 

@@ -1,25 +1,70 @@
-# Settings Schema
+# Settings Schema（P0 冻结契约）
 
-- schemaVersion：1
-- 事实来源：PRD §6；本文给出机器实现所需 scope/迁移
+- 契约状态：Frozen
+- schemaVersion：2
+- 机器事实来源：[`SETTINGS_SCHEMA.json`](./SETTINGS_SCHEMA.json)
 
-| Key | 类型/默认 | Scope 与继承 | Reset/迁移 |
+## 权威边界
+
+PRD 定义“为什么存在该设置、用户看到什么行为、属于哪个产品阶段”；本 Schema 独占 key、存储类型、默认值、数值范围、枚举值、scope、继承、阶段可用性和迁移。技术设计与代码只引用，不复制默认值。若 PRD 产品语义与机器 Schema 不一致，发布门禁失败并要求两者显式修订；任一文档都不得用“以另一份为准”的循环表述自动覆盖冲突。
+
+## P0 用户设置
+
+| Key | 类型 / P0 默认 | Scope 与继承 | 机器约束 |
 | --- | --- | --- | --- |
-| autosave.enabled | Bool / true | global | reset true |
-| autosave.delaySeconds | Enum / 1 | global | 旧值夹到 0.5/1/2/5 |
-| editor.fontSize | Double / 15 | global → workspace | reset global；workspace 删除覆盖 |
-| editor.spellcheck | Bool / true | global → workspace | 同上 |
-| editor.wrap | Bool / true | global → workspace | 同上 |
-| preview.contentWidth | Double / 760 | global → workspace | 夹到 600…1200 |
-| preview.theme | Enum / system | global → workspace | 未知值回 system |
-| rendering.mermaid | Bool / true | global → workspace | 从旧 `extensions.mermaid` 迁移 |
-| rendering.math | Bool / true | global → workspace | 从旧 `extensions.math` 迁移 |
-| window.mode | Enum / preview | window restoration | 不参与偏好 reset |
-| window.splitRatio | Double / global initial 0.5 | global 仅决定新窗口初值；每窗口保存当前值 | 夹到 0.25…0.75 |
-| window.sidebar/scroll/focus | state | window restoration | 不参与继承 |
-| document.encoding/BOM/lineEnding | document property | document only | 不随 reset 改写 |
-| versionStore.enabled | Bool / true | global → workspace | P3 生效 |
-| versionStore.retentionDays | Int / 30 | global → workspace | P3，1…3650 |
-| versionStore.maxBytes | Int / 500 MiB | global → workspace | P3，最小 100 MiB |
+| `autosave.enabled` | Bool / `true` | global | 关闭即取消未开始的 file autosave |
+| `autosave.delaySeconds` | Number enum / `1` | global | `0.5 / 1 / 2 / 5` |
+| `files.markdownOpenBehavior` | Enum / `newWindow` | global | P0 只启用 `newWindow`；`workspaceTab` 从 P1 启用 |
+| `app.lastUsedMode` | Enum / `split` | global | P0 为 `editor / split / preview`；`instant` 从 P1 启用 |
+| `editor.fontSize` | Number / `15` | global → workspace | **闭区间 `12...28` pt**；非有限数无效 |
+| `editor.syntaxHighlighting.enabled` | Bool / `true` | global → workspace | 仅改变派生高亮，不改源码 |
+| `editor.spellcheck.enabled` | Bool / `true` | global → workspace | 系统拼写检查 |
+| `editor.wrap.enabled` | Bool / `true` | global → workspace | 自动换行 |
+| `preview.contentWidth` | Number / `760` | global → workspace | 闭区间 `600...1200` CSS px |
+| `preview.theme` | Enum / `system` | global → workspace | `system / light / dark` |
+| `preview.scrollSync.enabled` | Bool / `true` | global → workspace | 编辑器到预览同步；P1 反向同步沿用同一开关 |
+| `preview.headingClickToSource.enabled` | Bool / `true` | global → workspace | 预览标题点击定位源码 |
+| `rendering.mermaid.enabled` | Bool / `true` | global → workspace | 从旧 key 迁移 |
+| `rendering.math.enabled` | Bool / `true` | global → workspace | 从旧 key 迁移 |
+| `window.newWindowSplitRatio` | Number / `0.5` | global | 只决定无 restoration 的新窗口初值；闭区间 `0.25...0.75` |
+| `versionStore.enabled` | Bool / `true` | global → workspace | P3 才启用产品能力 |
+| `versionStore.retentionDays` | Integer / `30` | global → workspace | P3；`1...3650` |
+| `versionStore.maxBytes` | Integer / `524288000` | global → workspace | P3；最小 `104857600` |
 
-继承只允许 document property > workspace > global；窗口状态不进入该链。Schema 迁移在事务中完成，失败保留旧数据并回退默认，不修改文档或 Recovery。新增/删除 key 必须提升 schemaVersion 并提供迁移 fixture。
+`app.lastUsedMode` 的首次默认明确为 `split`，与“首次进入实时预览”一致。每次用户主动完成有效模式切换后更新它；窗口 restoration、错误回退和后台状态恢复不得反向改写它。P0 遇到尚未到阶段的 `instant` 或 `workspaceTab` 时按无效值处理，不可悄悄开启未来能力。
+
+## 窗口 restoration 与文档属性
+
+窗口状态不进入 global/workspace 继承链，也不因“重置偏好”被删除：
+
+| Key | 类型 / 初始化 | 规则 |
+| --- | --- | --- |
+| `window.mode` | phase-gated Enum / `app.lastUsedMode` | 有合法 restoration 时恢复该窗口值；否则读取最近模式 |
+| `window.splitRatio` | Number / `window.newWindowSplitRatio` | 每窗口保存当前值并夹到 `0.25...0.75` |
+| `window.sidebarVisible` | Bool / `true` | 每窗口状态 |
+| `window.focusRegion` | Enum / 按 mode 决定 | `editor / preview / sidebar`；不恢复不可见区域 |
+| `window.editorScrollAnchor` | Opaque restoration state / `null` | 版本不匹配即丢弃，不参与偏好迁移 |
+| `window.previewScrollAnchor` | Opaque restoration state / `null` | 同上 |
+
+`document.encoding / BOM / lineEnding` 是文档属性，不属于 SettingsStore；偏好 reset、workspace override 或窗口恢复都不得改写它们。
+
+## 解析、继承与写入规则
+
+- 仅 `SETTINGS_SCHEMA.json` 中列出的 key 可持久化；未知 key 留在隔离区供降级/升级诊断，运行时不可读取。
+- 可继承 key 的解析顺序固定为 workspace override → global → schema default；文档属性由专用存储覆盖，但不得伪装为任意设置 key。
+- 类型错误、非有限 number、越界 number、未启用阶段 enum 和未知 enum 都是 invalid，不是宽松转换。读取时使用 schema default 并记录无内容诊断；持久修复只在用户写入或迁移事务中发生。
+- workspace 只能覆盖机器 Schema 标为 `workspace` 的 key；不得覆盖 autosave、最近模式、文件打开方式或窗口 restoration。
+- 影响 parser/render 的设置写入成功后提升 pipeline generation 并取消旧任务；持久化失败则回滚 UI 值，不产生半应用状态。
+
+## v1 → v2 迁移
+
+迁移在临时 store 中完整验证后原子替换；失败保留 v1 原件，运行时使用 v2 默认值，不修改文档、Recovery 或窗口 restoration。
+
+1. 缺失 `app.lastUsedMode` 时写入 `split`。已有合法 `window.mode` 只代表该窗口 restoration，不得拿来覆盖最近模式。
+2. v1 的 global `window.splitRatio` 迁移到 `window.newWindowSplitRatio`；每窗口 `window.splitRatio` 原位保留并夹到范围。
+3. `editor.spellcheck`、`editor.wrap`、`rendering.mermaid`、`rendering.math` 分别重命名为带 `.enabled` 的 v2 key；旧 key 仅在新 key 缺失时消费一次。
+4. 新增语法高亮、滚动同步、标题点击和文件打开方式 key，写入各自默认值。
+5. `editor.fontSize` 夹到 `12...28`；NaN/Infinity/类型错误回 `15`。其他数值按机器 Schema 处理。
+6. P0 不可用的 `instant/workspaceTab` 进入隔离诊断并回到 `split/newWindow`，不得降级为另一个随机合法枚举。
+
+每次新增/删除/改名 key、改变默认/范围/scope/阶段可用性都必须提升 schemaVersion，并提供至少 `valid / missing / wrongType / boundary / unknownEnum / interruptedMigration / downgrade` fixture。Release CI 必须验证 Markdown 表与 `SETTINGS_SCHEMA.json` 的 key/default/range 一致；当前契约不等同于这些 fixture 已通过。

@@ -1,9 +1,9 @@
 # Inflow 扩展能力规范
 
-- 文档版本：v1.0
-- 更新日期：2026-08-17
+- 文档版本：v1.1
+- 更新日期：2026-08-18
 - 目标用户：熟悉 Swift、JavaScript 或 Web 技术的高级开发者
-- 计划阶段：见唯一 [Phase/Process Matrix](./PHASE_PROCESS_MATRIX.md)
+- 计划阶段：见机器权威 [Phase/Process Matrix JSON](./PHASE_PROCESS_MATRIX.json)（[可读投影](./PHASE_PROCESS_MATRIX.md)）
 
 完整技术架构、运行时、市场和同步设计见 [扩展系统总体设计](./SYSTEM_DESIGN.md)，长期生态与 AI 接入模型见 [Inflow 扩展生态战略](../../product/ECOSYSTEM_STRATEGY.md)，Markdown 扩展解析规则见 [Markdown 语法扩展设计](./SYNTAX_EXTENSION_API.md)。本文保留产品级能力边界和开发者接口摘要。
 
@@ -31,9 +31,9 @@ Inflow 的扩展系统用于让高级开发者适配专业写作场景，同时�
 
 ### 2.1 主题扩展
 
-- 提供编辑器配色、预览 CSS、代码配色和打印样式。
-- 主题只能包含声明式资源，不允许 JavaScript。
-- 导入前检查 CSS、字体和远程资源；远程资源默认拒绝。
+- E1 只提供 closed Schema 的 design token 值和有限色值/代码配色枚举，由 Core 编译进内置编辑器、预览和打印模板。
+- E1 包不接受 CSS 字节、字体、图片、URL、`@import` 或 JavaScript；未知 token/value 直接拒绝。
+- 未来 P2 受限主题包必须另有机器 ThemePolicy 与隔离字体解码；此前不开放任意 CSS 导入。
 - 主题异常时自动回退到内置主题。
 
 这是风险最低的扩展类型，应当最先开放。
@@ -41,8 +41,8 @@ Inflow 的扩展系统用于让高级开发者适配专业写作场景，同时�
 ### 2.2 Markdown 语法与渲染扩展
 
 - 注册新的围栏代码块语言，例如 `plantuml` 或领域专用图表。
-- 注册块级或行内语法，但必须提供解析规则、源码范围和渲染结果。
-- 渲染结果使用清洗后的 HTML/SVG 或受限视图描述，不能注入任意脚本。
+- Syntax v1 只注册 Core CommonMark fenced block 或带命名空间的 block directive；行内语法属于 v2/Experimental。
+- 渲染结果只能是 Core `ExtensionContentTreeV1`；HTML/SVG/CSS/URL/path 不属于公共返回类型。Domain Pack 的 exact-hash SVG asset 只能经 Core sanitizer 变成 opaque artifact handle 后由内容树引用。
 - 必须提供纯文本降级结果，确保未安装扩展时文档仍可读。
 - 扩展语法应使用明确命名空间或标准围栏，避免污染普通 Markdown。
 
@@ -84,7 +84,7 @@ Inflow 的扩展系统用于让高级开发者适配专业写作场景，同时�
 
 连接器是独立于普通插件的高权限扩展类型，面向云存储、GitHub 等可选同步场景。它不是 Inflow 核心能力，只能由用户主动从可信插件市场安装。
 
-- Inflow 永远先完成本地原子保存，再由 Core 建立带 `operationID/snapshotID/resources[]` 的加密 pending snapshot；连接器只获得可续签的短期流句柄，精确 ACK 前 Core 不清除待上传版本。
+- Inflow 永远先完成本地原子保存，再由 Core 建立带 `operationID/snapshotID/mutations[]` 的加密 pending snapshot；连接器只获得 opaque ID/状态，Core store owner 解密后经 authenticated one-shot pipe 流给 Network Broker，逐 mutation receipt 精确 ACK 前不清除对应 payload。
 - 连接器只能同步用户明确选择的文件或工作区，不能扫描其他目录。
 - 连接器不得拦截 `⌘S`、延迟本地保存、修改恢复快照或把云端状态冒充成本地保存状态。
 - 上传失败不影响本地文件，界面分别显示“已保存到本地”和“云端待同步/同步失败”。
@@ -124,11 +124,11 @@ flowchart LR
     Guard --> Core["文档模型、保存与恢复核心"]
 ```
 
-- Inflow 主进程维护 UI、文档模型、撤销、保存和恢复；Manager、Local Broker、网络 Broker、扩展 Host 的唯一边界见 [Phase/Process Matrix](./PHASE_PROCESS_MATRIX.md)。
-- 非主题扩展运行在独立 Extension Host 中，通过 XPC 或等价进程间通信调用。
+- Inflow 主进程维护 UI、文档模型、撤销、保存和恢复；Manager、PackageVerifier、Market/Local/Network Broker、ModelStore 与扩展 Host 的唯一边界见 [Phase/Process Matrix JSON](./PHASE_PROCESS_MATRIX.json)。
+- 非主题扩展各自拥有一个专属 `ExtensionHostLauncherClient`/connection 和独立 Extension Host 进程，通过 XPC 调用；运行时必须证明 active extension handles 与 PID/audit token 一一对应。
 - 一个扩展崩溃时优先只终止该扩展实例；连续崩溃后自动禁用。
 - 每次调用设置时间、内存和输出大小限制。预览渲染可以取消，文本修改必须原子提交。
-- 扩展返回的 HTML、SVG、CSS、文件路径和文本编辑必须由核心再次验证。
+- 扩展返回的 Content Tree 与文本编辑必须由 Core 验证；HTML、SVG、CSS、URL、文件路径在公共输出 Schema 边界直接拒绝。
 
 ## 5. 扩展包
 
@@ -167,13 +167,13 @@ flowchart LR
 
 ## 8. 发布与安装
 
-开放阶段、分发等级和进程边界只引用 [Phase/Process Matrix](./PHASE_PROCESS_MATRIX.md)；本页不重复维护 E0–E5 内容。
+开放阶段、分发等级和进程边界只引用 [Phase/Process Matrix JSON](./PHASE_PROCESS_MATRIX.json)；本页不重复维护 E0–E5 内容。
 
 安装流程：
 
-1. 校验包结构、签名、API 版本和危险资源。
+1. 每个 job 启动无 Keychain/安装目录写权的一次性 PackageVerifier，通过私有 FD/CAS 校验包结构、签名输入、API 版本和危险资源。
 2. 展示开发者、功能、权限和数据访问范围。
-3. 用户确认后复制到应用容器中的扩展目录。
+3. 用户确认后，Manager 从 verifier CAS FD tree 再算全部 hash，匹配 receipt 后原子复制到扩展目录。
 4. 在隔离宿主中首次启动，不要求重启编辑器。
 5. 异常时回滚安装并保留可理解的错误日志。
 
