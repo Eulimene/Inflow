@@ -20,14 +20,14 @@ REQUIREMENT_ID = re.compile(r"\bINF-P[0-3]-[A-Z][A-Z0-9]*-\d{3}\b")
 SHA256 = re.compile(r"^(?!0{64}$)[0-9a-f]{64}$")
 REQUIREMENT_DEFINITION = re.compile(r"\*\*(INF-P[0-3]-[A-Z][A-Z0-9]*-\d{3})\*\*")
 EXPECTED_LOCAL_SCHEMA_REFS = {
-    "治理/需求追踪.json": "./需求追踪模式.json",
-    "技术/扩展/AI运行清单.json": "./数据模式/AI运行清单第二版模式.json",
-    "技术/扩展/扩展钥匙串映射.json": "./数据模式/扩展钥匙串映射第一版模式.json",
-    "技术/扩展/IPC信任矩阵.json": "./数据模式/IPC信任矩阵第一版模式.json",
-    "技术/扩展/市场代理策略.json": "./数据模式/市场代理策略第一版模式.json",
-    "技术/扩展/阶段进程矩阵.json": "./数据模式/阶段进程矩阵第二版模式.json",
-    "技术/扩展/类型化适配器策略.json": "./数据模式/类型化适配器策略第一版模式.json",
-    "产品/Typora能力清单.json": "./Typora能力清单模式.json",
+    "机器校验/治理/需求追踪.json": "./需求追踪模式.json",
+    "机器校验/技术/扩展/AI运行清单.json": "./数据模式/AI运行清单第二版模式.json",
+    "机器校验/技术/扩展/扩展钥匙串映射.json": "./数据模式/扩展钥匙串映射第一版模式.json",
+    "机器校验/技术/扩展/IPC信任矩阵.json": "./数据模式/IPC信任矩阵第一版模式.json",
+    "机器校验/技术/扩展/市场代理策略.json": "./数据模式/市场代理策略第一版模式.json",
+    "机器校验/技术/扩展/阶段进程矩阵.json": "./数据模式/阶段进程矩阵第二版模式.json",
+    "机器校验/技术/扩展/类型化适配器策略.json": "./数据模式/类型化适配器策略第一版模式.json",
+    "机器校验/产品/Typora能力清单.json": "./Typora能力清单模式.json",
 }
 
 
@@ -46,6 +46,29 @@ def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 def load_json(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_object)
+
+
+def check_document_tree_separation(errors: list[str]) -> None:
+    """Keep human-readable documents and machine contracts in disjoint trees."""
+
+    human_root = DOCS / "阅读材料"
+    machine_root = DOCS / "机器校验"
+    expected_roots = {human_root.name, machine_root.name}
+    actual_roots = {path.name for path in DOCS.iterdir()} if DOCS.is_dir() else set()
+    if actual_roots != expected_roots:
+        errors.append(
+            "文档/: top level must contain exactly 阅读材料/ and 机器校验/; "
+            f"found={sorted(actual_roots)!r}"
+        )
+    for root, allowed_suffix in ((human_root, ".md"), (machine_root, ".json")):
+        if not root.is_dir():
+            errors.append(f"{root.relative_to(ROOT)}: missing document category root")
+            continue
+        for path in root.rglob("*"):
+            if path.is_file() and path.suffix != allowed_suffix:
+                errors.append(
+                    f"{path.relative_to(ROOT)}: file type is not allowed under {root.name}/"
+                )
 
 
 def check_json(errors: list[str]) -> dict[Path, object]:
@@ -513,7 +536,7 @@ def check_markdown_links(errors: list[str]) -> None:
 
 
 def check_prd_requirement_definitions(errors: list[str]) -> None:
-    path = DOCS / "产品" / "产品需求文档.md"
+    path = DOCS / "阅读材料" / "产品" / "产品需求文档.md"
     definitions = REQUIREMENT_DEFINITION.findall(path.read_text(encoding="utf-8"))
     seen: set[str] = set()
     for requirement_id in definitions:
@@ -538,19 +561,19 @@ def check_declared_authority_paths(
 
     declarations = (
         (
-            "治理/需求追踪.json",
+            "机器校验/治理/需求追踪.json",
             ("sourceRequirementLedger",),
-            "产品/产品需求文档.md",
+            "阅读材料/产品/产品需求文档.md",
         ),
         (
-            "技术/扩展/扩展钥匙串映射.json",
+            "机器校验/技术/扩展/扩展钥匙串映射.json",
             ("normativeSource",),
-            "技术/核心/钥匙串策略.json",
+            "机器校验/技术/核心/钥匙串策略.json",
         ),
         (
-            "技术/核心/性能清单.json",
+            "机器校验/技术/核心/性能清单.json",
             ("processSampling", "machineTargetAuthority"),
-            "技术/扩展/阶段进程矩阵.json",
+            "机器校验/技术/扩展/阶段进程矩阵.json",
         ),
     )
     for source_relative, field_path, target_relative in declarations:
@@ -580,19 +603,19 @@ def check_declared_authority_paths(
 def check_machine_authority_cross_references(
     loaded: dict[Path, object], errors: list[str]
 ) -> None:
-    keychain = document_at(loaded, "技术/核心/钥匙串策略.json")
+    keychain = document_at(loaded, "机器校验/技术/核心/钥匙串策略.json")
     projection = document_at(
-        loaded, "技术/扩展/扩展钥匙串映射.json"
+        loaded, "机器校验/技术/扩展/扩展钥匙串映射.json"
     )
     phase_matrix = document_at(
-        loaded, "技术/扩展/阶段进程矩阵.json"
+        loaded, "机器校验/技术/扩展/阶段进程矩阵.json"
     )
-    ipc_matrix = document_at(loaded, "技术/扩展/IPC信任矩阵.json")
+    ipc_matrix = document_at(loaded, "机器校验/技术/扩展/IPC信任矩阵.json")
     typed_adapters = document_at(
-        loaded, "技术/扩展/类型化适配器策略.json"
+        loaded, "机器校验/技术/扩展/类型化适配器策略.json"
     )
     market_policy = document_at(
-        loaded, "技术/扩展/市场代理策略.json"
+        loaded, "机器校验/技术/扩展/市场代理策略.json"
     )
     if not all(
         (keychain, projection, phase_matrix, ipc_matrix, typed_adapters, market_policy)
@@ -939,7 +962,7 @@ def check_inventory_references(loaded: dict[Path, object], errors: list[str]) ->
     if inventory is None:
         return
     path, document = inventory
-    prd_path = DOCS / "产品" / "产品需求文档.md"
+    prd_path = DOCS / "阅读材料" / "产品" / "产品需求文档.md"
     prd_ids = set(REQUIREMENT_ID.findall(prd_path.read_text(encoding="utf-8")))
     entries = document.get("capabilities")
     if not isinstance(entries, list):
@@ -967,16 +990,16 @@ def check_inventory_references(loaded: dict[Path, object], errors: list[str]) ->
 def check_requirement_traceability(
     loaded: dict[Path, object], errors: list[str]
 ) -> None:
-    path = DOCS / "治理" / "需求追踪.json"
+    path = DOCS / "机器校验" / "治理" / "需求追踪.json"
     document = loaded.get(path)
     if not isinstance(document, dict):
-        errors.append("文档/治理/需求追踪.json: missing machine source")
+        errors.append("文档/机器校验/治理/需求追踪.json: missing machine source")
         return
     requirements = document.get("requirements")
     if not isinstance(requirements, dict):
         errors.append(f"{path.relative_to(ROOT)}: requirements must be an object")
         return
-    prd_text = (DOCS / "产品" / "产品需求文档.md").read_text(encoding="utf-8")
+    prd_text = (DOCS / "阅读材料" / "产品" / "产品需求文档.md").read_text(encoding="utf-8")
     expected = set(REQUIREMENT_DEFINITION.findall(prd_text))
     actual = set(requirements)
     if expected != actual:
@@ -1171,6 +1194,7 @@ def check_validator_self_tests(errors: list[str]) -> None:
 def main() -> int:
     errors: list[str] = []
     check_validator_self_tests(errors)
+    check_document_tree_separation(errors)
     loaded = check_json(errors)
     check_schema_instances(loaded, errors)
     check_markdown_links(errors)

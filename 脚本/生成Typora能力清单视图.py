@@ -15,12 +15,13 @@ from urllib.parse import urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PRODUCT_DIR = ROOT / "文档" / "产品"
-INVENTORY_PATH = PRODUCT_DIR / "Typora能力清单.json"
-SCHEMA_PATH = PRODUCT_DIR / "Typora能力清单模式.json"
-PRD_PATH = PRODUCT_DIR / "产品需求文档.md"
-BENCHMARK_PATH = PRODUCT_DIR / "Typora对标基准.md"
-VIEW_PATH = PRODUCT_DIR / "Typora能力清单.md"
+MACHINE_PRODUCT_DIR = ROOT / "文档" / "机器校验" / "产品"
+HUMAN_PRODUCT_DIR = ROOT / "文档" / "阅读材料" / "产品"
+INVENTORY_PATH = MACHINE_PRODUCT_DIR / "Typora能力清单.json"
+SCHEMA_PATH = MACHINE_PRODUCT_DIR / "Typora能力清单模式.json"
+PRD_PATH = HUMAN_PRODUCT_DIR / "产品需求文档.md"
+BENCHMARK_PATH = HUMAN_PRODUCT_DIR / "Typora对标基准.md"
+VIEW_PATH = HUMAN_PRODUCT_DIR / "Typora能力清单.md"
 
 FEATURE_ID_RE = re.compile(
     r"^- \*\*(INF-P[0-3]-[A-Z]+-[0-9]{3})\*\*", re.MULTILINE
@@ -495,7 +496,7 @@ def render_markdown(inventory: dict[str, Any]) -> str:
         "# Typora Capability Inventory\uff08\u673a\u5668\u751f\u6210\u9605\u8bfb\u89c6\u56fe\uff09",
         "",
         "> \u8bf7\u52ff\u624b\u5de5\u7f16\u8f91\u672c\u6587\u4ef6\u3002\u6743\u5a01\u6570\u636e\u6765\u81ea "
-        "[`Typora能力清单.json`](./Typora能力清单.json)\uff1b\u8fd0\u884c "
+        "[`Typora能力清单.json`](../../机器校验/产品/Typora能力清单.json)\uff1b\u8fd0\u884c "
         "`python3 脚本/生成Typora能力清单视图.py` \u91cd\u65b0\u751f\u6210\u3002",
         "",
         "## \u57fa\u7ebf",
