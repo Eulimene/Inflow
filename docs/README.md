@@ -21,7 +21,8 @@ Inflow 是仅支持 Apple Silicon 的原生 macOS Markdown 编辑器，离线和
 - 产品基线：[PRD v2.0](./product/PRD.md)
 - P0 决策状态：[P0 决策记录](./product/P0_DECISIONS.md)（当前仅授权 T0，P0 未冻结）
 - 工程基线：[产品技术方案 v1.0](./engineering/TECHNICAL_DESIGN.md)
-- T0 Manifest 草案：[Markdown 方言](./engineering/MARKDOWN_DIALECT_MANIFEST.md)、[Sanitizer](./engineering/SANITIZER_MANIFEST.md)
+- T0 工件：[Markdown 方言](./engineering/MARKDOWN_DIALECT_MANIFEST.md)、[Render](./engineering/RENDER_MANIFEST.md)、[Sanitizer](./engineering/SANITIZER_MANIFEST.md)、[Save/Recovery ADR](./engineering/SAVE_RECOVERY_ADR.md)、[Render Isolation ADR](./engineering/RENDER_HELPER_ISOLATION_ADR.md)、[PDF ADR](./engineering/PDF_PATH_ADR.md)
+- 横切契约：[Settings Schema](./engineering/SETTINGS_SCHEMA.md)、[Data Protection](./engineering/DATA_PROTECTION_POLICY.md)
 - 扩展产品边界：[扩展能力规范](./engineering/extensions/OVERVIEW.md)
 - 扩展实现基线：[扩展系统总体设计](./engineering/extensions/SYSTEM_DESIGN.md)
 
@@ -55,15 +56,24 @@ docs/
 │   ├── PRD.md
 │   ├── P0_DECISIONS.md
 │   ├── TYPORA_BENCHMARK.md
+│   ├── TYPORA_CAPABILITY_INVENTORY.md
 │   └── ECOSYSTEM_STRATEGY.md
 └── engineering/
     ├── README.md
     ├── TECHNICAL_DESIGN.md
     ├── MARKDOWN_DIALECT_MANIFEST.md
+    ├── RENDER_MANIFEST.md
     ├── SANITIZER_MANIFEST.md
+    ├── SAVE_RECOVERY_ADR.md
+    ├── RENDER_HELPER_ISOLATION_ADR.md
+    ├── PDF_PATH_ADR.md
+    ├── SETTINGS_SCHEMA.md
+    ├── DATA_PROTECTION_POLICY.md
     └── extensions/
         ├── README.md
         ├── OVERVIEW.md
         ├── SYSTEM_DESIGN.md
+        ├── PHASE_PROCESS_MATRIX.md
+        ├── AI_RUNTIME_MANIFEST.md
         └── SYNTAX_EXTENSION_API.md
 ```

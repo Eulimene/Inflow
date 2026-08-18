@@ -61,18 +61,26 @@ CLI、Shell 自动化、完整 Git 客户端、批量发布和持续集成不属
 
 ```mermaid
 flowchart TB
-    subgraph App["Inflow 主应用"]
+    subgraph App["Inflow 主应用（无网络）"]
       UI["编辑器与声明式扩展 UI"]
       Core["文档模型 / 撤销 / 保存 / 恢复"]
-      Manager["Extension Manager"]
-      Broker["Capability Broker"]
-      San["内容清洗与事务校验"]
+      Guard["事务校验 / typed sanitizer"]
     end
 
-    subgraph Hosts["隔离进程"]
+    subgraph Control["本地控制进程（无网络）"]
+      Manager["ExtensionManager.xpc"]
+      Broker["LocalCapabilityBroker.xpc"]
+    end
+
+    subgraph Hosts["隔离扩展进程（无网络）"]
       H1["Extension Host A\nJavaScriptCore"]
       H2["Extension Host B\nJavaScriptCore"]
       HC["Connector Host\n更严格配额"]
+    end
+
+    subgraph Network["E4 独立联网进程"]
+      NB["NetworkCredentialBroker.xpc\n唯一 network entitlement"]
+      Adapters["官方 typed service adapters"]
     end
 
     subgraph System["系统服务"]
@@ -89,12 +97,14 @@ flowchart TB
     H1 --> Broker
     H2 --> Broker
     HC --> Broker
-    Broker --> San
-    San --> Core
+    Broker --> Guard
+    Guard --> Core
     Broker --> FS
     Broker --> KC
-    Broker --> Net
-    Manager --> Store
+    Broker --> NB
+    NB --> Adapters
+    Adapters --> Net
+    Adapters --> Store
 ```
 
 ### 3.1 主应用
@@ -110,6 +120,7 @@ flowchart TB
 - 根据激活事件启动 Extension Host，不在应用启动时加载所有扩展。
 - 管理 API 兼容性、崩溃计数、隔离状态、权限和资源配额。
 - 生成用户可见的扩展健康状态。
+- 启动 Host 时签发一次性 `LaunchCapability`，绑定 extensionID、package payload hash、签名等级、PID、audit token、专属 XPC endpoint、权限 grant hash 和过期时间。Broker 从已认证 peer context 取得身份并忽略请求 payload 自报的 extensionID；PID/audit token/package hash 任一变化即撤销连接。
 
 ### 3.3 Extension Host
 
@@ -132,8 +143,10 @@ Broker 是唯一敏感能力入口：
 - 校验扩展 ID、签名等级、声明权限、用户授权和当前用户手势。
 - 将 `document.read` 限定为当前文档快照，将 `workspace.read` 限定到授权根目录。
 - 代理 Keychain 凭据使用，令牌不返回扩展运行时。
-- 代理 HTTPS 请求并锁定主机名、方法、响应大小和重定向。
+- Local Broker 自身无 network entitlement。E4 只有独立 `NetworkCredentialBroker.xpc` 可联网，且首期只暴露官方类型化 GitHub/云存储/远程 AI adapter；不接受扩展提供任意 URL/method/header。
 - 记录敏感调用审计事件，供用户在设置中查看。
+
+E5 若开放通用 `NetworkServicePolicy`，必须先冻结端口 allowlist、拒绝 loopback/private/link-local/multicast/Unix socket、每次 DNS 解析后 IP 分类、连接时 re-resolve/绑定、防 DNS rebinding、系统/自定义 proxy 规则、逐跳重定向重新授权、跨 origin 清除 Authorization/cookie、TLS/响应/解压预算和 SSRF corpus。在此之前清单域名不能直接变成通用 HTTP 能力。
 
 ## 4. 扩展类型
 
@@ -210,8 +223,8 @@ com.example.terminology.inflowx
 
 包要求：
 
-- 路径必须规范化，拒绝绝对路径、`..`、符号链接和重复大小写路径。
-- 解压后大小、文件数和单文件大小受限。
+- `PackagePolicy v1`：ZIP 最大 50 MiB、解压总量 200 MiB、5,000 entries、单文件 50 MiB、压缩比 100:1、路径 UTF-8 字节 ≤512、层级 ≤20。拒绝 encrypted/data-descriptor ambiguity、重复 ZIP entry、absolute/`..`/NUL、symlink/hardlink/device、NFC 或 Unicode casefold 后重复路径。
+- JSON 必须是 UTF-8、无 BOM、I-JSON 子集，拒绝重复 key/NaN/Infinity；签名输入使用 RFC 8785 JCS canonicalization。ZIP 字节本身不作为签名事实来源。
 - `manifest.json` 使用固定 JSON Schema，未知关键字段导致安装失败。
 - 发布包不允许动态依赖；所有运行时代码必须在包内。
 - `content-manifest.json` 使用规范 JSON，按 UTF-8 路径字典序列出 payload 文件的路径、字节数和 SHA-256；`META-INF/content-manifest.json` 自身及 `META-INF/signatures/` 不进入列表，签名直接覆盖规范 JSON 字节。安装器只允许“清单列出的 payload + 这两个 META-INF 位置”，拒绝其他文件，从而避免任何摘要自引用。
@@ -276,7 +289,7 @@ com.example.terminology.inflowx
 
 ### 6.3 贡献点
 
-清单可声明 `themes`、`commands`、`diagnostics`、版本化 `syntax`、`fenceRenderers`、`exporters`、`views`、`settings`、`connector`、`aiProvider`、`aiActions`、`contextProviders` 和 `aiTools`。`syntax` 项必须符合 `SyntaxContributionSchema v1`，声明全局 ID、kind、定界符/指令名、Core-owned 语义节点类型、属性 Schema、fallback、capabilities、引用定义/使用角色和冲突集合；未声明的贡献点不能在运行时动态添加。
+清单可声明 `themes`、`commands`、`diagnostics`、版本化 `syntax`、`fenceRenderers`、`exporters`、`views`、`settings`、`connector`、`aiProvider`、`aiActions`、`contextProviders` 和 `aiTools`。稳定 `SyntaxContributionSchema v1` 只允许 fenced block 与 block directive，完整字段和 fallback 以语法 API 为准；standard node/inline delimiter 为 Experimental，不得进入市场 v1 包。未声明的贡献点不能动态添加。
 
 扩展不能把自定义对象直接插入 Core AST。Parser 只从版本化 Schema 选择 Core-owned `ExtensionSyntaxNode` 变体，并把定义/引用统一登记到 Core `ReferenceRegistry`；Registry 负责命名空间、重复 ID、跨扩展解析、诊断和导出锚点，插件只能提交声明和渲染结果。
 
@@ -286,7 +299,7 @@ com.example.terminology.inflowx
 
 - Extension Host 与 Broker 使用 XPC 传输具名消息。
 - SDK 对开发者暴露 Promise API；协议负载使用具备 Schema 的 Codable 数据。
-- 每个请求包含 `extensionID`、`requestID`、`apiVersion`、截止时间和取消令牌。
+- 每个请求包含 `requestID`、`apiVersion`、截止时间和取消令牌；`extensionID` 即使出现也只作诊断，授权身份只来自经 audit token 验证的 `LaunchCapability` peer context。
 - 大文档不重复传整份文本；使用只读快照句柄和分块读取。
 - 主应用不会接受扩展提供的对象引用、闭包或原生句柄。
 
@@ -444,8 +457,8 @@ stateDiagram-v2
 | 单次前台调用 | 2 秒 | 10 秒 |
 | 后台任务 | 不允许 | 单次 60 秒，可续约 |
 | 单次返回负载 | 4 MB | 8 MB |
-| 持久化状态 | 20 MB | 100 MB，不含同步缓存 |
-| 日志 | 5 MB 循环 | 10 MB 循环 |
+| 持久化状态 | 20 MB | 高信任连接器/Provider 无任意 State；只持 opaque operation/session ID |
+| 日志 | 5 MB 结构化循环 | 仅 Core-owned 结构化 event ID/计数/错误码，无自由文本和 payload |
 
 围栏渲染和导出可申请长任务令牌，必须显示进度并支持取消。资源限制先节流，再终止 Host；永不阻塞主应用输入线程。
 
@@ -473,10 +486,9 @@ sequenceDiagram
     U->>I: ⌘S / 自动保存
     I->>I: 本地原子写入成功
     I-->>U: 已保存到本地
-    I->>C: enqueue(operationID, snapshotID, handle, baselineID, resources[])
-    C->>I: openResourceStream(operationID, handle, resourceID/range)
-    I-->>C: 受限只读字节流
-    C->>R: 条件上传(if-match / base SHA)
+    I->>C: enqueue(metadata + opaque IDs)
+    C->>I: submitUploadPlan(operationID, typed adapter request)
+    I->>R: Network Broker 直接流式发送 approved snapshot/resources
     alt 上传成功
       R-->>C: remote revision
       C->>I: acknowledge(operationID, snapshotID, remoteRevision, uploadedHashes[])
@@ -507,9 +519,9 @@ sequenceDiagram
 
 窗口标题只显示本地保存状态；同步状态使用独立图标和文字，不能混为一个“已保存”指示。
 
-每次本地保存形成 Core-owned `SyncOperation`：稳定 `operationID`、不可变 `snapshotID`、`baselineID`、正文 hash 和逐项 `resources[] { resourceID, hash, byteCount }`。正文及资源以工作区密钥加密保存在 pending snapshot 中，直到收到完全匹配 operation/snapshot 及所有已上传 hash 的 ACK；崩溃、离线、认证失败或扩展更新不能删除它。ACK 不完整、过期或指向其他 snapshot 时拒绝清理。
+每次待同步状态使用 Core-owned `SyncOperation`：稳定 `operationID`、不可变 `snapshotID`、`baselineID`、正文 hash 和逐项 `resources[] { resourceID, relativePath, kind, state: present|tombstone, hash?, byteCount }`。未开始上传的同一文档操作按 latest-only 合并；已 in-flight 操作保留至精确 ACK，内容寻址加密去重并执行 [Data Protection Policy](../DATA_PROTECTION_POLICY.md)。默认每工作区 1 GiB/1,000 operations、全应用 5 GiB；磁盘压力先暂停同步并通知，永不阻塞或回滚本地保存。
 
-`SavedSnapshotHandle` 是针对一个 pending snapshot、连接器和工作区的短期不透明能力句柄。连接器可按范围流式读取正文/附件并提交断点 token；句柄过期时只能用同一 `operationID/snapshotID` 向 Core 续签，不能换取最新编辑内容。远端候选也通过 Core 限额的写入流提交，完成 hash 校验后才成为候选版本。Core 可撤销句柄并限制累计字节、并发和有效期；正文和附件不复制进扩展私有存储。用户明确取消同步或清除 pending 数据前必须列出尚未 ACK 的操作并二次确认。
+连接器不读取明文 snapshot/resource。它只提交声明式 `UploadPlan`（typed adapter、远端路径、条件 revision 和 opaque IDs），Core 校验后由 Network Broker 从加密 pending store 解密并直接流式发送；响应正文也直接流入 Core 限额候选 sink。连接器只能读取结构化状态/错误和不透明断点 token，不能写 Extension State、Cache 或自由日志旁路正文。ACK 使用 `{operationID,snapshotID,resources:[{resourceID,hash}],remoteRevision}`，同 hash 不同路径仍按 resourceID 区分。
 
 ### 12.3 冲突策略
 
@@ -541,7 +553,7 @@ sequenceDiagram
 
 ### 12A.1 Context Broker
 
-AI 扩展不能自行拼接和发送任意上下文。Context Broker 汇总 Action 输入、Provider 能力和用户批准的数据范围，生成不可变 Context Envelope，其中包含任务、来源范围、用户选择的文件、脱敏结果、目标模型、域名和预计大小。
+AI 扩展不能自行拼接、读取或发送任意上下文。Context Broker 汇总 Action 输入、Provider 能力和用户批准的数据范围，生成不可变 Context Envelope，其中包含任务、来源范围、用户选择的文件、脱敏结果、目标模型、域名和预计大小。远程 Provider 只返回声明式请求模板；Network Broker 直接把 approved Envelope 流式编码到官方 typed adapter，Provider Host 不接触正文。
 
 调用前用户可以检查并排除上下文项。恢复快照、凭据、完整本地路径和扩展日志永不进入 Envelope。
 
@@ -551,7 +563,7 @@ Provider 声明模型 ID、能力、上下文长度、流式和结构化输出�
 
 E4 本地推理由可选、独立安装、签名并公证的 Inflow AI Companion 提供。Companion 的 `Model Manager` 可联网下载模型但永不获得 Context Envelope、prompt 或输出；它校验发布者签名/hash 后把模型以只读文件描述符交给禁用网络 entitlement 的 `Inference Worker`。只有 Worker 通过短期、单用户、单请求能力令牌和认证 XPC 接收正文。两个角色使用不同进程、容器权限和审计日志；Companion 与模型资源不进入 Core 包。
 
-每次调用取“模型声明上限、Provider 审核上限、Core 上限”的最小值：默认上下文最多 2 MiB、输出最多 256 KiB、每个 Provider 同时 1 个生成请求。流式取消须在 2 秒内确认并停止产生 token；超时后 Core 撤销能力令牌、关闭流并终止对应 Companion 请求或远程 Broker 任务。Companion 必须声明模型内存/CPU 预算并由独立进程执行，超限只终止推理，不影响编辑器。
+AI Runtime 的模型生命周期、content-addressed store、二次 hash、CPU/RAM/quota、token/cost cap 和取消规则以版本化 `AI_RUNTIME_MANIFEST.md` 为准。该 Manifest Accepted 前 E4 只允许官方内部原型，任何 AI Action/Context/Provider 均不可作为普通开发包或 E1 本地签名包侧载。
 
 远程调用前展示模型、接收方、上下文范围及可用的费用估算；完成后将输入/输出 token、供应商返回费用、模型和时间写入最长保留 30 天的本地审计记录，不记录 prompt 正文。无法提供价格时必须明确显示“费用未知”，不能推断为免费。
 
@@ -567,7 +579,7 @@ Action 只能返回：
 
 ### 12A.4 AI Session Store
 
-AI 会话由 Core-owned `AISessionStore` 保存到应用容器内的加密 SQLite WAL 数据库；每个会话记录 owner extension、Provider、模型、创建/访问时间、expiresAt 和 opaque session ID。默认 TTL 30 天，用户可关闭保存、选择关闭时删除或缩短期限。扩展不能直接访问数据库，只能在当前授权范围内通过 session ID 追加或读取自身会话；工作区解绑、Provider 卸载、权限撤销或用户清除 AI 数据时删除关联记录。密钥保存在 Keychain，日志和崩溃报告不得包含会话正文。
+AI 会话由 Core-owned `AISessionStore` 保存；密文 SQLite/WAL/blob、域密钥、nonce/AAD、轮换、备份排除和 crypto-erase 必须执行 [Data Protection Policy](../DATA_PROTECTION_POLICY.md)。每个会话记录 owner、Provider、模型、时间、expiresAt 和 opaque session ID，默认 TTL 30 天。扩展不能直接访问数据库或自由日志；工作区解绑、Provider 卸载、撤权或清除数据时删除域 key 和关联记录。
 
 ### 12A.5 Prompt Injection 防护
 
@@ -601,7 +613,7 @@ AI 会话由 Core-owned `AISessionStore` 保存到应用容器内的加密 SQLit
 
 密钥轮换优先由旧密钥和平台共同认证新 `keyID`；私钥丢失时必须经身份复核、冷却期和公开安全通知后由平台签发替代证书。发布者转移要求原发布者、新发布者和平台三方确认，并在客户端更新前展示身份变化。证书到期、撤销和包级撤回应进入同一透明日志。开发者模式可使用自签名证书和 TOFU，但必须持久显示未认证警告，且不能据此进入市场或获得高权限。
 
-E1 的本地签名信任完全离线：用户确认的指纹按 publisher/package namespace 存入本地 Trust Store，不要求 Inflow 账号或平台证书。该信任只解锁主题、诊断、编辑命令等低权限类别，不能申请网络、凭据、同步、AI Tool 或其他高权限。E3 迁移到市场时必须用平台认证证书重新签名；客户端将其视为身份升级，展示旧/新指纹及平台证书并由用户确认一次，不静默继承本地 TOFU 信任。
+E1 的本地签名信任完全离线：用户确认的指纹按 publisher/package namespace 存入本地 Trust Store，不要求 Inflow 账号或平台证书。E1 只解锁主题与只读诊断；编辑命令到 E2 才可启用。它不能申请网络、凭据、同步、AI Tool 或其他高权限。E3 迁移到市场时必须用平台认证证书重新签名；客户端将其视为身份升级，展示旧/新指纹及平台证书并由用户确认一次，不静默继承本地 TOFU 信任。
 
 连接器必须人工审核；普通主题和低权限扩展可以采用自动审核加抽查。
 
@@ -629,6 +641,8 @@ E1 的本地签名信任完全离线：用户确认的指纹按 publisher/packag
 - `POST /reports`：用户举报。
 
 目录响应和撤回列表都必须签名，客户端缓存最后一次可信结果。市场离线不会影响已安装扩展运行。
+
+E3 初始市场是官方/邀请制 curated marketplace：发布者注册、公钥登记、上传和审核状态可由人工运营工具完成，不对任意第三方开放自助上传。对第三方开放前必须补齐版本化控制面 API（publisher/key register/rotate/recover、upload、scan/review status、release/withdraw）、透明日志 inclusion/consistency proof，以及签名 checkpoint `{treeSize,rootHash,issuedAt,expiresAt,sequence}`。客户端持久化最高 sequence/treeSize，拒绝回滚、过期 checkpoint、无 inclusion proof 的 release/revocation；应用 release manifest 也必须单调签名。上述门槛未通过时不得把 E3 描述为开放市场。
 
 ## 14. 开发者平台
 
@@ -746,35 +760,7 @@ E1 的本地签名信任完全离线：用户确认的指纹按 publisher/packag
 
 ## 19. 分阶段实施
 
-### E0：基础设施
-
-- Manifest、包校验、Extension Manager、独立 Host、XPC、权限 Broker。
-- 仅内部测试扩展，不开放安装。
-
-### E1：低风险开放
-
-- 主题、只读诊断、开发者模式、用户确认指纹的本地自签低权限扩展和本地 Trust Store；不要求账号。
-- SDK 合约测试、资源预算和崩溃隔离。
-
-### E2：内容扩展
-
-- 编辑命令、围栏渲染、单篇导出、声明式侧栏。
-- 受控文本事务、内容清洗和 UI Schema。
-- 仅开放 Inflow 官方签名的 WebAssembly 内容引擎原型，第三方模块不得安装。Manifest 的 `runtime.modules` 必须列出模块 SHA-256、导入函数 allowlist、只读资源；导入仅含确定性内存/字符串接口，不含 WASI、时钟、随机、文件、网络或进程。每实例内存 128 MiB、CPU 2 秒、输出 2 MiB，预览只返回经清洗 SVG；Full LaTeX 仅能使用此路径，PDF 只作为导出结果。
-
-### E3：免费插件市场
-
-- 免费公开扩展、匿名浏览安装、发布者账号、审核、双签名、目录、更新、透明日志和撤回；不含支付、用户许可证账号或企业身份。
-- 普通扩展进入市场，连接器仍为内部测试。
-
-### E4：受审联网与 AI
-
-- 权限代理、Keychain、限域 HTTPS、加密同步基线、同步状态机和三方合并。
-- 先发布官方 GitHub 连接器、独立 Inflow AI Companion 和官方示例远程 Model Provider，验证 Connector 与 AI Capability 模型；第三方高权限扩展仍不开放。
-
-### E5：稳定生态
-
-- 稳定 API 1.0、第三方连接器/AI Provider/受控 Tool、兼容策略、付费与企业目录、市场治理、灰度和安全响应机制。
+阶段能力、分发等级、进程和 entitlement 的唯一事实来源为 [Phase/Process Matrix](./PHASE_PROCESS_MATRIX.md)。本设计各章节描述目标机制，不得据此提前开放某能力；E2 官方 WASM、E3 curated 市场、E4 typed 网络/AI 和 E5 第三方高权限门槛均以矩阵为准。
 
 ## 20. 上线门槛
 

@@ -14,6 +14,10 @@
 
 - [Markdown 方言 Manifest](./MARKDOWN_DIALECT_MANIFEST.md)：P0 Parser 事实来源、options 与偏差表。
 - [Sanitizer Manifest](./SANITIZER_MANIFEST.md)：P0 HTML/URL 清洗规则与冻结门槛。
+- [Render Manifest](./RENDER_MANIFEST.md)：渲染依赖、golden 环境与输出一致性。
+- [Save/Recovery ADR](./SAVE_RECOVERY_ADR.md)：SaveEnvelope、身份与故障矩阵。
+- [Render Isolation ADR](./RENDER_HELPER_ISOLATION_ADR.md) 与 [PDF Path ADR](./PDF_PATH_ADR.md)：T0 条件实现路径。
+- [Settings Schema](./SETTINGS_SCHEMA.md) 与 [Data Protection Policy](./DATA_PROTECTION_POLICY.md)：横切状态和静态加密契约。
 
 - Core 工程、数据流、存储、测试或发布：[产品技术方案](./TECHNICAL_DESIGN.md)
 - 插件、SDK、语法、市场、同步或 AI：[扩展文档入口](./extensions/README.md)

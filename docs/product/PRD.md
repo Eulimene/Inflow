@@ -293,7 +293,7 @@ P0 用户契约以 Swift Markdown 0.8.0 锁定的 swift-cmark 0.8.0 / cmark-gfm 
 
 首版支持导出：
 
-1. HTML：生成单个自包含 `.html` 文件，内联字体、主题与代码样式、本地图片、公式及 Mermaid 结果，不含运行时脚本或外部依赖。源码中的 `data:` 仍按危险输入拒绝；只有 Core 对已通过图片策略的 PNG/JPEG 和固定 hash 内置字体按 `ExportResourcePolicy v1` 生成的 data URI 可进入最终导出 staging。P0 不获取远程图片，统一输出标明 URL 的占位。P0 最大输出体积为 100 MiB，预计超限时禁止写出。
+1. HTML：生成单个自包含 `.html` 文件，内联字体、主题与代码样式、本地图片、公式及 Mermaid 结果，不含运行时脚本或外部依赖。源码中的 `data:` 仍按危险输入拒绝；只有 Core 对已通过图片策略的 PNG/JPEG 和固定 hash 内置字体按 `ExportResourcePolicy v1` 生成的 data URI 可进入最终 staging。图片重新编码必须剥离 EXIF/GPS/XMP；远程占位只显示删除 userinfo/query/fragment 后的 origin 与截断路径，不暴露完整 URL；输出禁止绝对本地路径，并固定 CSP、no-referrer 与 external-link noopener/noreferrer。P0 最大输出体积为 100 MiB，预计超限时禁止写出。
 2. PDF：P0 只冻结 A4、四边 20 mm、当前主题、深色背景和无内容丢失；导出正文宽度为 `min(用户正文宽度, A4 可打印 CSS 宽度)`，不承诺固定 100% 缩放或高级分页。实现路径由 T0 原型条件决定：优先验证 `WKWebView.createPDF`；若不能稳定满足输出契约，则允许使用 `NSPrintOperation` 或独立分页管线。孤行控制、页眉页脚、自定义纸张/边距、结构块整体换页等增强分页进入 P1。P0-D07 在 PDF ADR 和 golden fixture 通过前保持 Conditional。
 
 导出通过“文件 > 导出”进入，使用系统保存面板。导出不改变当前 Markdown 文件路径或保存状态。最终 staging 使用系统为目标提供的 item replacement directory；目标已存在时协调替换，不存在时同卷原子 rename。保存面板关闭后若目标被其他进程新建，必须重新确认替换或另选目标。无法获得同卷 staging 时终止导出，失败不产生残缺目标文件。
@@ -340,7 +340,7 @@ Inflow 支持标准 Markdown 本地导航，不要求用户写入 Inflow 私有�
 
 ## 6. 设置
 
-设置分为全局默认、窗口状态、工作区覆盖和文档属性。下表是全局默认；窗口模式、分栏比例、滚动和侧栏属于窗口状态，工作区可覆盖渲染与资源设置，编码/BOM/主换行风格属于文档属性。优先级为文档属性 > 工作区覆盖 > 全局默认；窗口状态不改变内容语义。
+设置分为全局默认、窗口状态、工作区覆盖和文档属性，机器事实来源为版本化 [Settings Schema](../engineering/SETTINGS_SCHEMA.md)。下表给出产品默认：全局分栏比例只决定新窗口初值，窗口保存当前比例；窗口模式、滚动和侧栏属于窗口状态，工作区可覆盖编辑/渲染/资源设置，编码/BOM/主换行属于文档属性。优先级为文档属性 > 工作区覆盖 > 全局默认；窗口状态不改变内容语义。
 
 | 分组 | 设置项 | 默认值 | 范围/选项 |
 | --- | --- | --- | --- |
@@ -356,8 +356,10 @@ Inflow 支持标准 Markdown 本地导航，不要求用户写入 Inflow 私有�
 | 预览 | 预览主题 | 跟随系统 | 跟随系统 / 浅色 / 深色 |
 | 预览 | 编辑器到预览滚动同步 | 开启 | 开启 / 关闭 |
 | 预览 | 点击标题定位源码 | 开启 | 开启 / 关闭 |
-| 扩展 | Mermaid 渲染 | 开启 | 开启 / 关闭 |
-| 扩展 | 数学公式渲染 | 开启 | 开启 / 关闭 |
+| 渲染 | Mermaid 渲染 | 开启 | 开启 / 关闭 |
+| 渲染 | 数学公式渲染 | 开启 | 开启 / 关闭 |
+
+P3 VersionStore 默认开启，保留 30 天或 500 MiB（先到者为准），用户可关闭或覆盖期限/容量；Recovery 不受此设置影响。
 
 关闭自动保存时仍保留异常恢复快照；手动保存、关闭提醒和恢复机制继续生效。恢复默认设置只重置偏好，不改动文档内容、最近文件或恢复快照。
 
@@ -409,14 +411,15 @@ Inflow 支持标准 Markdown 本地导航，不要求用户写入 Inflow 私有�
 
 ### 9.2 性能指标
 
-在基准设备（Apple M1、8 GB 内存）的 Release 构建上，除冷启动外的延迟类指标每项执行至少 30 次并报告中位数与 nearest-rank P95。冷启动是独立指标，统一采用 process-cold：每次终止全部 Inflow/WebContent 进程后启动，共 10 次，不丢弃首次，报告 10 次全部结果、中位数与最大值；reboot-cold 只在发布前记录参考值，不作为可持续 CI 门槛。测试固定 signpost 名称、fixture 文件及 SHA-256。内存为应用进程与全部 WebContent 子进程的 resident memory 总和，取任务稳定 10 秒后的峰值：
+在基准设备（Apple M1、8 GB 内存）的 Release 构建上，除冷启动外的延迟类指标每项执行至少 30 次并报告中位数与 nearest-rank P95。冷启动采用 process-cold 10 次、不丢弃首次，门槛同时约束 median 与 max；reboot-cold 只作参考。测试固定 signpost 和 fixture SHA-256。内存统计 Main、WebContent、Render/Image helper 及其他 Inflow-owned 子进程整棵树的 resident peak：
 
-- 冷启动至可输入：不超过 2 秒。
-- 打开 1 MB / 10,000 行普通 Markdown：不超过 2 秒。
+- 冷启动空白窗口至可输入：median ≤ 1.5 秒且 max ≤ 2 秒。
+- 已启动应用打开 1 MB / 10,000 行至可输入：median ≤ 1.5 秒且 P95 ≤ 2 秒。
+- process-cold 启动并打开同一 1 MB fixture 至可输入的端到端指标：10 次 median ≤ 2.5 秒且 max ≤ 3 秒，直接验收产品 3 秒目标。
 - 普通输入到预览更新：P95 不超过 300 ms。
 - 模式切换：P95 不超过 150 ms。
 - 连续输入过程中主线程不得出现超过 100 ms 的可感知冻结。
-- 典型 1 MB 文档内存占用目标不超过 300 MB；复杂 Mermaid 内容单独评估。
+- 典型 1 MB 文档全进程树 resident peak 必须不超过 300 MiB；这是发布门槛，不是参考目标。复杂 Mermaid 另受 Sanitizer 全应用预算约束。
 - 1 MB / 10,000 行基准必须使用完整 P0 预览和语法高亮路径，禁止进入降级模式；更大或恶意复杂文档可另行定义非发布阻断的降级策略。
 
 ### 9.3 可靠性
@@ -484,8 +487,9 @@ Markdown 源码是文档事实来源。渲染 HTML、语法高亮结果、标题
 - 图形化表格、可点击任务列表、Smart Paste、脚注、TOC、YAML Front Matter 和 Alerts。
 - 图片粘贴、相对路径、附件目录和资源移动。
 - 受控远程图片加载，以及经过版本化安全 allowlist 清洗的 raw HTML；任意脚本 HTML 永久不进入 Core 支持范围。
-- 专注模式、打字机模式、行号、字数统计和自定义 CSS。
+- 专注模式、打字机模式、行号、字数统计和受控设计 token。
 - 系统打印、长图和增强 PDF。
+- P1 首发 raw HTML 只开放结构化标签 allowlist，自定义外观只开放设计 token；任意 CSS、`@import`、URL、第三方字体和字体文件导入暂不开放。后续若开放，必须先冻结独立 RawHTML/CSS/Font Policy、AST allowlist 与隔离字体解析 fixture。
 
 ### P2：Typora 能力对齐版本
 
@@ -525,6 +529,8 @@ Markdown 源码是文档事实来源。渲染 HTML、语法高亮结果、标题
 17. 外部修改与删除的每个分支均不静默覆盖或自动重建，明确覆盖前能创建冲突副本。
 18. HTML 超限、远程资源占位及 PDF A4/边距/深色/无内容丢失 fixture 均符合 5.12，失败不留下残缺目标。
 19. P0-D04、P0-D05、P0-D07 均已转为 Accepted；`MarkdownDialectManifest`、`SanitizerManifest`、`RenderManifest`、`RenderHelperIsolation` ADR 与 PDF 路径 ADR 已冻结并由对应 T0 fixture 验证。任何一项仍为 Reopened/Conditional 时禁止 P0 发布。
+20. Release Archive 的 UTType/`CFBundleDocumentTypes` 能让 Finder 双击和 Open With 打开 `.md`/`.markdown`；P0 feature flag 下只注册 `⌘1–3`，不得暴露 `⌘4` 菜单或测试入口。
+21. 截图/PDF golden manifest 已记录 macOS、WebKit、字体版本/hash、主题和 fixture hash；环境不匹配不能覆盖权威结果。
 
 ## 13. 测试样例集合
 

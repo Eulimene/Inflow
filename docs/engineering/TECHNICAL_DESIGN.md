@@ -199,13 +199,15 @@ final class MarkdownDocument: NSDocument {
 final class DocumentSession: ObservableObject {
     let documentID: DocumentID
     let buffer: TextBuffer
-    let undoCoordinator: UndoCoordinator
     let viewState: DocumentViewState
     let pipeline: DocumentPipeline
+    let committedBase: CommittedBaseSnapshot
 }
 ```
 
 `MarkdownDocument` 只负责 AppKit 生命周期和文件接口；`DocumentSession` 负责当前内存状态；解析、预览、恢复和导出通过服务对象运行。
+
+`documentID` 是应用生成且永久稳定的 UUID，不从路径或 file resource ID 派生。SQLite 维护 URL、security-scoped bookmark、volume/file resource identity 的 alias 历史；原子替换、移动和 Save As 不改变当前 documentID。原路径后来出现的新文件是新文档，除非其 resource identity 仍匹配已有 alias。
 
 ### 6.3 文档状态
 
@@ -222,8 +224,9 @@ stateDiagram-v2
     Ready --> ExternalChange
     Dirty --> Conflict: 外部也已修改
     ExternalChange --> Ready: 重新载入
-    Conflict --> Dirty: 合并/保留当前
-    Conflict --> Ready: 使用磁盘版本
+    Conflict --> Dirty: 保存副本
+    Conflict --> Ready: 重新载入
+    Conflict --> Dirty: 备份后明确覆盖
 ```
 
 保存状态和未来同步状态严格分离。窗口标题中的 edited 标记只代表本地文件状态。
@@ -257,12 +260,14 @@ struct WorkspaceEdit: Sendable {
 
 一次 `WorkspaceEdit` 原子执行并注册为一次 Undo。
 
+`NSDocument.undoManager` 是唯一 Undo 所有者。`TextBuffer` 观察 NSTextStorage、IME marked-text、拼写替换、拖放、粘贴、Finder replace 和程序化事务产生的全部字符 mutation，并为每次有效变化单调增加 `documentVersion`；原生输入不建立第二套 undo。格式命令和扩展编辑必须校验 `baseVersion`、排序并拒绝重叠范围，再以一个 undo grouping 提交。`NSTextFinder` 通过 `FindAdapter` 读写同一 TextBuffer，Replace All 转换为一个 `WorkspaceEdit`，不得绕过版本或重复注册撤销。
+
 ### 7.2 EditorView
 
 `NSViewRepresentable` 包装自定义 `MarkdownTextView: NSTextView`：
 
 - 使用系统输入法、文本选择、拖放、拼写、VoiceOver 和查找栏基础能力。
-- 自定义 command handling 支持 Tab/Shift-Tab、格式快捷键和 `⌘1`–`⌘4`。
+- 自定义 command handling 支持 Tab/Shift-Tab 和格式快捷键；P0 feature flag 只注册 `⌘1`–`⌘3`，P1 才增加 `⌘4`。
 - 高亮属性不写入文档模型，也不进入 Undo。
 - 只对变更行及受影响语法范围重新着色；代码围栏等跨行结构向前后扫描到稳定边界。
 - 大文件或持续输入时降低高亮优先级，永不阻塞字符输入和保存。
@@ -374,7 +379,7 @@ struct MarkdownSnapshot: Sendable {
 - `mode`: source / split / preview / renderedEditing。
 - 编辑器 selection 和可见字符范围。
 - 预览顶部 node ID 与节点内相对比例。
-- 分栏比例、正文宽度和焦点区域。
+- 当前分栏比例和焦点区域；正文宽度来自版本化 Settings Schema，不作为文档状态。
 
 切换模式先捕获语义锚点，再构造目标布局，最后恢复焦点和位置。
 
@@ -407,20 +412,20 @@ P1 再实现预览到编辑器的反向同步，使用相同锚点模型，避�
 
 ### 11.2 保存
 
-- 每个 `DocumentSession` 唯一持有一个 actor `SaveCoordinator`；队列项只保存保存来源、目标路径、最低目标 documentVersion 和关闭屏障等意图，不在入队时冻结 `expectedRevision` 或 Data。
-- 同路径、尚未开始的保存意图合并到最高最低目标版本；物理写入开始时从当前 buffer 捕获满足目标的最新不可变 snapshot，并以 Coordinator 的 `committedRevision` 建立 guard。连续内部保存成功后更新该 revision，不会把自己的 R1 误判为外部修改。
+- 每个 `DocumentSession` 唯一持有一个 actor `SaveCoordinator`；所有菜单、关闭、自动保存、Save As 和 AppKit save operation 必须先路由到它，不允许直接调用文档写入。队列项只保存来源、目标和最低目标版本；执行时在 MainActor 一次捕获唯一 `SaveEnvelope { saveNonce, documentID, version, exactData, contentHash, targetExpectation, lineEnding/BOM }`。
+- 同路径、尚未开始的意图合并到最高最低目标版本；物理写入、Recovery durable blob、prepared/committed journal 和完成校验都只能消费同一 envelope。`data(ofType:)` 只返回当前 active envelope 的 `exactData`，没有匹配 envelope 的原生入口必须失败，不得重新读取变化中的 TextBuffer。
 - `NSDocument` 是文档保存的唯一物理写入所有者，通过 override `writeSafely(to:ofType:for:)` 完成 staging、文件协调和最终替换。`SaveCoordinator` 不调用 `replaceItemAt`、不创建 replacement directory，也不维护第二套提交点；它只负责意图合并、捕获 snapshot、版本/revision guard、self-write token 和完成状态。
-- 调用 `super.writeSafely` 前以 Coordinator 的 `committedRevision` 建立一次可实现的 guard；不假设 AppKit 暴露“最终替换前”回调。随后由 `NSDocument` 原生协调与冲突机制完成唯一 safe write，完成回调再读取并记录最终 `FileRevision`。T0 必须在 guard 后外部改写、协调冲突和替换竞态 fixture 中证明不会静默覆盖；若失败，须另立 `DocumentWriteTransaction` ADR 并完整接管协调、替换、属性、change count 与 `fileURL` 后才能进入 T1。Save As 从入队到完成暂停原路径自动保存，成功回调后由 `NSDocument` 更新 `fileURL`，Coordinator 再更新 revision；失败则保持原路径。
+- 调用 `super.writeSafely` 前按 envelope 的 `targetExpectation` 建立 guard；不假设 AppKit 暴露最终替换前回调。完成后协调读取目标内容并要求 `actualHash == envelope.contentHash`，再生成绑定 nonce、canonical target、hash 和实际 revision 的 self-write token。任一不匹配都不得更新 committed revision、清除 dirty 或吞掉 FilePresenter 事件，立即进入冲突。T0 必须覆盖“替换后、完成读取前外部再写”的竞态；若原生机制失败，须另立 `DocumentWriteTransaction` ADR 后才能进入 T1。
+- Save As 使用 `SaveAsIntent { envelope, targetExpectation: absent|exactRevision, targetBookmark }`。成功且 hash/revision 校验后，在一个 SQLite 事务提交新 bookmark、URL/resource aliases 和 revision，再切换 `fileURL` 并释放旧 security scope；目标预期变化则重新确认，任何失败保持旧 URL、bookmark、scope 和 documentID。
 - `SaveCoordinator` 按单调 `documentVersion` 提交；旧完成回调不得覆盖新 revision 或清除新 dirty 状态。
 - 只有 `savedVersion == currentBufferVersion` 且目标仍为当前文档 URL 时才清除 edited 状态并允许关闭；否则保持 dirty，关闭屏障继续等待下一次保存或展示失败选择。
 - 保存失败保留 buffer 和恢复快照，显示重试/另存为。
 
 ### 11.3 自动保存
 
-- `MarkdownDocument` 子类以 `override class var autosavesInPlace: Bool { true }` 声明 AppKit 能力；不得把只读类型属性当作实例设置。
-- 自动保存开启时 `NSDocumentController.autosavingDelay` 映射为 0.5/1/2/5 秒；关闭时设置为 `0`，同时取消尚未开始的自动保存意图。
-- 用户关闭自动保存时，`SaveCoordinator` 拒绝自动保存来源的请求，但恢复快照仍运行；应用 resign active 也不得静默写盘。
-- 自动保存开启时，应用 resign active 可向同一协调器提交自动保存。关闭行为严格执行 PRD 5.1.4，并以 `SaveCoordinator` 的关闭屏障等待精确版本。
+- P0 明确关闭 AppKit 自动保存/草稿/Versions 所有权：`override class var autosavesInPlace: Bool { false }`、`override class var autosavesDrafts: Bool { false }`、`override class var preservesVersions: Bool { false }`，`NSDocumentController.autosavingDelay = 0`。系统不得创建 draft、自动写盘或以 Versions 改变关闭提示；P3 VersionStore 与 Recovery 均为独立应用服务。
+- 用户开启自动保存时，由 SaveCoordinator 自己按 0.5/1/2/5 秒防抖后显式发起普通 `.saveOperation` safe-save；关闭时取消未开始意图。应用 resign active 只有开关开启才可提交同类意图。
+- 关闭行为严格执行 PRD 5.1.4，`canClose` 只读取 Coordinator 的 dirty/savedVersion 屏障；所有 `NSSaveOperationType` fixture 必须证明不会绕过 envelope 或生成系统 draft/Version。
 
 ### 11.4 恢复快照
 
@@ -444,15 +449,17 @@ Application Support/Inflow/Recovery/
 - cleanShutdown、expiresAt；Save As 只迁移书签和 revision，不更换 documentID。
 - sessionEpoch、snapshotGeneration、lastCommittedDocumentVersion、discardedThroughGeneration 和 blob checksum。
 
+每个 epoch 使用独立 journal，header 固定为 magic `IFRJ`、schemaVersion、minimumReaderVersion、documentID、epoch、createdAt 和 header CRC。单文档 Recovery 硬配额 256 MiB/2,000 snapshots，全应用 2 GiB；达到软阈值时按“低于 committed 水位 → 非 head checkpoint → 最旧未命名”顺序回收，永不删除唯一未保存 head。仍无法腾挪时暂停新增周期快照并持续显示警告，但保存 exact envelope 的 durable blob 享有预留空间且本地保存不得被配额阻塞。journal 在 saveCommitted/clean 后压缩为新 epoch checkpoint，旧文件原子归档后删除。
+
 策略：
 
 - 变更后最迟 5 秒写入；每个 documentID 的 actor 串行分配严格递增的 snapshotGeneration。晚到的过期任务只可删除自身临时 blob，不得更新索引。
 - 提交顺序固定为：写 blob 临时文件并 `fsync` → 原子重命名为最终 blob → SQLite 事务插入 snapshot 行并更新 session head → 提交事务。索引永不引用未完成 blob；事务失败时最终 blob 作为 orphan 留待启动清扫。
 - 每次打开/恢复文档先生成随机 `sessionEpoch`，在接受编辑和排队快照前创建 journal 并同步写入 `start(epoch, baseFileRevision, baseSavedVersion)`。普通会话因此从开始即有 journal；`start` 失败时 Recovery 进入明确降级状态并阻止把会话标为可自动恢复。
 - 每个 session journal 是独立追加写日志；事件固定为 `start / savePrepared / saveCommitted / retire / discard / consume / clean`。每条记录包含 sequence、documentID、sessionEpoch、操作、documentVersion、snapshotGeneration、目标 URL 身份、预期/实际 FileRevision、contentHash、关联新 epoch、时间、前一记录 hash 和 CRC32C；追加必须 `fsync`，损坏尾部截断到最后有效记录。
-- 保存开始前追加并同步 `savePrepared(epoch, version, targetIdentity, contentHash)`；`NSDocument` safe-save 成功后追加并同步 `saveCommitted(epoch, version, actualFileRevision, contentHash)`，再镜像 SQLite 水位。若崩溃发生在二者之间，启动时读取磁盘 hash/revision 对账：与 prepared 内容完全一致则补记 committed，否则保留相应快照并标记“保存结果不确定”，绝不只凭回调或日志声称已保存。
+- 保存开始前先把 envelope.exactData 写为 durable Recovery blob，并在 SQLite 提交 blob/index/head；随后追加并同步 `savePrepared(epoch, version, blobID, targetIdentity, contentHash)`，最后才调用 safe-save。同一 blob 同时是保存字节和崩溃恢复来源。safe-save 成功且协调读取 hash 匹配后追加 `saveCommitted` 并同步，再镜像 SQLite 水位；prepared 未 committed 时启动按磁盘 hash/revision 对账，不匹配则保留 blob 并标记“保存结果不确定”。
 - “不保存/放弃恢复”先在 Recovery actor 内原子标记 epoch 为 `retiring`、停止接收并取消/排空该 epoch 的任务，再追加并同步 `retire(epoch)` 与 `discard(epoch, throughGeneration)`；`retire` 单独出现即足以禁止自动恢复，UI 只在两项 journal 事件均 fsync 后确认丢弃。随后镜像 SQLite，最后异步删除 blob。所有快照任务在写 blob、重命名和提交索引前均校验 epoch 为 active，晚到任务不能复活内容。
-- 成功应用旧 epoch 的恢复内容前创建并同步新 epoch 的 `start`；应用成功后在旧 journal 追加并同步 `consume(oldEpoch, newEpoch, throughGeneration)`。旧 epoch 此后不再作为恢复候选，后续编辑和快照只归属新 epoch；应用失败则不写 consume，允许重试。
+- 恢复切换顺序固定为：同步新 epoch `start` → 将恢复 exactData 写入新 epoch 首个 durable blob/index/head → 应用到 TextBuffer → 在旧 journal 同步 `consume(oldEpoch,newEpoch,throughGeneration)` → 向 UI 确认完成。此前崩溃仍由旧 epoch 恢复，此后崩溃由新 epoch head 恢复；应用失败不写 consume。
 - clean shutdown 先停止接收新任务并等待队列排空，再追加 `clean(epoch, throughGeneration)` 并镜像 SQLite；超过 2 秒仍未排空则不写 clean，保留恢复入口并允许退出。下次会话必须使用新 epoch，旧 epoch 的晚到任务一律自弃。
 - 相同内容 hash 可复用只读 blob，但每个 snapshot 索引仍记录独立 generation。正常保存不立即删除当前或更新 generation 的恢复记录，待 clean shutdown/tombstone 协议处理。
 - 启动时扫描未关闭 session；原文件已改变时以未命名副本恢复。
@@ -470,6 +477,8 @@ Application Support/Inflow/Recovery/
 - 自动 reload 捕获开始时的 `documentVersion` 与磁盘 `FileRevision`，读取完成、应用到 buffer 前再次校验两者；期间出现本地输入或新的磁盘 revision 即取消本次 reload。自身保存通知由 `SaveCoordinator` 的 self-write token 排除。
 - 永久冲突副本需要相邻目录权限；单文件授权不足时才请求包含目录。拒绝后禁止明确覆盖，但普通安全保存仍可继续。
 
+`DocumentSession` 在打开和每次校验成功的保存后持有 immutable `CommittedBaseSnapshot { version, exactData, hash, FileRevision }`，仅用于 P0 只读三方差异，不依赖 Recovery 或 P3 VersionStore。外部冲突固定展示 committed base / 当前 buffer / 当前磁盘，动作仅为“保存副本 / 重新载入 / 创建磁盘备份并明确覆盖”。
+
 ## 12. 本地版本历史
 
 P3 建立与 Recovery 分离的 VersionStore：
@@ -478,7 +487,7 @@ P3 建立与 Recovery 分离的 VersionStore：
 - VersionStore 用于用户浏览，可关闭和设置容量。
 - 保存成功和重大结构操作后创建版本。
 - 小版本存增量 delta，周期性存完整 checkpoint。
-- 默认保留 30 天或 500 MB，以先到者为准。
+- 产品默认保留 30 天或 500 MiB，以先到者为准；实现读取 `Settings Schema`，本文不另设默认。
 - 恢复旧版本实际创建一个可撤销 TextEdit，不绕过当前文档模型。
 
 ## 13. 查找、替换与工作区
@@ -529,10 +538,10 @@ enum LinkTarget: Sendable {
 
 解析流程：
 
-1. 对 URL 做 percent-decoding 和路径标准化，但不跟随未经验证的符号链接越出授权根目录。
-2. 相对路径以当前文档目录为基准，工作区内路径以 security-scoped root 校验。
+1. 将 raw target 原样交给 `URLPolicy v1`；LinkResolver 禁止再次 percent-decode/NFC。
+2. 相对路径以授权根目录 FD 逐段 no-follow 打开并核验 resource identity，成功后传只读 FD，不在验证后按路径重开。
 3. 单文件授权不足时，由 `ScopeAuthorizationCoordinator` 首次请求包含目录并持久化书签；拒绝状态按目录记忆，不自动重复提示。
-4. `#fragment` 使用 PRD 5.14 固定的 `github-compatible-heading-slug-v1`；Parser、预览、导出和导航共享同一实现，raw HTML `id` 不参与。
+4. raw fragment 由 URLPolicy 解码一次后直接匹配 DOM ID；只有 heading text 进入 `github-compatible-heading-slug-v1`，fragment 不再进入 slugger。
 5. Markdown 目标交给 `NSDocumentController`/WorkspaceSession 打开，加载完成后通过 SourceMap 定位标题。
 6. 非 Markdown 文件只有在授权范围内才交给 `NSWorkspace` 打开。
 7. HTTP/HTTPS 交给系统浏览器；危险 scheme、可执行目标和越权路径返回 blocked。
@@ -577,6 +586,7 @@ struct RenderProfile: Sendable, Codable {
 - 内联主题 CSS、代码样式、数学所需样式和已渲染 SVG。
 - 自包含 HTML 必须内联字体、CSS、本地图片、数学和 Mermaid 结果；P0 不获取远程图片，统一使用占位；100 MiB 为硬上限。源码和 raw HTML 中的 `data:` 始终拒绝，只有 Core 按 `ExportResourcePolicy v1` 对已验证 PNG/JPEG 重新编码或读取固定 hash 内置字体后，才可在最终 staging 生成 data URI。
 - 不包含运行时脚本，不依赖 CDN。
+- 应用 `ExportPrivacyPolicy v1`：图片重新编码并剥离 EXIF/GPS/XMP/ICC comment 等非像素元数据；远程占位只显示去除 userinfo/query/fragment 的 origin + 截断路径；不输出绝对本地路径。HTML 固定 `default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:` CSP、`Referrer-Policy: no-referrer`，外部链接仅保留规范化 http/https 且加 `rel="noopener noreferrer"`。
 - 使用系统为导出目标提供的同卷 item replacement directory；目标已存在时协调 `replaceItemAt`，目标不存在时在同卷完成原子 rename。保存面板关闭后若原本不存在的目标被其他进程创建，禁止覆盖并重新询问“替换 / 重新选择 / 取消”。不在相邻目录自行创建隐藏文件，禁止跨卷移动结果。
 
 ### 15.3 PDF
@@ -587,10 +597,11 @@ struct RenderProfile: Sendable, Codable {
 - 深色 profile 写入明确的页面背景和 `print-color-adjust: exact` 等打印样式，不切换浅色主题。
 - P0 固定 A4、20 mm 四边距，正文宽度取用户设置与可打印 CSS 宽度的较小值；只保证主题、深色背景和无内容丢失。高级分页、自定义纸张/边距和页眉页脚进入 P1。
 - 导出超时或节点失败时列出问题，由用户选择继续或取消，不生成半成品目标。
+- “导出不阻塞主线程”指解析、图片重编码、资源 IO 和清洗在后台 actor/helper 执行；WKWebView 与 NSPrintOperation 只能由 MainActor 异步编排，禁止同步等待或在主线程执行重 CPU/IO。优先 `createPDF`，打印路径仅在 PDF ADR 证明必要时作为条件回退。
 
 ## 16. 设置系统
 
-`SettingsStore` 将偏好定义为类型安全 key：
+`SettingsStore` 只实现版本化 [Settings Schema](./SETTINGS_SCHEMA.md) 中的 key、scope、默认、继承与迁移，不在代码或本文重复定义默认值：
 
 - 全局默认：UserDefaults。
 - 工作区覆盖：Application Support 中的 WorkspaceSettings，不污染用户目录。
@@ -679,7 +690,7 @@ System Policy、权限和工具列表只由 Core 产生。文档和外部数据�
 - Markdown 原始 HTML 默认不可信。
 - 文件访问仅限用户选择文件/工作区及应用容器。
 - security-scoped access 成对 start/stop，长任务由 Lease 管理。
-- 恢复 blob 使用文件保护和随机不可猜名称；索引不记录正文。
+- Recovery blob/index/WAL/temp 严格执行 [Data Protection Policy](./DATA_PROTECTION_POLICY.md) 的 AES-GCM、device-only Keychain、HMAC content ID、crypto-erase 和明文 canary 测试；不能只依赖随机文件名/FileVault。
 - 插件包阻止路径穿越、符号链接、压缩炸弹和未签名更新。
 - 网络、Keychain、剪贴板和工作区访问通过 Capability Broker。
 - AI/连接器不获得恢复数据和未经选择的工作区内容。
@@ -720,7 +731,7 @@ System Policy、权限和工具列表只由 Core 产生。文档和外部数据�
 ### 23.3 UI 测试
 
 - 新建、打开、保存、另存、关闭和外部修改。
-- `⌘1`–`⌘4`、查找替换、格式命令和焦点。
+- P0 feature flag 下仅 `⌘1`–`⌘3`；P1 feature flag 才注册 `⌘4`。测试查找替换、格式命令和焦点时分别断言菜单/快捷键可见性。
 - 点击重复标题准确定位。
 - 滚动同步与用户主动滚动 suppression。
 - 恢复中心、只读、保存失败和冲突流程。
@@ -738,12 +749,13 @@ System Policy、权限和工具列表只由 Core 产生。文档和外部数据�
 
 基准设备 Apple M1/8 GB：
 
-- 冷启动到可输入 ≤ 2 秒。
-- 1 MB/10,000 行打开 ≤ 2 秒。
+- 冷启动空白窗口：10 次 median ≤ 1.5 秒、max ≤ 2 秒。
+- warm app 打开 1 MB/10,000 行：至少 30 次 median ≤ 1.5 秒、P95 ≤ 2 秒。
+- process-cold 启动并打开 1 MB fixture：10 次 median ≤ 2.5 秒、max ≤ 3 秒。
 - 输入到预览 P95 ≤ 300 ms。
 - 模式切换 P95 ≤ 150 ms。
 - 输入主线程卡顿不得超过 100 ms。
-- 典型 1 MB 文档内存目标 ≤ 300 MB。
+- 典型 1 MB 文档 Main + WebContent + Render/Image helper 等完整 Inflow-owned 进程树 resident peak ≤ 300 MiB（发布门槛）。
 - 1 MB/10,000 行必须运行完整 P0 预览和高亮，禁止降级。
 
 发布门槛冷启动是独立指标，采用 process-cold 10 次且不丢弃首次，报告全部结果、中位数与最大值；reboot-cold 仅记录参考值。除冷启动外的延迟指标至少 30 次并使用 nearest-rank P95。测试工具固定 signpost 名称，fixture 包括长段落、大量标题、表格、代码、公式、Mermaid 和混合中文输入，并在报告记录每个 fixture SHA-256。
@@ -776,12 +788,13 @@ T0 逐原型退出矩阵：
 | 原型 | 必须归档的证据 | 失败时动作 |
 | --- | --- | --- |
 | Parser/slug | cmark commit/options、零未解释偏差、GitHub capture 与 slug oracle hash | D04 保持 Reopened |
-| Save/Recovery | guard 后外部改写 fixture、prepared/committed 对账、retire/consume/重建故障矩阵 | 修订保存/日志 ADR，不进入 T1 |
+| Editor/Preview | IME/undo/find mutation 版本单调；SourceMap UTF-16；DOM patch、标题/滚动定位与 stale bridge 负例 | 修订 TextBuffer/Preview 契约，不进入 T1 |
+| Save/Recovery | `SaveRecovery ADR`、envelope 字节绑定、guard/完成后外部改写、prepared durable blob、retire/consume/身份/重建故障矩阵 | ADR 不得 Accepted，不进入 T1 |
 | Render/Sanitizer | `RenderHelperIsolation` ADR、PID 强杀、WebKit 子进程退出、RSS/队列背压、URL/Image/Export golden | D05 保持 Reopened |
 | PDF | 三条候选路径的同一 A4/20 mm/深色/无丢失 golden 与选择理由 | D07 保持 Conditional |
 | 性能 | 固定 fixture hash、signpost、10 次 process-cold 与其余指标至少 30 次报告 | 未达门槛则继续 T0 优化 |
 
-全部矩阵项通过、原型达到性能/可靠性最低指标、P0-D04/P0-D05/P0-D07 转为 Accepted，并冻结 `MarkdownDialectManifest`、`SanitizerManifest`、`RenderManifest`、`RenderHelperIsolation` 与 PDF ADR 后，T0 才退出。任一条件未满足时不得开始 T1。
+全部矩阵项通过、原型达到性能/可靠性最低指标、P0-D04/P0-D05/P0-D07 转为 Accepted，并冻结 `MarkdownDialectManifest`、`SanitizerManifest`、`RenderManifest`、`SaveRecovery ADR`、`RenderHelperIsolation` 与 PDF ADR 后，T0 才退出。任一条件未满足时不得开始 T1。
 
 ### T1：P0 文档内核
 
@@ -822,6 +835,17 @@ T0 逐原型退出矩阵：
 - 语法和 Domain Pack。
 - AI Provider/Action/Context/Tool。
 - GitHub/云存储连接器。
+
+### 产品版本、工程阶段与 Definition of Done
+
+| 产品版本 | 主要工程阶段 | Definition of Done |
+| --- | --- | --- |
+| P0 | T0 风险出清；T1–T3 实施 | PRD §12 全部通过，D04/D05/D07 Accepted，全部 T0 Manifest/ADR 冻结，签名 Archive 验收 |
+| P1 | T4，必要的 T5 导出子项 | Typora 迁移语料的 P1 capability 全通过；`⌘4` round-trip/undo、工作区恢复、资源迁移、结构化 raw HTML/design token 安全门槛通过 |
+| P2 | T4–T5 补齐数学、方言、导出 | Capability Inventory 中所有非 exception 的 Typora 能力有等价路径；95% 语料无需修改，Top 30 任务成功率 ≥90%，exception ledger 已发布 |
+| P3 | T5；生态能力按 E0–E5 独立 | 文档健康、版本历史、资源管家、交互式合并分别通过准确率/恢复/事务/冲突 fixture；生态未完成不阻塞 P3 Core |
+
+T4 必须覆盖 P2 所需方言/数学迁移 fixture，T5 必须覆盖增强导出和再次导出；T6 只建设生态基础设施，不代替任何 P1–P3 Core 验收。PRD 仍是功能归属唯一来源。
 
 ## 26. ADR 清单
 

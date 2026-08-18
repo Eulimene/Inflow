@@ -12,15 +12,18 @@ P0 主应用及渲染 helper 均不授予 outgoing-network entitlement。预览�
 
 ## URLPolicy v1
 
-- URL 先拒绝控制字符和无效 UTF-8，再执行一次且仅一次 UTF-8 百分号解码、Unicode NFC 和 scheme/host 小写标准化；若剩余 `%xx` 再次解码会改变 scheme、host 或路径安全分类，目标降级为纯文本。
+- `URLPolicy` 是 percent-decode 与 NFC 的唯一所有者；调用方只能传 raw bytes/string，不得预解码。策略先拒绝无效 UTF-8，执行一次且仅一次 percent-decode 与 Unicode NFC，再次拒绝 NUL、C0/C1 control、bidi control、非法 scalar 和路径分隔混淆；若剩余 `%xx` 再解码会改变分类则降级纯文本。
 - 允许同文档 fragment、经安全作用域验证的本地相对 Markdown/附件链接，以及由用户单击后交系统浏览器的 `http`/`https`。未知 scheme、`javascript:`、`data:`、`blob:`、绝对 `file:`、带凭据 URL 和可执行目标均降级为纯文本，不产生可点击 DOM。
 - Markdown 图片 `src` 只允许经 `ResourceResolver` 验证的授权本地相对路径；远程、绝对 file、data URI 和越权路径统一占位。
+- `headingText → DOM ID` 只运行 slugger，不做 URL decode；`rawFragment → decoded ID` 只运行 URLPolicy decode/NFC 后与已有 DOM ID 比较，二者不得串联重复解码。
+- 本地资源从已授权根目录的打开目录句柄开始，以逐段 no-follow 语义解析；验证并打开后把只读 FD 与最终 resource identity 交给 helper，不把路径重新打开。symlink、alias 或 mount 变化导致 identity 不符即拒绝。
 
 ## ImageDecodePolicy v1
 
 - P0 只解码静态 PNG 与 JPEG；本地 SVG、GIF、APNG、动画 WebP、PDF 伪装图片和其他格式均显示占位。文件扩展名、声明 MIME 与 magic bytes 必须一致，否则拒绝。
 - 单文件最大 25 MiB、单边最大 16,384 px、总像素最大 40 MP、解码后内存最大 160 MiB；每文档图片解码内存总预算 320 MiB，同时最多 2 个解码任务。超过任一限制立即停止解码并占位。
 - 解码在可销毁的无网络 ImageDecodeHelper 中进行；禁止增量无限流、嵌套容器、多帧和颜色配置文件触发外部资源。helper 崩溃或越限只影响对应图片。
+- 全应用 `ImageDecodeSupervisor` 最多运行 2 个一次性 worker、排队 32 项，单任务硬截止 2 秒；worker 单进程 RSS 192 MiB、整棵关联进程树合计 384 MiB。超出队列立即背压，超时/超 RSS 强制终止整棵 job 进程树。多窗口共享同一预算，不按文档倍增。
 
 ## ExportResourcePolicy v1
 
@@ -49,10 +52,20 @@ P0 生成内容不能贡献任意 CSS；只使用应用内置、带版本 hash �
 
 Mermaid 与 KaTeX 不在长期存活的预览 WebView 中直接执行同步 JavaScript。实现固定为一任务一进程的 `RenderHelper.xpc`：helper 内使用随应用锁定的 WebKit JavaScript/DOM realm，禁止导航、网络、文件和持久化数据存储；进程只接收一个 job，返回序列化结果后退出，不复用 realm。
 
-主应用外的 `RenderSupervisor` 维护全应用最多 2 个运行 worker、最多 32 个排队 job 和 256 MiB worker RSS 总上限；超过队列上限立即背压并显示占位。Supervisor 从 XPC audit token 校验并记录专属 worker PID，使用独立 watchdog 计时；达到截止时间、单进程 128 MiB RSS、全局 RSS 或输出上限时，通过平台允许的进程终止 API 对该 PID 执行强制终止，等待退出确认后丢弃结果。仅取消 XPC connection、JavaScript Promise 或 WKWebView navigation 不算硬终止。
+主应用外的 `RenderSupervisor` 维护全应用最多 2 个运行 worker、最多 32 个排队 job 和 384 MiB 关联进程树 RSS 总上限；超过队列上限立即背压并显示占位。方案 B 的每个 job 必须独占非持久 `WKProcessPool`/website data store，Supervisor 建立 job → XPC/WebContent/Networking 等全部 PID 映射，聚合整棵树 RSS。达到截止时间、单 job 192 MiB、全局 RSS 或输出上限时强制终止全部关联 PID，并等待全部退出确认；只杀 XPC PID、取消 connection/Promise/navigation 均不算硬终止。
 
-上述 PID 获取、强制终止、sandbox entitlement、WebKit 子进程归属及 RSS 统计必须由 T0 `RenderHelperIsolation` ADR 和可重复 fixture 在 macOS 14+ Release sandbox 中证明；证明失败时 P0-D05 保持 Reopened，不得以软截止时间替代“硬超时”。
+上述 process pool 隔离、完整 PID 映射、强制终止、sandbox entitlement、WebKit 子进程归属及 RSS 统计必须由 T0 `RenderHelperIsolation` ADR 和可重复 fixture 在 macOS 14+ Release sandbox 中证明；任一项无法通过公开 API 证明时，ADR 必须回退为 Supervisor 直接拥有的一次性非 WebKit JS/DOM 进程。两条路径都失败则 P0-D05 保持 Reopened。
+
+## PreviewBridgePolicy v1
+
+- 预览脚本只安装在隔离 `WKContentWorld`；每次顶层加载生成 256-bit capability nonce，消息必须携带 nonce、documentID、documentVersion、navigationGeneration 和枚举 message type。
+- 每条消息使用机器可验证 JSON Schema，最大 64 KiB；未知字段/type、过期 nonce/version/generation、重复序号或非预期 frame 一律拒绝。导航开始即撤销旧 handler/nonce，页面销毁时移除 handler，禁止 handler 跨加载复用。
+- Core 优先把 typed render tree 编码为静态 DOM；必须兼容 HTML/SVG 的部分使用随 manifest 版本提交的机器可读 tag/attribute/class/CSS-property allowlist 和负面 corpus，不以自然语言列表作为唯一实现规范。
+
+## EntitlementMatrix v1
+
+P0 Release Archive 必须逐 target 校验签名 entitlements：Main、RenderHelper、ImageDecodeHelper、WebContent 配置均无 outgoing/incoming network；helper 无用户文件路径权限，只接收 FD/内存对象；只有 Main 持有用户选择文件的 security scope。CI 从最终 Archive 导出实际 entitlements 与 expected matrix 做字节级归一化 diff，Debug 配置不能作为证据。
 
 ## 冻结门槛
 
-测试至少覆盖 URL 多重编码/危险 scheme、raw HTML 转义、远程图片零请求、本地 SVG/data URI/伪造 MIME/像素炸弹、ExportResource provenance 伪造、Mermaid 脚本/事件/CSS/`foreignObject`/外部资源、KaTeX trust 命令/宏炸弹/`maxSize`、worker 强制终止、队列背压、节点/尺寸/RSS/文档预算和错误降级。T0 必须证明无 outgoing-network entitlement、网络请求计数为零、超时后 worker 及其 WebKit 子进程已退出，并审核 golden diff 与 `RenderHelperIsolation` ADR。这些条件是 P0-D05 转 Accepted 的强制门槛；任何规则、限额或依赖变化必须提升 manifestVersion。
+测试至少覆盖 URL 双解码/解码后 control/symlink swap、raw HTML 转义、远程图片零请求、本地 SVG/data URI/伪造 MIME/像素炸弹、ExportResource provenance、PreviewBridge nonce/schema/lifecycle、Mermaid/KaTeX 注入与炸弹、Render/Image worker 整棵树强制终止、队列背压、全应用 RSS 和错误降级。T0 必须审核机器可读 allowlist/负面 corpus、最终 Archive entitlement matrix、golden diff 与 `RenderHelperIsolation` ADR。这些条件是 P0-D05 转 Accepted 的强制门槛。

@@ -11,7 +11,8 @@ Inflow 是原生、离线优先的专业 macOS Markdown 编辑器。Core 聚焦�
 1. [PRD](./PRD.md)：产品范围、交互、设置、验收和已确认发布决策。所有产品任务优先读取。
 2. [P0 决策记录](./P0_DECISIONS.md)：开发前冻结事项及其规范位置。
 3. [Typora 对标与差异化路线](./TYPORA_BENCHMARK.md)：需要判断能力差距、版本优先级或竞争策略时读取。
-4. [扩展生态战略](./ECOSYSTEM_STRATEGY.md)：讨论插件市场、AI、连接器、商业和生态治理时读取。
+4. [Typora Capability Inventory](./TYPORA_CAPABILITY_INVENTORY.md)：查询具体对标证据、语料与 exception ledger。
+5. [扩展生态战略](./ECOSYSTEM_STRATEGY.md)：讨论插件市场、AI、连接器、商业和生态治理时读取。
 
 不要为了普通编辑器需求读取完整扩展系统设计；扩展的产品边界和技术实现位于 [扩展文档入口](../engineering/extensions/README.md)。
 

@@ -3,7 +3,7 @@
 - 文档版本：v1.0
 - 更新日期：2026-08-17
 - 目标用户：熟悉 Swift、JavaScript 或 Web 技术的高级开发者
-- 计划阶段：E1–E2 提供实验性 SDK，E5 稳定 API
+- 计划阶段：见唯一 [Phase/Process Matrix](./PHASE_PROCESS_MATRIX.md)
 
 完整技术架构、运行时、市场和同步设计见 [扩展系统总体设计](./SYSTEM_DESIGN.md)，长期生态与 AI 接入模型见 [Inflow 扩展生态战略](../../product/ECOSYSTEM_STRATEGY.md)，Markdown 扩展解析规则见 [Markdown 语法扩展设计](./SYNTAX_EXTENSION_API.md)。本文保留产品级能力边界和开发者接口摘要。
 
@@ -117,14 +117,14 @@ CLI 明确不作为插件类型，也不会通过“终端扩展”进入编辑�
 flowchart LR
     UI["Inflow 编辑器进程"] --> API["版本化扩展 API"]
     API --> Host["隔离的 Extension Host"]
-    Host --> E1["主题与渲染扩展"]
-    Host --> E2["诊断与编辑命令"]
-    Host --> E3["导出与侧栏工具"]
+    Host --> Theme["主题 / 诊断"]
+    Host --> Content["编辑 / 渲染"]
+    Host --> Tools["导出 / 侧栏"]
     API --> Guard["权限、超时与内容清洗"]
     Guard --> Core["文档模型、保存与恢复核心"]
 ```
 
-- Inflow 主进程只维护 UI、文档模型、撤销、保存和恢复。
+- Inflow 主进程维护 UI、文档模型、撤销、保存和恢复；Manager、Local Broker、网络 Broker、扩展 Host 的唯一边界见 [Phase/Process Matrix](./PHASE_PROCESS_MATRIX.md)。
 - 非主题扩展运行在独立 Extension Host 中，通过 XPC 或等价进程间通信调用。
 - 一个扩展崩溃时优先只终止该扩展实例；连续崩溃后自动禁用。
 - 每次调用设置时间、内存和输出大小限制。预览渲染可以取消，文本修改必须原子提交。
@@ -167,7 +167,7 @@ flowchart LR
 
 ## 8. 发布与安装
 
-E1–E2 支持开发者模式包和本地签名低权限包。E3 市场只提供免费公开扩展，用户可匿名浏览安装，仅发布者需要账号；官方连接器和示例 AI Provider 在 E4 验证。第三方高权限扩展、付费、用户许可证账号和企业身份到 E5 才开放。
+开放阶段、分发等级和进程边界只引用 [Phase/Process Matrix](./PHASE_PROCESS_MATRIX.md)；本页不重复维护 E0–E5 内容。
 
 安装流程：
 

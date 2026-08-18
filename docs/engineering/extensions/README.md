@@ -34,6 +34,8 @@
 - GitHub/云同步状态机、AI Provider 和 Prompt Injection 防护。
 - SDK、DevKit、测试、安全和实施路线。
 
+阶段与进程的唯一基线见 [Phase/Process Matrix](./PHASE_PROCESS_MATRIX.md)；AI 模型和费用硬边界见 [AI Runtime Manifest](./AI_RUNTIME_MANIFEST.md)。
+
 ### 第三层：Markdown 语法
 
 [Markdown 语法扩展设计](./SYNTAX_EXTENSION_API.md)，只在涉及以下问题时读取：
