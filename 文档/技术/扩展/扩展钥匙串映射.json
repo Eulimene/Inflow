@@ -1,0 +1,145 @@
+{
+  "$schema": "./数据模式/扩展钥匙串映射第一版模式.json",
+  "policyVersion": 1,
+  "authority": "projection",
+  "normativeSource": "../核心/钥匙串策略.json",
+  "sharedAccessGroupRule": "forbidden-unless-exactly-listed",
+  "wildcardAccessGroupRule": "forbidden",
+  "accessGroups": [
+    {
+      "id": "recovery-kek",
+      "logicalAccessGroup": "com.inflow.keys.recovery.core",
+      "targets": ["main-app"],
+      "secretClasses": ["recovery-domain-kek"]
+    },
+    {
+      "id": "workspace-index-kek",
+      "logicalAccessGroup": "com.inflow.keys.workspace-index.core",
+      "targets": ["main-app"],
+      "secretClasses": ["workspace-index-domain-kek"]
+    },
+    {
+      "id": "sync-kek",
+      "logicalAccessGroup": "com.inflow.keys.sync.core",
+      "targets": ["main-app"],
+      "secretClasses": ["sync-domain-kek"]
+    },
+    {
+      "id": "ai-session-kek",
+      "logicalAccessGroup": "com.inflow.keys.ai-session.core",
+      "targets": ["main-app"],
+      "secretClasses": ["ai-session-domain-kek"]
+    },
+    {
+      "id": "extension-state-kek",
+      "logicalAccessGroup": "com.inflow.keys.extension-state.core",
+      "targets": ["main-app"],
+      "secretClasses": ["extension-state-domain-kek"]
+    },
+    {
+      "id": "extension-trust-key",
+      "logicalAccessGroup": "com.inflow.keys.extension-trust.manager",
+      "targets": ["extension-manager"],
+      "secretClasses": ["local-trust-store-authentication-key"]
+    },
+    {
+      "id": "network-service-credentials",
+      "logicalAccessGroup": "com.inflow.credentials.network-broker",
+      "targets": ["network-credential-broker"],
+      "secretClasses": ["typed-service-oauth-token", "typed-service-api-key"]
+    },
+    {
+      "id": "model-source-credentials",
+      "logicalAccessGroup": "com.inflow.credentials.model-manager",
+      "targets": ["ai-model-manager"],
+      "secretClasses": ["fixed-model-source-token"]
+    }
+  ],
+  "wrappedDEKs": [
+    {
+      "domain": "recovery",
+      "kekRef": "recovery-kek",
+      "dekScope": "document-and-store-generation",
+      "rotationBoundary": "recovery-key-reset-or-document-identity-change",
+      "cryptoEraseTriggers": ["recovery-data-clear", "document-forget", "confirmed-key-loss-store-quarantine"]
+    },
+    {
+      "domain": "workspaceIndex",
+      "kekRef": "workspace-index-kek",
+      "dekScope": "workspace-identity-and-authorization-generation",
+      "rotationBoundary": "workspace-reauthorization",
+      "cryptoEraseTriggers": ["workspace-permission-revocation", "workspace-forget", "workspace-index-clear"]
+    },
+    {
+      "domain": "sync",
+      "kekRef": "sync-kek",
+      "dekScope": "workspace-and-connector-generation",
+      "rotationBoundary": "workspace-reauthorization-or-connector-change",
+      "cryptoEraseTriggers": ["workspace-unlink", "sync-data-clear", "connector-revocation"]
+    },
+    {
+      "domain": "aiSession",
+      "kekRef": "ai-session-kek",
+      "dekScope": "ai-session",
+      "rotationBoundary": "provider-or-model-change",
+      "cryptoEraseTriggers": ["session-expiry", "provider-uninstall", "ai-permission-revocation", "ai-data-clear"]
+    },
+    {
+      "domain": "extensionState",
+      "kekRef": "extension-state-kek",
+      "dekScope": "installed-package-workspace-and-grant-generation",
+      "rotationBoundary": "permission-grant-generation-change",
+      "cryptoEraseTriggers": ["extension-uninstall", "permission-revocation", "extension-revocation"]
+    }
+  ],
+  "stores": [
+    {
+      "id": "recovery-journal",
+      "ownerTarget": "main-app",
+      "encryption": "full-record-aead",
+      "encryptedFields": ["body", "bookmark", "path", "content-hash", "window-state", "document-metadata"],
+      "extensionReadable": false,
+      "deletionTriggers": ["recovery-data-clear", "document-forget"]
+    },
+    {
+      "id": "workspace-index-store",
+      "ownerTarget": "main-app",
+      "encryption": "encrypted-sqlite-wal-and-blobs",
+      "encryptedFields": ["title", "relative-path", "opaque-path-id", "search-token", "file-metadata"],
+      "extensionReadable": false,
+      "deletionTriggers": ["workspace-permission-revocation", "workspace-forget", "workspace-index-clear"]
+    },
+    {
+      "id": "sync-pending-store",
+      "ownerTarget": "main-app",
+      "encryption": "full-record-aead",
+      "encryptedFields": ["body", "resource-bytes", "paths", "hashes", "mutation-metadata", "receipts"],
+      "extensionReadable": false,
+      "deletionTriggers": ["workspace-unlink", "sync-data-clear", "connector-revocation"]
+    },
+    {
+      "id": "ai-session-store",
+      "ownerTarget": "main-app",
+      "encryption": "encrypted-sqlite-wal-and-blobs",
+      "encryptedFields": ["prompt", "response", "diff", "context-provenance", "session-metadata"],
+      "extensionReadable": false,
+      "deletionTriggers": ["session-expiry", "provider-uninstall", "ai-permission-revocation", "ai-data-clear"]
+    },
+    {
+      "id": "extension-state",
+      "ownerTarget": "main-app",
+      "encryption": "full-record-aead",
+      "encryptedFields": ["keys", "values", "schema-version", "grant-generation"],
+      "extensionReadable": true,
+      "deletionTriggers": ["extension-uninstall", "document-or-workspace-permission-revocation", "extension-revocation"],
+      "stateContract": {
+        "phases": ["E1", "E2"],
+        "maximumBytes": 65536,
+        "maximumPreferenceStringBytes": 256,
+        "allowedValueKinds": ["boolean", "bounded-number", "declared-enum", "bounded-preference-string"],
+        "freeFormStrings": false,
+        "documentDerivedContent": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,360 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://inflow.local/schemas/requirement-traceability-v1.schema.json",
+  "title": "Inflow P0-P3 Requirement Traceability",
+  "type": "object",
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "sourceRequirementLedger",
+    "closedWorld",
+    "expectedRequirementCount",
+    "requirements"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "./需求追踪模式.json"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "sourceRequirementLedger": {
+      "const": "../产品/产品需求文档.md"
+    },
+    "closedWorld": {
+      "const": true
+    },
+    "expectedRequirementCount": {
+      "const": 68
+    },
+    "requirements": {
+      "type": "object",
+      "required": [
+        "INF-P0-DIAGRAM-001",
+        "INF-P0-DOD-001",
+        "INF-P0-DOD-002",
+        "INF-P0-DOD-003",
+        "INF-P0-DOD-004",
+        "INF-P0-DOD-005",
+        "INF-P0-DOD-006",
+        "INF-P0-DOD-007",
+        "INF-P0-DOD-008",
+        "INF-P0-DOD-009",
+        "INF-P0-DOD-010",
+        "INF-P0-DOD-011",
+        "INF-P0-DOD-012",
+        "INF-P0-DOD-013",
+        "INF-P0-DOD-014",
+        "INF-P0-DOD-015",
+        "INF-P0-DOD-016",
+        "INF-P0-DOD-017",
+        "INF-P0-DOD-018",
+        "INF-P0-DOD-019",
+        "INF-P0-DOD-020",
+        "INF-P0-DOD-021",
+        "INF-P0-DOD-022",
+        "INF-P0-DOD-023",
+        "INF-P0-EDIT-001",
+        "INF-P0-EXPORT-001",
+        "INF-P0-FILE-001",
+        "INF-P0-MARKDOWN-001",
+        "INF-P0-MODE-001",
+        "INF-P0-NAV-001",
+        "INF-P0-PLATFORM-001",
+        "INF-P0-RECOVERY-001",
+        "INF-P0-SETTINGS-001",
+        "INF-P0-THEME-001",
+        "INF-P1-CONTENT-001",
+        "INF-P1-DOD-001",
+        "INF-P1-DOD-002",
+        "INF-P1-DOD-003",
+        "INF-P1-DOD-004",
+        "INF-P1-DOD-005",
+        "INF-P1-DOD-006",
+        "INF-P1-EDIT-001",
+        "INF-P1-EXPORT-001",
+        "INF-P1-MARKDOWN-001",
+        "INF-P1-MODE-001",
+        "INF-P1-RESOURCE-001",
+        "INF-P1-THEME-001",
+        "INF-P1-WORKSPACE-001",
+        "INF-P1-WRITING-001",
+        "INF-P2-DIALECT-001",
+        "INF-P2-DOD-001",
+        "INF-P2-DOD-002",
+        "INF-P2-DOD-003",
+        "INF-P2-DOD-004",
+        "INF-P2-DOD-005",
+        "INF-P2-EXPORT-001",
+        "INF-P2-PARITY-001",
+        "INF-P2-THEME-001",
+        "INF-P3-DOD-001",
+        "INF-P3-DOD-002",
+        "INF-P3-DOD-003",
+        "INF-P3-DOD-004",
+        "INF-P3-DOD-005",
+        "INF-P3-HEALTH-001",
+        "INF-P3-HISTORY-001",
+        "INF-P3-MERGE-001",
+        "INF-P3-PROFILE-001",
+        "INF-P3-RESOURCE-001"
+      ],
+      "properties": {
+        "INF-P0-DIAGRAM-001": { "$ref": "#/$defs/p0Feature" },
+        "INF-P0-DOD-001": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-002": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-003": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-004": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-005": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-006": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-007": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-008": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-009": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-010": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-011": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-012": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-013": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-014": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-015": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-016": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-017": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-018": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-019": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-020": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-021": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-022": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-DOD-023": { "$ref": "#/$defs/p0DoD" },
+        "INF-P0-EDIT-001": { "$ref": "#/$defs/p0Feature" },
+        "INF-P0-EXPORT-001": { "$ref": "#/$defs/p0Feature" },
+        "INF-P0-FILE-001": { "$ref": "#/$defs/p0Feature" },
+        "INF-P0-MARKDOWN-001": { "$ref": "#/$defs/p0Feature" },
+        "INF-P0-MODE-001": { "$ref": "#/$defs/p0Feature" },
+        "INF-P0-NAV-001": { "$ref": "#/$defs/p0Feature" },
+        "INF-P0-PLATFORM-001": { "$ref": "#/$defs/p0Feature" },
+        "INF-P0-RECOVERY-001": { "$ref": "#/$defs/p0Feature" },
+        "INF-P0-SETTINGS-001": { "$ref": "#/$defs/p0Feature" },
+        "INF-P0-THEME-001": { "$ref": "#/$defs/p0Feature" },
+        "INF-P1-CONTENT-001": { "$ref": "#/$defs/p1Feature" },
+        "INF-P1-DOD-001": { "$ref": "#/$defs/p1DoD" },
+        "INF-P1-DOD-002": { "$ref": "#/$defs/p1DoD" },
+        "INF-P1-DOD-003": { "$ref": "#/$defs/p1DoD" },
+        "INF-P1-DOD-004": { "$ref": "#/$defs/p1DoD" },
+        "INF-P1-DOD-005": { "$ref": "#/$defs/p1DoD" },
+        "INF-P1-DOD-006": { "$ref": "#/$defs/p1DoD" },
+        "INF-P1-EDIT-001": { "$ref": "#/$defs/p1Feature" },
+        "INF-P1-EXPORT-001": { "$ref": "#/$defs/p1Feature" },
+        "INF-P1-MARKDOWN-001": { "$ref": "#/$defs/p1Feature" },
+        "INF-P1-MODE-001": { "$ref": "#/$defs/p1Feature" },
+        "INF-P1-RESOURCE-001": { "$ref": "#/$defs/p1Feature" },
+        "INF-P1-THEME-001": { "$ref": "#/$defs/p1Feature" },
+        "INF-P1-WORKSPACE-001": { "$ref": "#/$defs/p1Feature" },
+        "INF-P1-WRITING-001": { "$ref": "#/$defs/p1Feature" },
+        "INF-P2-DIALECT-001": { "$ref": "#/$defs/p2Feature" },
+        "INF-P2-DOD-001": { "$ref": "#/$defs/p2DoD" },
+        "INF-P2-DOD-002": { "$ref": "#/$defs/p2DoD" },
+        "INF-P2-DOD-003": { "$ref": "#/$defs/p2DoD" },
+        "INF-P2-DOD-004": { "$ref": "#/$defs/p2DoD" },
+        "INF-P2-DOD-005": { "$ref": "#/$defs/p2DoD" },
+        "INF-P2-EXPORT-001": { "$ref": "#/$defs/p2Feature" },
+        "INF-P2-PARITY-001": { "$ref": "#/$defs/p2Feature" },
+        "INF-P2-THEME-001": { "$ref": "#/$defs/p2Feature" },
+        "INF-P3-DOD-001": { "$ref": "#/$defs/p3DoD" },
+        "INF-P3-DOD-002": { "$ref": "#/$defs/p3DoD" },
+        "INF-P3-DOD-003": { "$ref": "#/$defs/p3DoD" },
+        "INF-P3-DOD-004": { "$ref": "#/$defs/p3DoD" },
+        "INF-P3-DOD-005": { "$ref": "#/$defs/p3DoD" },
+        "INF-P3-HEALTH-001": { "$ref": "#/$defs/p3Feature" },
+        "INF-P3-HISTORY-001": { "$ref": "#/$defs/p3Feature" },
+        "INF-P3-MERGE-001": { "$ref": "#/$defs/p3Feature" },
+        "INF-P3-PROFILE-001": { "$ref": "#/$defs/p3Feature" },
+        "INF-P3-RESOURCE-001": { "$ref": "#/$defs/p3Feature" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "mapping": {
+      "type": "object",
+      "required": [
+        "requirementKind",
+        "productPhase",
+        "owner",
+        "engineeringPhases",
+        "evidenceRefs",
+        "fixtureGroup",
+        "evidenceStatus"
+      ],
+      "properties": {
+        "requirementKind": {
+          "enum": ["FEATURE", "DOD"]
+        },
+        "productPhase": {
+          "enum": ["P0", "P1", "P2", "P3"]
+        },
+        "owner": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Za-z0-9]+(?:\\.[A-Z][A-Za-z0-9]+)+$"
+        },
+        "engineeringPhases": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["T0", "T1", "T2", "T3", "T4", "T5", "T6"]
+          }
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!.*\\*)(?!.*\\?)(?!.*\\[)(?!.*\\])[^\\r\\n]+$"
+          }
+        },
+        "fixtureGroup": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*\\.v[1-9][0-9]*$"
+        },
+        "evidenceStatus": {
+          "enum": ["OPEN", "CONTRACT_FROZEN", "PASSED"]
+        },
+        "buildEvidence": {
+          "$ref": "#/$defs/buildEvidence"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "evidenceStatus": { "const": "PASSED" }
+            },
+            "required": ["evidenceStatus"]
+          },
+          "then": {
+            "required": ["buildEvidence"]
+          },
+          "else": {
+            "not": {
+              "required": ["buildEvidence"]
+            }
+          }
+        }
+      ]
+    },
+    "buildEvidence": {
+      "type": "object",
+      "required": [
+        "releaseBuildSHA256",
+        "fixtureManifestSHA256",
+        "resultSHA256"
+      ],
+      "properties": {
+        "releaseBuildSHA256": {
+          "type": "string",
+          "pattern": "^(?!0{64}$)[0-9a-f]{64}$"
+        },
+        "fixtureManifestSHA256": {
+          "type": "string",
+          "pattern": "^(?!0{64}$)[0-9a-f]{64}$"
+        },
+        "resultSHA256": {
+          "type": "string",
+          "pattern": "^(?!0{64}$)[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "p0Feature": {
+      "allOf": [
+        { "$ref": "#/$defs/mapping" },
+        {
+          "properties": {
+            "requirementKind": { "const": "FEATURE" },
+            "productPhase": { "const": "P0" }
+          }
+        }
+      ]
+    },
+    "p0DoD": {
+      "allOf": [
+        { "$ref": "#/$defs/mapping" },
+        {
+          "properties": {
+            "requirementKind": { "const": "DOD" },
+            "productPhase": { "const": "P0" }
+          }
+        }
+      ]
+    },
+    "p1Feature": {
+      "allOf": [
+        { "$ref": "#/$defs/mapping" },
+        {
+          "properties": {
+            "requirementKind": { "const": "FEATURE" },
+            "productPhase": { "const": "P1" }
+          }
+        }
+      ]
+    },
+    "p1DoD": {
+      "allOf": [
+        { "$ref": "#/$defs/mapping" },
+        {
+          "properties": {
+            "requirementKind": { "const": "DOD" },
+            "productPhase": { "const": "P1" }
+          }
+        }
+      ]
+    },
+    "p2Feature": {
+      "allOf": [
+        { "$ref": "#/$defs/mapping" },
+        {
+          "properties": {
+            "requirementKind": { "const": "FEATURE" },
+            "productPhase": { "const": "P2" }
+          }
+        }
+      ]
+    },
+    "p2DoD": {
+      "allOf": [
+        { "$ref": "#/$defs/mapping" },
+        {
+          "properties": {
+            "requirementKind": { "const": "DOD" },
+            "productPhase": { "const": "P2" }
+          }
+        }
+      ]
+    },
+    "p3Feature": {
+      "allOf": [
+        { "$ref": "#/$defs/mapping" },
+        {
+          "properties": {
+            "requirementKind": { "const": "FEATURE" },
+            "productPhase": { "const": "P3" }
+          }
+        }
+      ]
+    },
+    "p3DoD": {
+      "allOf": [
+        { "$ref": "#/$defs/mapping" },
+        {
+          "properties": {
+            "requirementKind": { "const": "DOD" },
+            "productPhase": { "const": "P3" }
+          }
+        }
+      ]
+    }
+  }
+}

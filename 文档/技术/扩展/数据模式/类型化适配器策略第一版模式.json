@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.inflow.local/extensions/typed-adapter-policy-v1.schema.json",
+  "title": "Inflow Typed Adapter Policy Catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "catalogVersion", "authority", "undeclaredAdapterRule", "policies"],
+  "properties": {
+    "$schema": { "const": "./数据模式/类型化适配器策略第一版模式.json" },
+    "catalogVersion": { "const": 1 },
+    "authority": { "const": "normative" },
+    "undeclaredAdapterRule": { "const": "disabled" },
+    "policies": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/policy" }
+    }
+  },
+  "$defs": {
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policyVersion", "policyID", "adapterID", "adapterVersion", "phase", "operations", "endpoints", "endpointGraph", "dns", "tls", "redirects", "credentials", "budgets", "responseURLPolicy"],
+      "properties": {
+        "policyVersion": { "const": 1 },
+        "policyID": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{2,127}$" },
+        "adapterID": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{2,127}$" },
+        "adapterVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "phase": { "const": "E4" },
+        "operations": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" } },
+        "endpoints": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["endpointID", "origin", "methods", "pathTemplates", "requestContentTypes", "responseContentTypes", "credentialScope"],
+            "properties": {
+              "endpointID": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+              "origin": { "type": "string", "pattern": "^https://[A-Za-z0-9.-]+:443$" },
+              "methods": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] } },
+              "pathTemplates": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^/" } },
+              "requestContentTypes": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+              "responseContentTypes": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } },
+              "credentialScope": { "type": "string", "minLength": 1, "maxLength": 64 }
+            }
+          }
+        },
+        "endpointGraph": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["operation", "from", "to"],
+            "properties": {
+              "operation": { "type": "string" },
+              "from": { "type": "string" },
+              "to": { "type": "string" }
+            }
+          }
+        },
+        "dns": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["resolveEachConnection", "pinResolvedAddressThroughTLS", "rejectAddressClasses", "maximumAnswers"],
+          "properties": {
+            "resolveEachConnection": { "const": true },
+            "pinResolvedAddressThroughTLS": { "const": true },
+            "rejectAddressClasses": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["unspecified", "loopback", "private", "link-local", "multicast", "carrier-grade-nat", "documentation", "benchmark", "reserved", "unix-socket"] } },
+            "maximumAnswers": { "type": "integer", "minimum": 1, "maximum": 32 }
+          }
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minimumVersion", "systemTrustOnly", "hostnameVerification", "clientCertificates"],
+          "properties": {
+            "minimumVersion": { "enum": ["TLS1.2", "TLS1.3"] },
+            "systemTrustOnly": { "const": true },
+            "hostnameVerification": { "const": true },
+            "clientCertificates": { "type": "boolean" }
+          }
+        },
+        "redirects": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maximumHops", "allowedEdges", "stripCredentialsOnOriginChange", "revalidateEveryHop"],
+          "properties": {
+            "maximumHops": { "type": "integer", "minimum": 0, "maximum": 5 },
+            "allowedEdges": { "type": "array", "items": { "type": "string" } },
+            "stripCredentialsOnOriginChange": { "const": true },
+            "revalidateEveryHop": { "const": true }
+          }
+        },
+        "credentials": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scopes", "neverForwardHeaders"],
+          "properties": {
+            "scopes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["scope", "endpointIDs", "headers"],
+                "properties": {
+                  "scope": { "type": "string" },
+                  "endpointIDs": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+                  "headers": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+                }
+              }
+            },
+            "neverForwardHeaders": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+          }
+        },
+        "budgets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requestBodyBytes", "responseCompressedBytes", "responseDecompressedBytes", "decompressionRatio", "wallClockSeconds", "requestsPerOperation"],
+          "properties": {
+            "requestBodyBytes": { "type": "integer", "minimum": 0 },
+            "responseCompressedBytes": { "type": "integer", "minimum": 1 },
+            "responseDecompressedBytes": { "type": "integer", "minimum": 1 },
+            "decompressionRatio": { "type": "number", "minimum": 1, "maximum": 100 },
+            "wallClockSeconds": { "type": "integer", "minimum": 1, "maximum": 600 },
+            "requestsPerOperation": { "type": "integer", "minimum": 1, "maximum": 10000 }
+          }
+        },
+        "responseURLPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["followServerReturnedURLs", "allowedFieldMappings"],
+          "properties": {
+            "followServerReturnedURLs": { "const": false },
+            "allowedFieldMappings": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    }
+  }
+}

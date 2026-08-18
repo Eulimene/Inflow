@@ -1,0 +1,58 @@
+{
+  "$schema": "./数据模式/AI运行清单第二版模式.json",
+  "manifestVersion": 2,
+  "authority": "normative",
+  "status": "Accepted",
+  "modelStore": {
+    "ownerTarget": "ai-model-store",
+    "addressing": "sha256-versioned-cas",
+    "publisherCannotMutateAfterPublication": true,
+    "publishSteps": [
+      "receive-read-only-staging-fd-and-expected-manifest-hash",
+      "independently-verify-publisher-signature-license-architecture-size-and-sha256",
+      "copy-without-path-reopen-into-store-owned-private-staging",
+      "fsync-file-and-parent-directory",
+      "atomically-publish-under-version-and-sha256",
+      "remove-model-manager-write-and-namespace-access",
+      "issue-expiring-read-only-fd-leases-only"
+    ],
+    "leaseChecks": [
+      "manifest-hash",
+      "content-sha256",
+      "resource-identity",
+      "size",
+      "store-generation",
+      "lease-expiry"
+    ]
+  },
+  "responseOwnership": {
+    "plaintextOwner": "main-app",
+    "transport": "authenticated-bounded-one-shot-stream",
+    "parserOwner": "main-app",
+    "diffOwner": "main-app",
+    "brokerPersistence": "forbidden"
+  },
+  "costLedger": {
+    "owner": "main-app",
+    "scope": "global-across-windows-and-processes",
+    "protocol": "atomic-reserve-settle-release",
+    "reservationKey": "requestID",
+    "unknownPriceRule": "per-request-confirmation-and-no-auto-continuation"
+  },
+  "memory": {
+    "maximumConcurrentWorkers": 1,
+    "singleWorkerPhysicalFraction": 0.30,
+    "totalAIPhysicalFraction": 0.35,
+    "absoluteSingleWorkerBytes": 6442450944,
+    "minimumCoreSystemHeadroomBytes": 4294967296,
+    "workingSetSafetyFactor": 1.25,
+    "admissionRule": "estimatedPeakWorkingSetTimesSafetyFactorMustFitAllSingleWorkerAndTotalAIAndHeadroomCeilings",
+    "memoryPressureRule": "cancelWorkerThenUnloadModelThenRejectNewRequests"
+  },
+  "distribution": {
+    "phase": "E4",
+    "thirdPartyProviders": "E5-or-later",
+    "developerModeData": "synthetic-fixtures-only",
+    "remoteAdapterPolicy": "must-have-declared-typed-adapter-policy"
+  }
+}
