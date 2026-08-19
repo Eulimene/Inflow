@@ -3,6 +3,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 
+use crate::analysis;
 use crate::document::{self, DecodeError, LineEnding};
 use crate::render;
 
@@ -42,6 +43,42 @@ impl InflowOwnedBytes {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+pub struct InflowHeading {
+    pub level: u8,
+    pub source_start: usize,
+    pub source_end: usize,
+    pub title_start: usize,
+    pub title_length: usize,
+}
+
+#[repr(C)]
+pub struct InflowOwnedHeadings {
+    pub data: *mut InflowHeading,
+    pub length: usize,
+}
+
+impl InflowOwnedHeadings {
+    const fn empty() -> Self {
+        Self {
+            data: ptr::null_mut(),
+            length: 0,
+        }
+    }
+
+    fn from_vec(headings: Vec<InflowHeading>) -> Self {
+        if headings.is_empty() {
+            return Self::empty();
+        }
+
+        let length = headings.len();
+        let boxed = headings.into_boxed_slice();
+        let data = Box::into_raw(boxed).cast::<InflowHeading>();
+        Self { data, length }
+    }
+}
+
+#[repr(C)]
 pub struct InflowDecodeResult {
     pub status: i32,
     pub utf8: InflowOwnedBytes,
@@ -71,6 +108,29 @@ impl InflowEncodeResult {
         Self {
             status,
             bytes: InflowOwnedBytes::empty(),
+        }
+    }
+}
+
+#[repr(C)]
+pub struct InflowAnalysisResult {
+    pub status: i32,
+    pub headings: InflowOwnedHeadings,
+    pub heading_text_utf8: InflowOwnedBytes,
+    pub word_count: u64,
+    pub character_count_with_spaces: u64,
+    pub character_count_without_spaces: u64,
+}
+
+impl InflowAnalysisResult {
+    const fn error(status: i32) -> Self {
+        Self {
+            status,
+            headings: InflowOwnedHeadings::empty(),
+            heading_text_utf8: InflowOwnedBytes::empty(),
+            word_count: 0,
+            character_count_with_spaces: 0,
+            character_count_without_spaces: 0,
         }
     }
 }
@@ -175,6 +235,57 @@ pub unsafe extern "C" fn inflow_markdown_render_html(
     .unwrap_or_else(|_| InflowEncodeResult::error(STATUS_PANIC))
 }
 
+/// Extracts heading source ranges and text statistics from UTF-8 Markdown.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_document_analyze(
+    utf8: *const u8,
+    length: usize,
+) -> InflowAnalysisResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowAnalysisResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Ok(markdown) = std::str::from_utf8(input) else {
+            return InflowAnalysisResult::error(STATUS_INVALID_UTF8);
+        };
+
+        let analysis = analysis::analyze(markdown);
+        let mut heading_text_utf8 = Vec::new();
+        let headings = analysis
+            .headings
+            .into_iter()
+            .map(|heading| {
+                let title_start = heading_text_utf8.len();
+                let title = heading.title.as_bytes();
+                heading_text_utf8.extend_from_slice(title);
+
+                InflowHeading {
+                    level: heading.level,
+                    source_start: heading.source_range.start,
+                    source_end: heading.source_range.end,
+                    title_start,
+                    title_length: title.len(),
+                }
+            })
+            .collect();
+
+        InflowAnalysisResult {
+            status: STATUS_OK,
+            headings: InflowOwnedHeadings::from_vec(headings),
+            heading_text_utf8: InflowOwnedBytes::from_vec(heading_text_utf8),
+            word_count: analysis.word_count,
+            character_count_with_spaces: analysis.character_count_with_spaces,
+            character_count_without_spaces: analysis.character_count_without_spaces,
+        }
+    }))
+    .unwrap_or_else(|_| InflowAnalysisResult::error(STATUS_PANIC))
+}
+
 /// Releases bytes returned by this library.
 ///
 /// # Safety
@@ -183,6 +294,22 @@ pub unsafe extern "C" fn inflow_markdown_render_html(
 /// must not have been released previously. A null pointer is accepted.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn inflow_owned_bytes_free(data: *mut u8, length: usize) {
+    if data.is_null() {
+        return;
+    }
+
+    let slice = ptr::slice_from_raw_parts_mut(data, length);
+    drop(unsafe { Box::from_raw(slice) });
+}
+
+/// Releases headings returned by this library.
+///
+/// # Safety
+///
+/// `data` and `length` must be an unchanged pair returned by this library and
+/// must not have been released previously. A null pointer is accepted.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_owned_headings_free(data: *mut InflowHeading, length: usize) {
     if data.is_null() {
         return;
     }
@@ -260,5 +387,67 @@ mod tests {
             String::from_utf8(html).expect("renderer returns UTF-8"),
             "<h1>标题</h1>\n<p><strong>Body</strong></p>\n"
         );
+    }
+
+    #[test]
+    fn ffi_analyzes_duplicate_unicode_headings_and_statistics() {
+        let markdown = "# 概览\n\nBody 123\n\n## Same\n\n## Same\n";
+        let result = unsafe { inflow_document_analyze(markdown.as_ptr(), markdown.len()) };
+
+        assert_eq!(result.status, STATUS_OK);
+        assert_eq!(result.headings.length, 3);
+        let headings =
+            unsafe { std::slice::from_raw_parts(result.headings.data, result.headings.length) };
+        assert_ne!(headings[1].source_start, headings[2].source_start);
+        assert_eq!(headings[0].level, 1);
+        assert_eq!(
+            &markdown[headings[0].source_start..headings[0].source_end],
+            "# 概览"
+        );
+
+        let title_bytes = unsafe {
+            std::slice::from_raw_parts(
+                result.heading_text_utf8.data,
+                result.heading_text_utf8.length,
+            )
+        };
+        let first_title = &title_bytes
+            [headings[0].title_start..headings[0].title_start + headings[0].title_length];
+        assert_eq!(std::str::from_utf8(first_title).unwrap(), "概览");
+        assert_eq!(result.word_count, 6);
+
+        unsafe {
+            inflow_owned_headings_free(result.headings.data, result.headings.length);
+            inflow_owned_bytes_free(
+                result.heading_text_utf8.data,
+                result.heading_text_utf8.length,
+            );
+        }
+    }
+
+    #[test]
+    fn ffi_analysis_rejects_invalid_inputs_with_empty_owned_results() {
+        for result in [unsafe { inflow_document_analyze(ptr::null(), 1) }, unsafe {
+            inflow_document_analyze([0xFF].as_ptr(), 1)
+        }] {
+            assert!(matches!(
+                result.status,
+                STATUS_INVALID_ARGUMENT | STATUS_INVALID_UTF8
+            ));
+            assert!(result.headings.data.is_null());
+            assert_eq!(result.headings.length, 0);
+            assert!(result.heading_text_utf8.data.is_null());
+            assert_eq!(result.heading_text_utf8.length, 0);
+            assert_eq!(result.word_count, 0);
+        }
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn ffi_analysis_layout_matches_64_bit_c_contract() {
+        assert_eq!(std::mem::size_of::<InflowHeading>(), 40);
+        assert_eq!(std::mem::align_of::<InflowHeading>(), 8);
+        assert_eq!(std::mem::size_of::<InflowOwnedHeadings>(), 16);
+        assert_eq!(std::mem::size_of::<InflowAnalysisResult>(), 64);
     }
 }

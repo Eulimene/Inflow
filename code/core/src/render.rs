@@ -3,16 +3,19 @@
 use pulldown_cmark::{Event, Options, Parser, html};
 
 pub fn html_fragment(markdown: &str) -> String {
+    let events = Parser::new_ext(markdown, options()).map(sanitize_event);
+    let mut output = String::with_capacity(markdown.len());
+    html::push_html(&mut output, events);
+    output
+}
+
+pub(crate) fn options() -> Options {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_FOOTNOTES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TASKLISTS);
-
-    let events = Parser::new_ext(markdown, options).map(sanitize_event);
-    let mut output = String::with_capacity(markdown.len());
-    html::push_html(&mut output, events);
-    output
+    options
 }
 
 fn sanitize_event(event: Event<'_>) -> Event<'_> {

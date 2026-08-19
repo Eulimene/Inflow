@@ -35,7 +35,45 @@ typedef struct InflowEncodeResult {
     InflowOwnedBytes bytes;
 } InflowEncodeResult;
 
-/// Version of the stable C ABI implemented by the linked Inflow core.
+typedef struct InflowHeading {
+    uint8_t level;
+    /// Start/end are end-exclusive UTF-8 byte offsets into the input passed to
+    /// inflow_document_analyze.
+    uintptr_t source_start;
+    uintptr_t source_end;
+    /// Start/length are UTF-8 byte offsets into heading_text_utf8 in the same
+    /// InflowAnalysisResult.
+    uintptr_t title_start;
+    uintptr_t title_length;
+} InflowHeading;
+
+typedef struct InflowOwnedHeadings {
+    InflowHeading *data;
+    uintptr_t length;
+} InflowOwnedHeadings;
+
+typedef struct InflowAnalysisResult {
+    InflowStatus status;
+    InflowOwnedHeadings headings;
+    InflowOwnedBytes heading_text_utf8;
+    uint64_t word_count;
+    uint64_t character_count_with_spaces;
+    uint64_t character_count_without_spaces;
+} InflowAnalysisResult;
+
+#if UINTPTR_MAX == UINT64_MAX
+#if defined(__cplusplus)
+static_assert(sizeof(InflowHeading) == 40, "InflowHeading ABI layout changed");
+static_assert(sizeof(InflowAnalysisResult) == 64, "InflowAnalysisResult ABI layout changed");
+#else
+_Static_assert(sizeof(InflowHeading) == 40, "InflowHeading ABI layout changed");
+_Static_assert(sizeof(InflowAnalysisResult) == 64, "InflowAnalysisResult ABI layout changed");
+#endif
+#endif
+
+/// Compatible major version of the stable C ABI implemented by the linked
+/// Inflow core. Additive functions and trailing-independent structs do not
+/// change this value; incompatible ownership or layout changes do.
 uint32_t inflow_core_abi_version(void);
 
 /// Decodes UTF-8 Markdown and normalizes in-memory line endings to LF.
@@ -61,8 +99,19 @@ InflowEncodeResult inflow_markdown_render_html(
     uintptr_t length
 );
 
+/// Extracts heading source ranges and text statistics from UTF-8 Markdown. The
+/// returned arrays belong to Inflow and must be released with their matching
+/// free functions.
+InflowAnalysisResult inflow_document_analyze(
+    const uint8_t *utf8,
+    uintptr_t length
+);
+
 /// Releases an unchanged pointer and length returned by Inflow.
 void inflow_owned_bytes_free(uint8_t *data, uintptr_t length);
+
+/// Releases an unchanged heading pointer and length returned by Inflow.
+void inflow_owned_headings_free(InflowHeading *data, uintptr_t length);
 
 #ifdef __cplusplus
 }

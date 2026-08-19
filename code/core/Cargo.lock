@@ -13,6 +13,7 @@ name = "inflow-core"
 version = "0.1.0"
 dependencies = [
  "pulldown-cmark",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -44,3 +45,9 @@ name = "unicase"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
+
+[[package]]
+name = "unicode-segmentation"
+version = "1.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
