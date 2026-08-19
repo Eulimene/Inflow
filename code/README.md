@@ -9,6 +9,13 @@ Inflow 是一款本地优先的 Markdown 写作工作台。首发客户端支持
 - `scripts/`：Xcode 调用的可重复构建脚本。
 - `docs/`：代码侧架构决策与开发约束。
 
+## 当前能力
+
+- 使用 macOS 原生文档生命周期新建、打开和自动保存 `.md` / `.markdown`；
+- 在单一 Markdown 源文本中进行系统原生撤销、重做与文本编辑；
+- 由 Rust 核心验证 UTF-8，并保留已有文件的 UTF-8 BOM 与 LF/CRLF 风格；
+- 对非 UTF-8 或混合换行文件拒绝写回，保护原文件不被猜测性转换。
+
 ## 构建
 
 需要 Xcode 26 或兼容版本，以及 `rust-toolchain.toml` 指定的 Rust 工具链。

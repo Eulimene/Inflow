@@ -2,6 +2,9 @@
 //!
 //! Platform clients communicate with this crate through the versioned C ABI.
 
+mod document;
+mod ffi;
+
 /// Current version of the C ABI exposed to platform clients.
 pub const ABI_VERSION: u32 = 1;
 

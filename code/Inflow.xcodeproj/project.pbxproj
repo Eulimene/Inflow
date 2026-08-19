@@ -8,20 +8,46 @@
 
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* InflowApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* InflowApp.swift */; };
-		A10000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* ContentView.swift */; };
+		A10000000000000000000002 /* MarkdownEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* MarkdownEditorView.swift */; };
 		A10000000000000000000003 /* InflowCoreBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* InflowCoreBridge.swift */; };
+		A10000000000000000000004 /* MarkdownDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* MarkdownDocument.swift */; };
+		A10000000000000000000005 /* MarkdownCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* MarkdownCodec.swift */; };
+		A10000000000000000000006 /* MarkdownCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* MarkdownCodecTests.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		AB0000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A80000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A50000000000000000000001;
+			remoteInfo = Inflow;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		A20000000000000000000001 /* InflowApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InflowApp.swift; sourceTree = "<group>"; };
-		A20000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A20000000000000000000002 /* MarkdownEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownEditorView.swift; sourceTree = "<group>"; };
 		A20000000000000000000003 /* InflowCoreBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InflowCoreBridge.swift; sourceTree = "<group>"; };
 		A20000000000000000000004 /* Inflow-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Inflow-Bridging-Header.h"; sourceTree = "<group>"; };
 		A20000000000000000000005 /* Inflow.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Inflow.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000006 /* MarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Document/MarkdownDocument.swift; sourceTree = "<group>"; };
+		A20000000000000000000007 /* MarkdownCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Document/MarkdownCodec.swift; sourceTree = "<group>"; };
+		A20000000000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Resources/Info.plist; sourceTree = "<group>"; };
+		A20000000000000000000009 /* Inflow.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Resources/Inflow.entitlements; sourceTree = "<group>"; };
+		A2000000000000000000000A /* MarkdownCodecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownCodecTests.swift; sourceTree = "<group>"; };
+		A2000000000000000000000B /* InflowTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = InflowTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A30000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A30000000000000000000002 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -35,6 +61,7 @@
 			isa = PBXGroup;
 			children = (
 				A40000000000000000000002 /* Inflow */,
+				A40000000000000000000004 /* InflowTests */,
 				A40000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -43,9 +70,13 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000001 /* InflowApp.swift */,
-				A20000000000000000000002 /* ContentView.swift */,
+				A20000000000000000000002 /* MarkdownEditorView.swift */,
+				A20000000000000000000006 /* MarkdownDocument.swift */,
+				A20000000000000000000007 /* MarkdownCodec.swift */,
 				A20000000000000000000003 /* InflowCoreBridge.swift */,
 				A20000000000000000000004 /* Inflow-Bridging-Header.h */,
+				A20000000000000000000008 /* Info.plist */,
+				A20000000000000000000009 /* Inflow.entitlements */,
 			);
 			path = macos/Inflow;
 			sourceTree = "<group>";
@@ -54,8 +85,17 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000005 /* Inflow.app */,
+				A2000000000000000000000B /* InflowTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000004 /* InflowTests */ = {
+			isa = PBXGroup;
+			children = (
+				A2000000000000000000000A /* MarkdownCodecTests.swift */,
+			);
+			path = macos/InflowTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -79,6 +119,24 @@
 			productReference = A20000000000000000000005 /* Inflow.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A50000000000000000000002 /* InflowTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A90000000000000000000003 /* Build configuration list for PBXNativeTarget "InflowTests" */;
+			buildPhases = (
+				A60000000000000000000003 /* Sources */,
+				A30000000000000000000002 /* Frameworks */,
+				A60000000000000000000004 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AB0000000000000000000002 /* PBXTargetDependency */,
+			);
+			name = InflowTests;
+			productName = InflowTests;
+			productReference = A2000000000000000000000B /* InflowTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -91,6 +149,10 @@
 				TargetAttributes = {
 					A50000000000000000000001 = {
 						CreatedOnToolsVersion = 26.6;
+					};
+					A50000000000000000000002 = {
+						CreatedOnToolsVersion = 26.6;
+						TestTargetID = A50000000000000000000001;
 					};
 				};
 			};
@@ -109,12 +171,20 @@
 			projectRoot = "";
 			targets = (
 				A50000000000000000000001 /* Inflow */,
+				A50000000000000000000002 /* InflowTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A60000000000000000000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A60000000000000000000004 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -135,6 +205,8 @@
 			inputPaths = (
 				"$(PROJECT_DIR)/core/Cargo.toml",
 				"$(PROJECT_DIR)/core/Cargo.lock",
+				"$(PROJECT_DIR)/core/src/document.rs",
+				"$(PROJECT_DIR)/core/src/ffi.rs",
 				"$(PROJECT_DIR)/core/src/lib.rs",
 				"$(PROJECT_DIR)/rust-toolchain.toml",
 			);
@@ -156,12 +228,30 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000001 /* InflowApp.swift in Sources */,
-				A10000000000000000000002 /* ContentView.swift in Sources */,
+				A10000000000000000000002 /* MarkdownEditorView.swift in Sources */,
 				A10000000000000000000003 /* InflowCoreBridge.swift in Sources */,
+				A10000000000000000000004 /* MarkdownDocument.swift in Sources */,
+				A10000000000000000000005 /* MarkdownCodec.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A60000000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000006 /* MarkdownCodecTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AB0000000000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A50000000000000000000001 /* Inflow */;
+			targetProxy = AB0000000000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		AA0000000000000000000001 /* Debug */ = {
@@ -207,20 +297,21 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = macos/Inflow/Resources/Inflow.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
+				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/core/include",
 				);
-				INFOPLIST_KEY_CFBundleDisplayName = Inflow;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_FILE = macos/Inflow/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -246,20 +337,21 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = macos/Inflow/Resources/Inflow.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
+				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/core/include",
 				);
-				INFOPLIST_KEY_CFBundleDisplayName = Inflow;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_FILE = macos/Inflow/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -281,6 +373,44 @@
 			};
 			name = Release;
 		};
+		AA0000000000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/core/include",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.inflow.desktop.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Inflow.app/Contents/MacOS/Inflow";
+			};
+			name = Debug;
+		};
+		AA0000000000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/core/include",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.inflow.desktop.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Inflow.app/Contents/MacOS/Inflow";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -298,6 +428,15 @@
 			buildConfigurations = (
 				AA0000000000000000000003 /* Debug */,
 				AA0000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A90000000000000000000003 /* Build configuration list for PBXNativeTarget "InflowTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000000005 /* Debug */,
+				AA0000000000000000000006 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
