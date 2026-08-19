@@ -9,6 +9,9 @@ license = "Proprietary"
 [lib]
 crate-type = ["rlib", "staticlib"]
 
+[dependencies]
+pulldown-cmark = { version = "=0.13.4", default-features = false, features = ["html"] }
+
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 

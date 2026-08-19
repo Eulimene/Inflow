@@ -53,6 +53,14 @@ InflowEncodeResult inflow_document_encode(
     uint8_t line_ending
 );
 
+/// Renders UTF-8 Markdown into an HTML fragment. Raw HTML is escaped. The
+/// returned bytes belong to Inflow and must be released with
+/// inflow_owned_bytes_free.
+InflowEncodeResult inflow_markdown_render_html(
+    const uint8_t *utf8,
+    uintptr_t length
+);
+
 /// Releases an unchanged pointer and length returned by Inflow.
 void inflow_owned_bytes_free(uint8_t *data, uintptr_t length);
 

@@ -59,7 +59,12 @@ enum MarkdownCodec {
             throw error(for: result.status)
         }
 
-        let decodedData = try takeOwnedBytes(result.utf8)
+        let decodedData: Data
+        do {
+            decodedData = try InflowCoreBridge.copyAndFree(result.utf8)
+        } catch {
+            throw MarkdownCodecError.coreFailure
+        }
         guard let text = String(data: decodedData, encoding: .utf8) else {
             throw MarkdownCodecError.coreFailure
         }
@@ -93,22 +98,11 @@ enum MarkdownCodec {
             throw error(for: result.status)
         }
 
-        return try takeOwnedBytes(result.bytes)
-    }
-
-    private static func takeOwnedBytes(_ bytes: InflowOwnedBytes) throws -> Data {
-        defer { inflow_owned_bytes_free(bytes.data, bytes.length) }
-
-        guard bytes.length > 0 else {
-            return Data()
-        }
-        guard let pointer = bytes.data else {
+        do {
+            return try InflowCoreBridge.copyAndFree(result.bytes)
+        } catch {
             throw MarkdownCodecError.coreFailure
         }
-        guard bytes.length <= UInt(Int.max) else {
-            throw MarkdownCodecError.coreFailure
-        }
-        return Data(bytes: pointer, count: Int(bytes.length))
     }
 
     private static func error(for status: InflowStatus) -> MarkdownCodecError {

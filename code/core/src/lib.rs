@@ -4,6 +4,7 @@
 
 mod document;
 mod ffi;
+mod render;
 
 /// Current version of the C ABI exposed to platform clients.
 pub const ABI_VERSION: u32 = 1;

@@ -4,6 +4,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 
 use crate::document::{self, DecodeError, LineEnding};
+use crate::render;
 
 pub const STATUS_OK: i32 = 0;
 pub const STATUS_INVALID_ARGUMENT: i32 = 1;
@@ -147,6 +148,33 @@ pub unsafe extern "C" fn inflow_document_encode(
     .unwrap_or_else(|_| InflowEncodeResult::error(STATUS_PANIC))
 }
 
+/// Renders UTF-8 Markdown into an HTML fragment with raw HTML escaped.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_markdown_render_html(
+    utf8: *const u8,
+    length: usize,
+) -> InflowEncodeResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowEncodeResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Ok(markdown) = std::str::from_utf8(input) else {
+            return InflowEncodeResult::error(STATUS_INVALID_UTF8);
+        };
+
+        InflowEncodeResult {
+            status: STATUS_OK,
+            bytes: InflowOwnedBytes::from_vec(render::html_fragment(markdown).into_bytes()),
+        }
+    }))
+    .unwrap_or_else(|_| InflowEncodeResult::error(STATUS_PANIC))
+}
+
 /// Releases bytes returned by this library.
 ///
 /// # Safety
@@ -216,5 +244,21 @@ mod tests {
         let result = unsafe { inflow_document_decode(ptr::null(), 1) };
         assert_eq!(result.status, STATUS_INVALID_ARGUMENT);
         assert!(result.utf8.data.is_null());
+    }
+
+    #[test]
+    fn ffi_renders_utf8_markdown() {
+        let markdown = "# 标题\n\n**Body**";
+        let result = unsafe { inflow_markdown_render_html(markdown.as_ptr(), markdown.len()) };
+
+        assert_eq!(result.status, STATUS_OK);
+        let html =
+            unsafe { std::slice::from_raw_parts(result.bytes.data, result.bytes.length).to_vec() };
+        unsafe { inflow_owned_bytes_free(result.bytes.data, result.bytes.length) };
+
+        assert_eq!(
+            String::from_utf8(html).expect("renderer returns UTF-8"),
+            "<h1>标题</h1>\n<p><strong>Body</strong></p>\n"
+        );
     }
 }
