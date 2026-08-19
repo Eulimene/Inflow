@@ -32,13 +32,15 @@ struct InflowApp: App {
         DocumentGroup(newDocument: MarkdownDocument()) { configuration in
             MarkdownEditorView(
                 document: configuration.$document,
-                fileURL: configuration.fileURL
+                fileURL: configuration.fileURL,
+                isEditable: configuration.isEditable
             )
                 .frame(minWidth: 720, minHeight: 480)
         }
         .defaultSize(width: 1_080, height: 720)
         .commands {
             OutlineCommands()
+            DocumentFindCommands()
         }
     }
 }

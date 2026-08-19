@@ -6,6 +6,7 @@ mod analysis;
 mod document;
 mod ffi;
 mod render;
+mod search;
 
 /// Current version of the C ABI exposed to platform clients.
 pub const ABI_VERSION: u32 = 1;

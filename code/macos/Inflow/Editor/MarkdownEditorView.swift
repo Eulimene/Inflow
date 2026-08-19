@@ -22,6 +22,10 @@ enum EditorViewMode: String, CaseIterable, Identifiable {
         case .preview: "doc.richtext"
         }
     }
+
+    var sourceVisible: EditorViewMode {
+        self == .preview ? .split : self
+    }
 }
 
 enum EditorStatisticMode: String, CaseIterable, Identifiable {
@@ -45,6 +49,7 @@ enum EditorStatisticMode: String, CaseIterable, Identifiable {
 struct MarkdownEditorView: View {
     @Binding var document: MarkdownDocument
     let fileURL: URL?
+    let isEditable: Bool
 
     @SceneStorage("editorViewMode") private var storedViewMode = EditorViewMode.split.rawValue
     @SceneStorage("isDocumentOutlineVisible") private var isOutlineVisible = true
@@ -60,6 +65,13 @@ struct MarkdownEditorView: View {
     @State private var sourceSelectionRequest: SourceSelectionRequest?
     @State private var sourceSelectionGeneration = 0
     @State private var outlineFocusGeneration = 0
+    @StateObject private var findSession = DocumentFindSession()
+    @State private var replaceAllPlan: ReplaceAllPlan?
+    @State private var findSearchGeneration = 0
+    @State private var findSearchTask: Task<Void, Never>?
+    @State private var findSearchWorker = DocumentSearchWorker()
+    @State private var pendingReplacementRange: Range<Int>?
+    @State private var pendingFindNavigation: [Int] = []
 
     private var viewMode: EditorViewMode {
         get { EditorViewMode(rawValue: storedViewMode) ?? .split }
@@ -73,6 +85,19 @@ struct MarkdownEditorView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if findSession.isPresented {
+                DocumentFindBar(
+                    session: findSession,
+                    isEditable: isEditable,
+                    onPrevious: findPrevious,
+                    onNext: findNext,
+                    onReplaceCurrent: replaceCurrent,
+                    onPreviewReplaceAll: previewReplaceAll,
+                    onClose: closeFind
+                )
+                Divider()
+            }
+
             content
 
             Divider()
@@ -80,6 +105,7 @@ struct MarkdownEditorView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .focusedValue(\.outlineVisibility, $isOutlineVisible)
+        .focusedSceneValue(\.documentFindActions, findCommandActions)
         .toolbar {
             ToolbarItem {
                 Button {
@@ -114,12 +140,53 @@ struct MarkdownEditorView: View {
         }
         .onAppear {
             scheduleDerivedContent(for: document.text, delayNanoseconds: 0)
+            if !findSession.query.isEmpty {
+                scheduleFindSearch(
+                    source: document.text,
+                    position: .preserve,
+                    revealAfterSearch: false,
+                    delayNanoseconds: 0
+                )
+            }
         }
-        .onChange(of: document.text) { _, markdown in
+        .onChange(of: Data(document.text.utf8)) { _, _ in
+            let markdown = document.text
             selectedHeadingID = nil
             sourceSelectionRequest = nil
             analysisState = .updating(previous: analysisState.displayedAnalysis)
             scheduleDerivedContent(for: markdown, delayNanoseconds: 120_000_000)
+            if findSession.isPresented || !findSession.query.isEmpty {
+                let replacementRange = pendingReplacementRange
+                pendingReplacementRange = nil
+                scheduleFindSearch(
+                    source: markdown,
+                    position: replacementRange.map(SearchRefreshPosition.afterReplacement)
+                        ?? .preserve,
+                    revealAfterSearch: replacementRange != nil,
+                    delayNanoseconds: replacementRange == nil ? 80_000_000 : 0
+                )
+            }
+        }
+        .onChange(of: Data(findSession.query.utf8)) { _, _ in
+            findSession.clearNotice()
+            scheduleFindSearch(
+                source: document.text,
+                position: .first,
+                revealAfterSearch: true,
+                delayNanoseconds: 60_000_000
+            )
+        }
+        .onChange(of: findSession.isCaseSensitive) { _, _ in
+            findSession.clearNotice()
+            scheduleFindSearch(
+                source: document.text,
+                position: .first,
+                revealAfterSearch: true,
+                delayNanoseconds: 60_000_000
+            )
+        }
+        .onChange(of: Data(findSession.replacement.utf8)) { _, _ in
+            findSession.clearNotice()
         }
         .onChange(of: isOutlineVisible) { _, isVisible in
             if isVisible {
@@ -128,6 +195,16 @@ struct MarkdownEditorView: View {
         }
         .onDisappear {
             derivedContentTask?.cancel()
+            findSearchTask?.cancel()
+            pendingFindNavigation.removeAll()
+            findSession.cancelSearch()
+        }
+        .sheet(item: $replaceAllPlan) { plan in
+            ReplaceAllPreviewView(
+                plan: plan,
+                onCancel: { replaceAllPlan = nil },
+                onApply: { applyReplaceAll(plan) }
+            )
         }
     }
 
@@ -172,7 +249,8 @@ struct MarkdownEditorView: View {
         MarkdownSourceEditor(
             text: $document.text,
             selectionRequest: sourceSelectionRequest,
-            session: sourceEditorSession
+            session: sourceEditorSession,
+            isEditable: isEditable
         )
     }
 
@@ -214,14 +292,266 @@ struct MarkdownEditorView: View {
         }
 
         selectedHeadingID = heading.id
-        if viewMode == .preview {
-            viewMode = .split
-        }
+        viewMode = viewMode.sourceVisible
         sourceSelectionGeneration &+= 1
         sourceSelectionRequest = SourceSelectionRequest(
             generation: sourceSelectionGeneration,
             utf8Range: heading.sourceUTF8Range
         )
+    }
+
+    private var findCommandActions: DocumentFindCommandActions {
+        DocumentFindCommandActions(
+            hasQuery: !findSession.query.isEmpty,
+            canReplace: isEditable,
+            showFind: { presentFind(replacing: false) },
+            showReplace: { presentFind(replacing: true) },
+            next: findNext,
+            previous: findPrevious
+        )
+    }
+
+    private func presentFind(replacing: Bool) {
+        guard !replacing || isEditable else { return }
+        viewMode = viewMode.sourceVisible
+        findSession.present(replacing: replacing)
+        if !findSession.resultsAreCurrent(for: document.text) {
+            scheduleFindSearch(
+                source: document.text,
+                position: .preserve,
+                revealAfterSearch: false,
+                delayNanoseconds: 0
+            )
+        }
+    }
+
+    private func closeFind() {
+        findSession.dismiss()
+        Task { @MainActor in
+            await Task.yield()
+            _ = sourceEditorSession.focusEditor()
+        }
+    }
+
+    private func findNext() {
+        navigateFind(by: 1)
+    }
+
+    private func findPrevious() {
+        navigateFind(by: -1)
+    }
+
+    private func navigateFind(by offset: Int) {
+        viewMode = viewMode.sourceVisible
+        if findSession.isSearching {
+            pendingFindNavigation.append(offset)
+            return
+        }
+        guard findSession.resultsAreCurrent(for: document.text) else {
+            pendingFindNavigation.append(offset)
+            scheduleFindSearch(
+                source: document.text,
+                position: .preserve,
+                revealAfterSearch: false,
+                delayNanoseconds: 0
+            )
+            return
+        }
+        reveal(offset > 0 ? findSession.moveNext() : findSession.movePrevious())
+    }
+
+    private func revealCurrentMatch() {
+        reveal(findSession.currentMatch)
+    }
+
+    private func reveal(_ match: DocumentSearchMatch?) {
+        guard let match else { return }
+        viewMode = viewMode.sourceVisible
+        sourceSelectionGeneration &+= 1
+        sourceSelectionRequest = SourceSelectionRequest(
+            generation: sourceSelectionGeneration,
+            utf8Range: match.utf8Range,
+            style: .match,
+            focusesEditor: !findSession.isPresented
+        )
+    }
+
+    private func replaceCurrent() {
+        guard isEditable,
+              findSession.canReplaceCurrent,
+              let match = findSession.currentMatch
+        else {
+            return
+        }
+        guard UTF8Text.isExactlyEqual(findSession.sourceSnapshot, document.text) else {
+            scheduleFindSearch(
+                source: document.text,
+                position: .preserve,
+                revealAfterSearch: false,
+                delayNanoseconds: 0
+            )
+            findSession.showNotice("正文已变化，查找结果已刷新；请重新确认替换。")
+            return
+        }
+
+        let (replacementEnd, overflow) = match.utf8Range.lowerBound.addingReportingOverflow(
+            findSession.replacement.utf8.count
+        )
+        guard !overflow else {
+            findSession.showNotice("替换内容过大，未执行替换。")
+            return
+        }
+        pendingReplacementRange = match.utf8Range.lowerBound..<replacementEnd
+        let replaced = sourceEditorSession.replaceCurrent(
+            utf8Range: match.utf8Range,
+            with: findSession.replacement,
+            expectedText: document.text
+        )
+        guard replaced else {
+            pendingReplacementRange = nil
+            scheduleFindSearch(
+                source: document.text,
+                position: .preserve,
+                revealAfterSearch: false,
+                delayNanoseconds: 0
+            )
+            findSession.showNotice("当前匹配已变化，未执行替换。")
+            return
+        }
+
+        focusSourceForDocumentUndo()
+        findSession.showNotice("已替换 1 处。")
+    }
+
+    private func previewReplaceAll() {
+        guard isEditable else { return }
+        do {
+            replaceAllPlan = try findSession.makeReplaceAllPlan(source: document.text)
+            if replaceAllPlan == nil {
+                findSession.showNotice("当前没有可替换的匹配。")
+            }
+        } catch {
+            findSession.showNotice(
+                (error as? LocalizedError)?.errorDescription
+                    ?? "暂时无法准备全部替换。"
+            )
+        }
+    }
+
+    private func applyReplaceAll(_ plan: ReplaceAllPlan) {
+        guard isEditable,
+              UTF8Text.isExactlyEqual(plan.source, document.text),
+              UTF8Text.isExactlyEqual(plan.query, findSession.query),
+              UTF8Text.isExactlyEqual(plan.replacement, findSession.replacement),
+              plan.caseSensitive == findSession.isCaseSensitive
+        else {
+            replaceAllPlan = nil
+            scheduleFindSearch(
+                source: document.text,
+                position: .preserve,
+                revealAfterSearch: false,
+                delayNanoseconds: 0
+            )
+            findSession.showNotice("正文或替换条件已变化，旧计划未执行；结果已刷新。")
+            return
+        }
+
+        let replaced = sourceEditorSession.replaceAll(
+            utf8Ranges: plan.matches.map(\.utf8Range),
+            with: plan.replacement,
+            expectedText: plan.source
+        )
+        replaceAllPlan = nil
+        guard replaced else {
+            scheduleFindSearch(
+                source: document.text,
+                position: .preserve,
+                revealAfterSearch: false,
+                delayNanoseconds: 0
+            )
+            findSession.showNotice("正文已变化，未执行全部替换。")
+            return
+        }
+
+        focusSourceForDocumentUndo()
+        findSession.showNotice("已替换 \(plan.matches.count) 处；可用“撤销”一次恢复。")
+    }
+
+    private func focusSourceForDocumentUndo() {
+        Task { @MainActor in
+            await Task.yield()
+            _ = sourceEditorSession.focusEditor()
+        }
+    }
+
+    private func scheduleFindSearch(
+        source: String,
+        position: SearchRefreshPosition,
+        revealAfterSearch: Bool,
+        delayNanoseconds: UInt64
+    ) {
+        findSearchTask?.cancel()
+        findSearchGeneration &+= 1
+        let generation = findSearchGeneration
+        let query = findSession.query
+        let caseSensitive = findSession.isCaseSensitive
+        let worker = findSearchWorker
+        findSession.beginSearch()
+
+        findSearchTask = Task { @MainActor in
+            if delayNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: delayNanoseconds)
+            }
+            guard !Task.isCancelled else { return }
+
+            guard let outcome = await worker.search(
+                source: source,
+                query: query,
+                caseSensitive: caseSensitive
+            ) else {
+                return
+            }
+            guard !Task.isCancelled,
+                  generation == findSearchGeneration,
+                  UTF8Text.isExactlyEqual(document.text, source),
+                  UTF8Text.isExactlyEqual(findSession.query, query),
+                  findSession.isCaseSensitive == caseSensitive
+            else {
+                return
+            }
+
+            switch outcome {
+            case let .success(result):
+                findSession.applySearch(
+                    result,
+                    source: source,
+                    query: query,
+                    caseSensitive: caseSensitive,
+                    position: position
+                )
+                let pendingNavigation = pendingFindNavigation
+                pendingFindNavigation.removeAll()
+                if !pendingNavigation.isEmpty {
+                    var match = findSession.currentMatch
+                    for offset in pendingNavigation {
+                        match = offset > 0
+                            ? findSession.moveNext()
+                            : findSession.movePrevious()
+                    }
+                    reveal(match)
+                } else if revealAfterSearch {
+                    revealCurrentMatch()
+                }
+            case let .failure(message):
+                pendingFindNavigation.removeAll()
+                findSession.failSearch(
+                    message: message,
+                    source: source,
+                    query: query,
+                    caseSensitive: caseSensitive
+                )
+            }
+        }
     }
 
     private func scheduleDerivedContent(for markdown: String, delayNanoseconds: UInt64) {

@@ -4,6 +4,25 @@ import SwiftUI
 struct SourceSelectionRequest: Equatable {
     let generation: Int
     let utf8Range: Range<Int>
+    let style: SourceSelectionStyle
+    let focusesEditor: Bool
+
+    init(
+        generation: Int,
+        utf8Range: Range<Int>,
+        style: SourceSelectionStyle = .caret,
+        focusesEditor: Bool = true
+    ) {
+        self.generation = generation
+        self.utf8Range = utf8Range
+        self.style = style
+        self.focusesEditor = focusesEditor
+    }
+}
+
+enum SourceSelectionStyle: Equatable {
+    case caret
+    case match
 }
 
 struct SourceNavigationTarget: Equatable {
@@ -86,7 +105,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.isContinuousSpellCheckingEnabled = true
-        textView.usesFindBar = true
+        textView.usesFindBar = false
         textView.setAccessibilityLabel("Markdown 源码编辑器")
 
         scrollView.documentView = textView
@@ -114,6 +133,88 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private func undoManagerChangedText(_ notification: Notification) {
         updateBoundText?(textView.string)
     }
+
+    @discardableResult
+    func focusEditor() -> Bool {
+        guard let window = textView.window else { return false }
+        return window.makeFirstResponder(textView)
+    }
+
+    @discardableResult
+    func replaceCurrent(
+        utf8Range: Range<Int>,
+        with replacement: String,
+        expectedText: String
+    ) -> Bool {
+        guard textView.isEditable,
+              UTF8Text.isExactlyEqual(textView.string, expectedText),
+              let target = MarkdownSourceRange.navigationTarget(
+                  forUTF8Range: utf8Range,
+                  in: expectedText
+              )
+        else {
+            return false
+        }
+
+        textView.insertText(replacement, replacementRange: target.revealRange)
+        textView.undoManager?.setActionName("替换")
+        return true
+    }
+
+    @discardableResult
+    func replaceAll(
+        utf8Ranges: [Range<Int>],
+        with replacement: String,
+        expectedText: String
+    ) -> Bool {
+        guard textView.isEditable,
+              UTF8Text.isExactlyEqual(textView.string, expectedText),
+              !utf8Ranges.isEmpty
+        else {
+            return false
+        }
+
+        let sourceBytes = Array(expectedText.utf8)
+        let replacementBytes = Array(replacement.utf8)
+        var previousEnd = 0
+        var outputSize = sourceBytes.count
+        for utf8Range in utf8Ranges {
+            guard utf8Range.lowerBound >= previousEnd,
+                  let target = MarkdownSourceRange.navigationTarget(
+                      forUTF8Range: utf8Range,
+                      in: expectedText
+                  ),
+                  target.revealRange.length > 0
+            else {
+                return false
+            }
+
+            let removed = utf8Range.count
+            let (afterRemoval, removalOverflow) = outputSize.subtractingReportingOverflow(removed)
+            let (afterInsertion, insertionOverflow) = afterRemoval.addingReportingOverflow(
+                replacementBytes.count
+            )
+            guard !removalOverflow, !insertionOverflow else { return false }
+            outputSize = afterInsertion
+            previousEnd = utf8Range.upperBound
+        }
+
+        var output: [UInt8] = []
+        output.reserveCapacity(outputSize)
+        var cursor = 0
+        for utf8Range in utf8Ranges {
+            output.append(contentsOf: sourceBytes[cursor..<utf8Range.lowerBound])
+            output.append(contentsOf: replacementBytes)
+            cursor = utf8Range.upperBound
+        }
+        output.append(contentsOf: sourceBytes[cursor...])
+
+        let finalText = String(decoding: output, as: UTF8.self)
+        let fullRange = NSRange(location: 0, length: (expectedText as NSString).length)
+        textView.insertText(finalText, replacementRange: fullRange)
+        textView.undoManager?.setActionName("全部替换")
+        return true
+    }
 }
 
 @MainActor
@@ -137,12 +238,47 @@ final class WindowAwareTextView: NSTextView {
         super.didChangeText()
         textDidChangeHandler?(string)
     }
+
+    /// AppKit's standard Edit menu dispatches these actions through the first
+    /// responder. NSTextView owns an undo manager but does not itself expose
+    /// the menu selectors, so bridge them explicitly for this persistent view.
+    @objc func undo(_ sender: Any?) {
+        persistentUndoManager.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        persistentUndoManager.redo()
+    }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        switch item.action {
+        case #selector(undo(_:)):
+            persistentUndoManager.canUndo
+        case #selector(redo(_:)):
+            persistentUndoManager.canRedo
+        default:
+            super.validateUserInterfaceItem(item)
+        }
+    }
 }
 
 struct MarkdownSourceEditor: NSViewRepresentable {
     @Binding var text: String
     let selectionRequest: SourceSelectionRequest?
     let session: MarkdownSourceEditorSession
+    let isEditable: Bool
+
+    init(
+        text: Binding<String>,
+        selectionRequest: SourceSelectionRequest?,
+        session: MarkdownSourceEditorSession,
+        isEditable: Bool = true
+    ) {
+        _text = text
+        self.selectionRequest = selectionRequest
+        self.session = session
+        self.isEditable = isEditable
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -178,17 +314,19 @@ struct MarkdownSourceEditor: NSViewRepresentable {
             self.parent = parent
             let textBinding = parent.$text
             parent.session.updateBoundText = { updatedText in
-                if textBinding.wrappedValue != updatedText {
+                if !UTF8Text.isExactlyEqual(textBinding.wrappedValue, updatedText) {
                     textBinding.wrappedValue = updatedText
                 }
             }
             textView.delegate = self
+            textView.isEditable = parent.isEditable
+            textView.isSelectable = true
             textView.didAttachToWindow = { [weak self, weak textView] in
                 guard let self, let textView else { return }
                 self.applyPendingSelection(to: textView)
             }
 
-            if textView.string != parent.text {
+            if !UTF8Text.isExactlyEqual(textView.string, parent.text) {
                 let selection = textView.selectedRange()
                 textView.string = parent.text
                 let utf16Length = (parent.text as NSString).length
@@ -215,10 +353,12 @@ struct MarkdownSourceEditor: NSViewRepresentable {
             }
 
             parent.session.pendingSelectionRequest = request
-            textView.setSelectedRange(target.caretRange)
+            textView.setSelectedRange(
+                request.style == .caret ? target.caretRange : target.revealRange
+            )
             textView.scrollRangeToVisible(target.revealRange)
             textView.showFindIndicator(for: target.revealRange)
-            completeFocus(for: request, textView: textView)
+            completeApplication(for: request, textView: textView)
         }
 
         private func applyPendingSelection(to textView: NSTextView) {
@@ -226,14 +366,13 @@ struct MarkdownSourceEditor: NSViewRepresentable {
             apply(request, to: textView)
         }
 
-        private func completeFocus(
+        private func completeApplication(
             for request: SourceSelectionRequest,
             textView: NSTextView
         ) {
-            guard let window = textView.window,
-                  window.makeFirstResponder(textView)
-            else {
-                return
+            guard let window = textView.window else { return }
+            if request.focusesEditor {
+                guard window.makeFirstResponder(textView) else { return }
             }
 
             parent.session.appliedSelectionGeneration = request.generation

@@ -21,6 +21,10 @@
 		A1000000000000000000000C /* MarkdownSourceEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* MarkdownSourceEditor.swift */; };
 		A1000000000000000000000D /* DocumentOutlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* DocumentOutlineView.swift */; };
 		A1000000000000000000000E /* MarkdownAnalyzerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* MarkdownAnalyzerTests.swift */; };
+		A1000000000000000000000F /* MarkdownSearcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* MarkdownSearcher.swift */; };
+		A10000000000000000000010 /* DocumentFindBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000015 /* DocumentFindBar.swift */; };
+		A10000000000000000000011 /* DocumentFindCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000016 /* DocumentFindCommands.swift */; };
+		A10000000000000000000012 /* MarkdownSearcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000017 /* MarkdownSearcherTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -53,6 +57,10 @@
 		A20000000000000000000011 /* MarkdownSourceEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownSourceEditor.swift; sourceTree = "<group>"; };
 		A20000000000000000000012 /* DocumentOutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Outline/DocumentOutlineView.swift; sourceTree = "<group>"; };
 		A20000000000000000000013 /* MarkdownAnalyzerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownAnalyzerTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000014 /* MarkdownSearcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Search/MarkdownSearcher.swift; sourceTree = "<group>"; };
+		A20000000000000000000015 /* DocumentFindBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Search/DocumentFindBar.swift; sourceTree = "<group>"; };
+		A20000000000000000000016 /* DocumentFindCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Search/DocumentFindCommands.swift; sourceTree = "<group>"; };
+		A20000000000000000000017 /* MarkdownSearcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownSearcherTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -95,6 +103,9 @@
 				A2000000000000000000000E /* MarkdownPreviewView.swift */,
 				A20000000000000000000010 /* MarkdownAnalyzer.swift */,
 				A20000000000000000000012 /* DocumentOutlineView.swift */,
+				A20000000000000000000014 /* MarkdownSearcher.swift */,
+				A20000000000000000000015 /* DocumentFindBar.swift */,
+				A20000000000000000000016 /* DocumentFindCommands.swift */,
 				A20000000000000000000003 /* InflowCoreBridge.swift */,
 				A20000000000000000000004 /* Inflow-Bridging-Header.h */,
 				A20000000000000000000008 /* Info.plist */,
@@ -118,6 +129,7 @@
 				A2000000000000000000000A /* MarkdownCodecTests.swift */,
 				A2000000000000000000000C /* MarkdownRendererTests.swift */,
 				A20000000000000000000013 /* MarkdownAnalyzerTests.swift */,
+				A20000000000000000000017 /* MarkdownSearcherTests.swift */,
 			);
 			path = macos/InflowTests;
 			sourceTree = "<group>";
@@ -234,6 +246,7 @@
 				"$(PROJECT_DIR)/core/src/ffi.rs",
 				"$(PROJECT_DIR)/core/src/lib.rs",
 				"$(PROJECT_DIR)/core/src/render.rs",
+				"$(PROJECT_DIR)/core/src/search.rs",
 				"$(PROJECT_DIR)/rust-toolchain.toml",
 				"$(PROJECT_DIR)/scripts/build-rust.sh",
 			);
@@ -264,6 +277,9 @@
 				A1000000000000000000000B /* MarkdownAnalyzer.swift in Sources */,
 				A1000000000000000000000C /* MarkdownSourceEditor.swift in Sources */,
 				A1000000000000000000000D /* DocumentOutlineView.swift in Sources */,
+				A1000000000000000000000F /* MarkdownSearcher.swift in Sources */,
+				A10000000000000000000010 /* DocumentFindBar.swift in Sources */,
+				A10000000000000000000011 /* DocumentFindCommands.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -274,6 +290,7 @@
 				A10000000000000000000006 /* MarkdownCodecTests.swift in Sources */,
 				A10000000000000000000007 /* MarkdownRendererTests.swift in Sources */,
 				A1000000000000000000000E /* MarkdownAnalyzerTests.swift in Sources */,
+				A10000000000000000000012 /* MarkdownSearcherTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

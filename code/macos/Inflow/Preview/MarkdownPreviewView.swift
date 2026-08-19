@@ -21,8 +21,10 @@ struct MarkdownPreviewView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        guard context.coordinator.lastHTML != html
-                || context.coordinator.lastBaseURL != baseURL else {
+        let htmlChanged = context.coordinator.lastHTML.map {
+            !UTF8Text.isExactlyEqual($0, html)
+        } ?? true
+        guard htmlChanged || context.coordinator.lastBaseURL != baseURL else {
             return
         }
 

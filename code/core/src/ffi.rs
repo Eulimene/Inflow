@@ -6,6 +6,7 @@ use std::ptr;
 use crate::analysis;
 use crate::document::{self, DecodeError, LineEnding};
 use crate::render;
+use crate::search;
 
 pub const STATUS_OK: i32 = 0;
 pub const STATUS_INVALID_ARGUMENT: i32 = 1;
@@ -79,6 +80,39 @@ impl InflowOwnedHeadings {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+pub struct InflowSearchMatch {
+    pub source_start: usize,
+    pub source_end: usize,
+}
+
+#[repr(C)]
+pub struct InflowOwnedSearchMatches {
+    pub data: *mut InflowSearchMatch,
+    pub length: usize,
+}
+
+impl InflowOwnedSearchMatches {
+    const fn empty() -> Self {
+        Self {
+            data: ptr::null_mut(),
+            length: 0,
+        }
+    }
+
+    fn from_vec(matches: Vec<InflowSearchMatch>) -> Self {
+        if matches.is_empty() {
+            return Self::empty();
+        }
+
+        let length = matches.len();
+        let boxed = matches.into_boxed_slice();
+        let data = Box::into_raw(boxed).cast::<InflowSearchMatch>();
+        Self { data, length }
+    }
+}
+
+#[repr(C)]
 pub struct InflowDecodeResult {
     pub status: i32,
     pub utf8: InflowOwnedBytes,
@@ -131,6 +165,21 @@ impl InflowAnalysisResult {
             word_count: 0,
             character_count_with_spaces: 0,
             character_count_without_spaces: 0,
+        }
+    }
+}
+
+#[repr(C)]
+pub struct InflowSearchResult {
+    pub status: i32,
+    pub matches: InflowOwnedSearchMatches,
+}
+
+impl InflowSearchResult {
+    const fn error(status: i32) -> Self {
+        Self {
+            status,
+            matches: InflowOwnedSearchMatches::empty(),
         }
     }
 }
@@ -286,6 +335,55 @@ pub unsafe extern "C" fn inflow_document_analyze(
     .unwrap_or_else(|_| InflowAnalysisResult::error(STATUS_PANIC))
 }
 
+/// Finds non-overlapping literal matches in UTF-8 Markdown source.
+///
+/// # Safety
+///
+/// When their lengths are non-zero, `utf8` and `query_utf8` must point to the
+/// corresponding number of readable bytes for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_document_search(
+    utf8: *const u8,
+    length: usize,
+    query_utf8: *const u8,
+    query_length: usize,
+    case_sensitive: u8,
+) -> InflowSearchResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowSearchResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Some(query_input) = (unsafe { borrowed_bytes(query_utf8, query_length) }) else {
+            return InflowSearchResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Ok(markdown) = std::str::from_utf8(input) else {
+            return InflowSearchResult::error(STATUS_INVALID_UTF8);
+        };
+        let Ok(query) = std::str::from_utf8(query_input) else {
+            return InflowSearchResult::error(STATUS_INVALID_UTF8);
+        };
+        let case_sensitive = match case_sensitive {
+            0 => false,
+            1 => true,
+            _ => return InflowSearchResult::error(STATUS_INVALID_ARGUMENT),
+        };
+
+        let matches = search::find_literal(markdown, query, case_sensitive)
+            .into_iter()
+            .map(|found| InflowSearchMatch {
+                source_start: found.source_range.start,
+                source_end: found.source_range.end,
+            })
+            .collect();
+
+        InflowSearchResult {
+            status: STATUS_OK,
+            matches: InflowOwnedSearchMatches::from_vec(matches),
+        }
+    }))
+    .unwrap_or_else(|_| InflowSearchResult::error(STATUS_PANIC))
+}
+
 /// Releases bytes returned by this library.
 ///
 /// # Safety
@@ -310,6 +408,25 @@ pub unsafe extern "C" fn inflow_owned_bytes_free(data: *mut u8, length: usize) {
 /// must not have been released previously. A null pointer is accepted.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn inflow_owned_headings_free(data: *mut InflowHeading, length: usize) {
+    if data.is_null() {
+        return;
+    }
+
+    let slice = ptr::slice_from_raw_parts_mut(data, length);
+    drop(unsafe { Box::from_raw(slice) });
+}
+
+/// Releases search matches returned by this library.
+///
+/// # Safety
+///
+/// `data` and `length` must be an unchanged pair returned by this library and
+/// must not have been released previously. A null pointer is accepted.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_owned_search_matches_free(
+    data: *mut InflowSearchMatch,
+    length: usize,
+) {
     if data.is_null() {
         return;
     }
@@ -449,5 +566,69 @@ mod tests {
         assert_eq!(std::mem::align_of::<InflowHeading>(), 8);
         assert_eq!(std::mem::size_of::<InflowOwnedHeadings>(), 16);
         assert_eq!(std::mem::size_of::<InflowAnalysisResult>(), 64);
+        assert_eq!(std::mem::size_of::<InflowSearchMatch>(), 16);
+        assert_eq!(std::mem::align_of::<InflowSearchMatch>(), 8);
+        assert_eq!(std::mem::size_of::<InflowOwnedSearchMatches>(), 16);
+        assert_eq!(std::mem::size_of::<InflowSearchResult>(), 24);
+    }
+
+    #[test]
+    fn ffi_searches_unicode_with_exact_source_ranges() {
+        let markdown = "标题 Alpha\n标题 alpha\nStraße";
+        let query = "alpha";
+        let result = unsafe {
+            inflow_document_search(
+                markdown.as_ptr(),
+                markdown.len(),
+                query.as_ptr(),
+                query.len(),
+                0,
+            )
+        };
+
+        assert_eq!(result.status, STATUS_OK);
+        let matches =
+            unsafe { std::slice::from_raw_parts(result.matches.data, result.matches.length) };
+        assert_eq!(matches.len(), 2);
+        assert_eq!(
+            &markdown[matches[0].source_start..matches[0].source_end],
+            "Alpha"
+        );
+        assert_eq!(
+            &markdown[matches[1].source_start..matches[1].source_end],
+            "alpha"
+        );
+        unsafe { inflow_owned_search_matches_free(result.matches.data, result.matches.length) };
+    }
+
+    #[test]
+    fn ffi_search_rejects_invalid_arguments_with_empty_results() {
+        let valid = "text";
+        let invalid_utf8 = [0xFF];
+        let cases = [
+            unsafe { inflow_document_search(ptr::null(), 1, valid.as_ptr(), valid.len(), 0) },
+            unsafe { inflow_document_search(valid.as_ptr(), valid.len(), ptr::null(), 1, 0) },
+            unsafe {
+                inflow_document_search(
+                    valid.as_ptr(),
+                    valid.len(),
+                    invalid_utf8.as_ptr(),
+                    invalid_utf8.len(),
+                    0,
+                )
+            },
+            unsafe {
+                inflow_document_search(valid.as_ptr(), valid.len(), valid.as_ptr(), valid.len(), 2)
+            },
+        ];
+
+        for result in cases {
+            assert!(matches!(
+                result.status,
+                STATUS_INVALID_ARGUMENT | STATUS_INVALID_UTF8
+            ));
+            assert!(result.matches.data.is_null());
+            assert_eq!(result.matches.length, 0);
+        }
     }
 }

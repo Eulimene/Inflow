@@ -52,6 +52,19 @@ typedef struct InflowOwnedHeadings {
     uintptr_t length;
 } InflowOwnedHeadings;
 
+typedef struct InflowSearchMatch {
+    /// End-exclusive UTF-8 byte offsets into the source passed to
+    /// inflow_document_search. Both ends align with extended grapheme
+    /// boundaries in that source.
+    uintptr_t source_start;
+    uintptr_t source_end;
+} InflowSearchMatch;
+
+typedef struct InflowOwnedSearchMatches {
+    InflowSearchMatch *data;
+    uintptr_t length;
+} InflowOwnedSearchMatches;
+
 typedef struct InflowAnalysisResult {
     InflowStatus status;
     InflowOwnedHeadings headings;
@@ -61,13 +74,22 @@ typedef struct InflowAnalysisResult {
     uint64_t character_count_without_spaces;
 } InflowAnalysisResult;
 
+typedef struct InflowSearchResult {
+    InflowStatus status;
+    InflowOwnedSearchMatches matches;
+} InflowSearchResult;
+
 #if UINTPTR_MAX == UINT64_MAX
 #if defined(__cplusplus)
 static_assert(sizeof(InflowHeading) == 40, "InflowHeading ABI layout changed");
 static_assert(sizeof(InflowAnalysisResult) == 64, "InflowAnalysisResult ABI layout changed");
+static_assert(sizeof(InflowSearchMatch) == 16, "InflowSearchMatch ABI layout changed");
+static_assert(sizeof(InflowSearchResult) == 24, "InflowSearchResult ABI layout changed");
 #else
 _Static_assert(sizeof(InflowHeading) == 40, "InflowHeading ABI layout changed");
 _Static_assert(sizeof(InflowAnalysisResult) == 64, "InflowAnalysisResult ABI layout changed");
+_Static_assert(sizeof(InflowSearchMatch) == 16, "InflowSearchMatch ABI layout changed");
+_Static_assert(sizeof(InflowSearchResult) == 24, "InflowSearchResult ABI layout changed");
 #endif
 #endif
 
@@ -107,11 +129,31 @@ InflowAnalysisResult inflow_document_analyze(
     uintptr_t length
 );
 
+/// Finds non-overlapping literal matches in UTF-8 Markdown source order.
+/// case_sensitive must be 0 or 1. Case-insensitive matching uses
+/// locale-independent Unicode folding. Only complete extended grapheme ranges
+/// are returned, so a match never splits a combining sequence or ZWJ emoji.
+/// The returned array belongs to Inflow and must be released with
+/// inflow_owned_search_matches_free.
+InflowSearchResult inflow_document_search(
+    const uint8_t *utf8,
+    uintptr_t length,
+    const uint8_t *query_utf8,
+    uintptr_t query_length,
+    uint8_t case_sensitive
+);
+
 /// Releases an unchanged pointer and length returned by Inflow.
 void inflow_owned_bytes_free(uint8_t *data, uintptr_t length);
 
 /// Releases an unchanged heading pointer and length returned by Inflow.
 void inflow_owned_headings_free(InflowHeading *data, uintptr_t length);
+
+/// Releases an unchanged search-match pointer and length returned by Inflow.
+void inflow_owned_search_matches_free(
+    InflowSearchMatch *data,
+    uintptr_t length
+);
 
 #ifdef __cplusplus
 }
