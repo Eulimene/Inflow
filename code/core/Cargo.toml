@@ -1,0 +1,17 @@
+[package]
+name = "inflow-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+description = "Cross-platform document core for Inflow"
+license = "Proprietary"
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"

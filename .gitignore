@@ -74,6 +74,7 @@ xcuserdata/
 
 # Xcode build products
 DerivedData/
+.derivedData*/
 build/
 *.hmap
 *.ipa
@@ -83,6 +84,9 @@ build/
 # Swift Package Manager
 .build/
 .swiftpm/
+
+# Rust
+target/
 
 # Dependency managers
 Pods/
