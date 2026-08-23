@@ -4,6 +4,7 @@
 
 mod analysis;
 mod document;
+mod export;
 mod ffi;
 mod render;
 mod search;

@@ -1,5 +1,37 @@
 import SwiftUI
 
+private enum HTMLExportNotice: Identifiable {
+    case success(URL)
+    case failure(String)
+
+    var id: String {
+        switch self {
+        case let .success(url): "success:\(url.path)"
+        case let .failure(message): "failure:\(message)"
+        }
+    }
+
+    var alert: Alert {
+        switch self {
+        case let .success(url):
+            Alert(
+                title: Text("HTML 导出完成"),
+                message: Text("已导出到：\n\(url.path)"),
+                primaryButton: .default(Text("在 Finder 中显示")) {
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                },
+                secondaryButton: .cancel(Text("完成"))
+            )
+        case let .failure(message):
+            Alert(
+                title: Text("HTML 导出未完成"),
+                message: Text(message),
+                dismissButton: .default(Text("好"))
+            )
+        }
+    }
+}
+
 enum EditorViewMode: String, CaseIterable, Identifiable {
     case source
     case split
@@ -76,6 +108,9 @@ struct MarkdownEditorView: View {
     @State private var findSearchWorker = DocumentSearchWorker()
     @State private var pendingReplacementRange: Range<Int>?
     @State private var pendingFindNavigation: [Int] = []
+    @State private var isExportingHTML = false
+    @State private var htmlExportWorker = HTMLExportWorker()
+    @State private var htmlExportNotice: HTMLExportNotice?
 
     private var viewMode: EditorViewMode {
         get { EditorViewMode.resolve(storedValue: storedViewMode) }
@@ -111,6 +146,7 @@ struct MarkdownEditorView: View {
         .focusedValue(\.outlineVisibility, $isOutlineVisible)
         .focusedSceneValue(\.editorViewModeActions, editorViewModeCommandActions)
         .focusedSceneValue(\.documentFindActions, findCommandActions)
+        .focusedSceneValue(\.htmlExportActions, htmlExportCommandActions)
         .toolbar {
             ToolbarItem {
                 Button {
@@ -210,6 +246,9 @@ struct MarkdownEditorView: View {
                 onCancel: { replaceAllPlan = nil },
                 onApply: { applyReplaceAll(plan) }
             )
+        }
+        .alert(item: $htmlExportNotice) { notice in
+            notice.alert
         }
     }
 
@@ -321,6 +360,71 @@ struct MarkdownEditorView: View {
             selectedMode: viewMode,
             select: { mode in selectViewMode(mode) }
         )
+    }
+
+    private var htmlExportCommandActions: HTMLExportCommandActions {
+        HTMLExportCommandActions(
+            isExporting: isExportingHTML,
+            start: startHTMLExport
+        )
+    }
+
+    private func startHTMLExport() {
+        guard !isExportingHTML else { return }
+        let snapshot = HTMLExportSnapshot(markdown: document.text)
+        let basename = fileURL?.deletingPathExtension().lastPathComponent ?? "未命名文档"
+        let suggestedFilename = "\(basename).html"
+        let worker = htmlExportWorker
+        isExportingHTML = true
+
+        Task { @MainActor in
+            defer { isExportingHTML = false }
+
+            let generation = await worker.generate(snapshot)
+            let html: Data
+            switch generation {
+            case let .success(data):
+                html = data
+            case let .failure(error):
+                htmlExportNotice = .failure(error.localizedDescription)
+                return
+            }
+
+            guard let targetURL = await HTMLExportPanel.chooseDestination(
+                suggestedFilename: suggestedFilename
+            ) else {
+                return
+            }
+
+            let accessed = targetURL.startAccessingSecurityScopedResource()
+            defer {
+                if accessed {
+                    targetURL.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            let targetSnapshot: HTMLExportTargetSnapshot
+            do {
+                targetSnapshot = try HTMLExportTargetSnapshot.capture(targetURL)
+            } catch {
+                htmlExportNotice = .failure(
+                    (error as? LocalizedError)?.errorDescription
+                        ?? HTMLExportTargetError.cannotInspect.localizedDescription
+                )
+                return
+            }
+
+            switch await worker.write(
+                html,
+                to: targetURL,
+                expectedTarget: targetSnapshot
+            ) {
+            case .success:
+                htmlExportNotice = .success(targetURL)
+            case let .failure(error):
+                htmlExportNotice = .failure(error.localizedDescription)
+            }
+        }
     }
 
     private func selectViewMode(_ mode: EditorViewMode) {

@@ -5,6 +5,7 @@ use std::ptr;
 
 use crate::analysis;
 use crate::document::{self, DecodeError, LineEnding};
+use crate::export::{self, ExportError};
 use crate::render;
 use crate::search;
 
@@ -12,6 +13,8 @@ pub const STATUS_OK: i32 = 0;
 pub const STATUS_INVALID_ARGUMENT: i32 = 1;
 pub const STATUS_INVALID_UTF8: i32 = 2;
 pub const STATUS_MIXED_LINE_ENDINGS: i32 = 3;
+pub const STATUS_UNSUPPORTED_CONTENT: i32 = 4;
+pub const STATUS_OUTPUT_TOO_LARGE: i32 = 5;
 pub const STATUS_PANIC: i32 = 255;
 
 pub const LINE_ENDING_LF: u8 = 0;
@@ -175,6 +178,23 @@ pub struct InflowSearchResult {
     pub matches: InflowOwnedSearchMatches,
 }
 
+#[repr(C)]
+pub struct InflowHTMLExportResult {
+    pub status: i32,
+    pub html: InflowOwnedBytes,
+    pub blocking_issues: u64,
+}
+
+impl InflowHTMLExportResult {
+    const fn error(status: i32, blocking_issues: u64) -> Self {
+        Self {
+            status,
+            html: InflowOwnedBytes::empty(),
+            blocking_issues,
+        }
+    }
+}
+
 impl InflowSearchResult {
     const fn error(status: i32) -> Self {
         Self {
@@ -282,6 +302,42 @@ pub unsafe extern "C" fn inflow_markdown_render_html(
         }
     }))
     .unwrap_or_else(|_| InflowEncodeResult::error(STATUS_PANIC))
+}
+
+/// Exports an immutable UTF-8 Markdown snapshot as a self-contained HTML document.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_markdown_export_html(
+    utf8: *const u8,
+    length: usize,
+) -> InflowHTMLExportResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowHTMLExportResult::error(STATUS_INVALID_ARGUMENT, 0);
+        };
+        let Ok(markdown) = std::str::from_utf8(input) else {
+            return InflowHTMLExportResult::error(STATUS_INVALID_UTF8, 0);
+        };
+
+        match export::html_document(markdown) {
+            Ok(html) => InflowHTMLExportResult {
+                status: STATUS_OK,
+                html: InflowOwnedBytes::from_vec(html),
+                blocking_issues: 0,
+            },
+            Err(ExportError::UnsupportedContent(issues)) => {
+                InflowHTMLExportResult::error(STATUS_UNSUPPORTED_CONTENT, issues)
+            }
+            Err(ExportError::OutputTooLarge) => {
+                InflowHTMLExportResult::error(STATUS_OUTPUT_TOO_LARGE, 0)
+            }
+        }
+    }))
+    .unwrap_or_else(|_| InflowHTMLExportResult::error(STATUS_PANIC, 0))
 }
 
 /// Extracts heading source ranges and text statistics from UTF-8 Markdown.
@@ -570,6 +626,7 @@ mod tests {
         assert_eq!(std::mem::align_of::<InflowSearchMatch>(), 8);
         assert_eq!(std::mem::size_of::<InflowOwnedSearchMatches>(), 16);
         assert_eq!(std::mem::size_of::<InflowSearchResult>(), 24);
+        assert_eq!(std::mem::size_of::<InflowHTMLExportResult>(), 32);
     }
 
     #[test]
@@ -629,6 +686,49 @@ mod tests {
             ));
             assert!(result.matches.data.is_null());
             assert_eq!(result.matches.length, 0);
+        }
+    }
+
+    #[test]
+    fn ffi_exports_html_and_reports_blocking_issues() {
+        let markdown = "# Export\n";
+        let result = unsafe { inflow_markdown_export_html(markdown.as_ptr(), markdown.len()) };
+        assert_eq!(result.status, STATUS_OK);
+        assert_eq!(result.blocking_issues, 0);
+        let html = unsafe { std::slice::from_raw_parts(result.html.data, result.html.length) };
+        assert!(
+            std::str::from_utf8(html)
+                .unwrap()
+                .contains("<h1>Export</h1>")
+        );
+        unsafe { inflow_owned_bytes_free(result.html.data, result.html.length) };
+
+        let unsupported = "![image](photo.png) and $formula$";
+        let result =
+            unsafe { inflow_markdown_export_html(unsupported.as_ptr(), unsupported.len()) };
+        assert_eq!(result.status, STATUS_UNSUPPORTED_CONTENT);
+        assert_eq!(
+            result.blocking_issues,
+            export::ISSUE_IMAGE | export::ISSUE_FORMULA
+        );
+        assert!(result.html.data.is_null());
+        assert_eq!(result.html.length, 0);
+    }
+
+    #[test]
+    fn ffi_export_rejects_invalid_inputs_without_allocating() {
+        let invalid_utf8 = [0xFF];
+        for result in [
+            unsafe { inflow_markdown_export_html(ptr::null(), 1) },
+            unsafe { inflow_markdown_export_html(invalid_utf8.as_ptr(), invalid_utf8.len()) },
+        ] {
+            assert!(matches!(
+                result.status,
+                STATUS_INVALID_ARGUMENT | STATUS_INVALID_UTF8
+            ));
+            assert!(result.html.data.is_null());
+            assert_eq!(result.html.length, 0);
+            assert_eq!(result.blocking_issues, 0);
         }
     }
 }

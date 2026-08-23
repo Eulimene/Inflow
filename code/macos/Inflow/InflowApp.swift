@@ -42,6 +42,7 @@ struct InflowApp: App {
             EditorViewModeCommands()
             OutlineCommands()
             DocumentFindCommands()
+            HTMLExportCommands()
         }
     }
 }

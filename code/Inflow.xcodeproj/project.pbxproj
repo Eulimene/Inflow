@@ -27,6 +27,9 @@
 		A10000000000000000000012 /* MarkdownSearcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000017 /* MarkdownSearcherTests.swift */; };
 		A10000000000000000000013 /* EditorViewModeCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* EditorViewModeCommands.swift */; };
 		A10000000000000000000014 /* EditorViewModeCommandsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* EditorViewModeCommandsTests.swift */; };
+		A10000000000000000000015 /* HTMLExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001A /* HTMLExporter.swift */; };
+		A10000000000000000000016 /* HTMLExportCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001B /* HTMLExportCommands.swift */; };
+		A10000000000000000000017 /* HTMLExporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001C /* HTMLExporterTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -65,6 +68,9 @@
 		A20000000000000000000017 /* MarkdownSearcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownSearcherTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000018 /* EditorViewModeCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/EditorViewModeCommands.swift; sourceTree = "<group>"; };
 		A20000000000000000000019 /* EditorViewModeCommandsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorViewModeCommandsTests.swift; sourceTree = "<group>"; };
+		A2000000000000000000001A /* HTMLExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Export/HTMLExporter.swift; sourceTree = "<group>"; };
+		A2000000000000000000001B /* HTMLExportCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Export/HTMLExportCommands.swift; sourceTree = "<group>"; };
+		A2000000000000000000001C /* HTMLExporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTMLExporterTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -102,6 +108,8 @@
 				A20000000000000000000002 /* MarkdownEditorView.swift */,
 				A20000000000000000000011 /* MarkdownSourceEditor.swift */,
 				A20000000000000000000018 /* EditorViewModeCommands.swift */,
+				A2000000000000000000001A /* HTMLExporter.swift */,
+				A2000000000000000000001B /* HTMLExportCommands.swift */,
 				A20000000000000000000006 /* MarkdownDocument.swift */,
 				A20000000000000000000007 /* MarkdownCodec.swift */,
 				A2000000000000000000000D /* MarkdownRenderer.swift */,
@@ -136,6 +144,7 @@
 				A20000000000000000000013 /* MarkdownAnalyzerTests.swift */,
 				A20000000000000000000017 /* MarkdownSearcherTests.swift */,
 				A20000000000000000000019 /* EditorViewModeCommandsTests.swift */,
+				A2000000000000000000001C /* HTMLExporterTests.swift */,
 			);
 			path = macos/InflowTests;
 			sourceTree = "<group>";
@@ -249,6 +258,7 @@
 				"$(PROJECT_DIR)/core/Cargo.lock",
 				"$(PROJECT_DIR)/core/src/analysis.rs",
 				"$(PROJECT_DIR)/core/src/document.rs",
+				"$(PROJECT_DIR)/core/src/export.rs",
 				"$(PROJECT_DIR)/core/src/ffi.rs",
 				"$(PROJECT_DIR)/core/src/lib.rs",
 				"$(PROJECT_DIR)/core/src/render.rs",
@@ -287,6 +297,8 @@
 				A10000000000000000000010 /* DocumentFindBar.swift in Sources */,
 				A10000000000000000000011 /* DocumentFindCommands.swift in Sources */,
 				A10000000000000000000013 /* EditorViewModeCommands.swift in Sources */,
+				A10000000000000000000015 /* HTMLExporter.swift in Sources */,
+				A10000000000000000000016 /* HTMLExportCommands.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -299,6 +311,7 @@
 				A1000000000000000000000E /* MarkdownAnalyzerTests.swift in Sources */,
 				A10000000000000000000012 /* MarkdownSearcherTests.swift in Sources */,
 				A10000000000000000000014 /* EditorViewModeCommandsTests.swift in Sources */,
+				A10000000000000000000017 /* HTMLExporterTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

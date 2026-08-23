@@ -13,10 +13,19 @@ static const InflowStatus INFLOW_STATUS_OK = 0;
 static const InflowStatus INFLOW_STATUS_INVALID_ARGUMENT = 1;
 static const InflowStatus INFLOW_STATUS_INVALID_UTF8 = 2;
 static const InflowStatus INFLOW_STATUS_MIXED_LINE_ENDINGS = 3;
+static const InflowStatus INFLOW_STATUS_UNSUPPORTED_CONTENT = 4;
+static const InflowStatus INFLOW_STATUS_OUTPUT_TOO_LARGE = 5;
 static const InflowStatus INFLOW_STATUS_PANIC = 255;
 
 static const uint8_t INFLOW_LINE_ENDING_LF = 0;
 static const uint8_t INFLOW_LINE_ENDING_CRLF = 1;
+
+typedef uint64_t InflowHTMLExportIssues;
+static const InflowHTMLExportIssues INFLOW_HTML_EXPORT_ISSUE_IMAGE = UINT64_C(1) << 0;
+static const InflowHTMLExportIssues INFLOW_HTML_EXPORT_ISSUE_FORMULA = UINT64_C(1) << 1;
+static const InflowHTMLExportIssues INFLOW_HTML_EXPORT_ISSUE_MERMAID = UINT64_C(1) << 2;
+static const InflowHTMLExportIssues INFLOW_HTML_EXPORT_ISSUE_LOCAL_LINK = UINT64_C(1) << 3;
+static const InflowHTMLExportIssues INFLOW_HTML_EXPORT_ISSUE_UNSAFE_LINK = UINT64_C(1) << 4;
 
 typedef struct InflowOwnedBytes {
     uint8_t *data;
@@ -79,17 +88,25 @@ typedef struct InflowSearchResult {
     InflowOwnedSearchMatches matches;
 } InflowSearchResult;
 
+typedef struct InflowHTMLExportResult {
+    InflowStatus status;
+    InflowOwnedBytes html;
+    InflowHTMLExportIssues blocking_issues;
+} InflowHTMLExportResult;
+
 #if UINTPTR_MAX == UINT64_MAX
 #if defined(__cplusplus)
 static_assert(sizeof(InflowHeading) == 40, "InflowHeading ABI layout changed");
 static_assert(sizeof(InflowAnalysisResult) == 64, "InflowAnalysisResult ABI layout changed");
 static_assert(sizeof(InflowSearchMatch) == 16, "InflowSearchMatch ABI layout changed");
 static_assert(sizeof(InflowSearchResult) == 24, "InflowSearchResult ABI layout changed");
+static_assert(sizeof(InflowHTMLExportResult) == 32, "InflowHTMLExportResult ABI layout changed");
 #else
 _Static_assert(sizeof(InflowHeading) == 40, "InflowHeading ABI layout changed");
 _Static_assert(sizeof(InflowAnalysisResult) == 64, "InflowAnalysisResult ABI layout changed");
 _Static_assert(sizeof(InflowSearchMatch) == 16, "InflowSearchMatch ABI layout changed");
 _Static_assert(sizeof(InflowSearchResult) == 24, "InflowSearchResult ABI layout changed");
+_Static_assert(sizeof(InflowHTMLExportResult) == 32, "InflowHTMLExportResult ABI layout changed");
 #endif
 #endif
 
@@ -117,6 +134,17 @@ InflowEncodeResult inflow_document_encode(
 /// returned bytes belong to Inflow and must be released with
 /// inflow_owned_bytes_free.
 InflowEncodeResult inflow_markdown_render_html(
+    const uint8_t *utf8,
+    uintptr_t length
+);
+
+/// Exports an immutable UTF-8 Markdown snapshot as one self-contained HTML
+/// document. The result never references local resources or runtime scripts.
+/// Unsupported images, formulas, Mermaid blocks, local links and unsafe link
+/// schemes are reported through blocking_issues and return no HTML. Successful
+/// output is at most 100 MiB. Returned bytes must be released with
+/// inflow_owned_bytes_free.
+InflowHTMLExportResult inflow_markdown_export_html(
     const uint8_t *utf8,
     uintptr_t length
 );
