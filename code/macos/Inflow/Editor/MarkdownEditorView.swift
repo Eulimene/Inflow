@@ -26,6 +26,10 @@ enum EditorViewMode: String, CaseIterable, Identifiable {
     var sourceVisible: EditorViewMode {
         self == .preview ? .split : self
     }
+
+    static func resolve(storedValue: String) -> EditorViewMode {
+        EditorViewMode(rawValue: storedValue) ?? .split
+    }
 }
 
 enum EditorStatisticMode: String, CaseIterable, Identifiable {
@@ -74,7 +78,7 @@ struct MarkdownEditorView: View {
     @State private var pendingFindNavigation: [Int] = []
 
     private var viewMode: EditorViewMode {
-        get { EditorViewMode(rawValue: storedViewMode) ?? .split }
+        get { EditorViewMode.resolve(storedValue: storedViewMode) }
         nonmutating set { storedViewMode = newValue.rawValue }
     }
 
@@ -105,6 +109,7 @@ struct MarkdownEditorView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .focusedValue(\.outlineVisibility, $isOutlineVisible)
+        .focusedSceneValue(\.editorViewModeActions, editorViewModeCommandActions)
         .focusedSceneValue(\.documentFindActions, findCommandActions)
         .toolbar {
             ToolbarItem {
@@ -125,7 +130,7 @@ struct MarkdownEditorView: View {
                     "写作视图",
                     selection: Binding(
                         get: { viewMode },
-                        set: { viewMode = $0 }
+                        set: { mode in selectViewMode(mode) }
                     )
                 ) {
                     ForEach(EditorViewMode.allCases) { mode in
@@ -309,6 +314,23 @@ struct MarkdownEditorView: View {
             next: findNext,
             previous: findPrevious
         )
+    }
+
+    private var editorViewModeCommandActions: EditorViewModeCommandActions {
+        EditorViewModeCommandActions(
+            selectedMode: viewMode,
+            select: { mode in selectViewMode(mode) }
+        )
+    }
+
+    private func selectViewMode(_ mode: EditorViewMode) {
+        viewMode = mode
+        guard mode != .preview, !findSession.isPresented else { return }
+
+        Task { @MainActor in
+            await Task.yield()
+            _ = sourceEditorSession.focusEditor()
+        }
     }
 
     private func presentFind(replacing: Bool) {
