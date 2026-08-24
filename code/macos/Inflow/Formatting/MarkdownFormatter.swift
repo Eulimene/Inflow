@@ -3,11 +3,13 @@ import Foundation
 enum MarkdownInlineFormat: UInt8, CaseIterable, Sendable {
     case bold = 1
     case italic = 2
+    case strikethrough = 3
 
     var label: String {
         switch self {
         case .bold: "粗体"
         case .italic: "斜体"
+        case .strikethrough: "删除线"
         }
     }
 
@@ -15,6 +17,7 @@ enum MarkdownInlineFormat: UInt8, CaseIterable, Sendable {
         switch self {
         case .bold: "粗体格式"
         case .italic: "斜体格式"
+        case .strikethrough: "删除线格式"
         }
     }
 
@@ -22,6 +25,7 @@ enum MarkdownInlineFormat: UInt8, CaseIterable, Sendable {
         switch self {
         case .bold: UInt8(INFLOW_INLINE_FORMAT_BOLD)
         case .italic: UInt8(INFLOW_INLINE_FORMAT_ITALIC)
+        case .strikethrough: UInt8(INFLOW_INLINE_FORMAT_STRIKETHROUGH)
         }
     }
 }

@@ -38,6 +38,11 @@ struct MarkdownFormatCommands: Commands {
             }
             .keyboardShortcut("i", modifiers: .command)
             .disabled(actions?.canFormat != true)
+
+            Button(MarkdownInlineFormat.strikethrough.label) {
+                actions?.apply(.strikethrough)
+            }
+            .disabled(actions?.canFormat != true)
         }
     }
 }

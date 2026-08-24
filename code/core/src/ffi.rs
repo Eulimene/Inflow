@@ -24,6 +24,7 @@ pub const LINE_ENDING_CRLF: u8 = 1;
 
 pub const INLINE_FORMAT_BOLD: u8 = 1;
 pub const INLINE_FORMAT_ITALIC: u8 = 2;
+pub const INLINE_FORMAT_STRIKETHROUGH: u8 = 3;
 
 #[repr(C)]
 pub struct InflowOwnedBytes {
@@ -393,6 +394,7 @@ pub unsafe extern "C" fn inflow_markdown_format_inline(
         let inline_format = match inline_format {
             INLINE_FORMAT_BOLD => InlineFormat::Bold,
             INLINE_FORMAT_ITALIC => InlineFormat::Italic,
+            INLINE_FORMAT_STRIKETHROUGH => InlineFormat::Strikethrough,
             _ => return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT),
         };
 

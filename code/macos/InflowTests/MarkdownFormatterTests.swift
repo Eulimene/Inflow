@@ -8,6 +8,10 @@ final class MarkdownFormatterTests: XCTestCase {
         XCTAssertEqual(MemoryLayout<InflowMarkdownEditResult>.alignment, 8)
         XCTAssertEqual(MarkdownInlineFormat.bold.coreValue, UInt8(INFLOW_INLINE_FORMAT_BOLD))
         XCTAssertEqual(MarkdownInlineFormat.italic.coreValue, UInt8(INFLOW_INLINE_FORMAT_ITALIC))
+        XCTAssertEqual(
+            MarkdownInlineFormat.strikethrough.coreValue,
+            UInt8(INFLOW_INLINE_FORMAT_STRIKETHROUGH)
+        )
     }
 
     func testPlansUnicodeBoldUsingUTF16SelectionAndUTF8CoreRanges() throws {
@@ -94,6 +98,27 @@ final class MarkdownFormatterTests: XCTestCase {
         }
     }
 
+    func testPlansAndRemovesUnicodeStrikethrough() throws {
+        let source = "保留 旧内容 继续"
+        let selected = (source as NSString).range(of: "旧内容")
+        let added = try MarkdownFormatter.plan(
+            source: source,
+            selectedUTF16Range: selected,
+            format: .strikethrough
+        )
+        XCTAssertEqual(added.resultingSource, "保留 ~~旧内容~~ 继续")
+        XCTAssertTrue(try MarkdownRenderer.htmlFragment(for: added.resultingSource).contains(
+            "<del>旧内容</del>"
+        ))
+
+        let removed = try MarkdownFormatter.plan(
+            source: added.resultingSource,
+            selectedUTF16Range: (added.resultingSource as NSString).range(of: "旧内容"),
+            format: .strikethrough
+        )
+        XCTAssertEqual(removed.resultingSource, source)
+    }
+
     @MainActor
     func testSessionAppliesFormatAsOneUndoUnitAndRestoresSelection() throws {
         let source = "Hello 世界"
@@ -172,6 +197,12 @@ final class MarkdownFormatterTests: XCTestCase {
                 .command
             )
         }
+
+        let strikethroughItems = items.filter {
+            $0.title == MarkdownInlineFormat.strikethrough.label
+        }
+        XCTAssertEqual(strikethroughItems.count, 1)
+        XCTAssertEqual(strikethroughItems.first?.keyEquivalent, "")
     }
 
     @MainActor

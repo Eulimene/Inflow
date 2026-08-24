@@ -11,6 +11,7 @@ use crate::render;
 pub enum InlineFormat {
     Bold,
     Italic,
+    Strikethrough,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -48,6 +49,7 @@ pub fn format_inline(
     let marker = match format {
         InlineFormat::Bold => "**",
         InlineFormat::Italic => "*",
+        InlineFormat::Strikethrough => "~~",
     };
 
     if requested_selection.is_empty() {
@@ -137,8 +139,8 @@ fn format_spans(source: &str, format: InlineFormat) -> Vec<FormatSpan> {
             Event::End(end) if is_target_end(end, format) => {
                 if let Some(full_start) = stack.pop() {
                     let marker_length = match format {
-                        InlineFormat::Bold => 2,
                         InlineFormat::Italic => 1,
+                        InlineFormat::Bold | InlineFormat::Strikethrough => 2,
                     };
                     let content_start = full_start + marker_length;
                     let content_end = range.end.saturating_sub(marker_length);
@@ -161,14 +163,18 @@ fn format_spans(source: &str, format: InlineFormat) -> Vec<FormatSpan> {
 fn is_target_start(tag: &Tag<'_>, format: InlineFormat) -> bool {
     matches!(
         (tag, format),
-        (Tag::Strong, InlineFormat::Bold) | (Tag::Emphasis, InlineFormat::Italic)
+        (Tag::Strong, InlineFormat::Bold)
+            | (Tag::Emphasis, InlineFormat::Italic)
+            | (Tag::Strikethrough, InlineFormat::Strikethrough)
     )
 }
 
 fn is_target_end(end: TagEnd, format: InlineFormat) -> bool {
     matches!(
         (end, format),
-        (TagEnd::Strong, InlineFormat::Bold) | (TagEnd::Emphasis, InlineFormat::Italic)
+        (TagEnd::Strong, InlineFormat::Bold)
+            | (TagEnd::Emphasis, InlineFormat::Italic)
+            | (TagEnd::Strikethrough, InlineFormat::Strikethrough)
     )
 }
 
@@ -244,6 +250,38 @@ mod tests {
                 selection_range: 3..3,
             })
         );
+        assert_eq!(
+            format_inline("text", 2..2, InlineFormat::Strikethrough),
+            Ok(MarkdownEdit {
+                replace_range: 2..2,
+                replacement: "~~~~".to_owned(),
+                selection_range: 4..4,
+            })
+        );
+    }
+
+    #[test]
+    fn adds_and_removes_gfm_strikethrough() {
+        let source = "before 旧内容 after";
+        let start = "before ".len();
+        let end = start + "旧内容".len();
+        let added = format_inline(source, start..end, InlineFormat::Strikethrough).unwrap();
+        let formatted = replacing(source, added.replace_range, &added.replacement);
+        assert_eq!(formatted, "before ~~旧内容~~ after");
+        assert!(render::html_fragment(&formatted).contains("<del>旧内容</del>"));
+
+        let content_start = start + 2;
+        let content_end = content_start + "旧内容".len();
+        let removed = format_inline(
+            &formatted,
+            content_start..content_end,
+            InlineFormat::Strikethrough,
+        )
+        .unwrap();
+        assert_eq!(
+            replacing(&formatted, removed.replace_range, &removed.replacement),
+            source
+        );
     }
 
     #[test]
@@ -316,8 +354,8 @@ mod tests {
 
     fn format_marker_len(format: InlineFormat) -> usize {
         match format {
-            InlineFormat::Bold => 2,
             InlineFormat::Italic => 1,
+            InlineFormat::Bold | InlineFormat::Strikethrough => 2,
         }
     }
 }

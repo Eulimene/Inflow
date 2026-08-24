@@ -23,6 +23,7 @@ static const uint8_t INFLOW_LINE_ENDING_CRLF = 1;
 
 static const uint8_t INFLOW_INLINE_FORMAT_BOLD = 1;
 static const uint8_t INFLOW_INLINE_FORMAT_ITALIC = 2;
+static const uint8_t INFLOW_INLINE_FORMAT_STRIKETHROUGH = 3;
 
 typedef uint64_t InflowHTMLExportIssues;
 static const InflowHTMLExportIssues INFLOW_HTML_EXPORT_ISSUE_IMAGE = UINT64_C(1) << 0;
