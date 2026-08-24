@@ -194,6 +194,19 @@ InflowMarkdownEditResult inflow_markdown_format_heading(
     uint8_t heading_level
 );
 
+/// Plans adding or removing one block quote level over complete source lines.
+/// Existing contiguous quote blocks are treated as a unit so a marker-only
+/// change cannot leave CommonMark lazy continuation semantics unchanged. Empty
+/// lines and nested levels are preserved. Selection and returned ranges use
+/// end-exclusive UTF-8 byte offsets aligned to complete extended graphemes.
+/// Returned replacement bytes must be released with inflow_owned_bytes_free.
+InflowMarkdownEditResult inflow_markdown_format_block_quote(
+    const uint8_t *utf8,
+    uintptr_t length,
+    uintptr_t selection_start,
+    uintptr_t selection_end
+);
+
 /// Extracts heading source ranges and text statistics from UTF-8 Markdown. The
 /// returned arrays belong to Inflow and must be released with their matching
 /// free functions.

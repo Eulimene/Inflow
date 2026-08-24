@@ -178,6 +178,64 @@ final class MarkdownFormatterTests: XCTestCase {
         }
     }
 
+    func testBlockQuotePlanHandlesUnicodeCaretAndEmptyTemplate() throws {
+        let source = "Intro\n引用👩‍💻\nTail\n"
+        let caret = (source as NSString).range(of: "👩‍💻").location
+        let plan = try MarkdownFormatter.plan(
+            source: source,
+            selectedUTF16Range: NSRange(location: caret, length: 0),
+            command: .blockQuote
+        )
+        XCTAssertEqual(plan.resultingSource, "Intro\n> 引用👩‍💻\nTail\n")
+        let selected = try XCTUnwrap(
+            MarkdownSourceRange.navigationTarget(
+                forUTF8Range: plan.selectionUTF8Range,
+                in: plan.resultingSource
+            )
+        )
+        XCTAssertEqual(selected.revealRange.location, caret + 2)
+        XCTAssertEqual(selected.revealRange.length, 0)
+
+        let empty = try MarkdownFormatter.plan(
+            source: "",
+            selectedUTF16Range: NSRange(location: 0, length: 0),
+            command: .blockQuote
+        )
+        XCTAssertEqual(empty.resultingSource, "> ")
+        XCTAssertEqual(empty.selectionUTF8Range, 2..<2)
+    }
+
+    func testBlockQuotePlanAddsRemovesAndPreservesNestedLevel() throws {
+        let source = "one\n\n二\n"
+        let added = try MarkdownFormatter.plan(
+            source: source,
+            selectedUTF16Range: NSRange(location: 0, length: (source as NSString).length),
+            command: .blockQuote
+        )
+        XCTAssertEqual(added.resultingSource, "> one\n> \n> 二\n")
+        XCTAssertTrue(try MarkdownRenderer.htmlFragment(for: added.resultingSource).contains(
+            "<blockquote>"
+        ))
+
+        let removed = try MarkdownFormatter.plan(
+            source: added.resultingSource,
+            selectedUTF16Range: NSRange(
+                location: 0,
+                length: (added.resultingSource as NSString).length
+            ),
+            command: .blockQuote
+        )
+        XCTAssertEqual(removed.resultingSource, source)
+
+        let nested = "> > inner\n> > next\n"
+        let shallower = try MarkdownFormatter.plan(
+            source: nested,
+            selectedUTF16Range: NSRange(location: 5, length: 0),
+            command: .blockQuote
+        )
+        XCTAssertEqual(shallower.resultingSource, "> inner\n> next\n")
+    }
+
     @MainActor
     func testSessionAppliesFormatAsOneUndoUnitAndRestoresSelection() throws {
         let source = "Hello 世界"
@@ -247,7 +305,8 @@ final class MarkdownFormatterTests: XCTestCase {
 
         editable.apply(.inline(.bold))
         editable.apply(.heading(.four))
-        XCTAssertEqual(first, [.inline(.bold), .heading(.four)])
+        editable.apply(.blockQuote)
+        XCTAssertEqual(first, [.inline(.bold), .heading(.four), .blockQuote])
         XCTAssertTrue(second.isEmpty)
         XCTAssertFalse(readOnly.canFormat)
     }
@@ -282,6 +341,10 @@ final class MarkdownFormatterTests: XCTestCase {
             XCTAssertEqual(matches.count, 1)
             XCTAssertEqual(matches.first?.keyEquivalent, "")
         }
+
+        let quoteItems = items.filter { $0.title == "引用" }
+        XCTAssertEqual(quoteItems.count, 1)
+        XCTAssertEqual(quoteItems.first?.keyEquivalent, "")
     }
 
     @MainActor

@@ -438,6 +438,35 @@ pub unsafe extern "C" fn inflow_markdown_format_heading(
     .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
 }
 
+/// Plans one predictable block quote level edit for complete source lines.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call. Selection offsets are end-exclusive UTF-8 byte
+/// offsets and must align with extended grapheme boundaries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_markdown_format_block_quote(
+    utf8: *const u8,
+    length: usize,
+    selection_start: usize,
+    selection_end: usize,
+) -> InflowMarkdownEditResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Ok(source) = std::str::from_utf8(input) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_UTF8);
+        };
+        markdown_edit_result(format::format_block_quote(
+            source,
+            selection_start..selection_end,
+        ))
+    }))
+    .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
+}
+
 fn markdown_edit_result(
     result: Result<format::MarkdownEdit, FormatError>,
 ) -> InflowMarkdownEditResult {
@@ -936,6 +965,28 @@ mod tests {
 
         let invalid =
             unsafe { inflow_markdown_format_heading(source.as_ptr(), source.len(), 0, 0, 7) };
+        assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
+        assert!(invalid.replacement.data.is_null());
+    }
+
+    #[test]
+    fn ffi_plans_multiline_block_quote_and_releases_result() {
+        let source = "one\n二\n";
+        let result = unsafe {
+            inflow_markdown_format_block_quote(source.as_ptr(), source.len(), 0, source.len())
+        };
+        assert_eq!(result.status, STATUS_OK);
+        assert_eq!(result.replace_start, 0);
+        assert_eq!(result.replace_end, source.len());
+        let replacement = unsafe {
+            std::slice::from_raw_parts(result.replacement.data, result.replacement.length)
+        };
+        assert_eq!(std::str::from_utf8(replacement).unwrap(), "> one\n> 二\n");
+        unsafe {
+            inflow_owned_bytes_free(result.replacement.data, result.replacement.length);
+        }
+
+        let invalid = unsafe { inflow_markdown_format_block_quote(ptr::null(), 1, 0, 0) };
         assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
         assert!(invalid.replacement.data.is_null());
     }

@@ -55,11 +55,13 @@ enum MarkdownHeadingLevel: UInt8, CaseIterable, Identifiable, Sendable {
 enum MarkdownFormatCommand: Equatable, Sendable {
     case inline(MarkdownInlineFormat)
     case heading(MarkdownHeadingLevel)
+    case blockQuote
 
     var undoActionName: String {
         switch self {
         case let .inline(format): format.undoActionName
         case .heading: "标题格式"
+        case .blockQuote: "引用格式"
         }
     }
 }
@@ -151,6 +153,13 @@ enum MarkdownFormatter {
                     UInt(selectedUTF8Range.lowerBound),
                     UInt(selectedUTF8Range.upperBound),
                     level.rawValue
+                )
+            case .blockQuote:
+                inflow_markdown_format_block_quote(
+                    sourcePointer,
+                    UInt(buffer.count),
+                    UInt(selectedUTF8Range.lowerBound),
+                    UInt(selectedUTF8Range.upperBound)
                 )
             }
         }

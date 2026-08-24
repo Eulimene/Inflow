@@ -50,6 +50,16 @@ struct OutputUnit {
     actionable: bool,
 }
 
+#[derive(Debug)]
+struct QuoteLineOutput {
+    old_line_start: usize,
+    new_line_start: usize,
+    old_range: Range<usize>,
+    old_probe: usize,
+    new_probe: usize,
+    removed_marker: Option<Range<usize>>,
+}
+
 pub fn format_inline(
     source: &str,
     requested_selection: Range<usize>,
@@ -229,6 +239,111 @@ pub fn format_heading(
     })
 }
 
+pub fn format_block_quote(
+    source: &str,
+    requested_selection: Range<usize>,
+) -> Result<MarkdownEdit, FormatError> {
+    if !is_valid_selection(source, &requested_selection) {
+        return Err(FormatError::InvalidSelection);
+    }
+
+    let document_analysis = analysis::analyze(source);
+    let initial_range = heading_aware_line_range(
+        source,
+        requested_selection.clone(),
+        &document_analysis.headings,
+    );
+    let quote_spans = block_quote_spans(source);
+    let block_range = quote_aware_line_range(
+        source,
+        requested_selection.clone(),
+        initial_range,
+        &quote_spans,
+    );
+    let lines = physical_line_ranges(source, block_range.clone());
+    let markers: Vec<Option<Range<usize>>> = lines
+        .iter()
+        .map(|line| block_quote_marker_range(source, line.clone()))
+        .collect();
+    let remove = markers.iter().all(Option::is_some);
+
+    let mut replacement = String::with_capacity(block_range.len() + lines.len() * 2);
+    let mut outputs = Vec::with_capacity(lines.len());
+    for (line, marker) in lines.iter().zip(markers) {
+        let new_line_start = replacement.len();
+        if remove {
+            let marker = marker.ok_or(FormatError::AmbiguousSelection)?;
+            replacement.push_str(&source[line.start..marker.start]);
+            replacement.push_str(&source[marker.end..line.end]);
+            let new_line_end = replacement.len();
+            outputs.push(QuoteLineOutput {
+                old_line_start: line.start,
+                new_line_start,
+                old_range: line.clone(),
+                old_probe: line_probe(source, line.clone()),
+                new_probe: line_probe(&replacement, new_line_start..new_line_end),
+                removed_marker: Some(marker),
+            });
+        } else {
+            replacement.push_str("> ");
+            replacement.push_str(&source[line.clone()]);
+            let new_line_end = replacement.len();
+            outputs.push(QuoteLineOutput {
+                old_line_start: line.start,
+                new_line_start,
+                old_range: line.clone(),
+                old_probe: line_probe(source, line.clone()),
+                new_probe: line_probe(&replacement, new_line_start..new_line_end),
+                removed_marker: None,
+            });
+        }
+    }
+
+    let candidate = replacing(source, block_range.clone(), &replacement);
+    let candidate_spans = block_quote_spans(&candidate);
+    for output in &outputs {
+        let old_depth = block_quote_depth_at(&quote_spans, output.old_probe);
+        let new_depth =
+            block_quote_depth_at(&candidate_spans, block_range.start + output.new_probe);
+        let valid = if remove {
+            old_depth > 0 && new_depth + 1 == old_depth
+        } else {
+            new_depth == old_depth + 1
+        };
+        if !valid {
+            return Err(FormatError::AmbiguousSelection);
+        }
+    }
+
+    let selection_range = if requested_selection.is_empty() {
+        let caret = requested_selection.start;
+        let output = outputs
+            .iter()
+            .find(|output| output.old_range.start <= caret && caret <= output.old_range.end)
+            .ok_or(FormatError::InvalidSelection)?;
+        let old_offset = caret - output.old_line_start;
+        let new_offset = if let Some(marker) = &output.removed_marker {
+            if caret <= marker.start {
+                old_offset
+            } else {
+                old_offset.saturating_sub((caret.min(marker.end)) - marker.start)
+            }
+        } else {
+            old_offset + 2
+        };
+        let new_caret = block_range.start + output.new_line_start + new_offset;
+        new_caret..new_caret
+    } else {
+        block_range.start..block_range.start + without_trailing_line_ending(&replacement)
+    };
+
+    Ok(MarkdownEdit {
+        replace_range: block_range,
+        replacement,
+        selection_range,
+    })
+}
+
 fn heading_aware_line_range(
     source: &str,
     selection: Range<usize>,
@@ -264,6 +379,98 @@ fn heading_aware_line_range(
         if range == previous {
             return range;
         }
+    }
+}
+
+fn quote_aware_line_range(
+    source: &str,
+    selection: Range<usize>,
+    mut range: Range<usize>,
+    quote_spans: &[Range<usize>],
+) -> Range<usize> {
+    loop {
+        let previous = range.clone();
+        for quote in quote_spans {
+            if ranges_overlap(&range, quote)
+                || (selection.is_empty()
+                    && quote.start <= selection.start
+                    && selection.start <= quote.end)
+            {
+                range.start = range.start.min(line_start(source, quote.start));
+                range.end = range.end.max(line_end_including_ending(source, quote.end));
+            }
+        }
+        if range == previous {
+            return range;
+        }
+    }
+}
+
+fn physical_line_ranges(source: &str, block_range: Range<usize>) -> Vec<Range<usize>> {
+    if block_range.is_empty() {
+        return vec![block_range];
+    }
+
+    let mut lines = Vec::new();
+    let mut cursor = block_range.start;
+    while cursor < block_range.end {
+        let end = line_end_including_ending(source, cursor).min(block_range.end);
+        lines.push(cursor..end);
+        cursor = end;
+    }
+    lines
+}
+
+fn block_quote_marker_range(source: &str, line: Range<usize>) -> Option<Range<usize>> {
+    let bytes = source.as_bytes();
+    let content_end = trailing_line_ending_start(source, line.clone());
+    let mut cursor = line.start;
+    let mut indentation = 0;
+    while cursor < content_end && bytes[cursor] == b' ' && indentation < 3 {
+        cursor += 1;
+        indentation += 1;
+    }
+    if cursor >= content_end || bytes[cursor] != b'>' {
+        return None;
+    }
+    let marker_start = cursor;
+    cursor += 1;
+    if cursor < content_end && matches!(bytes[cursor], b' ' | b'\t') {
+        cursor += 1;
+    }
+    Some(marker_start..cursor)
+}
+
+fn block_quote_spans(source: &str) -> Vec<Range<usize>> {
+    let mut starts = Vec::new();
+    let mut spans = Vec::new();
+    for (event, range) in Parser::new_ext(source, render::options()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::BlockQuote(_)) => starts.push(range.start),
+            Event::End(TagEnd::BlockQuote(_)) => {
+                if let Some(start) = starts.pop() {
+                    spans.push(start..range.end);
+                }
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
+fn block_quote_depth_at(spans: &[Range<usize>], position: usize) -> usize {
+    spans
+        .iter()
+        .filter(|span| span.start <= position && (position < span.end || span.start == span.end))
+        .count()
+}
+
+fn line_probe(source: &str, line: Range<usize>) -> usize {
+    let content_end = trailing_line_ending_start(source, line.clone());
+    if content_end > line.start {
+        content_end - 1
+    } else {
+        line.start
     }
 }
 
@@ -522,6 +729,87 @@ fn is_grapheme_boundary(source: &str, offset: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adds_quote_to_current_unicode_line_and_empty_document() {
+        let source = "前文\n引用👩‍💻\n";
+        let line_start = "前文\n".len();
+        let caret = line_start + "引用".len();
+        assert_eq!(
+            format_block_quote(source, caret..caret),
+            Ok(MarkdownEdit {
+                replace_range: line_start..source.len(),
+                replacement: "> 引用👩‍💻\n".to_owned(),
+                selection_range: caret + 2..caret + 2,
+            })
+        );
+        assert_eq!(
+            format_block_quote("", 0..0),
+            Ok(MarkdownEdit {
+                replace_range: 0..0,
+                replacement: "> ".to_owned(),
+                selection_range: 2..2,
+            })
+        );
+    }
+
+    #[test]
+    fn adds_and_removes_multiline_quote_with_blank_line() {
+        let source = "one\n\n二\n";
+        let added = format_block_quote(source, 0..source.len()).unwrap();
+        assert_eq!(added.replacement, "> one\n> \n> 二\n");
+        let formatted = replacing(source, added.replace_range, &added.replacement);
+        assert!(render::html_fragment(&formatted).contains("<blockquote>"));
+
+        let removed = format_block_quote(&formatted, 0..formatted.len()).unwrap();
+        assert_eq!(removed.replacement, source);
+        assert_eq!(
+            replacing(&formatted, removed.replace_range, &removed.replacement),
+            source
+        );
+    }
+
+    #[test]
+    fn removes_one_nested_quote_level_and_preserves_caret() {
+        let nested = "> > inner\n> > next\n";
+        let removed = format_block_quote(nested, 5..5).unwrap();
+        assert_eq!(removed.replace_range, 0..nested.len());
+        assert_eq!(removed.replacement, "> inner\n> next\n");
+
+        let single = "> text\n";
+        let removed = format_block_quote(single, 4..4).unwrap();
+        assert_eq!(removed.replacement, "text\n");
+        assert_eq!(removed.selection_range, 2..2);
+    }
+
+    #[test]
+    fn quote_requires_a_real_block_quote_and_preserves_complete_code_fence() {
+        let fenced = "```\ninside\n```\n";
+        assert_eq!(
+            format_block_quote(fenced, 6..6),
+            Err(FormatError::AmbiguousSelection)
+        );
+
+        let quoted = format_block_quote(fenced, 0..fenced.len()).unwrap();
+        assert_eq!(quoted.replacement, "> ```\n> inside\n> ```\n");
+        let result = replacing(fenced, quoted.replace_range, &quoted.replacement);
+        let html = render::html_fragment(&result);
+        assert!(html.contains("<blockquote>"));
+        assert!(html.contains("<pre><code>inside\n</code></pre>"));
+    }
+
+    #[test]
+    fn quote_rejects_invalid_selection_and_deepens_lazy_continuation() {
+        assert_eq!(
+            format_block_quote("e\u{301}", 1..1),
+            Err(FormatError::InvalidSelection)
+        );
+        let lazy = "> quoted\nlazy continuation\n";
+        let edit = format_block_quote(lazy, 12..12).unwrap();
+        assert_eq!(edit.replacement, "> > quoted\n> lazy continuation\n");
+        let result = replacing(lazy, edit.replace_range, &edit.replacement);
+        assert!(render::html_fragment(&result).contains("<blockquote>\n<blockquote>"));
+    }
 
     #[test]
     fn adds_heading_to_current_line_and_preserves_caret_position() {

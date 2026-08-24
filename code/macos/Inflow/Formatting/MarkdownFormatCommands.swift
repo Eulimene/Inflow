@@ -52,6 +52,11 @@ struct MarkdownFormatCommands: Commands {
                     .disabled(actions?.canFormat != true)
                 }
             }
+
+            Button("引用") {
+                actions?.apply(.blockQuote)
+            }
+            .disabled(actions?.canFormat != true)
         }
     }
 }
