@@ -6,6 +6,7 @@ mod analysis;
 mod document;
 mod export;
 mod ffi;
+mod format;
 mod render;
 mod search;
 

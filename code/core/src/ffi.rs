@@ -6,6 +6,7 @@ use std::ptr;
 use crate::analysis;
 use crate::document::{self, DecodeError, LineEnding};
 use crate::export::{self, ExportError};
+use crate::format::{self, FormatError, InlineFormat};
 use crate::render;
 use crate::search;
 
@@ -15,10 +16,14 @@ pub const STATUS_INVALID_UTF8: i32 = 2;
 pub const STATUS_MIXED_LINE_ENDINGS: i32 = 3;
 pub const STATUS_UNSUPPORTED_CONTENT: i32 = 4;
 pub const STATUS_OUTPUT_TOO_LARGE: i32 = 5;
+pub const STATUS_AMBIGUOUS_FORMAT: i32 = 6;
 pub const STATUS_PANIC: i32 = 255;
 
 pub const LINE_ENDING_LF: u8 = 0;
 pub const LINE_ENDING_CRLF: u8 = 1;
+
+pub const INLINE_FORMAT_BOLD: u8 = 1;
+pub const INLINE_FORMAT_ITALIC: u8 = 2;
 
 #[repr(C)]
 pub struct InflowOwnedBytes {
@@ -185,6 +190,29 @@ pub struct InflowHTMLExportResult {
     pub blocking_issues: u64,
 }
 
+#[repr(C)]
+pub struct InflowMarkdownEditResult {
+    pub status: i32,
+    pub replacement: InflowOwnedBytes,
+    pub replace_start: usize,
+    pub replace_end: usize,
+    pub selection_start: usize,
+    pub selection_end: usize,
+}
+
+impl InflowMarkdownEditResult {
+    const fn error(status: i32) -> Self {
+        Self {
+            status,
+            replacement: InflowOwnedBytes::empty(),
+            replace_start: 0,
+            replace_end: 0,
+            selection_start: 0,
+            selection_end: 0,
+        }
+    }
+}
+
 impl InflowHTMLExportResult {
     const fn error(status: i32, blocking_issues: u64) -> Self {
         Self {
@@ -338,6 +366,54 @@ pub unsafe extern "C" fn inflow_markdown_export_html(
         }
     }))
     .unwrap_or_else(|_| InflowHTMLExportResult::error(STATUS_PANIC, 0))
+}
+
+/// Plans one predictable inline Markdown formatting edit for a UTF-8 snapshot.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call. Selection offsets are end-exclusive UTF-8 byte
+/// offsets and must align with extended grapheme boundaries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_markdown_format_inline(
+    utf8: *const u8,
+    length: usize,
+    selection_start: usize,
+    selection_end: usize,
+    inline_format: u8,
+) -> InflowMarkdownEditResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Ok(source) = std::str::from_utf8(input) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_UTF8);
+        };
+        let inline_format = match inline_format {
+            INLINE_FORMAT_BOLD => InlineFormat::Bold,
+            INLINE_FORMAT_ITALIC => InlineFormat::Italic,
+            _ => return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT),
+        };
+
+        match format::format_inline(source, selection_start..selection_end, inline_format) {
+            Ok(edit) => InflowMarkdownEditResult {
+                status: STATUS_OK,
+                replacement: InflowOwnedBytes::from_vec(edit.replacement.into_bytes()),
+                replace_start: edit.replace_range.start,
+                replace_end: edit.replace_range.end,
+                selection_start: edit.selection_range.start,
+                selection_end: edit.selection_range.end,
+            },
+            Err(FormatError::InvalidSelection) => {
+                InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT)
+            }
+            Err(FormatError::AmbiguousSelection) => {
+                InflowMarkdownEditResult::error(STATUS_AMBIGUOUS_FORMAT)
+            }
+        }
+    }))
+    .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
 }
 
 /// Extracts heading source ranges and text statistics from UTF-8 Markdown.
@@ -627,6 +703,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<InflowOwnedSearchMatches>(), 16);
         assert_eq!(std::mem::size_of::<InflowSearchResult>(), 24);
         assert_eq!(std::mem::size_of::<InflowHTMLExportResult>(), 32);
+        assert_eq!(std::mem::size_of::<InflowMarkdownEditResult>(), 56);
     }
 
     #[test]
@@ -729,6 +806,68 @@ mod tests {
             assert!(result.html.data.is_null());
             assert_eq!(result.html.length, 0);
             assert_eq!(result.blocking_issues, 0);
+        }
+    }
+
+    #[test]
+    fn ffi_plans_inline_format_and_reports_ambiguous_selection() {
+        let source = "Text 中文";
+        let start = "Text ".len();
+        let result = unsafe {
+            inflow_markdown_format_inline(
+                source.as_ptr(),
+                source.len(),
+                start,
+                source.len(),
+                INLINE_FORMAT_BOLD,
+            )
+        };
+        assert_eq!(result.status, STATUS_OK);
+        assert_eq!(result.replace_start, start);
+        assert_eq!(result.replace_end, source.len());
+        assert_eq!(result.selection_start, start + 2);
+        assert_eq!(result.selection_end, source.len() + 2);
+        let replacement = unsafe {
+            std::slice::from_raw_parts(result.replacement.data, result.replacement.length)
+        };
+        assert_eq!(std::str::from_utf8(replacement).unwrap(), "**中文**");
+        unsafe {
+            inflow_owned_bytes_free(result.replacement.data, result.replacement.length);
+        }
+
+        let formatted = "**bold**";
+        let result = unsafe {
+            inflow_markdown_format_inline(
+                formatted.as_ptr(),
+                formatted.len(),
+                3,
+                5,
+                INLINE_FORMAT_BOLD,
+            )
+        };
+        assert_eq!(result.status, STATUS_AMBIGUOUS_FORMAT);
+        assert!(result.replacement.data.is_null());
+    }
+
+    #[test]
+    fn ffi_format_rejects_invalid_arguments_without_allocating() {
+        let source = "text";
+        for result in [
+            unsafe { inflow_markdown_format_inline(ptr::null(), 1, 0, 0, INLINE_FORMAT_BOLD) },
+            unsafe {
+                inflow_markdown_format_inline(
+                    source.as_ptr(),
+                    source.len(),
+                    0,
+                    5,
+                    INLINE_FORMAT_BOLD,
+                )
+            },
+            unsafe { inflow_markdown_format_inline(source.as_ptr(), source.len(), 0, 0, 99) },
+        ] {
+            assert_eq!(result.status, STATUS_INVALID_ARGUMENT);
+            assert!(result.replacement.data.is_null());
+            assert_eq!(result.replacement.length, 0);
         }
     }
 }

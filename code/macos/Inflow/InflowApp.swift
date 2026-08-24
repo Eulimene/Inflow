@@ -43,6 +43,7 @@ struct InflowApp: App {
             OutlineCommands()
             DocumentFindCommands()
             HTMLExportCommands()
+            MarkdownFormatCommands()
         }
     }
 }

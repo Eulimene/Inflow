@@ -111,6 +111,7 @@ struct MarkdownEditorView: View {
     @State private var isExportingHTML = false
     @State private var htmlExportWorker = HTMLExportWorker()
     @State private var htmlExportNotice: HTMLExportNotice?
+    @State private var markdownFormatErrorMessage: String?
 
     private var viewMode: EditorViewMode {
         get { EditorViewMode.resolve(storedValue: storedViewMode) }
@@ -147,6 +148,7 @@ struct MarkdownEditorView: View {
         .focusedSceneValue(\.editorViewModeActions, editorViewModeCommandActions)
         .focusedSceneValue(\.documentFindActions, findCommandActions)
         .focusedSceneValue(\.htmlExportActions, htmlExportCommandActions)
+        .focusedSceneValue(\.markdownFormatActions, markdownFormatCommandActions)
         .toolbar {
             ToolbarItem {
                 Button {
@@ -249,6 +251,21 @@ struct MarkdownEditorView: View {
         }
         .alert(item: $htmlExportNotice) { notice in
             notice.alert
+        }
+        .alert(
+            "无法应用 Markdown 格式",
+            isPresented: Binding(
+                get: { markdownFormatErrorMessage != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        markdownFormatErrorMessage = nil
+                    }
+                }
+            )
+        ) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(markdownFormatErrorMessage ?? "正文未被修改。")
         }
     }
 
@@ -367,6 +384,42 @@ struct MarkdownEditorView: View {
             isExporting: isExportingHTML,
             start: startHTMLExport
         )
+    }
+
+    private var markdownFormatCommandActions: MarkdownFormatCommandActions {
+        MarkdownFormatCommandActions(
+            canFormat: isEditable,
+            apply: applyMarkdownInlineFormat
+        )
+    }
+
+    private func applyMarkdownInlineFormat(_ format: MarkdownInlineFormat) {
+        guard isEditable else { return }
+        let source = document.text
+
+        do {
+            let plan = try MarkdownFormatter.plan(
+                source: source,
+                selectedUTF16Range: sourceEditorSession.textView.selectedRange(),
+                format: format
+            )
+            viewMode = viewMode.sourceVisible
+            guard sourceEditorSession.applyMarkdownFormat(
+                plan,
+                actionName: format.undoActionName
+            ) else {
+                markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未修改文档。"
+                return
+            }
+
+            Task { @MainActor in
+                await Task.yield()
+                _ = sourceEditorSession.focusEditor()
+            }
+        } catch {
+            markdownFormatErrorMessage = (error as? LocalizedError)?.errorDescription
+                ?? MarkdownFormatError.coreFailure.localizedDescription
+        }
     }
 
     private func startHTMLExport() {

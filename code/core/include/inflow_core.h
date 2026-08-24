@@ -15,10 +15,14 @@ static const InflowStatus INFLOW_STATUS_INVALID_UTF8 = 2;
 static const InflowStatus INFLOW_STATUS_MIXED_LINE_ENDINGS = 3;
 static const InflowStatus INFLOW_STATUS_UNSUPPORTED_CONTENT = 4;
 static const InflowStatus INFLOW_STATUS_OUTPUT_TOO_LARGE = 5;
+static const InflowStatus INFLOW_STATUS_AMBIGUOUS_FORMAT = 6;
 static const InflowStatus INFLOW_STATUS_PANIC = 255;
 
 static const uint8_t INFLOW_LINE_ENDING_LF = 0;
 static const uint8_t INFLOW_LINE_ENDING_CRLF = 1;
+
+static const uint8_t INFLOW_INLINE_FORMAT_BOLD = 1;
+static const uint8_t INFLOW_INLINE_FORMAT_ITALIC = 2;
 
 typedef uint64_t InflowHTMLExportIssues;
 static const InflowHTMLExportIssues INFLOW_HTML_EXPORT_ISSUE_IMAGE = UINT64_C(1) << 0;
@@ -94,6 +98,15 @@ typedef struct InflowHTMLExportResult {
     InflowHTMLExportIssues blocking_issues;
 } InflowHTMLExportResult;
 
+typedef struct InflowMarkdownEditResult {
+    InflowStatus status;
+    InflowOwnedBytes replacement;
+    uintptr_t replace_start;
+    uintptr_t replace_end;
+    uintptr_t selection_start;
+    uintptr_t selection_end;
+} InflowMarkdownEditResult;
+
 #if UINTPTR_MAX == UINT64_MAX
 #if defined(__cplusplus)
 static_assert(sizeof(InflowHeading) == 40, "InflowHeading ABI layout changed");
@@ -101,12 +114,14 @@ static_assert(sizeof(InflowAnalysisResult) == 64, "InflowAnalysisResult ABI layo
 static_assert(sizeof(InflowSearchMatch) == 16, "InflowSearchMatch ABI layout changed");
 static_assert(sizeof(InflowSearchResult) == 24, "InflowSearchResult ABI layout changed");
 static_assert(sizeof(InflowHTMLExportResult) == 32, "InflowHTMLExportResult ABI layout changed");
+static_assert(sizeof(InflowMarkdownEditResult) == 56, "InflowMarkdownEditResult ABI layout changed");
 #else
 _Static_assert(sizeof(InflowHeading) == 40, "InflowHeading ABI layout changed");
 _Static_assert(sizeof(InflowAnalysisResult) == 64, "InflowAnalysisResult ABI layout changed");
 _Static_assert(sizeof(InflowSearchMatch) == 16, "InflowSearchMatch ABI layout changed");
 _Static_assert(sizeof(InflowSearchResult) == 24, "InflowSearchResult ABI layout changed");
 _Static_assert(sizeof(InflowHTMLExportResult) == 32, "InflowHTMLExportResult ABI layout changed");
+_Static_assert(sizeof(InflowMarkdownEditResult) == 56, "InflowMarkdownEditResult ABI layout changed");
 #endif
 #endif
 
@@ -147,6 +162,20 @@ InflowEncodeResult inflow_markdown_render_html(
 InflowHTMLExportResult inflow_markdown_export_html(
     const uint8_t *utf8,
     uintptr_t length
+);
+
+/// Plans a single inline Markdown edit without modifying the source. Selection
+/// and returned ranges use end-exclusive UTF-8 byte offsets aligned to complete
+/// extended graphemes. A complete wrapper is removed; plain selected content
+/// is wrapped; an empty selection gets an editable template. Partial or mixed
+/// target formatting returns INFLOW_STATUS_AMBIGUOUS_FORMAT and no replacement.
+/// Returned replacement bytes must be released with inflow_owned_bytes_free.
+InflowMarkdownEditResult inflow_markdown_format_inline(
+    const uint8_t *utf8,
+    uintptr_t length,
+    uintptr_t selection_start,
+    uintptr_t selection_end,
+    uint8_t inline_format
 );
 
 /// Extracts heading source ranges and text statistics from UTF-8 Markdown. The

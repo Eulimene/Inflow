@@ -31,6 +31,38 @@ struct SourceNavigationTarget: Equatable {
 }
 
 enum MarkdownSourceRange {
+    static func utf8Range(
+        forUTF16Range utf16Range: NSRange,
+        in text: String
+    ) -> Range<Int>? {
+        let utf16 = text.utf16
+        guard utf16Range.location >= 0,
+              utf16Range.length >= 0,
+              utf16Range.location <= utf16.count,
+              utf16Range.length <= utf16.count - utf16Range.location,
+              let lowerUTF16 = utf16.index(
+                  utf16.startIndex,
+                  offsetBy: utf16Range.location,
+                  limitedBy: utf16.endIndex
+              ),
+              let upperUTF16 = utf16.index(
+                  lowerUTF16,
+                  offsetBy: utf16Range.length,
+                  limitedBy: utf16.endIndex
+              ),
+              let lower = String.Index(lowerUTF16, within: text),
+              let upper = String.Index(upperUTF16, within: text),
+              let lowerUTF8 = lower.samePosition(in: text.utf8),
+              let upperUTF8 = upper.samePosition(in: text.utf8)
+        else {
+            return nil
+        }
+
+        let lowerOffset = text.utf8.distance(from: text.utf8.startIndex, to: lowerUTF8)
+        let upperOffset = text.utf8.distance(from: text.utf8.startIndex, to: upperUTF8)
+        return lowerOffset..<upperOffset
+    }
+
     static func navigationTarget(
         forUTF8Range utf8Range: Range<Int>,
         in text: String
@@ -213,6 +245,41 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         let fullRange = NSRange(location: 0, length: (expectedText as NSString).length)
         textView.insertText(finalText, replacementRange: fullRange)
         textView.undoManager?.setActionName("全部替换")
+        return true
+    }
+
+    @discardableResult
+    func applyMarkdownFormat(
+        _ plan: MarkdownFormatPlan,
+        actionName: String
+    ) -> Bool {
+        guard textView.isEditable,
+              !textView.hasMarkedText(),
+              UTF8Text.isExactlyEqual(textView.string, plan.sourceSnapshot),
+              let replacementTarget = MarkdownSourceRange.navigationTarget(
+                  forUTF8Range: plan.replaceUTF8Range,
+                  in: plan.sourceSnapshot
+              ),
+              let finalSelection = MarkdownSourceRange.navigationTarget(
+                  forUTF8Range: plan.selectionUTF8Range,
+                  in: plan.resultingSource
+              )
+        else {
+            return false
+        }
+
+        textView.insertText(
+            plan.replacement,
+            replacementRange: replacementTarget.revealRange
+        )
+        guard UTF8Text.isExactlyEqual(textView.string, plan.resultingSource) else {
+            textView.undoManager?.undo()
+            return false
+        }
+
+        textView.setSelectedRange(finalSelection.revealRange)
+        textView.scrollRangeToVisible(finalSelection.revealRange)
+        textView.undoManager?.setActionName(actionName)
         return true
     }
 }
