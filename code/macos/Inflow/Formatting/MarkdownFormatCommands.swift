@@ -3,9 +3,9 @@ import SwiftUI
 @MainActor
 final class MarkdownFormatCommandActions {
     let canFormat: Bool
-    let apply: (MarkdownInlineFormat) -> Void
+    let apply: (MarkdownFormatCommand) -> Void
 
-    init(canFormat: Bool, apply: @escaping (MarkdownInlineFormat) -> Void) {
+    init(canFormat: Bool, apply: @escaping (MarkdownFormatCommand) -> Void) {
         self.canFormat = canFormat
         self.apply = apply
     }
@@ -28,21 +28,30 @@ struct MarkdownFormatCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .textFormatting) {
             Button(MarkdownInlineFormat.bold.label) {
-                actions?.apply(.bold)
+                actions?.apply(.inline(.bold))
             }
             .keyboardShortcut("b", modifiers: .command)
             .disabled(actions?.canFormat != true)
 
             Button(MarkdownInlineFormat.italic.label) {
-                actions?.apply(.italic)
+                actions?.apply(.inline(.italic))
             }
             .keyboardShortcut("i", modifiers: .command)
             .disabled(actions?.canFormat != true)
 
             Button(MarkdownInlineFormat.strikethrough.label) {
-                actions?.apply(.strikethrough)
+                actions?.apply(.inline(.strikethrough))
             }
             .disabled(actions?.canFormat != true)
+
+            Menu("标题") {
+                ForEach(MarkdownHeadingLevel.allCases) { level in
+                    Button(level.label) {
+                        actions?.apply(.heading(level))
+                    }
+                    .disabled(actions?.canFormat != true)
+                }
+            }
         }
     }
 }

@@ -389,11 +389,11 @@ struct MarkdownEditorView: View {
     private var markdownFormatCommandActions: MarkdownFormatCommandActions {
         MarkdownFormatCommandActions(
             canFormat: isEditable,
-            apply: applyMarkdownInlineFormat
+            apply: applyMarkdownFormat
         )
     }
 
-    private func applyMarkdownInlineFormat(_ format: MarkdownInlineFormat) {
+    private func applyMarkdownFormat(_ command: MarkdownFormatCommand) {
         guard isEditable else { return }
         let source = document.text
 
@@ -401,12 +401,12 @@ struct MarkdownEditorView: View {
             let plan = try MarkdownFormatter.plan(
                 source: source,
                 selectedUTF16Range: sourceEditorSession.textView.selectedRange(),
-                format: format
+                command: command
             )
             viewMode = viewMode.sourceVisible
             guard sourceEditorSession.applyMarkdownFormat(
                 plan,
-                actionName: format.undoActionName
+                actionName: command.undoActionName
             ) else {
                 markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未修改文档。"
                 return

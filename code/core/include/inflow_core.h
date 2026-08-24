@@ -179,6 +179,21 @@ InflowMarkdownEditResult inflow_markdown_format_inline(
     uint8_t inline_format
 );
 
+/// Plans a heading edit over complete source lines without modifying the
+/// source. `heading_level` must be 1...6. Mixed levels are unified; if every
+/// nonblank selected line already has the requested level, heading markers are
+/// removed. Setext headings are consumed as one block and normalized to ATX
+/// when changing level. Selection and returned ranges use end-exclusive UTF-8
+/// byte offsets aligned to complete extended graphemes. Returned replacement
+/// bytes must be released with inflow_owned_bytes_free.
+InflowMarkdownEditResult inflow_markdown_format_heading(
+    const uint8_t *utf8,
+    uintptr_t length,
+    uintptr_t selection_start,
+    uintptr_t selection_end,
+    uint8_t heading_level
+);
+
 /// Extracts heading source ranges and text statistics from UTF-8 Markdown. The
 /// returned arrays belong to Inflow and must be released with their matching
 /// free functions.

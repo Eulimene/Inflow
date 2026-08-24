@@ -398,24 +398,65 @@ pub unsafe extern "C" fn inflow_markdown_format_inline(
             _ => return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT),
         };
 
-        match format::format_inline(source, selection_start..selection_end, inline_format) {
-            Ok(edit) => InflowMarkdownEditResult {
-                status: STATUS_OK,
-                replacement: InflowOwnedBytes::from_vec(edit.replacement.into_bytes()),
-                replace_start: edit.replace_range.start,
-                replace_end: edit.replace_range.end,
-                selection_start: edit.selection_range.start,
-                selection_end: edit.selection_range.end,
-            },
-            Err(FormatError::InvalidSelection) => {
-                InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT)
-            }
-            Err(FormatError::AmbiguousSelection) => {
-                InflowMarkdownEditResult::error(STATUS_AMBIGUOUS_FORMAT)
-            }
-        }
+        markdown_edit_result(format::format_inline(
+            source,
+            selection_start..selection_end,
+            inline_format,
+        ))
     }))
     .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
+}
+
+/// Plans one predictable ATX heading edit for complete source lines.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call. Selection offsets are end-exclusive UTF-8 byte
+/// offsets and must align with extended grapheme boundaries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_markdown_format_heading(
+    utf8: *const u8,
+    length: usize,
+    selection_start: usize,
+    selection_end: usize,
+    heading_level: u8,
+) -> InflowMarkdownEditResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Ok(source) = std::str::from_utf8(input) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_UTF8);
+        };
+        markdown_edit_result(format::format_heading(
+            source,
+            selection_start..selection_end,
+            heading_level,
+        ))
+    }))
+    .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
+}
+
+fn markdown_edit_result(
+    result: Result<format::MarkdownEdit, FormatError>,
+) -> InflowMarkdownEditResult {
+    match result {
+        Ok(edit) => InflowMarkdownEditResult {
+            status: STATUS_OK,
+            replacement: InflowOwnedBytes::from_vec(edit.replacement.into_bytes()),
+            replace_start: edit.replace_range.start,
+            replace_end: edit.replace_range.end,
+            selection_start: edit.selection_range.start,
+            selection_end: edit.selection_range.end,
+        },
+        Err(FormatError::InvalidSelection) => {
+            InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT)
+        }
+        Err(FormatError::AmbiguousSelection) => {
+            InflowMarkdownEditResult::error(STATUS_AMBIGUOUS_FORMAT)
+        }
+    }
 }
 
 /// Extracts heading source ranges and text statistics from UTF-8 Markdown.
@@ -871,5 +912,31 @@ mod tests {
             assert!(result.replacement.data.is_null());
             assert_eq!(result.replacement.length, 0);
         }
+    }
+
+    #[test]
+    fn ffi_plans_multiline_heading_and_validates_level() {
+        let source = "# One\nplain\n";
+        let result = unsafe {
+            inflow_markdown_format_heading(source.as_ptr(), source.len(), 0, source.len(), 2)
+        };
+        assert_eq!(result.status, STATUS_OK);
+        assert_eq!(result.replace_start, 0);
+        assert_eq!(result.replace_end, source.len());
+        let replacement = unsafe {
+            std::slice::from_raw_parts(result.replacement.data, result.replacement.length)
+        };
+        assert_eq!(
+            std::str::from_utf8(replacement).unwrap(),
+            "## One\n## plain\n"
+        );
+        unsafe {
+            inflow_owned_bytes_free(result.replacement.data, result.replacement.length);
+        }
+
+        let invalid =
+            unsafe { inflow_markdown_format_heading(source.as_ptr(), source.len(), 0, 0, 7) };
+        assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
+        assert!(invalid.replacement.data.is_null());
     }
 }

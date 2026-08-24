@@ -119,6 +119,65 @@ final class MarkdownFormatterTests: XCTestCase {
         XCTAssertEqual(removed.resultingSource, source)
     }
 
+    func testHeadingPlanExpandsUnicodeLineAndPreservesCaret() throws {
+        let source = "Intro\n标题👩‍💻\nTail\n"
+        let caret = (source as NSString).range(of: "👩‍💻").location
+        let plan = try MarkdownFormatter.plan(
+            source: source,
+            selectedUTF16Range: NSRange(location: caret, length: 0),
+            heading: .three
+        )
+
+        XCTAssertEqual(plan.resultingSource, "Intro\n### 标题👩‍💻\nTail\n")
+        let selected = try XCTUnwrap(
+            MarkdownSourceRange.navigationTarget(
+                forUTF8Range: plan.selectionUTF8Range,
+                in: plan.resultingSource
+            )
+        )
+        XCTAssertEqual(selected.revealRange.length, 0)
+        XCTAssertEqual(selected.revealRange.location, caret + 4)
+    }
+
+    func testHeadingPlanUnifiesMultilineAndConvertsSetext() throws {
+        let source = "Title\n=====\nplain\n### Three\n"
+        let plan = try MarkdownFormatter.plan(
+            source: source,
+            selectedUTF16Range: NSRange(location: 0, length: (source as NSString).length),
+            heading: .two
+        )
+        XCTAssertEqual(plan.resultingSource, "## Title\n## plain\n## Three\n")
+        XCTAssertEqual(
+            try MarkdownAnalyzer.analyze(plan.resultingSource).headings.map(\.level),
+            [2, 2, 2]
+        )
+
+        let removed = try MarkdownFormatter.plan(
+            source: plan.resultingSource,
+            selectedUTF16Range: NSRange(
+                location: 0,
+                length: (plan.resultingSource as NSString).length
+            ),
+            heading: .two
+        )
+        XCTAssertEqual(removed.resultingSource, "Title\nplain\nThree\n")
+    }
+
+    func testHeadingPlanRejectsCodeFenceWithoutChangingSource() {
+        let source = "```\ninside\n```\n"
+        XCTAssertThrowsError(
+            try MarkdownFormatter.plan(
+                source: source,
+                selectedUTF16Range: (source as NSString).range(of: "inside"),
+                heading: .one
+            )
+        ) { error in
+            guard case MarkdownFormatError.ambiguousSelection = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
     @MainActor
     func testSessionAppliesFormatAsOneUndoUnitAndRestoresSelection() throws {
         let source = "Hello 世界"
@@ -145,6 +204,18 @@ final class MarkdownFormatterTests: XCTestCase {
         XCTAssertEqual(session.textView.string, source)
         session.textView.undoManager?.redo()
         XCTAssertEqual(session.textView.string, "Hello **世界**")
+
+        session.textView.string = "Title\nBody\n"
+        session.textView.setSelectedRange(NSRange(location: 2, length: 0))
+        let heading = try MarkdownFormatter.plan(
+            source: session.textView.string,
+            selectedUTF16Range: session.textView.selectedRange(),
+            heading: .two
+        )
+        XCTAssertTrue(session.applyMarkdownFormat(heading, actionName: "标题格式"))
+        XCTAssertEqual(session.textView.string, "## Title\nBody\n")
+        session.textView.undoManager?.undo()
+        XCTAssertEqual(session.textView.string, "Title\nBody\n")
     }
 
     @MainActor
@@ -169,13 +240,14 @@ final class MarkdownFormatterTests: XCTestCase {
 
     @MainActor
     func testFormatCommandActionsAreSceneScopedAndRespectReadOnlyState() {
-        var first: [MarkdownInlineFormat] = []
-        var second: [MarkdownInlineFormat] = []
+        var first: [MarkdownFormatCommand] = []
+        var second: [MarkdownFormatCommand] = []
         let editable = MarkdownFormatCommandActions(canFormat: true) { first.append($0) }
         let readOnly = MarkdownFormatCommandActions(canFormat: false) { second.append($0) }
 
-        editable.apply(.bold)
-        XCTAssertEqual(first, [.bold])
+        editable.apply(.inline(.bold))
+        editable.apply(.heading(.four))
+        XCTAssertEqual(first, [.inline(.bold), .heading(.four)])
         XCTAssertTrue(second.isEmpty)
         XCTAssertFalse(readOnly.canFormat)
     }
@@ -203,6 +275,13 @@ final class MarkdownFormatterTests: XCTestCase {
         }
         XCTAssertEqual(strikethroughItems.count, 1)
         XCTAssertEqual(strikethroughItems.first?.keyEquivalent, "")
+
+        XCTAssertEqual(items.filter { $0.title == "标题" }.count, 1)
+        for level in MarkdownHeadingLevel.allCases {
+            let matches = items.filter { $0.title == level.label }
+            XCTAssertEqual(matches.count, 1)
+            XCTAssertEqual(matches.first?.keyEquivalent, "")
+        }
     }
 
     @MainActor

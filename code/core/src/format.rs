@@ -5,7 +5,7 @@ use std::ops::Range;
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::render;
+use crate::{analysis, render};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InlineFormat {
@@ -33,16 +33,29 @@ struct FormatSpan {
     content_range: Range<usize>,
 }
 
+#[derive(Debug)]
+struct BlockUnit {
+    source_range: Range<usize>,
+    content_range: Range<usize>,
+    line_ending_range: Range<usize>,
+    heading_level: Option<u8>,
+}
+
+#[derive(Debug)]
+struct OutputUnit {
+    old_source_range: Range<usize>,
+    old_content_range: Range<usize>,
+    new_unit_range: Range<usize>,
+    new_content_start: usize,
+    actionable: bool,
+}
+
 pub fn format_inline(
     source: &str,
     requested_selection: Range<usize>,
     format: InlineFormat,
 ) -> Result<MarkdownEdit, FormatError> {
-    if requested_selection.start > requested_selection.end
-        || requested_selection.end > source.len()
-        || !is_grapheme_boundary(source, requested_selection.start)
-        || !is_grapheme_boundary(source, requested_selection.end)
-    {
+    if !is_valid_selection(source, &requested_selection) {
         return Err(FormatError::InvalidSelection);
     }
 
@@ -103,6 +116,316 @@ pub fn format_inline(
         replacement,
         selection_range: selection.start + marker.len()..selection.end + marker.len(),
     })
+}
+
+pub fn format_heading(
+    source: &str,
+    requested_selection: Range<usize>,
+    level: u8,
+) -> Result<MarkdownEdit, FormatError> {
+    if !(1..=6).contains(&level) || !is_valid_selection(source, &requested_selection) {
+        return Err(FormatError::InvalidSelection);
+    }
+
+    let document_analysis = analysis::analyze(source);
+    let block_range = heading_aware_line_range(
+        source,
+        requested_selection.clone(),
+        &document_analysis.headings,
+    );
+    let units = block_units(source, block_range.clone(), &document_analysis.headings)?;
+    let caret = requested_selection.start;
+    let actionable: Vec<bool> = units
+        .iter()
+        .map(|unit| {
+            unit.heading_level.is_some()
+                || !unit.content_range.is_empty()
+                || (requested_selection.is_empty()
+                    && unit.source_range.start <= caret
+                    && caret <= unit.source_range.end)
+        })
+        .collect();
+    if !actionable.iter().any(|is_actionable| *is_actionable) {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    let remove = units
+        .iter()
+        .zip(&actionable)
+        .filter(|(_, is_actionable)| **is_actionable)
+        .all(|(unit, _)| unit.heading_level == Some(level));
+    let marker = "#".repeat(usize::from(level));
+    let mut replacement = String::with_capacity(block_range.len() + units.len() * 7);
+    let mut output_units = Vec::with_capacity(units.len());
+
+    for (unit, is_actionable) in units.iter().zip(actionable) {
+        let new_unit_start = replacement.len();
+        let content = &source[unit.content_range.clone()];
+        let new_content_start;
+
+        if !is_actionable {
+            replacement.push_str(&source[unit.source_range.clone()]);
+            new_content_start = new_unit_start
+                + unit
+                    .content_range
+                    .start
+                    .saturating_sub(unit.source_range.start);
+        } else if remove {
+            new_content_start = new_unit_start;
+            replacement.push_str(content);
+            replacement.push_str(&source[unit.line_ending_range.clone()]);
+        } else {
+            replacement.push_str(&marker);
+            replacement.push(' ');
+            new_content_start = replacement.len();
+            replacement.push_str(content);
+            replacement.push_str(&source[unit.line_ending_range.clone()]);
+        }
+
+        output_units.push(OutputUnit {
+            old_source_range: unit.source_range.clone(),
+            old_content_range: unit.content_range.clone(),
+            new_unit_range: new_unit_start..replacement.len(),
+            new_content_start,
+            actionable: is_actionable,
+        });
+    }
+
+    let candidate = replacing(source, block_range.clone(), &replacement);
+    let candidate_headings = analysis::analyze(&candidate).headings;
+    for unit in output_units.iter().filter(|unit| unit.actionable) {
+        let expected_start = block_range.start + unit.new_unit_range.start;
+        let heading = candidate_headings
+            .iter()
+            .find(|heading| heading.source_range.start == expected_start);
+        if remove {
+            if heading.is_some() {
+                return Err(FormatError::AmbiguousSelection);
+            }
+        } else if heading.is_none_or(|heading| heading.level != level) {
+            return Err(FormatError::AmbiguousSelection);
+        }
+    }
+
+    let selection_range = if requested_selection.is_empty() {
+        let unit = output_units
+            .iter()
+            .find(|unit| unit.old_source_range.start <= caret && caret <= unit.old_source_range.end)
+            .ok_or(FormatError::InvalidSelection)?;
+        let old_content_offset = caret
+            .saturating_sub(unit.old_content_range.start)
+            .min(unit.old_content_range.len());
+        let new_caret = block_range.start + unit.new_content_start + old_content_offset;
+        new_caret..new_caret
+    } else {
+        let selected_end = block_range.start + without_trailing_line_ending(&replacement);
+        block_range.start..selected_end
+    };
+
+    Ok(MarkdownEdit {
+        replace_range: block_range,
+        replacement,
+        selection_range,
+    })
+}
+
+fn heading_aware_line_range(
+    source: &str,
+    selection: Range<usize>,
+    headings: &[analysis::Heading],
+) -> Range<usize> {
+    let start = line_start(source, selection.start);
+    let end_anchor = if !selection.is_empty()
+        && selection.end > selection.start
+        && source.as_bytes().get(selection.end - 1) == Some(&b'\n')
+    {
+        selection.end - 1
+    } else {
+        selection.end
+    };
+    let mut range = start..line_end_including_ending(source, end_anchor);
+
+    loop {
+        let previous = range.clone();
+        for heading in headings {
+            if ranges_overlap(&range, &heading.source_range)
+                || (selection.is_empty()
+                    && heading.source_range.start <= selection.start
+                    && selection.start <= heading.source_range.end)
+            {
+                range.start = range
+                    .start
+                    .min(line_start(source, heading.source_range.start));
+                range.end = range
+                    .end
+                    .max(line_end_including_ending(source, heading.source_range.end));
+            }
+        }
+        if range == previous {
+            return range;
+        }
+    }
+}
+
+fn block_units(
+    source: &str,
+    block_range: Range<usize>,
+    headings: &[analysis::Heading],
+) -> Result<Vec<BlockUnit>, FormatError> {
+    if block_range.is_empty() {
+        return Ok(vec![BlockUnit {
+            source_range: block_range.clone(),
+            content_range: block_range.clone(),
+            line_ending_range: block_range,
+            heading_level: None,
+        }]);
+    }
+
+    let mut units = Vec::new();
+    let mut cursor = block_range.start;
+    while cursor < block_range.end {
+        if let Some(heading) = headings.iter().find(|heading| {
+            heading.source_range.start == cursor && heading.source_range.end <= block_range.end
+        }) {
+            let unit_end = line_end_including_ending(source, heading.source_range.end);
+            let content_range = heading_content_range(source, heading)?;
+            units.push(BlockUnit {
+                source_range: cursor..unit_end,
+                content_range,
+                line_ending_range: heading.source_range.end..unit_end,
+                heading_level: Some(heading.level),
+            });
+            cursor = unit_end;
+            continue;
+        }
+
+        let unit_end = line_end_including_ending(source, cursor);
+        let line_ending_start = trailing_line_ending_start(source, cursor..unit_end);
+        units.push(BlockUnit {
+            source_range: cursor..unit_end,
+            content_range: trim_horizontal_whitespace(source, cursor..line_ending_start),
+            line_ending_range: line_ending_start..unit_end,
+            heading_level: None,
+        });
+        cursor = unit_end;
+    }
+    Ok(units)
+}
+
+fn heading_content_range(
+    source: &str,
+    heading: &analysis::Heading,
+) -> Result<Range<usize>, FormatError> {
+    let raw = &source[heading.source_range.clone()];
+    if let Some(newline) = raw.find('\n') {
+        let title_end = heading.source_range.start + newline;
+        let title_end = if source.as_bytes().get(title_end.saturating_sub(1)) == Some(&b'\r') {
+            title_end - 1
+        } else {
+            title_end
+        };
+        return Ok(trim_horizontal_whitespace(
+            source,
+            heading.source_range.start..title_end,
+        ));
+    }
+
+    atx_heading_content_range(source, heading.source_range.clone())
+        .ok_or(FormatError::AmbiguousSelection)
+}
+
+fn atx_heading_content_range(source: &str, range: Range<usize>) -> Option<Range<usize>> {
+    let bytes = source.as_bytes();
+    let mut cursor = range.start;
+    let mut indent = 0;
+    while cursor < range.end && bytes[cursor] == b' ' && indent < 3 {
+        cursor += 1;
+        indent += 1;
+    }
+    let marker_start = cursor;
+    while cursor < range.end && bytes[cursor] == b'#' {
+        cursor += 1;
+    }
+    let marker_length = cursor - marker_start;
+    if !(1..=6).contains(&marker_length)
+        || (cursor < range.end && !matches!(bytes[cursor], b' ' | b'\t'))
+    {
+        return None;
+    }
+    while cursor < range.end && matches!(bytes[cursor], b' ' | b'\t') {
+        cursor += 1;
+    }
+
+    let mut content_end = range.end;
+    while content_end > cursor && matches!(bytes[content_end - 1], b' ' | b'\t') {
+        content_end -= 1;
+    }
+    let closing_end = content_end;
+    while content_end > cursor && bytes[content_end - 1] == b'#' {
+        content_end -= 1;
+    }
+    if content_end < closing_end
+        && content_end > cursor
+        && matches!(bytes[content_end - 1], b' ' | b'\t')
+    {
+        while content_end > cursor && matches!(bytes[content_end - 1], b' ' | b'\t') {
+            content_end -= 1;
+        }
+    } else {
+        content_end = closing_end;
+    }
+    Some(cursor..content_end)
+}
+
+fn trim_horizontal_whitespace(source: &str, mut range: Range<usize>) -> Range<usize> {
+    let bytes = source.as_bytes();
+    while range.start < range.end && matches!(bytes[range.start], b' ' | b'\t') {
+        range.start += 1;
+    }
+    while range.end > range.start && matches!(bytes[range.end - 1], b' ' | b'\t') {
+        range.end -= 1;
+    }
+    range
+}
+
+fn line_start(source: &str, offset: usize) -> usize {
+    source.as_bytes()[..offset]
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |newline| newline + 1)
+}
+
+fn line_end_including_ending(source: &str, offset: usize) -> usize {
+    if offset >= source.len() {
+        return source.len();
+    }
+    source.as_bytes()[offset..]
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .map_or(source.len(), |newline| offset + newline + 1)
+}
+
+fn trailing_line_ending_start(source: &str, range: Range<usize>) -> usize {
+    let bytes = source.as_bytes();
+    if range.end > range.start && bytes[range.end - 1] == b'\n' {
+        if range.end - 1 > range.start && bytes[range.end - 2] == b'\r' {
+            range.end - 2
+        } else {
+            range.end - 1
+        }
+    } else {
+        range.end
+    }
+}
+
+fn without_trailing_line_ending(text: &str) -> usize {
+    if text.ends_with("\r\n") {
+        text.len() - 2
+    } else if text.ends_with('\n') {
+        text.len() - 1
+    } else {
+        text.len()
+    }
 }
 
 fn trim_surrounding_whitespace(source: &str, selection: Range<usize>) -> Option<Range<usize>> {
@@ -182,6 +505,13 @@ fn ranges_overlap(lhs: &Range<usize>, rhs: &Range<usize>) -> bool {
     lhs.start < rhs.end && rhs.start < lhs.end
 }
 
+fn is_valid_selection(source: &str, selection: &Range<usize>) -> bool {
+    selection.start <= selection.end
+        && selection.end <= source.len()
+        && is_grapheme_boundary(source, selection.start)
+        && is_grapheme_boundary(source, selection.end)
+}
+
 fn is_grapheme_boundary(source: &str, offset: usize) -> bool {
     offset == source.len()
         || source
@@ -192,6 +522,113 @@ fn is_grapheme_boundary(source: &str, offset: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adds_heading_to_current_line_and_preserves_caret_position() {
+        assert_eq!(
+            format_heading("plain text\nnext\n", 2..2, 2),
+            Ok(MarkdownEdit {
+                replace_range: 0..11,
+                replacement: "## plain text\n".to_owned(),
+                selection_range: 5..5,
+            })
+        );
+        assert_eq!(
+            format_heading("", 0..0, 1),
+            Ok(MarkdownEdit {
+                replace_range: 0..0,
+                replacement: "# ".to_owned(),
+                selection_range: 2..2,
+            })
+        );
+    }
+
+    #[test]
+    fn removes_same_atx_heading_and_normalizes_closing_hashes() {
+        let source = "## Title ##\nBody\n";
+        let edit = format_heading(source, 4..4, 2).unwrap();
+        assert_eq!(edit.replace_range, 0..12);
+        assert_eq!(edit.replacement, "Title\n");
+        assert_eq!(edit.selection_range, 1..1);
+        assert_eq!(
+            replacing(source, edit.replace_range, &edit.replacement),
+            "Title\nBody\n"
+        );
+    }
+
+    #[test]
+    fn unifies_mixed_multiline_headings_then_removes_them_together() {
+        let source = "# One\nplain\n### Three\n\nnext\n";
+        let selected_end = "# One\nplain\n### Three\n\n".len();
+        let added = format_heading(source, 0..selected_end, 2).unwrap();
+        assert_eq!(added.replace_range, 0..selected_end);
+        assert_eq!(added.replacement, "## One\n## plain\n## Three\n\n");
+        assert_eq!(added.selection_range, 0..added.replacement.len() - 1);
+
+        let formatted = replacing(source, added.replace_range, &added.replacement);
+        let removed = format_heading(&formatted, 0..added.replacement.len() - 1, 2).unwrap();
+        assert_eq!(removed.replacement, "One\nplain\nThree\n");
+        assert_eq!(
+            replacing(&formatted, removed.replace_range, &removed.replacement),
+            "One\nplain\nThree\n\nnext\n"
+        );
+    }
+
+    #[test]
+    fn converts_or_removes_setext_heading_as_one_block() {
+        let source = "Title\n=====\nBody\n";
+        let converted = format_heading(source, 2..2, 3).unwrap();
+        assert_eq!(converted.replace_range, 0..12);
+        assert_eq!(converted.replacement, "### Title\n");
+        assert_eq!(
+            replacing(source, converted.replace_range, &converted.replacement),
+            "### Title\nBody\n"
+        );
+
+        let removed = format_heading(source, 8..8, 1).unwrap();
+        assert_eq!(removed.replacement, "Title\n");
+
+        let crlf = "Title\r\n=====\r\n";
+        let converted = format_heading(crlf, 9..9, 4).unwrap();
+        assert_eq!(converted.replacement, "#### Title\r\n");
+    }
+
+    #[test]
+    fn selection_ending_at_line_break_does_not_change_next_line() {
+        let source = "one\ntwo\n";
+        let edit = format_heading(source, 0..4, 1).unwrap();
+        assert_eq!(edit.replace_range, 0..4);
+        assert_eq!(edit.replacement, "# one\n");
+        assert_eq!(
+            replacing(source, edit.replace_range, &edit.replacement),
+            "# one\ntwo\n"
+        );
+    }
+
+    #[test]
+    fn refuses_headings_inside_code_fences_or_secondary_heading_on_removal() {
+        let fenced = "```\ninside\n```\n";
+        assert_eq!(
+            format_heading(fenced, 6..6, 1),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            format_heading("## # Child\n", 4..4, 2),
+            Err(FormatError::AmbiguousSelection)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_heading_level_and_grapheme_internal_selection() {
+        assert_eq!(
+            format_heading("text", 0..0, 0),
+            Err(FormatError::InvalidSelection)
+        );
+        assert_eq!(
+            format_heading("e\u{301}", 1..1, 1),
+            Err(FormatError::InvalidSelection)
+        );
+    }
 
     #[test]
     fn wraps_unicode_selection_and_keeps_content_selected() {

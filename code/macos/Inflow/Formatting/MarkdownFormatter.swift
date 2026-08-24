@@ -30,6 +30,40 @@ enum MarkdownInlineFormat: UInt8, CaseIterable, Sendable {
     }
 }
 
+enum MarkdownHeadingLevel: UInt8, CaseIterable, Identifiable, Sendable {
+    case one = 1
+    case two = 2
+    case three = 3
+    case four = 4
+    case five = 5
+    case six = 6
+
+    var id: UInt8 { rawValue }
+
+    var label: String {
+        switch self {
+        case .one: "一级标题"
+        case .two: "二级标题"
+        case .three: "三级标题"
+        case .four: "四级标题"
+        case .five: "五级标题"
+        case .six: "六级标题"
+        }
+    }
+}
+
+enum MarkdownFormatCommand: Equatable, Sendable {
+    case inline(MarkdownInlineFormat)
+    case heading(MarkdownHeadingLevel)
+
+    var undoActionName: String {
+        switch self {
+        case let .inline(format): format.undoActionName
+        case .heading: "标题格式"
+        }
+    }
+}
+
 struct MarkdownFormatPlan: Sendable {
     let sourceSnapshot: String
     let replaceUTF8Range: Range<Int>
@@ -47,7 +81,7 @@ enum MarkdownFormatError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .ambiguousSelection:
-            "当前选区只覆盖了部分或混合格式，或无法形成有效的行内 Markdown。请调整选区后重试。"
+            "当前选区包含部分或混合格式，或无法形成有效的 Markdown 结构。请调整选区后重试。"
         case .invalidSelection:
             "当前选区无法安全映射到完整字符，请调整选区后重试。"
         case .invalidCoreResult:
@@ -64,6 +98,30 @@ enum MarkdownFormatter {
         selectedUTF16Range: NSRange,
         format: MarkdownInlineFormat
     ) throws -> MarkdownFormatPlan {
+        try plan(
+            source: source,
+            selectedUTF16Range: selectedUTF16Range,
+            command: .inline(format)
+        )
+    }
+
+    static func plan(
+        source: String,
+        selectedUTF16Range: NSRange,
+        heading: MarkdownHeadingLevel
+    ) throws -> MarkdownFormatPlan {
+        try plan(
+            source: source,
+            selectedUTF16Range: selectedUTF16Range,
+            command: .heading(heading)
+        )
+    }
+
+    static func plan(
+        source: String,
+        selectedUTF16Range: NSRange,
+        command: MarkdownFormatCommand
+    ) throws -> MarkdownFormatPlan {
         guard InflowCoreBridge.isCompatible else {
             throw MarkdownFormatError.coreFailure
         }
@@ -76,13 +134,25 @@ enum MarkdownFormatter {
 
         let sourceUTF8 = Data(source.utf8)
         let result: InflowMarkdownEditResult = sourceUTF8.withUnsafeBytes { buffer in
-            inflow_markdown_format_inline(
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count),
-                UInt(selectedUTF8Range.lowerBound),
-                UInt(selectedUTF8Range.upperBound),
-                format.coreValue
-            )
+            let sourcePointer = buffer.bindMemory(to: UInt8.self).baseAddress
+            return switch command {
+            case let .inline(format):
+                inflow_markdown_format_inline(
+                    sourcePointer,
+                    UInt(buffer.count),
+                    UInt(selectedUTF8Range.lowerBound),
+                    UInt(selectedUTF8Range.upperBound),
+                    format.coreValue
+                )
+            case let .heading(level):
+                inflow_markdown_format_heading(
+                    sourcePointer,
+                    UInt(buffer.count),
+                    UInt(selectedUTF8Range.lowerBound),
+                    UInt(selectedUTF8Range.upperBound),
+                    level.rawValue
+                )
+            }
         }
 
         guard result.status == INFLOW_STATUS_OK else {
