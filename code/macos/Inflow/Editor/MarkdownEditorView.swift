@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 private enum HTMLExportNotice: Identifiable {
@@ -107,6 +108,7 @@ struct MarkdownEditorView: View {
     @Binding var document: MarkdownDocument
     let fileURL: URL?
     let isEditable: Bool
+    var recoveryCoordinator: DocumentRecoveryCoordinator? = nil
 
     @SceneStorage("editorViewMode") private var storedViewMode = EditorViewMode.split.rawValue
     @SceneStorage("isDocumentOutlineVisible") private var isOutlineVisible = true
@@ -138,6 +140,9 @@ struct MarkdownEditorView: View {
     @State private var isImportingImage = false
     @State private var imageAssetWorker = ImageAssetWorker()
     @StateObject private var imageDirectoryAccess = ImageAssetDirectoryAccess()
+    @State private var recoveryRecordID = UUID()
+    @State private var isRecoveryCenterPresented = false
+    @State private var didApplyRestorationState = false
 
     private var viewMode: EditorViewMode {
         get { EditorViewMode.resolve(storedValue: storedViewMode) }
@@ -154,7 +159,15 @@ struct MarkdownEditorView: View {
     }
 
     var body: some View {
+        presentationLayer
+    }
+
+    private var editorSurface: some View {
         VStack(spacing: 0) {
+            if let recoveryCoordinator {
+                RecoveryProtectionStatusBanner(coordinator: recoveryCoordinator)
+            }
+
             if document.properties.requiresLineEndingChoice {
                 lineEndingChoiceBanner
                 Divider()
@@ -185,6 +198,7 @@ struct MarkdownEditorView: View {
         .focusedSceneValue(\.htmlExportActions, htmlExportCommandActions)
         .focusedSceneValue(\.markdownFormatActions, markdownFormatCommandActions)
         .focusedSceneValue(\.markdownInsertActions, markdownInsertCommandActions)
+        .focusedSceneValue(\.recoveryActions, recoveryCommandActions)
         .toolbar {
             ToolbarItem {
                 Button {
@@ -217,7 +231,12 @@ struct MarkdownEditorView: View {
                 .accessibilityLabel("写作视图")
             }
         }
+    }
+
+    private var documentObservationLayer: some View {
+        editorSurface
         .onAppear {
+            applyRestorationStateIfNeeded()
             scheduleDerivedContent(
                 for: document.text,
                 documentDirectory: fileURL?.deletingLastPathComponent(),
@@ -230,6 +249,15 @@ struct MarkdownEditorView: View {
                     revealAfterSearch: false,
                     delayNanoseconds: 0
                 )
+            }
+            updateRecoveryProtection()
+            if let recoveryCoordinator {
+                Task {
+                    await recoveryCoordinator.loadIfNeeded()
+                    if recoveryCoordinator.claimAutomaticPresentation() {
+                        isRecoveryCenterPresented = true
+                    }
+                }
             }
         }
         .onChange(of: Data(document.text.utf8)) { _, _ in
@@ -253,6 +281,7 @@ struct MarkdownEditorView: View {
                     delayNanoseconds: replacementRange == nil ? 80_000_000 : 0
                 )
             }
+            updateRecoveryProtection()
         }
         .onChange(of: fileURL) { _, newURL in
             scheduleDerivedContent(
@@ -260,6 +289,23 @@ struct MarkdownEditorView: View {
                 documentDirectory: newURL?.deletingLastPathComponent(),
                 delayNanoseconds: 0
             )
+            updateRecoveryProtection()
+        }
+        .onChange(of: document.properties) { _, _ in
+            updateRecoveryProtection()
+        }
+        .onChange(of: storedViewMode) { _, _ in
+            updateRecoveryProtection()
+        }
+    }
+
+    private var interactionObservationLayer: some View {
+        documentObservationLayer
+        .onChange(of: sourceEditorSession.selectedUTF16Range) { _, _ in
+            updateRecoveryProtection()
+        }
+        .onChange(of: sourceEditorSession.verticalScrollOffset) { _, _ in
+            updateRecoveryProtection()
         }
         .onChange(of: Data(findSession.query.utf8)) { _, _ in
             findSession.clearNotice()
@@ -292,7 +338,16 @@ struct MarkdownEditorView: View {
             findSearchTask?.cancel()
             pendingFindNavigation.removeAll()
             findSession.cancelSearch()
+            recoveryCoordinator?.close(recoveryRecordID)
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) {
+            _ in
+            recoveryCoordinator?.close(recoveryRecordID)
+        }
+    }
+
+    private var presentationLayer: some View {
+        interactionObservationLayer
         .sheet(item: $replaceAllPlan) { plan in
             ReplaceAllPreviewView(
                 plan: plan,
@@ -306,6 +361,14 @@ struct MarkdownEditorView: View {
                 onCancel: { linkInsertionRequest = nil },
                 onInsert: { destination in insertLink(request, destination: destination) }
             )
+        }
+        .sheet(isPresented: $isRecoveryCenterPresented) {
+            if let recoveryCoordinator {
+                RecoveryCenterView(
+                    coordinator: recoveryCoordinator,
+                    onClose: { isRecoveryCenterPresented = false }
+                )
+            }
         }
         .alert(item: $htmlExportNotice) { notice in
             notice.alert
@@ -433,6 +496,39 @@ struct MarkdownEditorView: View {
         .padding(.vertical, 8)
         .background(Color.orange.opacity(0.08))
         .accessibilityElement(children: .contain)
+    }
+
+    private var recoveryCommandActions: RecoveryCommandActions? {
+        guard recoveryCoordinator != nil else { return nil }
+        return RecoveryCommandActions {
+            isRecoveryCenterPresented = true
+        }
+    }
+
+    private func applyRestorationStateIfNeeded() {
+        guard !didApplyRestorationState,
+              let restorationState = document.restorationState,
+              EditorViewMode(rawValue: restorationState.viewModeRawValue) != nil
+        else {
+            return
+        }
+        didApplyRestorationState = true
+        storedViewMode = restorationState.viewModeRawValue
+        sourceEditorSession.requestRestoration(restorationState)
+    }
+
+    private func updateRecoveryProtection() {
+        guard let recoveryCoordinator else { return }
+        recoveryCoordinator.update(
+            DocumentRecoveryRecord(
+                id: recoveryRecordID,
+                document: document,
+                originalURL: fileURL,
+                selectedUTF16Range: sourceEditorSession.selectedUTF16Range,
+                viewMode: viewMode,
+                verticalScrollOffset: sourceEditorSession.verticalScrollOffset
+            )
+        )
     }
 
     private func selectHeading(_ heading: DocumentHeading) {

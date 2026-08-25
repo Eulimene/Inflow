@@ -15,19 +15,23 @@ struct MarkdownDocument: FileDocument {
 
     var text: String
     var properties: MarkdownFileProperties
+    var restorationState: MarkdownRestorationState?
 
     init(
         text: String = "",
-        properties: MarkdownFileProperties = .newDocument
+        properties: MarkdownFileProperties = .newDocument,
+        restorationState: MarkdownRestorationState? = nil
     ) {
         self.text = text
         self.properties = properties
+        self.restorationState = restorationState
     }
 
     init(fileData: Data) throws {
         let decoded = try MarkdownCodec.decode(fileData)
         text = decoded.text
         properties = decoded.properties
+        restorationState = nil
     }
 
     init(configuration: ReadConfiguration) throws {

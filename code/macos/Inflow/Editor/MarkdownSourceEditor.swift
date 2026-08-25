@@ -99,8 +99,10 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     let scrollView: NSScrollView
     let textView: WindowAwareTextView
     @Published private(set) var selectedUTF16Range = NSRange(location: 0, length: 0)
+    @Published private(set) var verticalScrollOffset = 0.0
     fileprivate var appliedSelectionGeneration: Int?
     fileprivate var pendingSelectionRequest: SourceSelectionRequest?
+    fileprivate var pendingRestorationState: MarkdownRestorationState?
     fileprivate var updateBoundText: ((String) -> Void)?
 
     override init() {
@@ -111,6 +113,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
+        scrollView.contentView.postsBoundsChangedNotifications = true
 
         let textView = WindowAwareTextView(frame: scrollView.contentView.bounds)
         textView.font = .monospacedSystemFont(ofSize: 15, weight: .regular)
@@ -157,10 +160,25 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         )
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(scrollViewBoundsChanged),
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView,
+        )
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(undoManagerChangedText),
             name: .NSUndoManagerDidRedoChange,
             object: textView.undoManager
         )
+    }
+
+    @objc
+    private func scrollViewBoundsChanged(_ notification: Notification) {
+        guard let clipView = notification.object as? NSClipView else { return }
+        let offset = max(0, clipView.bounds.origin.y)
+        if verticalScrollOffset != offset {
+            verticalScrollOffset = offset
+        }
     }
 
     @objc
@@ -178,6 +196,38 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         if selectedUTF16Range != range {
             selectedUTF16Range = range
         }
+    }
+
+    func requestRestoration(_ state: MarkdownRestorationState) {
+        pendingRestorationState = state
+        applyPendingRestorationIfPossible()
+    }
+
+    fileprivate func applyPendingRestorationIfPossible() {
+        guard let state = pendingRestorationState,
+              textView.window != nil
+        else {
+            return
+        }
+        let utf16Length = (textView.string as NSString).length
+        let location = min(state.selectedUTF16Location, utf16Length)
+        let length = min(state.selectedUTF16Length, utf16Length - location)
+        let range = NSRange(location: location, length: length)
+        textView.setSelectedRange(range)
+        updateSelectedRange(range)
+
+        if let textContainer = textView.textContainer {
+            textView.layoutManager?.ensureLayout(for: textContainer)
+        }
+        let maximumOffset = max(
+            0,
+            textView.bounds.height - scrollView.contentSize.height
+        )
+        let offset = min(CGFloat(state.verticalScrollOffset), maximumOffset)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: offset))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        verticalScrollOffset = Double(offset)
+        pendingRestorationState = nil
     }
 
     @discardableResult
@@ -577,6 +627,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
             textView.dropImageHandler = parent.onDropImage
             textView.didAttachToWindow = { [weak self, weak textView] in
                 guard let self, let textView else { return }
+                self.parent.session.applyPendingRestorationIfPossible()
                 self.applyPendingSelection(to: textView)
             }
 
@@ -589,6 +640,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
                 textView.setSelectedRange(NSRange(location: location, length: length))
             }
 
+            parent.session.applyPendingRestorationIfPossible()
             apply(parent.selectionRequest, to: textView)
         }
 

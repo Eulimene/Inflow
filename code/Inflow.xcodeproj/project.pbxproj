@@ -39,6 +39,9 @@
 		A1000000000000000000001E /* LocalImageResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000023 /* LocalImageResolver.swift */; };
 		A1000000000000000000001F /* ImageAssetImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000024 /* ImageAssetImporter.swift */; };
 		A10000000000000000000020 /* PDFExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000025 /* PDFExporter.swift */; };
+		A10000000000000000000021 /* DocumentRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000026 /* DocumentRecovery.swift */; };
+		A10000000000000000000022 /* RecoveryCenterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000027 /* RecoveryCenterView.swift */; };
+		A10000000000000000000023 /* DocumentRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000028 /* DocumentRecoveryTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -89,6 +92,9 @@
 		A20000000000000000000023 /* LocalImageResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preview/LocalImageResolver.swift; sourceTree = "<group>"; };
 		A20000000000000000000024 /* ImageAssetImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Insertion/ImageAssetImporter.swift; sourceTree = "<group>"; };
 		A20000000000000000000025 /* PDFExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Export/PDFExporter.swift; sourceTree = "<group>"; };
+		A20000000000000000000026 /* DocumentRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Recovery/DocumentRecovery.swift; sourceTree = "<group>"; };
+		A20000000000000000000027 /* RecoveryCenterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Recovery/RecoveryCenterView.swift; sourceTree = "<group>"; };
+		A20000000000000000000028 /* DocumentRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentRecoveryTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -129,6 +135,8 @@
 				A2000000000000000000001A /* HTMLExporter.swift */,
 				A2000000000000000000001B /* HTMLExportCommands.swift */,
 				A20000000000000000000025 /* PDFExporter.swift */,
+				A20000000000000000000026 /* DocumentRecovery.swift */,
+				A20000000000000000000027 /* RecoveryCenterView.swift */,
 				A2000000000000000000001D /* MarkdownFormatter.swift */,
 				A2000000000000000000001E /* MarkdownFormatCommands.swift */,
 				A20000000000000000000020 /* MarkdownInsertCommands.swift */,
@@ -172,6 +180,7 @@
 				A2000000000000000000001C /* HTMLExporterTests.swift */,
 				A2000000000000000000001F /* MarkdownFormatterTests.swift */,
 				A20000000000000000000022 /* MarkdownInsertionTests.swift */,
+				A20000000000000000000028 /* DocumentRecoveryTests.swift */,
 			);
 			path = macos/InflowTests;
 			sourceTree = "<group>";
@@ -336,6 +345,8 @@
 				A1000000000000000000001C /* MarkdownLinkInsertionView.swift in Sources */,
 				A1000000000000000000001F /* ImageAssetImporter.swift in Sources */,
 				A10000000000000000000020 /* PDFExporter.swift in Sources */,
+				A10000000000000000000021 /* DocumentRecovery.swift in Sources */,
+				A10000000000000000000022 /* RecoveryCenterView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -351,6 +362,7 @@
 				A10000000000000000000017 /* HTMLExporterTests.swift in Sources */,
 				A1000000000000000000001A /* MarkdownFormatterTests.swift in Sources */,
 				A1000000000000000000001D /* MarkdownInsertionTests.swift in Sources */,
+				A10000000000000000000023 /* DocumentRecoveryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

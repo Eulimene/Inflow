@@ -28,12 +28,15 @@ private struct OutlineCommands: Commands {
 
 @main
 struct InflowApp: App {
+    @StateObject private var recoveryCoordinator = DocumentRecoveryCoordinator()
+
     var body: some Scene {
         DocumentGroup(newDocument: MarkdownDocument()) { configuration in
             MarkdownEditorView(
                 document: configuration.$document,
                 fileURL: configuration.fileURL,
-                isEditable: configuration.isEditable
+                isEditable: configuration.isEditable,
+                recoveryCoordinator: recoveryCoordinator
             )
                 .frame(minWidth: 720, minHeight: 480)
         }
@@ -45,6 +48,7 @@ struct InflowApp: App {
             HTMLExportCommands()
             MarkdownFormatCommands()
             MarkdownInsertCommands()
+            RecoveryCommands()
         }
     }
 }
