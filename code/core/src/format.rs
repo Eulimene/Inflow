@@ -55,6 +55,13 @@ struct LinkSpan {
 }
 
 #[derive(Debug)]
+struct TableSpan {
+    full: Range<usize>,
+    columns: usize,
+    body_rows: usize,
+}
+
+#[derive(Debug)]
 struct BlockUnit {
     source_range: Range<usize>,
     content_range: Range<usize>,
@@ -393,6 +400,64 @@ pub fn insert_link(
 
     Ok(MarkdownEdit {
         replace_range,
+        replacement,
+        selection_range: label_range,
+    })
+}
+
+pub fn insert_table(
+    source: &str,
+    requested_selection: Range<usize>,
+) -> Result<MarkdownEdit, FormatError> {
+    if !is_valid_selection(source, &requested_selection) {
+        return Err(FormatError::InvalidSelection);
+    }
+    let tables = table_spans(source);
+    if tables.iter().any(|table| {
+        ranges_overlap(&requested_selection, &table.full)
+            || (requested_selection.is_empty()
+                && table.full.start <= requested_selection.start
+                && requested_selection.start <= table.full.end)
+    }) {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    let label = if requested_selection.is_empty() {
+        "标题 1".to_owned()
+    } else {
+        escaped_table_cell(&source[requested_selection.clone()])
+    };
+    let prefix = if requested_selection.start > 0
+        && source.as_bytes()[requested_selection.start - 1] != b'\n'
+    {
+        "\n\n"
+    } else {
+        ""
+    };
+    let suffix = if requested_selection.end < source.len()
+        && source.as_bytes()[requested_selection.end] != b'\n'
+    {
+        "\n\n"
+    } else {
+        ""
+    };
+    let table = format!(
+        "| {label} | 标题 2 | 标题 3 |\n| --- | --- | --- |\n| 内容 1 | 内容 2 | 内容 3 |\n| 内容 4 | 内容 5 | 内容 6 |"
+    );
+    let replacement = format!("{prefix}{table}{suffix}");
+    let table_start = requested_selection.start + prefix.len();
+    let label_start = table_start + 2;
+    let label_range = label_start..label_start + label.len();
+    let candidate = replacing(source, requested_selection.clone(), &replacement);
+    if !table_spans(&candidate)
+        .iter()
+        .any(|span| span.full.start == table_start && span.columns == 3 && span.body_rows == 2)
+    {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    Ok(MarkdownEdit {
+        replace_range: requested_selection,
         replacement,
         selection_range: label_range,
     })
@@ -1381,6 +1446,47 @@ fn escaped_link_label(label: &str) -> String {
     )
 }
 
+fn table_spans(source: &str) -> Vec<TableSpan> {
+    let mut open: Vec<TableSpan> = Vec::new();
+    let mut spans = Vec::new();
+    for (event, range) in Parser::new_ext(source, render::options()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Table(alignments)) => open.push(TableSpan {
+                full: range,
+                columns: alignments.len(),
+                body_rows: 0,
+            }),
+            Event::Start(Tag::TableRow) => {
+                if let Some(table) = open.last_mut() {
+                    table.body_rows += 1;
+                }
+            }
+            Event::End(TagEnd::Table) => {
+                if let Some(table) = open.pop() {
+                    spans.push(table);
+                }
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
+fn escaped_table_cell(content: &str) -> String {
+    content.chars().fold(
+        String::with_capacity(content.len()),
+        |mut escaped, character| {
+            match character {
+                '\\' => escaped.push_str("\\\\"),
+                '|' => escaped.push_str("\\|"),
+                '\n' => escaped.push_str("<br>"),
+                _ => escaped.push(character),
+            }
+            escaped
+        },
+    )
+}
+
 fn fence_marker(source: &str, line: Range<usize>) -> Option<(u8, usize)> {
     let bytes = source.as_bytes();
     let content_end = trailing_line_ending_start(source, line.clone());
@@ -1903,6 +2009,44 @@ mod tests {
         );
         assert_eq!(
             insert_link("e\u{301}", 1..1, "https://example.com"),
+            Err(FormatError::InvalidSelection)
+        );
+    }
+
+    #[test]
+    fn table_inserts_three_by_three_template_and_selects_first_header() {
+        let edit = insert_table("", 0..0).unwrap();
+        assert_eq!(
+            edit.replacement,
+            "| 标题 1 | 标题 2 | 标题 3 |\n| --- | --- | --- |\n| 内容 1 | 内容 2 | 内容 3 |\n| 内容 4 | 内容 5 | 内容 6 |"
+        );
+        assert_eq!(edit.selection_range, 2..10);
+        assert!(render::html_fragment(&edit.replacement).contains("<table>"));
+    }
+
+    #[test]
+    fn table_preserves_selection_with_cell_escaping_and_block_boundaries() {
+        let source = "before A|B\nC after";
+        let start = "before ".len();
+        let end = source.len() - " after".len();
+        let edit = insert_table(source, start..end).unwrap();
+        assert!(edit.replacement.starts_with("\n\n| A\\|B<br>C |"));
+        assert!(edit.replacement.ends_with("|\n\n"));
+        let formatted = replacing(source, edit.replace_range, &edit.replacement);
+        assert!(render::html_fragment(&formatted).contains("<table>"));
+        assert_eq!(&formatted[edit.selection_range], "A\\|B<br>C");
+    }
+
+    #[test]
+    fn table_rejects_existing_table_and_invalid_grapheme_boundary() {
+        let source = "| One | Two |\n| --- | --- |\n| A | B |\n";
+        let caret = source.find('A').unwrap();
+        assert_eq!(
+            insert_table(source, caret..caret),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            insert_table("e\u{301}", 1..1),
             Err(FormatError::InvalidSelection)
         );
     }

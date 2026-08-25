@@ -58,8 +58,54 @@ final class MarkdownInsertionTests: XCTestCase {
         }
     }
 
+    func testTablePlanCreatesThreeByThreeTemplateAndEscapesSelection() throws {
+        let empty = try MarkdownFormatter.tablePlan(
+            source: "",
+            selectedUTF16Range: NSRange(location: 0, length: 0)
+        )
+        XCTAssertEqual(
+            empty.resultingSource,
+            "| 标题 1 | 标题 2 | 标题 3 |\n| --- | --- | --- |\n| 内容 1 | 内容 2 | 内容 3 |\n| 内容 4 | 内容 5 | 内容 6 |"
+        )
+        let header = try XCTUnwrap(
+            MarkdownSourceRange.navigationTarget(
+                forUTF8Range: empty.selectionUTF8Range,
+                in: empty.resultingSource
+            )
+        )
+        XCTAssertEqual((empty.resultingSource as NSString).substring(with: header.revealRange), "标题 1")
+
+        let source = "before A|B\nC after"
+        let selected = (source as NSString).range(of: "A|B\nC")
+        let escaped = try MarkdownFormatter.tablePlan(
+            source: source,
+            selectedUTF16Range: selected
+        )
+        XCTAssertTrue(escaped.resultingSource.contains("| A\\|B<br>C | 标题 2 |"))
+        XCTAssertTrue(try MarkdownRenderer.htmlFragment(for: escaped.resultingSource).contains(
+            "<table>"
+        ))
+    }
+
+    func testTablePlanRejectsInsertionInsideExistingTable() {
+        let source = "| One | Two |\n| --- | --- |\n| A | B |\n"
+        XCTAssertThrowsError(
+            try MarkdownFormatter.tablePlan(
+                source: source,
+                selectedUTF16Range: NSRange(
+                    location: (source as NSString).range(of: "A").location,
+                    length: 0
+                )
+            )
+        ) { error in
+            guard case MarkdownFormatError.ambiguousSelection = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
     @MainActor
-    func testLinkPlanAppliesAsOneUndoUnit() throws {
+    func testInsertionPlansApplyAsOneUndoUnit() throws {
         let source = "Read docs"
         let session = MarkdownSourceEditorSession()
         session.textView.isEditable = true
@@ -76,16 +122,40 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertEqual(session.textView.string, source)
         session.textView.undoManager?.redo()
         XCTAssertEqual(session.textView.string, "Read [docs](<https://example.com>)")
+
+        session.textView.string = "Header"
+        session.textView.setSelectedRange(NSRange(location: 0, length: 6))
+        let table = try MarkdownFormatter.tablePlan(
+            source: session.textView.string,
+            selectedUTF16Range: session.textView.selectedRange()
+        )
+        XCTAssertTrue(session.applyMarkdownFormat(table, actionName: "插入表格"))
+        XCTAssertTrue(session.textView.string.hasPrefix("| Header | 标题 2 |"))
+        session.textView.undoManager?.undo()
+        XCTAssertEqual(session.textView.string, "Header")
+        session.textView.undoManager?.redo()
+        XCTAssertTrue(session.textView.string.hasPrefix("| Header | 标题 2 |"))
     }
 
     @MainActor
     func testInsertActionsAreSceneScopedAndMenuHasCommandK() throws {
         var firstCount = 0
         var secondCount = 0
-        let first = MarkdownInsertCommandActions(canInsert: true) { firstCount += 1 }
-        let second = MarkdownInsertCommandActions(canInsert: false) { secondCount += 1 }
+        var firstTableCount = 0
+        let first = MarkdownInsertCommandActions(
+            canInsert: true,
+            insertLink: { firstCount += 1 },
+            insertTable: { firstTableCount += 1 }
+        )
+        let second = MarkdownInsertCommandActions(
+            canInsert: false,
+            insertLink: { secondCount += 1 },
+            insertTable: { secondCount += 1 }
+        )
         first.insertLink()
+        first.insertTable()
         XCTAssertEqual(firstCount, 1)
+        XCTAssertEqual(firstTableCount, 1)
         XCTAssertEqual(secondCount, 0)
         XCTAssertFalse(second.canInsert)
 
@@ -99,6 +169,12 @@ final class MarkdownInsertionTests: XCTestCase {
             matches.first?.keyEquivalentModifierMask.intersection([.command, .option, .shift]),
             .command
         )
+
+        let tableItems = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu)).filter {
+            $0.title == "表格"
+        }
+        XCTAssertEqual(tableItems.count, 1)
+        XCTAssertEqual(tableItems.first?.keyEquivalent, "")
     }
 
     @MainActor

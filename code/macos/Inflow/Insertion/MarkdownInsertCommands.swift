@@ -4,10 +4,16 @@ import SwiftUI
 final class MarkdownInsertCommandActions {
     let canInsert: Bool
     let insertLink: () -> Void
+    let insertTable: () -> Void
 
-    init(canInsert: Bool, insertLink: @escaping () -> Void) {
+    init(
+        canInsert: Bool,
+        insertLink: @escaping () -> Void,
+        insertTable: @escaping () -> Void
+    ) {
         self.canInsert = canInsert
         self.insertLink = insertLink
+        self.insertTable = insertTable
     }
 }
 
@@ -31,6 +37,11 @@ struct MarkdownInsertCommands: Commands {
                 actions?.insertLink()
             }
             .keyboardShortcut("k", modifiers: .command)
+            .disabled(actions?.canInsert != true)
+
+            Button("表格") {
+                actions?.insertTable()
+            }
             .disabled(actions?.canInsert != true)
         }
     }

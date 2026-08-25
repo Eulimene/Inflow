@@ -229,6 +229,21 @@ InflowMarkdownEditResult inflow_markdown_insert_link(
     uintptr_t destination_length
 );
 
+/// Plans a 3-column by 3-row Markdown table insertion (one header and two data
+/// rows). Selected source is escaped into the first header; an empty selection
+/// receives a default header, which remains selected for immediate editing.
+/// Newlines become safe `<br>` cell content and pipes/backslashes are escaped.
+/// Existing table intersections are rejected without modifying the source.
+/// Selection and returned ranges use end-exclusive UTF-8 byte offsets aligned
+/// to complete extended graphemes. Returned replacement bytes must be released
+/// with inflow_owned_bytes_free.
+InflowMarkdownEditResult inflow_markdown_insert_table(
+    const uint8_t *utf8,
+    uintptr_t length,
+    uintptr_t selection_start,
+    uintptr_t selection_end
+);
+
 /// Plans a heading edit over complete source lines without modifying the
 /// source. `heading_level` must be 1...6. Mixed levels are unified; if every
 /// nonblank selected line already has the requested level, heading markers are
