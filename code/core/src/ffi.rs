@@ -411,6 +411,35 @@ pub unsafe extern "C" fn inflow_markdown_format_inline(
     .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
 }
 
+/// Plans one predictable inline-code edit for a UTF-8 snapshot.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call. Selection offsets are end-exclusive UTF-8 byte
+/// offsets and must align with extended grapheme boundaries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_markdown_format_inline_code(
+    utf8: *const u8,
+    length: usize,
+    selection_start: usize,
+    selection_end: usize,
+) -> InflowMarkdownEditResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Ok(source) = std::str::from_utf8(input) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_UTF8);
+        };
+        markdown_edit_result(format::format_inline_code(
+            source,
+            selection_start..selection_end,
+        ))
+    }))
+    .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
+}
+
 /// Plans one predictable ATX heading edit for complete source lines.
 ///
 /// # Safety
@@ -960,6 +989,34 @@ mod tests {
         };
         assert_eq!(result.status, STATUS_AMBIGUOUS_FORMAT);
         assert!(result.replacement.data.is_null());
+    }
+
+    #[test]
+    fn ffi_plans_inline_code_and_releases_result() {
+        let source = "code `value`";
+        let result = unsafe {
+            inflow_markdown_format_inline_code(source.as_ptr(), source.len(), 0, source.len())
+        };
+        assert_eq!(result.status, STATUS_OK);
+        let replacement = unsafe {
+            std::slice::from_raw_parts(result.replacement.data, result.replacement.length)
+        };
+        assert_eq!(
+            std::str::from_utf8(replacement).unwrap(),
+            "`` code `value` ``"
+        );
+        unsafe {
+            inflow_owned_bytes_free(result.replacement.data, result.replacement.length);
+        }
+
+        let ambiguous =
+            unsafe { inflow_markdown_format_inline_code(source.as_ptr(), source.len(), 7, 10) };
+        assert_eq!(ambiguous.status, STATUS_AMBIGUOUS_FORMAT);
+        assert!(ambiguous.replacement.data.is_null());
+
+        let invalid = unsafe { inflow_markdown_format_inline_code(ptr::null(), 1, 0, 0) };
+        assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
+        assert!(invalid.replacement.data.is_null());
     }
 
     #[test]

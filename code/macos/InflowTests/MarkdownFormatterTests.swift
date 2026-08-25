@@ -79,6 +79,52 @@ final class MarkdownFormatterTests: XCTestCase {
         XCTAssertEqual(plan.selectionUTF8Range, 4..<4)
     }
 
+    func testInlineCodePlansSafeDelimiterAndRemovesCompleteSpan() throws {
+        let source = "before code `value` 中文 after"
+        let selected = (source as NSString).range(of: "code `value` 中文")
+        let added = try MarkdownFormatter.plan(
+            source: source,
+            selectedUTF16Range: selected,
+            command: .inlineCode
+        )
+        XCTAssertEqual(added.replacement, "``code `value` 中文``")
+        XCTAssertTrue(try MarkdownRenderer.htmlFragment(for: added.resultingSource).contains(
+            "<code>code `value` 中文</code>"
+        ))
+
+        let removed = try MarkdownFormatter.plan(
+            source: added.resultingSource,
+            selectedUTF16Range: (added.resultingSource as NSString).range(of: "code `value` 中文"),
+            command: .inlineCode
+        )
+        XCTAssertEqual(removed.resultingSource, source)
+
+        let empty = try MarkdownFormatter.plan(
+            source: "text",
+            selectedUTF16Range: NSRange(location: 2, length: 0),
+            command: .inlineCode
+        )
+        XCTAssertEqual(empty.resultingSource, "te``xt")
+        XCTAssertEqual(empty.selectionUTF8Range, 3..<3)
+    }
+
+    func testInlineCodeRejectsPartialAndMultilineSelection() {
+        XCTAssertThrowsError(
+            try MarkdownFormatter.plan(
+                source: "`code`",
+                selectedUTF16Range: NSRange(location: 2, length: 2),
+                command: .inlineCode
+            )
+        )
+        XCTAssertThrowsError(
+            try MarkdownFormatter.plan(
+                source: "one\ntwo",
+                selectedUTF16Range: NSRange(location: 0, length: 7),
+                command: .inlineCode
+            )
+        )
+    }
+
     func testMultilineSelectionFormatsOnlyWhenItProducesValidInlineMarkdown() throws {
         let source = " first\nsecond "
         let plan = try MarkdownFormatter.plan(
@@ -395,10 +441,14 @@ final class MarkdownFormatterTests: XCTestCase {
         let readOnly = MarkdownFormatCommandActions(canFormat: false) { second.append($0) }
 
         editable.apply(.inline(.bold))
+        editable.apply(.inlineCode)
         editable.apply(.heading(.four))
         editable.apply(.blockQuote)
         editable.apply(.list(.task))
-        XCTAssertEqual(first, [.inline(.bold), .heading(.four), .blockQuote, .list(.task)])
+        XCTAssertEqual(
+            first,
+            [.inline(.bold), .inlineCode, .heading(.four), .blockQuote, .list(.task)]
+        )
         XCTAssertTrue(second.isEmpty)
         XCTAssertFalse(readOnly.canFormat)
     }
@@ -444,6 +494,10 @@ final class MarkdownFormatterTests: XCTestCase {
             XCTAssertEqual(matches.count, 1)
             XCTAssertEqual(matches.first?.keyEquivalent, "")
         }
+
+        let inlineCodeItems = items.filter { $0.title == "行内代码" }
+        XCTAssertEqual(inlineCodeItems.count, 1)
+        XCTAssertEqual(inlineCodeItems.first?.keyEquivalent, "")
     }
 
     @MainActor

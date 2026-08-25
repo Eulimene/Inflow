@@ -78,6 +78,7 @@ enum MarkdownListFormat: UInt8, CaseIterable, Identifiable, Sendable {
 
 enum MarkdownFormatCommand: Equatable, Sendable {
     case inline(MarkdownInlineFormat)
+    case inlineCode
     case heading(MarkdownHeadingLevel)
     case blockQuote
     case list(MarkdownListFormat)
@@ -85,6 +86,7 @@ enum MarkdownFormatCommand: Equatable, Sendable {
     var undoActionName: String {
         switch self {
         case let .inline(format): format.undoActionName
+        case .inlineCode: "行内代码格式"
         case .heading: "标题格式"
         case .blockQuote: "引用格式"
         case .list: "列表格式"
@@ -171,6 +173,13 @@ enum MarkdownFormatter {
                     UInt(selectedUTF8Range.lowerBound),
                     UInt(selectedUTF8Range.upperBound),
                     format.coreValue
+                )
+            case .inlineCode:
+                inflow_markdown_format_inline_code(
+                    sourcePointer,
+                    UInt(buffer.count),
+                    UInt(selectedUTF8Range.lowerBound),
+                    UInt(selectedUTF8Range.upperBound)
                 )
             case let .heading(level):
                 inflow_markdown_format_heading(

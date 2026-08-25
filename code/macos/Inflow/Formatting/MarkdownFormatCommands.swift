@@ -66,6 +66,11 @@ struct MarkdownFormatCommands: Commands {
                     .disabled(actions?.canFormat != true)
                 }
             }
+
+            Button("行内代码") {
+                actions?.apply(.inlineCode)
+            }
+            .disabled(actions?.canFormat != true)
         }
     }
 }

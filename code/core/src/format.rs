@@ -159,6 +159,69 @@ pub fn format_inline(
     })
 }
 
+pub fn format_inline_code(
+    source: &str,
+    requested_selection: Range<usize>,
+) -> Result<MarkdownEdit, FormatError> {
+    if !is_valid_selection(source, &requested_selection) {
+        return Err(FormatError::InvalidSelection);
+    }
+    if requested_selection.is_empty() {
+        let caret = requested_selection.start + 1;
+        return Ok(MarkdownEdit {
+            replace_range: requested_selection,
+            replacement: "``".to_owned(),
+            selection_range: caret..caret,
+        });
+    }
+
+    let selected = &source[requested_selection.clone()];
+    if selected.contains('\n') || selected.chars().all(char::is_whitespace) {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    let spans = inline_code_spans(source);
+    if let Some(span) = spans.iter().find(|span| {
+        requested_selection == span.full_range || requested_selection == span.content_range
+    }) {
+        let replacement = source[span.content_range.clone()].to_owned();
+        let selection_start = span.full_range.start;
+        return Ok(MarkdownEdit {
+            replace_range: span.full_range.clone(),
+            selection_range: selection_start..selection_start + replacement.len(),
+            replacement,
+        });
+    }
+    if spans.iter().any(|span| {
+        ranges_overlap(&requested_selection, &span.full_range)
+            && !(requested_selection.start <= span.full_range.start
+                && span.full_range.end <= requested_selection.end)
+    }) {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    let delimiter = "`".repeat(longest_backtick_run(selected).saturating_add(1));
+    let needs_padding = selected.starts_with(['`', ' ']) || selected.ends_with(['`', ' ']);
+    let padding = if needs_padding { " " } else { "" };
+    let replacement = format!("{delimiter}{padding}{selected}{padding}{delimiter}");
+    let full_range = requested_selection.start..requested_selection.start + replacement.len();
+    let content_start = requested_selection.start + delimiter.len() + padding.len();
+    let content_range = content_start..content_start + selected.len();
+    let candidate = replacing(source, requested_selection.clone(), &replacement);
+    if !inline_code_spans(&candidate)
+        .iter()
+        .any(|span| span.full_range == full_range && span.content_range == content_range)
+    {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    Ok(MarkdownEdit {
+        replace_range: requested_selection,
+        replacement,
+        selection_range: content_range,
+    })
+}
+
 pub fn format_heading(
     source: &str,
     requested_selection: Range<usize>,
@@ -1001,6 +1064,52 @@ fn format_spans(source: &str, format: InlineFormat) -> Vec<FormatSpan> {
     spans
 }
 
+fn inline_code_spans(source: &str) -> Vec<FormatSpan> {
+    Parser::new_ext(source, render::options())
+        .into_offset_iter()
+        .filter_map(|(event, range)| {
+            if !matches!(event, Event::Code(_)) {
+                return None;
+            }
+            let raw = &source[range.clone()];
+            let delimiter_length = raw.bytes().take_while(|byte| *byte == b'`').count();
+            if delimiter_length == 0
+                || raw.bytes().rev().take_while(|byte| *byte == b'`').count() != delimiter_length
+                || delimiter_length * 2 > raw.len()
+            {
+                return None;
+            }
+            let mut content_start = range.start + delimiter_length;
+            let mut content_end = range.end - delimiter_length;
+            let interior = &source[content_start..content_end];
+            if interior.starts_with(' ')
+                && interior.ends_with(' ')
+                && interior.bytes().any(|byte| byte != b' ')
+            {
+                content_start += 1;
+                content_end -= 1;
+            }
+            Some(FormatSpan {
+                full_range: range,
+                content_range: content_start..content_end,
+            })
+        })
+        .collect()
+}
+
+fn longest_backtick_run(text: &str) -> usize {
+    text.bytes()
+        .fold((0, 0), |(longest, current), byte| {
+            if byte == b'`' {
+                let next = current + 1;
+                (longest.max(next), next)
+            } else {
+                (longest, 0)
+            }
+        })
+        .0
+}
+
 fn is_target_start(tag: &Tag<'_>, format: InlineFormat) -> bool {
     matches!(
         (tag, format),
@@ -1293,6 +1402,57 @@ mod tests {
                 replacement: "~~~~".to_owned(),
                 selection_range: 4..4,
             })
+        );
+    }
+
+    #[test]
+    fn inline_code_wraps_unicode_and_chooses_a_safe_delimiter() {
+        let source = "before code `with` 中文 after";
+        let start = "before ".len();
+        let end = source.len() - " after".len();
+        let edit = format_inline_code(source, start..end).unwrap();
+        assert_eq!(edit.replacement, "``code `with` 中文``");
+        assert_eq!(edit.selection_range, start + 2..end + 2);
+        let formatted = replacing(source, edit.replace_range, &edit.replacement);
+        assert!(render::html_fragment(&formatted).contains("<code>code `with` 中文</code>"));
+    }
+
+    #[test]
+    fn inline_code_preserves_edge_spaces_and_removes_complete_span() {
+        let source = "x leading and trailing y";
+        let start = 1;
+        let end = source.len() - 1;
+        let added = format_inline_code(source, start..end).unwrap();
+        assert_eq!(added.replacement, "`  leading and trailing  `");
+        let formatted = replacing(source, added.replace_range, &added.replacement);
+        let removed = format_inline_code(&formatted, added.selection_range).unwrap();
+        assert_eq!(
+            replacing(&formatted, removed.replace_range, &removed.replacement),
+            source
+        );
+    }
+
+    #[test]
+    fn inline_code_inserts_template_and_rejects_partial_or_multiline_selection() {
+        assert_eq!(
+            format_inline_code("text", 2..2),
+            Ok(MarkdownEdit {
+                replace_range: 2..2,
+                replacement: "``".to_owned(),
+                selection_range: 3..3,
+            })
+        );
+        assert_eq!(
+            format_inline_code("`code`", 2..4),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            format_inline_code("one\ntwo", 0..7),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            format_inline_code("e\u{301}", 1..1),
+            Err(FormatError::InvalidSelection)
         );
     }
 

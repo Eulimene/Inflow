@@ -183,6 +183,20 @@ InflowMarkdownEditResult inflow_markdown_format_inline(
     uint8_t inline_format
 );
 
+/// Plans a single inline-code edit without modifying the source. Complete code
+/// spans are unwrapped; ordinary selections are wrapped with a backtick run
+/// longer than any run inside the content. Edge spaces and backticks receive
+/// CommonMark padding so the selected source is preserved. Empty selections
+/// receive an editable template. Partial existing spans, multiline selections
+/// and whitespace-only selections return INFLOW_STATUS_AMBIGUOUS_FORMAT.
+/// Returned replacement bytes must be released with inflow_owned_bytes_free.
+InflowMarkdownEditResult inflow_markdown_format_inline_code(
+    const uint8_t *utf8,
+    uintptr_t length,
+    uintptr_t selection_start,
+    uintptr_t selection_end
+);
+
 /// Plans a heading edit over complete source lines without modifying the
 /// source. `heading_level` must be 1...6. Mixed levels are unified; if every
 /// nonblank selected line already has the requested level, heading markers are
