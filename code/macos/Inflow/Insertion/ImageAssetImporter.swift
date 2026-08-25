@@ -147,6 +147,35 @@ struct ClipboardImagePayload: Sendable, Equatable {
     }
 }
 
+enum DroppedImageSource {
+    @MainActor
+    private static let readingOptions: [NSPasteboard.ReadingOptionKey: Any] = [
+        .urlReadingFileURLsOnly: true,
+    ]
+
+    @MainActor
+    static func containsFileURLs(_ pasteboard: NSPasteboard) -> Bool {
+        pasteboard.canReadObject(forClasses: [NSURL.self], options: readingOptions)
+    }
+
+    @MainActor
+    static func read(from pasteboard: NSPasteboard) -> URL? {
+        guard let urls = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: readingOptions
+        ) as? [URL], urls.count == 1 else {
+            return nil
+        }
+        let url = urls[0]
+        guard let type = UTType(filenameExtension: url.pathExtension),
+              type.conforms(to: .png) || type.conforms(to: .jpeg)
+        else {
+            return nil
+        }
+        return url
+    }
+}
+
 enum ClipboardImageProcessor {
     static func validateAndNormalize(_ payload: ClipboardImagePayload) throws -> ValidatedLocalImage {
         switch payload.kind {

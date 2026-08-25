@@ -349,6 +349,51 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertFalse(textView.consumeImagePaste(from: imagePasteboard))
     }
 
+    @MainActor
+    func testSourceEditorAcceptsOneSupportedImageDropAtRequestedCaret() {
+        let imageURL = URL(fileURLWithPath: "/tmp/inflow-drop-photo.png")
+        let pasteboard = NSPasteboard(
+            name: NSPasteboard.Name("inflow.tests.drop.\(UUID().uuidString)")
+        )
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([imageURL as NSURL]))
+
+        let textView = WindowAwareTextView()
+        textView.isEditable = true
+        textView.string = "before after"
+        var receivedURL: URL?
+        textView.dropImageHandler = { receivedURL = $0 }
+        XCTAssertTrue(textView.consumeImageDrop(
+            from: pasteboard,
+            insertionRange: NSRange(location: 7, length: 0)
+        ))
+        XCTAssertEqual(receivedURL, imageURL)
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 7, length: 0))
+
+        let unsupported = NSPasteboard(
+            name: NSPasteboard.Name("inflow.tests.drop.unsupported.\(UUID().uuidString)")
+        )
+        unsupported.clearContents()
+        unsupported.writeObjects([URL(fileURLWithPath: "/tmp/vector.svg") as NSURL])
+        XCTAssertFalse(textView.consumeImageDrop(
+            from: unsupported,
+            insertionRange: NSRange(location: 0, length: 0)
+        ))
+
+        let multiple = NSPasteboard(
+            name: NSPasteboard.Name("inflow.tests.drop.multiple.\(UUID().uuidString)")
+        )
+        multiple.clearContents()
+        multiple.writeObjects([
+            imageURL as NSURL,
+            URL(fileURLWithPath: "/tmp/second.jpg") as NSURL,
+        ])
+        XCTAssertFalse(textView.consumeImageDrop(
+            from: multiple,
+            insertionRange: NSRange(location: 0, length: 0)
+        ))
+    }
+
     func testClipboardImagesAreValidatedAndTIFFIsNormalizedToPNG() async throws {
         let worker = ImageAssetWorker()
         let png = try testPNGData()

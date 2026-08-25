@@ -140,6 +140,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.isContinuousSpellCheckingEnabled = true
         textView.usesFindBar = false
         textView.setAccessibilityLabel("Markdown 源码编辑器")
+        textView.registerForDraggedTypes([.fileURL])
 
         scrollView.documentView = textView
         self.scrollView = scrollView
@@ -402,6 +403,7 @@ final class WindowAwareTextView: NSTextView {
     var didAttachToWindow: (() -> Void)?
     var textDidChangeHandler: ((String) -> Void)?
     var pasteImageHandler: ((ClipboardImagePayload) -> Void)?
+    var dropImageHandler: ((URL) -> Void)?
 
     override var undoManager: UndoManager? {
         persistentUndoManager
@@ -436,6 +438,51 @@ final class WindowAwareTextView: NSTextView {
         super.paste(sender)
     }
 
+    @discardableResult
+    func consumeImageDrop(from pasteboard: NSPasteboard, insertionRange: NSRange) -> Bool {
+        guard isEditable,
+              let dropImageHandler,
+              let url = DroppedImageSource.read(from: pasteboard)
+        else {
+            return false
+        }
+        let length = (string as NSString).length
+        let location = min(max(0, insertionRange.location), length)
+        setSelectedRange(NSRange(location: location, length: 0))
+        dropImageHandler(url)
+        return true
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        if DroppedImageSource.read(from: sender.draggingPasteboard) != nil {
+            return isEditable && dropImageHandler != nil ? .copy : []
+        }
+        if DroppedImageSource.containsFileURLs(sender.draggingPasteboard) { return [] }
+        return super.draggingEntered(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        if DroppedImageSource.read(from: sender.draggingPasteboard) != nil {
+            return isEditable && dropImageHandler != nil
+        }
+        if DroppedImageSource.containsFileURLs(sender.draggingPasteboard) { return false }
+        return super.prepareForDragOperation(sender)
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        guard DroppedImageSource.read(from: sender.draggingPasteboard) != nil else {
+            if DroppedImageSource.containsFileURLs(sender.draggingPasteboard) { return false }
+            return super.performDragOperation(sender)
+        }
+        let screenPoint = window?.convertPoint(toScreen: sender.draggingLocation)
+            ?? sender.draggingLocation
+        let insertion = characterIndexForInsertion(at: screenPoint)
+        return consumeImageDrop(
+            from: sender.draggingPasteboard,
+            insertionRange: NSRange(location: insertion, length: 0)
+        )
+    }
+
     /// AppKit's standard Edit menu dispatches these actions through the first
     /// responder. NSTextView owns an undo manager but does not itself expose
     /// the menu selectors, so bridge them explicitly for this persistent view.
@@ -465,19 +512,22 @@ struct MarkdownSourceEditor: NSViewRepresentable {
     let session: MarkdownSourceEditorSession
     let isEditable: Bool
     let onPasteImage: ((ClipboardImagePayload) -> Void)?
+    let onDropImage: ((URL) -> Void)?
 
     init(
         text: Binding<String>,
         selectionRequest: SourceSelectionRequest?,
         session: MarkdownSourceEditorSession,
         isEditable: Bool = true,
-        onPasteImage: ((ClipboardImagePayload) -> Void)? = nil
+        onPasteImage: ((ClipboardImagePayload) -> Void)? = nil,
+        onDropImage: ((URL) -> Void)? = nil
     ) {
         _text = text
         self.selectionRequest = selectionRequest
         self.session = session
         self.isEditable = isEditable
         self.onPasteImage = onPasteImage
+        self.onDropImage = onDropImage
     }
 
     func makeCoordinator() -> Coordinator {
@@ -500,6 +550,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
             textView.delegate = nil
             textView.didAttachToWindow = nil
             textView.pasteImageHandler = nil
+            textView.dropImageHandler = nil
         }
     }
 
@@ -523,6 +574,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
             textView.isEditable = parent.isEditable
             textView.isSelectable = true
             textView.pasteImageHandler = parent.onPasteImage
+            textView.dropImageHandler = parent.onDropImage
             textView.didAttachToWindow = { [weak self, weak textView] in
                 guard let self, let textView else { return }
                 self.applyPendingSelection(to: textView)

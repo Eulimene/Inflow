@@ -339,7 +339,8 @@ struct MarkdownEditorView: View {
             selectionRequest: sourceSelectionRequest,
             session: sourceEditorSession,
             isEditable: isEditable,
-            onPasteImage: pasteImage
+            onPasteImage: pasteImage,
+            onDropImage: dropImage
         )
     }
 
@@ -440,6 +441,14 @@ struct MarkdownEditorView: View {
     }
 
     private func insertImage() {
+        importExistingImage(from: nil)
+    }
+
+    private func dropImage(_ sourceURL: URL) {
+        importExistingImage(from: sourceURL)
+    }
+
+    private func importExistingImage(from providedSourceURL: URL?) {
         guard isEditable, !isImportingImage else { return }
         guard let documentURL = fileURL else {
             markdownFormatErrorMessage = ImageAssetImportError.unsavedDocument.localizedDescription
@@ -454,8 +463,14 @@ struct MarkdownEditorView: View {
 
         Task { @MainActor in
             defer { isImportingImage = false }
-            guard let sourceURL = await ImageAssetPicker.chooseSource(attachedTo: window) else {
-                return
+            let sourceURL: URL
+            if let providedSourceURL {
+                sourceURL = providedSourceURL
+            } else {
+                guard let selectedURL = await ImageAssetPicker.chooseSource(attachedTo: window) else {
+                    return
+                }
+                sourceURL = selectedURL
             }
 
             do {
