@@ -203,6 +203,18 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         applyPendingRestorationIfPossible()
     }
 
+    func resetAfterExternalReload(_ text: String) {
+        let previousSelection = textView.selectedRange()
+        textView.string = text
+        let utf16Length = (text as NSString).length
+        let location = min(previousSelection.location, utf16Length)
+        let length = min(previousSelection.length, utf16Length - location)
+        let selection = NSRange(location: location, length: length)
+        textView.setSelectedRange(selection)
+        updateSelectedRange(selection)
+        textView.undoManager?.removeAllActions()
+    }
+
     fileprivate func applyPendingRestorationIfPossible() {
         guard let state = pendingRestorationState,
               textView.window != nil

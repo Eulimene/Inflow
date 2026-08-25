@@ -189,6 +189,8 @@ struct HTMLExportTargetSnapshot: Equatable, Sendable {
         if case .existing = state { true } else { false }
     }
 
+    var isExistingTarget: Bool { exists }
+
     private static func contentHash(of url: URL) throws -> UInt64 {
         let handle: FileHandle
         do {

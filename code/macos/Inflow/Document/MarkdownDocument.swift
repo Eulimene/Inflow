@@ -16,15 +16,21 @@ struct MarkdownDocument: FileDocument {
     var text: String
     var properties: MarkdownFileProperties
     var restorationState: MarkdownRestorationState?
+    var openedFileData: Data?
+    let writeGuard: MarkdownWriteGuard
 
     init(
         text: String = "",
         properties: MarkdownFileProperties = .newDocument,
-        restorationState: MarkdownRestorationState? = nil
+        restorationState: MarkdownRestorationState? = nil,
+        openedFileData: Data? = nil,
+        writeGuard: MarkdownWriteGuard = MarkdownWriteGuard()
     ) {
         self.text = text
         self.properties = properties
         self.restorationState = restorationState
+        self.openedFileData = openedFileData
+        self.writeGuard = writeGuard
     }
 
     init(fileData: Data) throws {
@@ -32,6 +38,8 @@ struct MarkdownDocument: FileDocument {
         text = decoded.text
         properties = decoded.properties
         restorationState = nil
+        openedFileData = fileData
+        writeGuard = MarkdownWriteGuard()
     }
 
     init(configuration: ReadConfiguration) throws {
@@ -50,7 +58,12 @@ struct MarkdownDocument: FileDocument {
         properties.requiresLineEndingChoice = false
     }
 
-    func fileWrapper(configuration _: WriteConfiguration) throws -> FileWrapper {
-        try FileWrapper(regularFileWithContents: encodedFileData())
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        let data = try encodedFileData()
+        try writeGuard.authorize(
+            existingFile: configuration.existingFile,
+            proposedData: data
+        )
+        return FileWrapper(regularFileWithContents: data)
     }
 }

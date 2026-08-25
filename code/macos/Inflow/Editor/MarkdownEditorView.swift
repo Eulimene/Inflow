@@ -143,6 +143,9 @@ struct MarkdownEditorView: View {
     @State private var recoveryRecordID = UUID()
     @State private var isRecoveryCenterPresented = false
     @State private var didApplyRestorationState = false
+    @StateObject private var fileSafetySession = DocumentFileSafetySession()
+    @State private var isFileSafetyPresented = false
+    @State private var fileSafetyNotice: DocumentFileSafetyNotice?
 
     private var viewMode: EditorViewMode {
         get { EditorViewMode.resolve(storedValue: storedViewMode) }
@@ -155,7 +158,20 @@ struct MarkdownEditorView: View {
     }
 
     private var canEditDocument: Bool {
-        isEditable && !document.properties.requiresLineEndingChoice
+        isEditable
+            && !document.properties.requiresLineEndingChoice
+            && !fileSafetySession.state.blocksEditing
+            && !isFileSafetyPresented
+    }
+
+    private var displayedFileSafetyState: DocumentFileSafetyState {
+        if case .safe = fileSafetySession.state,
+           !isEditable,
+           let fileURL
+        {
+            return .readOnly(fileURL)
+        }
+        return fileSafetySession.state
     }
 
     var body: some View {
@@ -167,6 +183,12 @@ struct MarkdownEditorView: View {
             if let recoveryCoordinator {
                 RecoveryProtectionStatusBanner(coordinator: recoveryCoordinator)
             }
+
+            DocumentFileSafetyBanner(
+                state: displayedFileSafetyState,
+                onCompare: { isFileSafetyPresented = true },
+                onSaveCopy: saveCurrentDocumentCopy
+            )
 
             if document.properties.requiresLineEndingChoice {
                 lineEndingChoiceBanner
@@ -251,6 +273,7 @@ struct MarkdownEditorView: View {
                 )
             }
             updateRecoveryProtection()
+            fileSafetySession.update(document: document, fileURL: fileURL)
             if let recoveryCoordinator {
                 Task {
                     await recoveryCoordinator.loadIfNeeded()
@@ -282,6 +305,7 @@ struct MarkdownEditorView: View {
                 )
             }
             updateRecoveryProtection()
+            fileSafetySession.update(document: document, fileURL: fileURL)
         }
         .onChange(of: fileURL) { _, newURL in
             scheduleDerivedContent(
@@ -290,9 +314,11 @@ struct MarkdownEditorView: View {
                 delayNanoseconds: 0
             )
             updateRecoveryProtection()
+            fileSafetySession.update(document: document, fileURL: newURL)
         }
         .onChange(of: document.properties) { _, _ in
             updateRecoveryProtection()
+            fileSafetySession.update(document: document, fileURL: fileURL)
         }
         .onChange(of: storedViewMode) { _, _ in
             updateRecoveryProtection()
@@ -338,6 +364,7 @@ struct MarkdownEditorView: View {
             findSearchTask?.cancel()
             pendingFindNavigation.removeAll()
             findSession.cancelSearch()
+            fileSafetySession.stopMonitoring()
             recoveryCoordinator?.close(recoveryRecordID)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) {
@@ -370,7 +397,32 @@ struct MarkdownEditorView: View {
                 )
             }
         }
+        .sheet(isPresented: $isFileSafetyPresented) {
+            if let snapshot = fileSafetySession.state.conflictSnapshot {
+                DocumentConflictReviewView(
+                    snapshot: snapshot,
+                    onSaveCopy: saveCopyFromConflictReview,
+                    onReload: { try await reloadFromDisk(snapshot) },
+                    onOverwrite: {
+                        try await overwriteDiskVersion(snapshot)
+                    },
+                    onRecreate: { try await recreateDeletedFile(snapshot) },
+                    onResolved: { isFileSafetyPresented = false },
+                    onClose: { isFileSafetyPresented = false }
+                )
+            } else {
+                ContentUnavailableView(
+                    "文件状态已变化",
+                    systemImage: "checkmark.circle",
+                    description: Text("请关闭此窗口并查看当前文档状态。")
+                )
+                .frame(minWidth: 520, minHeight: 280)
+            }
+        }
         .alert(item: $htmlExportNotice) { notice in
+            notice.alert
+        }
+        .alert(item: $fileSafetyNotice) { notice in
             notice.alert
         }
         .alert(
@@ -529,6 +581,82 @@ struct MarkdownEditorView: View {
                 verticalScrollOffset: sourceEditorSession.verticalScrollOffset
             )
         )
+    }
+
+    private func reloadFromDisk(_ snapshot: DocumentFileConflictSnapshot) async throws {
+        let result = try await fileSafetySession.reload(snapshot)
+        document.properties = result.decoded.properties
+        document.openedFileData = result.data
+        document.text = result.decoded.text
+        sourceEditorSession.resetAfterExternalReload(result.decoded.text)
+    }
+
+    private func overwriteDiskVersion(_ snapshot: DocumentFileConflictSnapshot) async throws
+        -> URL
+    {
+        let conflictURL = try await fileSafetySession.overwrite(snapshot)
+        fileSafetyNotice = .conflictCopySaved(conflictURL)
+        return conflictURL
+    }
+
+    private func recreateDeletedFile(_ snapshot: DocumentFileConflictSnapshot) async throws {
+        try await fileSafetySession.recreate(snapshot)
+    }
+
+    private func saveCurrentDocumentCopy() {
+        let snapshotData: Data
+        do {
+            snapshotData = try document.encodedFileData()
+        } catch {
+            fileSafetyNotice = .failure(
+                (error as? LocalizedError)?.errorDescription
+                    ?? "当前正文无法编码，未写入任何文件。"
+            )
+            return
+        }
+
+        let panel = NSSavePanel()
+        panel.title = "保存 Markdown 副本"
+        panel.prompt = "保存副本"
+        panel.allowedContentTypes = [.inflowMarkdown]
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.nameFieldStringValue = fileURL?.lastPathComponent ?? "未命名文档.md"
+
+        Task { @MainActor in
+            let response = await withCheckedContinuation { continuation in
+                panel.begin { continuation.resume(returning: $0) }
+            }
+            guard response == .OK, let targetURL = panel.url else { return }
+
+            let accessed = targetURL.startAccessingSecurityScopedResource()
+            defer {
+                if accessed { targetURL.stopAccessingSecurityScopedResource() }
+            }
+
+            do {
+                let targetSnapshot = try HTMLExportTargetSnapshot.capture(targetURL)
+                try await fileSafetySession.saveCopy(
+                    snapshotData,
+                    to: targetURL,
+                    expectedTarget: targetSnapshot
+                )
+                fileSafetyNotice = .copySaved(targetURL)
+            } catch {
+                fileSafetyNotice = .failure(
+                    (error as? LocalizedError)?.errorDescription
+                        ?? "未能安全保存副本；原文件与当前编辑均未改变。"
+                )
+            }
+        }
+    }
+
+    private func saveCopyFromConflictReview() {
+        isFileSafetyPresented = false
+        Task { @MainActor in
+            await Task.yield()
+            saveCurrentDocumentCopy()
+        }
     }
 
     private func selectHeading(_ heading: DocumentHeading) {
