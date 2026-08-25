@@ -6,10 +6,16 @@ import UniformTypeIdentifiers
 struct HTMLExportSnapshot: Sendable {
     let utf8: Data
     let documentDirectory: URL?
+    let appearance: PreviewAppearanceConfiguration
 
-    init(markdown: String, documentDirectory: URL? = nil) {
+    init(
+        markdown: String,
+        documentDirectory: URL? = nil,
+        appearance: PreviewAppearanceConfiguration = .default
+    ) {
         utf8 = Data(markdown.utf8)
         self.documentDirectory = documentDirectory
+        self.appearance = appearance
     }
 }
 
@@ -80,7 +86,8 @@ enum HTMLExporter {
                     in: coreHTML,
                     documentDirectory: snapshot.documentDirectory
                 )
-                let output = Data(resolved.utf8)
+                let themed = PreviewAppearanceCSS.applying(snapshot.appearance, to: resolved)
+                let output = Data(themed.utf8)
                 guard output.count <= LocalImageValidator.maximumBytes else {
                     throw HTMLExportError.outputTooLarge
                 }

@@ -104,6 +104,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     fileprivate var pendingSelectionRequest: SourceSelectionRequest?
     fileprivate var pendingRestorationState: MarkdownRestorationState?
     fileprivate var updateBoundText: ((String) -> Void)?
+    private(set) var sourceAppearance = SourceEditorAppearance.default
+    private var hasAppliedSourceAppearance = false
 
     override init() {
         let scrollView = NSScrollView()
@@ -170,6 +172,48 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             name: .NSUndoManagerDidRedoChange,
             object: textView.undoManager
         )
+        applySourceAppearance(.default)
+    }
+
+    func applySourceAppearance(_ appearance: SourceEditorAppearance, force: Bool = false) {
+        guard force || !hasAppliedSourceAppearance || sourceAppearance != appearance else { return }
+        sourceAppearance = appearance
+        hasAppliedSourceAppearance = true
+
+        let selection = textView.selectedRange()
+        let font = NSFont.monospacedSystemFont(
+            ofSize: CGFloat(appearance.fontSize),
+            weight: .regular
+        )
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineHeightMultiple = CGFloat(appearance.lineHeight)
+
+        let undoManager = textView.undoManager
+        let shouldRestoreUndoRegistration = undoManager?.isUndoRegistrationEnabled == true
+        if shouldRestoreUndoRegistration {
+            undoManager?.disableUndoRegistration()
+        }
+        defer {
+            if shouldRestoreUndoRegistration {
+                undoManager?.enableUndoRegistration()
+            }
+        }
+
+        textView.font = font
+        textView.defaultParagraphStyle = paragraphStyle
+        textView.isContinuousSpellCheckingEnabled = appearance.spellingEnabled
+        textView.typingAttributes[.font] = font
+        textView.typingAttributes[.paragraphStyle] = paragraphStyle
+
+        if let textStorage = textView.textStorage, textStorage.length > 0 {
+            textStorage.beginEditing()
+            textStorage.addAttributes(
+                [.font: font, .paragraphStyle: paragraphStyle],
+                range: NSRange(location: 0, length: textStorage.length)
+            )
+            textStorage.endEditing()
+        }
+        textView.setSelectedRange(selection)
     }
 
     @objc
@@ -573,6 +617,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
     let selectionRequest: SourceSelectionRequest?
     let session: MarkdownSourceEditorSession
     let isEditable: Bool
+    let appearance: SourceEditorAppearance
     let onPasteImage: ((ClipboardImagePayload) -> Void)?
     let onDropImage: ((URL) -> Void)?
 
@@ -581,6 +626,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
         selectionRequest: SourceSelectionRequest?,
         session: MarkdownSourceEditorSession,
         isEditable: Bool = true,
+        appearance: SourceEditorAppearance = .default,
         onPasteImage: ((ClipboardImagePayload) -> Void)? = nil,
         onDropImage: ((URL) -> Void)? = nil
     ) {
@@ -588,6 +634,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
         self.selectionRequest = selectionRequest
         self.session = session
         self.isEditable = isEditable
+        self.appearance = appearance
         self.onPasteImage = onPasteImage
         self.onDropImage = onDropImage
     }
@@ -643,7 +690,8 @@ struct MarkdownSourceEditor: NSViewRepresentable {
                 self.applyPendingSelection(to: textView)
             }
 
-            if !UTF8Text.isExactlyEqual(textView.string, parent.text) {
+            let textChanged = !UTF8Text.isExactlyEqual(textView.string, parent.text)
+            if textChanged {
                 let selection = textView.selectedRange()
                 textView.string = parent.text
                 let utf16Length = (parent.text as NSString).length
@@ -651,6 +699,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
                 let length = min(selection.length, utf16Length - location)
                 textView.setSelectedRange(NSRange(location: location, length: length))
             }
+            parent.session.applySourceAppearance(parent.appearance, force: textChanged)
 
             parent.session.applyPendingRestorationIfPossible()
             apply(parent.selectionRequest, to: textView)

@@ -42,23 +42,31 @@ enum MarkdownRenderer {
         return html
     }
 
-    static func htmlDocument(for markdown: String, documentDirectory: URL? = nil) -> String {
+    static func htmlDocument(
+        for markdown: String,
+        documentDirectory: URL? = nil,
+        configuration: PreviewAppearanceConfiguration = .default
+    ) -> String {
         do {
             let fragment = try htmlFragment(for: markdown)
             return document(
                 containing: LocalImageResolver.resolveSlots(
                     in: fragment,
                     documentDirectory: documentDirectory
-                )
+                ),
+                configuration: configuration
             )
         } catch {
             let message = (error as? LocalizedError)?.errorDescription
                 ?? MarkdownRenderError.coreFailure.localizedDescription
-            return errorDocument(message: message)
+            return errorDocument(message: message, configuration: configuration)
         }
     }
 
-    static func document(containing fragment: String) -> String {
+    static func document(
+        containing fragment: String,
+        configuration: PreviewAppearanceConfiguration = .default
+    ) -> String {
         """
         <!doctype html>
         <html lang="zh-Hans">
@@ -106,6 +114,7 @@ enum MarkdownRenderer {
               .image-warning { color: #d29922; border-color: #9e6a03; }
             }
           </style>
+          \(PreviewAppearanceCSS.styleElement(for: configuration))
         </head>
         <body>
         \(fragment)
@@ -114,11 +123,79 @@ enum MarkdownRenderer {
         """
     }
 
-    private static func errorDocument(message: String) -> String {
+    private static func errorDocument(
+        message: String,
+        configuration: PreviewAppearanceConfiguration
+    ) -> String {
         let escaped = message
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
-        return document(containing: "<p class=\"preview-error\">\(escaped)</p>")
+        return document(
+            containing: "<p class=\"preview-error\">\(escaped)</p>",
+            configuration: configuration
+        )
+    }
+}
+
+enum PreviewAppearanceCSS {
+    static func styleElement(for configuration: PreviewAppearanceConfiguration) -> String {
+        let width = decimal(configuration.contentWidth)
+        let fontSize = decimal(17 * configuration.zoom)
+        let themeRules: String = switch configuration.theme {
+        case .standard:
+            ""
+        case .longform:
+            "body { font-family: ui-serif, Georgia, 'Songti SC', serif; line-height: 1.82; }"
+        case .code:
+            "body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.58; } h1, h2, h3, h4, h5, h6 { font-family: -apple-system, BlinkMacSystemFont, sans-serif; }"
+        case .highContrast:
+            highContrastRules
+        }
+
+        let colorRules: String = switch configuration.colorScheme {
+        case .system:
+            ":root { color-scheme: light dark; }"
+        case .light:
+            ":root { color-scheme: light; } body { color: #111111; background: #ffffff; } h1, h2, th, td { border-color: #767676; } a { color: #004ea8; } blockquote { color: #333333; border-color: #606060; } pre, tr:nth-child(even) { background: #f1f1f1; } code { background: #d8d8d866; }"
+        case .dark:
+            ":root { color-scheme: dark; } body { color: #f2f2f2; background: #101214; } h1, h2, th, td { border-color: #8a8a8a; } a { color: #78b7ff; } blockquote { color: #d0d0d0; border-color: #a0a0a0; } pre, tr:nth-child(even) { background: #202428; } code { background: #ffffff24; }"
+        }
+
+        let contrastRules = configuration.increasedContrast ? highContrastRules : ""
+        let motionRules = configuration.reduceMotion
+            ? "*, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }"
+            : ""
+
+        return """
+        <style id="inflow-user-appearance">
+          :root { font-size: \(fontSize)px; }
+          body { max-width: \(width)px; }
+          \(colorRules)
+          \(themeRules)
+          \(contrastRules)
+          \(motionRules)
+        </style>
+        """
+    }
+
+    static func applying(
+        _ configuration: PreviewAppearanceConfiguration,
+        to html: String
+    ) -> String {
+        let style = styleElement(for: configuration)
+        guard let headEnd = html.range(of: "</head>", options: [.caseInsensitive]) else {
+            return style + html
+        }
+        var result = html
+        result.insert(contentsOf: style + "\n", at: headEnd.lowerBound)
+        return result
+    }
+
+    private static let highContrastRules =
+        "body { color: CanvasText; background: Canvas; } a { color: LinkText; text-decoration: underline; text-decoration-thickness: 2px; } h1, h2, th, td, blockquote { border-color: currentColor; } :focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }"
+
+    private static func decimal(_ value: Double) -> String {
+        String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), value)
     }
 }

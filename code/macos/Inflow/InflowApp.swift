@@ -29,6 +29,7 @@ private struct OutlineCommands: Commands {
 @main
 struct InflowApp: App {
     @StateObject private var recoveryCoordinator = DocumentRecoveryCoordinator()
+    @StateObject private var preferences = AppPreferences()
 
     var body: some Scene {
         DocumentGroup(newDocument: MarkdownDocument()) { configuration in
@@ -36,7 +37,8 @@ struct InflowApp: App {
                 document: configuration.$document,
                 fileURL: configuration.fileURL,
                 isEditable: configuration.isEditable,
-                recoveryCoordinator: recoveryCoordinator
+                recoveryCoordinator: recoveryCoordinator,
+                preferences: preferences
             )
                 .frame(minWidth: 720, minHeight: 480)
         }
@@ -50,6 +52,10 @@ struct InflowApp: App {
             MarkdownFormatCommands()
             MarkdownInsertCommands()
             RecoveryCommands()
+        }
+
+        Settings {
+            InflowSettingsView(preferences: preferences)
         }
     }
 }

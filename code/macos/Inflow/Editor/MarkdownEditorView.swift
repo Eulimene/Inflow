@@ -109,6 +109,21 @@ struct MarkdownEditorView: View {
     let fileURL: URL?
     let isEditable: Bool
     var recoveryCoordinator: DocumentRecoveryCoordinator? = nil
+    @ObservedObject private var preferences: AppPreferences
+
+    init(
+        document: Binding<MarkdownDocument>,
+        fileURL: URL?,
+        isEditable: Bool,
+        recoveryCoordinator: DocumentRecoveryCoordinator? = nil,
+        preferences: AppPreferences? = nil
+    ) {
+        _document = document
+        self.fileURL = fileURL
+        self.isEditable = isEditable
+        self.recoveryCoordinator = recoveryCoordinator
+        _preferences = ObservedObject(wrappedValue: preferences ?? AppPreferences())
+    }
 
     @SceneStorage("editorViewMode") private var storedViewMode = EditorViewMode.split.rawValue
     @SceneStorage("isDocumentOutlineVisible") private var isOutlineVisible = true
@@ -266,6 +281,7 @@ struct MarkdownEditorView: View {
             scheduleDerivedContent(
                 for: document.text,
                 documentDirectory: fileURL?.deletingLastPathComponent(),
+                configuration: preferences.previewConfiguration,
                 delayNanoseconds: 0
             )
             if !findSession.query.isEmpty {
@@ -295,6 +311,7 @@ struct MarkdownEditorView: View {
             scheduleDerivedContent(
                 for: markdown,
                 documentDirectory: fileURL?.deletingLastPathComponent(),
+                configuration: preferences.previewConfiguration,
                 delayNanoseconds: 120_000_000
             )
             if findSession.isPresented || !findSession.query.isEmpty {
@@ -315,6 +332,7 @@ struct MarkdownEditorView: View {
             scheduleDerivedContent(
                 for: document.text,
                 documentDirectory: newURL?.deletingLastPathComponent(),
+                configuration: preferences.previewConfiguration,
                 delayNanoseconds: 0
             )
             updateRecoveryProtection()
@@ -326,6 +344,14 @@ struct MarkdownEditorView: View {
         }
         .onChange(of: storedViewMode) { _, _ in
             updateRecoveryProtection()
+        }
+        .onChange(of: preferences.previewConfiguration) { _, configuration in
+            scheduleDerivedContent(
+                for: document.text,
+                documentDirectory: fileURL?.deletingLastPathComponent(),
+                configuration: configuration,
+                delayNanoseconds: 0
+            )
         }
     }
 
@@ -499,6 +525,7 @@ struct MarkdownEditorView: View {
             selectionRequest: sourceSelectionRequest,
             session: sourceEditorSession,
             isEditable: canEditDocument,
+            appearance: preferences.sourceEditorAppearance,
             onPasteImage: pasteImage,
             onDropImage: dropImage
         )
@@ -1241,7 +1268,8 @@ struct MarkdownEditorView: View {
         guard !isExportingHTML, !isExportingPDF else { return }
         let snapshot = HTMLExportSnapshot(
             markdown: document.text,
-            documentDirectory: fileURL?.deletingLastPathComponent()
+            documentDirectory: fileURL?.deletingLastPathComponent(),
+            appearance: preferences.previewConfiguration
         )
         let basename = fileURL?.deletingPathExtension().lastPathComponent ?? "未命名文档"
         let suggestedFilename = "\(basename).html"
@@ -1302,7 +1330,8 @@ struct MarkdownEditorView: View {
         guard !isExportingHTML, !isExportingPDF else { return }
         let snapshot = HTMLExportSnapshot(
             markdown: document.text,
-            documentDirectory: fileURL?.deletingLastPathComponent()
+            documentDirectory: fileURL?.deletingLastPathComponent(),
+            appearance: preferences.previewConfiguration
         )
         let basename = fileURL?.deletingPathExtension().lastPathComponent ?? "未命名文档"
         let worker = htmlExportWorker
@@ -1615,6 +1644,7 @@ struct MarkdownEditorView: View {
     private func scheduleDerivedContent(
         for markdown: String,
         documentDirectory: URL?,
+        configuration: PreviewAppearanceConfiguration,
         delayNanoseconds: UInt64
     ) {
         derivedContentTask?.cancel()
@@ -1629,7 +1659,8 @@ struct MarkdownEditorView: View {
 
             guard let content = await contentDeriver.derive(
                 markdown: markdown,
-                documentDirectory: documentDirectory
+                documentDirectory: documentDirectory,
+                configuration: configuration
             ) else { return }
 
             guard !Task.isCancelled, generation == derivedContentGeneration else { return }
@@ -1733,11 +1764,16 @@ private enum DocumentAnalysisOutcome: Sendable {
 }
 
 private actor DocumentContentDeriver {
-    func derive(markdown: String, documentDirectory: URL?) -> DerivedDocumentContent? {
+    func derive(
+        markdown: String,
+        documentDirectory: URL?,
+        configuration: PreviewAppearanceConfiguration
+    ) -> DerivedDocumentContent? {
         guard !Task.isCancelled else { return nil }
         let html = MarkdownRenderer.htmlDocument(
             for: markdown,
-            documentDirectory: documentDirectory
+            documentDirectory: documentDirectory,
+            configuration: configuration
         )
         guard !Task.isCancelled else { return nil }
 
