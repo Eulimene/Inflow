@@ -125,6 +125,36 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertTrue(plan.resultingSource.hasPrefix("before 文字👩‍💻"))
     }
 
+    func testFootnotePlanCreatesUniqueReferenceAndEditableDefinition() throws {
+        let empty = try MarkdownFormatter.footnotePlan(
+            source: "",
+            selectedUTF16Range: NSRange(location: 0, length: 0)
+        )
+        XCTAssertEqual(empty.resultingSource, "[^note-1]\n\n[^note-1]: 脚注内容\n")
+        let placeholder = try XCTUnwrap(
+            MarkdownSourceRange.navigationTarget(
+                forUTF8Range: empty.selectionUTF8Range,
+                in: empty.resultingSource
+            )
+        )
+        XCTAssertEqual(
+            (empty.resultingSource as NSString).substring(with: placeholder.revealRange),
+            "脚注内容"
+        )
+        let html = try MarkdownRenderer.htmlFragment(for: empty.resultingSource)
+        XCTAssertTrue(html.contains("footnote-reference"))
+        XCTAssertTrue(html.contains("footnote-definition"))
+
+        let source = "Anchor[^note-1]\n\n[^note-1]: Existing\n"
+        let selection = (source as NSString).range(of: "Anchor")
+        let unique = try MarkdownFormatter.footnotePlan(
+            source: source,
+            selectedUTF16Range: selection
+        )
+        XCTAssertTrue(unique.resultingSource.hasPrefix("Anchor[^note-2][^note-1]"))
+        XCTAssertTrue(unique.resultingSource.hasSuffix("[^note-2]: 脚注内容\n"))
+    }
+
     @MainActor
     func testInsertionPlansApplyAsOneUndoUnit() throws {
         let source = "Read docs"
@@ -169,6 +199,19 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertEqual(session.textView.string, "Before")
         session.textView.undoManager?.redo()
         XCTAssertEqual(session.textView.string, "Before\n\n---\n\n")
+
+        session.textView.string = "Anchor"
+        session.textView.setSelectedRange(NSRange(location: 0, length: 6))
+        let footnote = try MarkdownFormatter.footnotePlan(
+            source: session.textView.string,
+            selectedUTF16Range: session.textView.selectedRange()
+        )
+        XCTAssertTrue(session.applyMarkdownFormat(footnote, actionName: "插入脚注"))
+        XCTAssertEqual(session.textView.string, "Anchor[^note-1]\n\n[^note-1]: 脚注内容\n")
+        session.textView.undoManager?.undo()
+        XCTAssertEqual(session.textView.string, "Anchor")
+        session.textView.undoManager?.redo()
+        XCTAssertEqual(session.textView.string, "Anchor[^note-1]\n\n[^note-1]: 脚注内容\n")
     }
 
     @MainActor
@@ -177,24 +220,29 @@ final class MarkdownInsertionTests: XCTestCase {
         var secondCount = 0
         var firstTableCount = 0
         var firstRuleCount = 0
+        var firstFootnoteCount = 0
         let first = MarkdownInsertCommandActions(
             canInsert: true,
             insertLink: { firstCount += 1 },
             insertTable: { firstTableCount += 1 },
-            insertHorizontalRule: { firstRuleCount += 1 }
+            insertHorizontalRule: { firstRuleCount += 1 },
+            insertFootnote: { firstFootnoteCount += 1 }
         )
         let second = MarkdownInsertCommandActions(
             canInsert: false,
             insertLink: { secondCount += 1 },
             insertTable: { secondCount += 1 },
-            insertHorizontalRule: { secondCount += 1 }
+            insertHorizontalRule: { secondCount += 1 },
+            insertFootnote: { secondCount += 1 }
         )
         first.insertLink()
         first.insertTable()
         first.insertHorizontalRule()
+        first.insertFootnote()
         XCTAssertEqual(firstCount, 1)
         XCTAssertEqual(firstTableCount, 1)
         XCTAssertEqual(firstRuleCount, 1)
+        XCTAssertEqual(firstFootnoteCount, 1)
         XCTAssertEqual(secondCount, 0)
         XCTAssertFalse(second.canInsert)
 
@@ -220,6 +268,12 @@ final class MarkdownInsertionTests: XCTestCase {
         }
         XCTAssertEqual(horizontalRuleItems.count, 1)
         XCTAssertEqual(horizontalRuleItems.first?.keyEquivalent, "")
+
+        let footnoteItems = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu)).filter {
+            $0.title == "脚注"
+        }
+        XCTAssertEqual(footnoteItems.count, 1)
+        XCTAssertEqual(footnoteItems.first?.keyEquivalent, "")
     }
 
     @MainActor

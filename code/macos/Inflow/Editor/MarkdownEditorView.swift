@@ -407,8 +407,31 @@ struct MarkdownEditorView: View {
             canInsert: isEditable,
             insertLink: presentLinkInsertion,
             insertTable: insertTable,
-            insertHorizontalRule: insertHorizontalRule
+            insertHorizontalRule: insertHorizontalRule,
+            insertFootnote: insertFootnote
         )
+    }
+
+    private func insertFootnote() {
+        guard isEditable else { return }
+        do {
+            let plan = try MarkdownFormatter.footnotePlan(
+                source: document.text,
+                selectedUTF16Range: sourceEditorSession.textView.selectedRange()
+            )
+            viewMode = viewMode.sourceVisible
+            guard sourceEditorSession.applyMarkdownFormat(plan, actionName: "插入脚注") else {
+                markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未插入脚注。"
+                return
+            }
+            Task { @MainActor in
+                await Task.yield()
+                _ = sourceEditorSession.focusEditor()
+            }
+        } catch {
+            markdownFormatErrorMessage = (error as? LocalizedError)?.errorDescription
+                ?? MarkdownFormatError.coreFailure.localizedDescription
+        }
     }
 
     private func insertHorizontalRule() {

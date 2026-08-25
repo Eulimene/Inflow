@@ -497,6 +497,57 @@ pub fn insert_horizontal_rule(
     })
 }
 
+pub fn insert_footnote(
+    source: &str,
+    requested_selection: Range<usize>,
+) -> Result<MarkdownEdit, FormatError> {
+    if !is_valid_selection(source, &requested_selection) {
+        return Err(FormatError::InvalidSelection);
+    }
+
+    let used_names = footnote_names(source);
+    let identifier = (1..=used_names.len() + 1)
+        .map(|number| format!("note-{number}"))
+        .find(|candidate| !used_names.contains(candidate))
+        .ok_or(FormatError::AmbiguousSelection)?;
+    let insertion_point = requested_selection.end;
+    let reference = format!("[^{identifier}]");
+    let mut replacement = format!("{reference}{}", &source[insertion_point..]);
+    let trailing_newlines = replacement
+        .as_bytes()
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\n')
+        .count()
+        .min(2);
+    replacement.push_str(&"\n".repeat(2 - trailing_newlines));
+    let definition_start = insertion_point + replacement.len();
+    let definition_prefix = format!("[^{identifier}]: ");
+    replacement.push_str(&definition_prefix);
+    let placeholder_start = insertion_point + replacement.len();
+    replacement.push_str("脚注内容\n");
+    let placeholder_end = insertion_point + replacement.len() - 1;
+
+    let replace_range = insertion_point..source.len();
+    let candidate = replacing(source, replace_range.clone(), &replacement);
+    let (references, definitions) = footnote_parts(&candidate, &identifier);
+    if !references
+        .iter()
+        .any(|range| range.start == insertion_point)
+        || !definitions
+            .iter()
+            .any(|range| range.start == definition_start)
+    {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    Ok(MarkdownEdit {
+        replace_range,
+        replacement,
+        selection_range: placeholder_start..placeholder_end,
+    })
+}
+
 pub fn format_heading(
     source: &str,
     requested_selection: Range<usize>,
@@ -1513,6 +1564,32 @@ fn horizontal_rule_ranges(source: &str) -> Vec<Range<usize>> {
         .collect()
 }
 
+fn footnote_names(source: &str) -> Vec<String> {
+    Parser::new_ext(source, render::options())
+        .filter_map(|event| match event {
+            Event::Start(Tag::FootnoteDefinition(name)) | Event::FootnoteReference(name) => {
+                Some(name.into_string())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn footnote_parts(source: &str, identifier: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+    let mut references = Vec::new();
+    let mut definitions = Vec::new();
+    for (event, range) in Parser::new_ext(source, render::options()).into_offset_iter() {
+        match event {
+            Event::FootnoteReference(name) if name.as_ref() == identifier => references.push(range),
+            Event::Start(Tag::FootnoteDefinition(name)) if name.as_ref() == identifier => {
+                definitions.push(range);
+            }
+            _ => {}
+        }
+    }
+    (references, definitions)
+}
+
 fn consecutive_newlines_before(source: &str, position: usize) -> usize {
     source.as_bytes()[..position]
         .iter()
@@ -2141,6 +2218,47 @@ mod tests {
         );
         assert_eq!(
             insert_horizontal_rule("e\u{301}", 1..1),
+            Err(FormatError::InvalidSelection)
+        );
+    }
+
+    #[test]
+    fn footnote_inserts_unique_reference_and_editable_definition() {
+        let edit = insert_footnote("", 0..0).unwrap();
+        assert_eq!(edit.replacement, "[^note-1]\n\n[^note-1]: 脚注内容\n");
+        assert_eq!(&edit.replacement[edit.selection_range], "脚注内容");
+        let (references, definitions) = footnote_parts(&edit.replacement, "note-1");
+        assert_eq!(references.len(), 1);
+        assert_eq!(definitions.len(), 1);
+        let html = render::html_fragment(&edit.replacement);
+        assert!(html.contains("footnote-reference"));
+        assert!(html.contains("footnote-definition"));
+
+        let source = "Existing[^note-1]\n\n[^note-1]: First\n";
+        let edit = insert_footnote(source, "Existing".len().."Existing".len()).unwrap();
+        assert!(edit.replacement.starts_with("[^note-2]"));
+        let formatted = replacing(source, edit.replace_range, &edit.replacement);
+        assert!(formatted.contains("[^note-2]: 脚注内容"));
+    }
+
+    #[test]
+    fn footnote_preserves_selected_anchor_and_rejects_invalid_context() {
+        let source = "Before 文本👩‍💻 after";
+        let end = source.find(" after").unwrap();
+        let edit = insert_footnote(source, "Before ".len()..end).unwrap();
+        let formatted = replacing(source, edit.replace_range, &edit.replacement);
+        assert!(formatted.starts_with("Before 文本👩‍💻[^note-1] after"));
+        assert!(formatted.ends_with("[^note-1]: 脚注内容\n"));
+        assert_eq!(&formatted[edit.selection_range], "脚注内容");
+
+        let fenced = "```text\ninside\n```\n";
+        let caret = fenced.find("inside").unwrap() + 2;
+        assert_eq!(
+            insert_footnote(fenced, caret..caret),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            insert_footnote("e\u{301}", 1..1),
             Err(FormatError::InvalidSelection)
         );
     }

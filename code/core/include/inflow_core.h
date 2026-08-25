@@ -257,6 +257,20 @@ InflowMarkdownEditResult inflow_markdown_insert_horizontal_rule(
     uintptr_t selection_end
 );
 
+/// Plans one Markdown footnote after the current selection. The selected
+/// anchor source remains unchanged, a unique `note-N` reference is inserted at
+/// its end, and a matching definition is appended after the document with its
+/// placeholder selected. Existing parsed footnote names are never reused.
+/// Selection and returned ranges use end-exclusive UTF-8 byte offsets aligned
+/// to complete extended graphemes. Returned replacement bytes must be released
+/// with inflow_owned_bytes_free.
+InflowMarkdownEditResult inflow_markdown_insert_footnote(
+    const uint8_t *utf8,
+    uintptr_t length,
+    uintptr_t selection_start,
+    uintptr_t selection_end
+);
+
 /// Plans a heading edit over complete source lines without modifying the
 /// source. `heading_level` must be 1...6. Mixed levels are unified; if every
 /// nonblank selected line already has the requested level, heading markers are
