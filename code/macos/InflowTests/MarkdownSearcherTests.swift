@@ -363,6 +363,7 @@ final class MarkdownSearcherTests: XCTestCase {
             backing: .buffered,
             defer: false
         )
+        window.animationBehavior = .none
         window.contentView = NSHostingView(rootView: root)
         window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil) }
@@ -758,6 +759,7 @@ final class MarkdownSearcherTests: XCTestCase {
             backing: .buffered,
             defer: false
         )
+        window.animationBehavior = .none
         let container = NSView(frame: window.contentView?.bounds ?? .zero)
         let hostingView = NSHostingView(
             rootView: SearchEditorHarness(model: model, session: session)

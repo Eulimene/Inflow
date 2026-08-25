@@ -105,6 +105,7 @@ enum EditorStatisticMode: String, CaseIterable, Identifiable {
 }
 
 struct MarkdownEditorView: View {
+    @Environment(\.openDocument) private var openDocument
     @Binding var document: MarkdownDocument
     let fileURL: URL?
     let isEditable: Bool
@@ -140,6 +141,13 @@ struct MarkdownEditorView: View {
     @State private var previewScrollGeneration = 0
     @State private var previewScrollRequest: PreviewScrollRequest?
     @State private var previewScrollPausedByUser = false
+    @State private var previewLinkGeneration = 0
+    @State private var previewLinkTask: Task<Void, Never>?
+    @State private var previewLinkWorker = PreviewLinkWorker()
+    @State private var previewLinkPlan: PreviewLinkPlan?
+    @State private var incomingHeadingFragment: String?
+    @State private var incomingNavigationIsPending = false
+    @State private var navigationRegistrationID = UUID()
     @StateObject private var sourceEditorSession = MarkdownSourceEditorSession()
     @State private var selectedHeadingID: DocumentHeading.ID?
     @State private var sourceSelectionRequest: SourceSelectionRequest?
@@ -283,6 +291,7 @@ struct MarkdownEditorView: View {
     private var documentObservationLayer: some View {
         editorSurface
         .onAppear {
+            registerDocumentNavigation(url: fileURL)
             applyRestorationStateIfNeeded()
             scheduleDerivedContent(
                 for: document.text,
@@ -338,6 +347,7 @@ struct MarkdownEditorView: View {
             fileSafetySession.update(document: document, fileURL: fileURL)
         }
         .onChange(of: fileURL) { _, newURL in
+            registerDocumentNavigation(url: newURL)
             scheduleDerivedContent(
                 for: document.text,
                 documentDirectory: newURL?.deletingLastPathComponent(),
@@ -422,11 +432,13 @@ struct MarkdownEditorView: View {
         }
         .onDisappear {
             derivedContentTask?.cancel()
+            previewLinkTask?.cancel()
             findSearchTask?.cancel()
             pendingFindNavigation.removeAll()
             findSession.cancelSearch()
             fileSafetySession.stopMonitoring()
             recoveryCoordinator?.close(recoveryRecordID)
+            PreviewDocumentNavigationBroker.shared.unregister(id: navigationRegistrationID)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) {
             _ in
@@ -436,6 +448,20 @@ struct MarkdownEditorView: View {
 
     private var presentationLayer: some View {
         interactionObservationLayer
+        .sheet(item: $previewLinkPlan) { plan in
+            PreviewLinkDecisionView(
+                plan: plan,
+                onCancel: { previewLinkPlan = nil },
+                onConfirm: { confirmPreviewLink(plan) },
+                onReveal: { url in
+                    guard previewLocalTargetIsCurrent(plan, url: url) else { return }
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                    previewLinkPlan = nil
+                },
+                onReauthorize: { url in reauthorizePreviewLink(plan, expectedURL: url) },
+                onCopyTarget: { copyPreviewLinkTarget(plan) }
+            )
+        }
         .sheet(item: $replaceAllPlan) { plan in
             ReplaceAllPreviewView(
                 plan: plan,
@@ -570,6 +596,7 @@ struct MarkdownEditorView: View {
                 ? previewScrollRequest
                 : nil,
             onHeadingActivated: activatePreviewHeading,
+            onLinkActivated: activatePreviewLink,
             onManualScroll: {
                 if preferences.scrollSyncEnabled {
                     previewScrollPausedByUser = true
@@ -882,6 +909,303 @@ struct MarkdownEditorView: View {
             return
         }
         selectHeading(heading)
+    }
+
+    private func activatePreviewLink(_ target: String) {
+        previewLinkTask?.cancel()
+        previewLinkGeneration &+= 1
+        let generation = previewLinkGeneration
+        let markdown = document.text
+        let documentURL = fileURL
+
+        previewLinkTask = Task { @MainActor in
+            let plan = await previewLinkWorker.plan(
+                markdown: markdown,
+                target: target,
+                documentURL: documentURL
+            )
+            guard !Task.isCancelled, generation == previewLinkGeneration else { return }
+            guard PreviewLinkPlanner.isCurrent(plan, markdown: document.text) else {
+                previewLinkPlan = blockedPreviewLinkPlan(
+                    target: target,
+                    reason: .noLongerInDocument,
+                    safeTarget: "该预览链接"
+                )
+                return
+            }
+            switch plan.destination {
+            case let .currentDocument(fragment):
+                navigateInCurrentDocument(to: fragment)
+            case .external, .local, .blocked:
+                previewLinkPlan = plan
+            }
+        }
+    }
+
+    private func navigateInCurrentDocument(to fragment: String?) {
+        incomingHeadingFragment = fragment
+        incomingNavigationIsPending = true
+        applyPendingDocumentNavigationIfPossible()
+    }
+
+    private func applyPendingDocumentNavigationIfPossible() {
+        guard incomingNavigationIsPending else { return }
+        guard let fragment = incomingHeadingFragment else {
+            incomingNavigationIsPending = false
+            selectedHeadingID = nil
+            viewMode = viewMode.sourceVisible
+            sourceSelectionGeneration &+= 1
+            sourceSelectionRequest = SourceSelectionRequest(
+                generation: sourceSelectionGeneration,
+                utf8Range: 0..<0
+            )
+            return
+        }
+
+        switch analysisState {
+        case .updating:
+            return
+        case let .ready(analysis):
+            incomingNavigationIsPending = false
+            guard let heading = PreviewHeadingAnchorResolver.heading(
+                for: fragment,
+                in: analysis.headings
+            ) else {
+                previewLinkPlan = blockedPreviewLinkPlan(
+                    target: "#\(fragment)",
+                    reason: .missingHeading,
+                    safeTarget: "标题“\(fragment.prefix(80))”"
+                )
+                return
+            }
+            selectHeading(heading)
+        case .failed:
+            incomingNavigationIsPending = false
+            previewLinkPlan = blockedPreviewLinkPlan(
+                target: "#\(fragment)",
+                reason: .missingHeading,
+                safeTarget: "标题“\(fragment.prefix(80))”"
+            )
+        }
+    }
+
+    private func registerDocumentNavigation(url: URL?) {
+        PreviewDocumentNavigationBroker.shared.register(
+            id: navigationRegistrationID,
+            url: url
+        ) { fragment in
+            navigateInCurrentDocument(to: fragment)
+        }
+    }
+
+    private func confirmPreviewLink(_ plan: PreviewLinkPlan) {
+        guard PreviewLinkPlanner.isCurrent(plan, markdown: document.text) else {
+            previewLinkPlan = blockedPreviewLinkPlan(
+                target: plan.target,
+                reason: .noLongerInDocument,
+                safeTarget: "该预览链接"
+            )
+            return
+        }
+        performResolvedPreviewLink(plan)
+    }
+
+    private func performResolvedPreviewLink(
+        _ plan: PreviewLinkPlan,
+        authorizedURL: URL? = nil
+    ) {
+        switch plan.destination {
+        case let .external(link):
+            previewLinkPlan = nil
+            guard NSWorkspace.shared.open(link.url) else {
+                previewLinkPlan = blockedPreviewLinkPlan(
+                    target: plan.target,
+                    reason: .cannotOpen,
+                    safeTarget: link.displayDestination
+                )
+                return
+            }
+        case let .local(link):
+            let accessURL = authorizedURL ?? link.url
+            guard accessURL.standardizedFileURL.path == link.url.standardizedFileURL.path else {
+                previewLinkPlan = blockedPreviewLinkPlan(
+                    target: plan.target,
+                    reason: .unavailableLocalTarget,
+                    safeTarget: link.url.lastPathComponent,
+                    expectedURL: link.url
+                )
+                return
+            }
+            let accessed = accessURL.startAccessingSecurityScopedResource()
+            defer {
+                if accessed { accessURL.stopAccessingSecurityScopedResource() }
+            }
+            guard PreviewLinkPlanner.localTargetIsCurrent(link) else {
+                previewLinkPlan = blockedPreviewLinkPlan(
+                    target: plan.target,
+                    reason: .unavailableLocalTarget,
+                    safeTarget: link.url.lastPathComponent,
+                    expectedURL: link.url
+                )
+                return
+            }
+            previewLinkPlan = nil
+            switch link.kind {
+            case .markdown:
+                openLinkedMarkdown(
+                    link,
+                    originalTarget: plan.target,
+                    accessURL: accessURL
+                )
+            case .image, .pdf:
+                guard NSWorkspace.shared.open(accessURL) else {
+                    previewLinkPlan = blockedPreviewLinkPlan(
+                        target: plan.target,
+                        reason: .cannotOpen,
+                        safeTarget: link.url.lastPathComponent,
+                        expectedURL: link.url
+                    )
+                    return
+                }
+            case .attachment:
+                NSWorkspace.shared.activateFileViewerSelecting([accessURL])
+            }
+        case let .currentDocument(fragment):
+            previewLinkPlan = nil
+            navigateInCurrentDocument(to: fragment)
+        case .blocked:
+            break
+        }
+    }
+
+    private func openLinkedMarkdown(
+        _ link: PreviewLocalLink,
+        originalTarget: String,
+        accessURL: URL
+    ) {
+        if PreviewDocumentNavigationBroker.shared.routeIfOpen(
+            to: link.url,
+            fragment: link.fragment
+        ) {
+            if let openDocument = NativeDocumentSaveCoordinator.documentAlreadyOpen(
+                at: link.url,
+                excluding: nil
+            ) {
+                openDocument.showWindows()
+                openDocument.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
+            }
+            return
+        }
+
+        let token = PreviewDocumentNavigationBroker.shared.enqueue(
+            url: link.url,
+            fragment: link.fragment
+        )
+        Task { @MainActor in
+            let accessed = accessURL.startAccessingSecurityScopedResource()
+            defer {
+                if accessed { accessURL.stopAccessingSecurityScopedResource() }
+            }
+            do {
+                _ = try await openDocument(at: accessURL)
+                try? await Task.sleep(for: .seconds(10))
+                PreviewDocumentNavigationBroker.shared.cancelPending(
+                    url: link.url,
+                    token: token
+                )
+            } catch {
+                PreviewDocumentNavigationBroker.shared.cancelPending(
+                    url: link.url,
+                    token: token
+                )
+                previewLinkPlan = blockedPreviewLinkPlan(
+                    target: originalTarget,
+                    reason: .cannotOpen,
+                    safeTarget: link.url.lastPathComponent,
+                    expectedURL: link.url
+                )
+            }
+        }
+    }
+
+    private func previewLocalTargetIsCurrent(_ plan: PreviewLinkPlan, url: URL) -> Bool {
+        guard PreviewLinkPlanner.isCurrent(plan, markdown: document.text),
+              case let .local(link) = plan.destination,
+              link.url.standardizedFileURL.path == url.standardizedFileURL.path,
+              PreviewLinkPlanner.localTargetIsCurrent(link)
+        else {
+            previewLinkPlan = blockedPreviewLinkPlan(
+                target: plan.target,
+                reason: .unavailableLocalTarget,
+                safeTarget: url.lastPathComponent,
+                expectedURL: url
+            )
+            return false
+        }
+        return true
+    }
+
+    private func reauthorizePreviewLink(_ plan: PreviewLinkPlan, expectedURL: URL) {
+        previewLinkPlan = nil
+        Task { @MainActor in
+            await Task.yield()
+            guard let chosen = await PreviewLinkAuthorization.chooseExactTarget(
+                expectedURL,
+                attachedTo: sourceEditorSession.textView.window ?? NSApp.keyWindow
+            ) else {
+                return
+            }
+            let accessed = chosen.startAccessingSecurityScopedResource()
+            defer {
+                if accessed { chosen.stopAccessingSecurityScopedResource() }
+            }
+            let refreshed = await previewLinkWorker.plan(
+                markdown: document.text,
+                target: plan.target,
+                documentURL: fileURL
+            )
+            guard PreviewLinkPlanner.isCurrent(refreshed, markdown: document.text) else {
+                previewLinkPlan = blockedPreviewLinkPlan(
+                    target: plan.target,
+                    reason: .noLongerInDocument,
+                    safeTarget: "该预览链接"
+                )
+                return
+            }
+            guard case let .local(link) = refreshed.destination,
+                  link.url.standardizedFileURL.path == chosen.standardizedFileURL.path
+            else {
+                previewLinkPlan = refreshed
+                return
+            }
+            performResolvedPreviewLink(refreshed, authorizedURL: chosen)
+        }
+    }
+
+    private func copyPreviewLinkTarget(_ plan: PreviewLinkPlan) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(plan.target, forType: .string)
+        previewLinkPlan = nil
+    }
+
+    private func blockedPreviewLinkPlan(
+        target: String,
+        reason: PreviewLinkFailureReason,
+        safeTarget: String,
+        expectedURL: URL? = nil
+    ) -> PreviewLinkPlan {
+        PreviewLinkPlan(
+            sourceUTF8: Data(document.text.utf8),
+            target: target,
+            destination: .blocked(
+                PreviewLinkFailure(
+                    reason: reason,
+                    safeTarget: safeTarget,
+                    expectedURL: expectedURL
+                )
+            )
+        )
     }
 
     private func requestPreviewScroll() {
@@ -1740,6 +2064,7 @@ struct MarkdownEditorView: View {
             switch content.analysis {
             case let .success(analysis):
                 analysisState = .ready(analysis)
+                applyPendingDocumentNavigationIfPossible()
             case let .failure(message):
                 analysisState = .failed(
                     previous: analysisState.displayedAnalysis,

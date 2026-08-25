@@ -8,6 +8,7 @@ struct PreviewScrollRequest: Equatable {
 
 enum PreviewNavigationMessage: Equatable {
     case heading(sourceUTF8Offset: Int)
+    case link(target: String)
     case manualScroll
 
     static func decode(_ body: Any) -> Self? {
@@ -29,10 +30,46 @@ enum PreviewNavigationMessage: Equatable {
                 return nil
             }
             return .heading(sourceUTF8Offset: Int(value))
+        case "link":
+            guard let targetHex = dictionary["targetHex"] as? String,
+                  let target = decodeHexTarget(targetHex),
+                  !target.unicodeScalars.contains(where: { scalar in
+                      CharacterSet.controlCharacters.contains(scalar)
+                  })
+            else {
+                return nil
+            }
+            return .link(target: target)
         case "manualScroll":
             return .manualScroll
         default:
             return nil
+        }
+    }
+
+    private static func decodeHexTarget(_ hex: String) -> String? {
+        let bytes = Array(hex.utf8)
+        guard bytes.count <= 32 * 1_024, bytes.count.isMultiple(of: 2) else { return nil }
+        var decoded = Data(capacity: bytes.count / 2)
+        var index = 0
+        while index < bytes.count {
+            guard let high = hexadecimalValue(bytes[index]),
+                  let low = hexadecimalValue(bytes[index + 1])
+            else {
+                return nil
+            }
+            decoded.append(high << 4 | low)
+            index += 2
+        }
+        return String(data: decoded, encoding: .utf8)
+    }
+
+    private static func hexadecimalValue(_ byte: UInt8) -> UInt8? {
+        switch byte {
+        case 48...57: byte - 48
+        case 65...70: byte - 55
+        case 97...102: byte - 87
+        default: nil
         }
     }
 }
@@ -44,6 +81,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
     let baseURL: URL?
     let scrollRequest: PreviewScrollRequest?
     let onHeadingActivated: (Int) -> Void
+    let onLinkActivated: (String) -> Void
     let onManualScroll: () -> Void
 
     init(
@@ -51,12 +89,14 @@ struct MarkdownPreviewView: NSViewRepresentable {
         baseURL: URL?,
         scrollRequest: PreviewScrollRequest? = nil,
         onHeadingActivated: @escaping (Int) -> Void = { _ in },
+        onLinkActivated: @escaping (String) -> Void = { _ in },
         onManualScroll: @escaping () -> Void = {}
     ) {
         self.html = html
         self.baseURL = baseURL
         self.scrollRequest = scrollRequest
         self.onHeadingActivated = onHeadingActivated
+        self.onLinkActivated = onLinkActivated
         self.onManualScroll = onManualScroll
     }
 
@@ -88,6 +128,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
         context.coordinator.update(
             scrollRequest: scrollRequest,
             onHeadingActivated: onHeadingActivated,
+            onLinkActivated: onLinkActivated,
             onManualScroll: onManualScroll,
             webView: webView
         )
@@ -98,6 +139,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
         context.coordinator.update(
             scrollRequest: scrollRequest,
             onHeadingActivated: onHeadingActivated,
+            onLinkActivated: onLinkActivated,
             onManualScroll: onManualScroll,
             webView: webView
         )
@@ -136,16 +178,19 @@ struct MarkdownPreviewView: NSViewRepresentable {
         private var appliedScrollGeneration: Int?
         private var isDocumentLoaded = false
         private var onHeadingActivated: (Int) -> Void = { _ in }
+        private var onLinkActivated: (String) -> Void = { _ in }
         private var onManualScroll: () -> Void = {}
 
         func update(
             scrollRequest: PreviewScrollRequest?,
             onHeadingActivated: @escaping (Int) -> Void,
+            onLinkActivated: @escaping (String) -> Void,
             onManualScroll: @escaping () -> Void,
             webView: WKWebView
         ) {
             requestedScroll = scrollRequest
             self.onHeadingActivated = onHeadingActivated
+            self.onLinkActivated = onLinkActivated
             self.onManualScroll = onManualScroll
             applyScrollIfPossible(to: webView)
         }
@@ -177,6 +222,8 @@ struct MarkdownPreviewView: NSViewRepresentable {
             switch message {
             case let .heading(sourceUTF8Offset):
                 onHeadingActivated(sourceUTF8Offset)
+            case let .link(target):
+                onLinkActivated(target)
             case .manualScroll:
                 onManualScroll()
             }
@@ -248,8 +295,19 @@ struct MarkdownPreviewView: NSViewRepresentable {
       };
 
       document.addEventListener('click', (event) => {
+        const link = event.target instanceof Element
+          ? event.target.closest('a[data-inflow-link-target-hex]')
+          : null;
+        if (link) {
+          event.preventDefault();
+          const targetHex = link.getAttribute('data-inflow-link-target-hex');
+          if (targetHex !== null) {
+            handler.postMessage({ type: 'link', targetHex });
+          }
+          return;
+        }
         const heading = headingFor(event.target);
-        if (!heading || (event.target instanceof Element && event.target.closest('a'))) {
+        if (!heading) {
           return;
         }
         event.preventDefault();

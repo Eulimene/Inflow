@@ -55,6 +55,7 @@
 		A1000000000000000000002E /* AnonymousUsageData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000033 /* AnonymousUsageData.swift */; };
 		A1000000000000000000002F /* AnonymousUsagePrivacyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000034 /* AnonymousUsagePrivacyView.swift */; };
 		A10000000000000000000030 /* AnonymousUsageDataTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000035 /* AnonymousUsageDataTests.swift */; };
+		A10000000000000000000031 /* PreviewLinkNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000036 /* PreviewLinkNavigation.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -121,6 +122,7 @@
 		A20000000000000000000033 /* AnonymousUsageData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Privacy/AnonymousUsageData.swift; sourceTree = "<group>"; };
 		A20000000000000000000034 /* AnonymousUsagePrivacyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Privacy/AnonymousUsagePrivacyView.swift; sourceTree = "<group>"; };
 		A20000000000000000000035 /* AnonymousUsageDataTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnonymousUsageDataTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000036 /* PreviewLinkNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preview/PreviewLinkNavigation.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -182,6 +184,7 @@
 				A2000000000000000000000D /* MarkdownRenderer.swift */,
 				A20000000000000000000023 /* LocalImageResolver.swift */,
 				A2000000000000000000000E /* MarkdownPreviewView.swift */,
+				A20000000000000000000036 /* PreviewLinkNavigation.swift */,
 				A20000000000000000000010 /* MarkdownAnalyzer.swift */,
 				A20000000000000000000012 /* DocumentOutlineView.swift */,
 				A20000000000000000000014 /* MarkdownSearcher.swift */,
@@ -370,6 +373,7 @@
 				A10000000000000000000008 /* MarkdownRenderer.swift in Sources */,
 				A1000000000000000000001E /* LocalImageResolver.swift in Sources */,
 				A10000000000000000000009 /* MarkdownPreviewView.swift in Sources */,
+				A10000000000000000000031 /* PreviewLinkNavigation.swift in Sources */,
 				A1000000000000000000000B /* MarkdownAnalyzer.swift in Sources */,
 				A1000000000000000000000C /* MarkdownSourceEditor.swift in Sources */,
 				A1000000000000000000000D /* DocumentOutlineView.swift in Sources */,

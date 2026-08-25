@@ -49,9 +49,16 @@ enum MarkdownRenderer {
         navigationHeadings: [DocumentHeading] = []
     ) -> String {
         do {
-            let fragment = PreviewNavigationMarkup.annotateHeadings(
+            let headingFragment = PreviewNavigationMarkup.annotateHeadings(
                 in: try htmlFragment(for: markdown),
                 headings: navigationHeadings
+            )
+            let linkTargets = try MarkdownReferenceScanner.references(in: markdown)
+                .filter { $0.kind == .link }
+                .map(\.target)
+            let fragment = PreviewNavigationMarkup.annotateLinks(
+                in: headingFragment,
+                targets: linkTargets
             )
             return document(
                 containing: LocalImageResolver.resolveSlots(
@@ -144,6 +151,8 @@ enum MarkdownRenderer {
 }
 
 enum PreviewNavigationMarkup {
+    private static let maximumLinkTargetBytes = 16 * 1_024
+
     static func annotateHeadings(
         in fragment: String,
         headings: [DocumentHeading]
@@ -174,6 +183,76 @@ enum PreviewNavigationMarkup {
             )
         }
         return result as String
+    }
+
+    static func annotateLinks(in fragment: String, targets: [String]) -> String {
+        guard !targets.isEmpty,
+              let linkPattern = try? NSRegularExpression(pattern: #"<a href=\"([^\"]*)\""#)
+        else {
+            return fragment
+        }
+        let source = fragment as NSString
+        let fullRange = NSRange(location: 0, length: (fragment as NSString).length)
+        let matches = linkPattern.matches(in: fragment, range: fullRange)
+        var selectedMatches: [(NSTextCheckingResult, String)] = []
+        var searchIndex = 0
+        for target in targets {
+            guard let renderedTarget = URL(string: target)?.relativeString else { return fragment }
+            let expectedHref = escapeHTMLAttribute(renderedTarget)
+            var selected: NSTextCheckingResult?
+            while searchIndex < matches.count {
+                let candidate = matches[searchIndex]
+                searchIndex += 1
+                guard candidate.numberOfRanges == 2,
+                      source.substring(with: candidate.range(at: 1)) == expectedHref,
+                      !isGeneratedFootnoteAnchor(candidate, in: source)
+                else {
+                    continue
+                }
+                selected = candidate
+                break
+            }
+            guard let selected else { return fragment }
+            selectedMatches.append((selected, target))
+        }
+
+        let result = NSMutableString(string: fragment)
+        for (match, target) in selectedMatches.reversed() {
+            guard target.utf8.count <= maximumLinkTargetBytes,
+                  !target.unicodeScalars.contains(where: { scalar in
+                      CharacterSet.controlCharacters.contains(scalar)
+                  })
+            else {
+                continue
+            }
+            let original = result.substring(with: match.range)
+            let targetHex = Data(target.utf8).map { String(format: "%02x", $0) }.joined()
+            result.replaceCharacters(
+                in: match.range,
+                with: "\(original) data-inflow-link-target-hex=\"\(targetHex)\""
+            )
+        }
+        return result as String
+    }
+
+    private static func isGeneratedFootnoteAnchor(
+        _ match: NSTextCheckingResult,
+        in source: NSString
+    ) -> Bool {
+        let marker = #"<sup class="footnote-reference">"#
+        let start = max(0, match.range.location - (marker as NSString).length)
+        let prefix = source.substring(
+            with: NSRange(location: start, length: match.range.location - start)
+        )
+        return prefix.hasSuffix(marker)
+    }
+
+    private static func escapeHTMLAttribute(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
     }
 }
 
