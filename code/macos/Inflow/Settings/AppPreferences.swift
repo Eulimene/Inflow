@@ -98,6 +98,7 @@ final class AppPreferences: ObservableObject {
     private enum Key {
         static let editorFontSize = "preferences.editor.fontSize"
         static let editorLineHeight = "preferences.editor.lineHeight"
+        static let syntaxHighlightingEnabled = "preferences.editor.syntaxHighlightingEnabled"
         static let spellingEnabled = "preferences.editor.spellingEnabled"
         static let scrollSyncEnabled = "preferences.preview.scrollSyncEnabled"
         static let headingNavigationEnabled = "preferences.preview.headingNavigationEnabled"
@@ -136,6 +137,12 @@ final class AppPreferences: ObservableObject {
 
     @Published var spellingEnabled: Bool {
         didSet { defaults.set(spellingEnabled, forKey: Key.spellingEnabled) }
+    }
+
+    @Published var syntaxHighlightingEnabled: Bool {
+        didSet {
+            defaults.set(syntaxHighlightingEnabled, forKey: Key.syntaxHighlightingEnabled)
+        }
     }
 
     @Published var scrollSyncEnabled: Bool {
@@ -197,6 +204,11 @@ final class AppPreferences: ObservableObject {
             in: defaults,
             defaultValue: SourceEditorAppearance.default.lineHeight,
             range: Limits.editorLineHeight
+        )
+        syntaxHighlightingEnabled = Self.bool(
+            forKey: Key.syntaxHighlightingEnabled,
+            in: defaults,
+            defaultValue: true
         )
         spellingEnabled = Self.bool(
             forKey: Key.spellingEnabled,
@@ -287,6 +299,7 @@ final class AppPreferences: ObservableObject {
     func resetWritingAndPreview() {
         editorFontSize = SourceEditorAppearance.default.fontSize
         editorLineHeight = SourceEditorAppearance.default.lineHeight
+        syntaxHighlightingEnabled = true
         spellingEnabled = SourceEditorAppearance.default.spellingEnabled
         scrollSyncEnabled = true
         headingNavigationEnabled = true
@@ -301,6 +314,7 @@ final class AppPreferences: ObservableObject {
     private func persistCurrentValues() {
         defaults.set(editorFontSize, forKey: Key.editorFontSize)
         defaults.set(editorLineHeight, forKey: Key.editorLineHeight)
+        defaults.set(syntaxHighlightingEnabled, forKey: Key.syntaxHighlightingEnabled)
         defaults.set(spellingEnabled, forKey: Key.spellingEnabled)
         defaults.set(scrollSyncEnabled, forKey: Key.scrollSyncEnabled)
         defaults.set(headingNavigationEnabled, forKey: Key.headingNavigationEnabled)

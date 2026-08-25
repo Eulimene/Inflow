@@ -32,6 +32,21 @@ static const uint8_t INFLOW_LIST_FORMAT_TASK = 3;
 static const uint8_t INFLOW_REFERENCE_KIND_LINK = 1;
 static const uint8_t INFLOW_REFERENCE_KIND_IMAGE = 2;
 
+static const uint8_t INFLOW_HIGHLIGHT_KIND_HEADING = 1;
+static const uint8_t INFLOW_HIGHLIGHT_KIND_EMPHASIS = 2;
+static const uint8_t INFLOW_HIGHLIGHT_KIND_STRONG = 3;
+static const uint8_t INFLOW_HIGHLIGHT_KIND_STRIKETHROUGH = 4;
+static const uint8_t INFLOW_HIGHLIGHT_KIND_CODE = 5;
+static const uint8_t INFLOW_HIGHLIGHT_KIND_LINK = 6;
+static const uint8_t INFLOW_HIGHLIGHT_KIND_IMAGE = 7;
+static const uint8_t INFLOW_HIGHLIGHT_KIND_BLOCK_QUOTE = 8;
+static const uint8_t INFLOW_HIGHLIGHT_KIND_LIST = 9;
+static const uint8_t INFLOW_HIGHLIGHT_KIND_TABLE = 10;
+static const uint8_t INFLOW_HIGHLIGHT_KIND_FOOTNOTE = 11;
+static const uint8_t INFLOW_HIGHLIGHT_KIND_MATH = 12;
+static const uint8_t INFLOW_HIGHLIGHT_KIND_RAW = 13;
+static const uint8_t INFLOW_HIGHLIGHT_KIND_RULE = 14;
+
 typedef uint64_t InflowHTMLExportIssues;
 static const InflowHTMLExportIssues INFLOW_HTML_EXPORT_ISSUE_IMAGE = UINT64_C(1) << 0;
 static const InflowHTMLExportIssues INFLOW_HTML_EXPORT_ISSUE_FORMULA = UINT64_C(1) << 1;
@@ -107,6 +122,19 @@ typedef struct InflowOwnedReferences {
     uintptr_t length;
 } InflowOwnedReferences;
 
+typedef struct InflowHighlightSpan {
+    uint8_t kind;
+    /// Start/end are end-exclusive UTF-8 byte offsets into the input passed to
+    /// inflow_markdown_highlight. Ranges may overlap for nested Markdown.
+    uintptr_t source_start;
+    uintptr_t source_end;
+} InflowHighlightSpan;
+
+typedef struct InflowOwnedHighlightSpans {
+    InflowHighlightSpan *data;
+    uintptr_t length;
+} InflowOwnedHighlightSpans;
+
 typedef struct InflowAnalysisResult {
     InflowStatus status;
     InflowOwnedHeadings headings;
@@ -126,6 +154,11 @@ typedef struct InflowReferenceResult {
     InflowOwnedReferences references;
     InflowOwnedBytes target_text_utf8;
 } InflowReferenceResult;
+
+typedef struct InflowHighlightResult {
+    InflowStatus status;
+    InflowOwnedHighlightSpans spans;
+} InflowHighlightResult;
 
 typedef struct InflowHTMLExportResult {
     InflowStatus status;
@@ -151,6 +184,8 @@ static_assert(sizeof(InflowSearchMatch) == 16, "InflowSearchMatch ABI layout cha
 static_assert(sizeof(InflowSearchResult) == 24, "InflowSearchResult ABI layout changed");
 static_assert(sizeof(InflowReference) == 24, "InflowReference ABI layout changed");
 static_assert(sizeof(InflowReferenceResult) == 40, "InflowReferenceResult ABI layout changed");
+static_assert(sizeof(InflowHighlightSpan) == 24, "InflowHighlightSpan ABI layout changed");
+static_assert(sizeof(InflowHighlightResult) == 24, "InflowHighlightResult ABI layout changed");
 static_assert(sizeof(InflowHTMLExportResult) == 32, "InflowHTMLExportResult ABI layout changed");
 static_assert(sizeof(InflowMarkdownEditResult) == 56, "InflowMarkdownEditResult ABI layout changed");
 #else
@@ -161,6 +196,8 @@ _Static_assert(sizeof(InflowSearchMatch) == 16, "InflowSearchMatch ABI layout ch
 _Static_assert(sizeof(InflowSearchResult) == 24, "InflowSearchResult ABI layout changed");
 _Static_assert(sizeof(InflowReference) == 24, "InflowReference ABI layout changed");
 _Static_assert(sizeof(InflowReferenceResult) == 40, "InflowReferenceResult ABI layout changed");
+_Static_assert(sizeof(InflowHighlightSpan) == 24, "InflowHighlightSpan ABI layout changed");
+_Static_assert(sizeof(InflowHighlightResult) == 24, "InflowHighlightResult ABI layout changed");
 _Static_assert(sizeof(InflowHTMLExportResult) == 32, "InflowHTMLExportResult ABI layout changed");
 _Static_assert(sizeof(InflowMarkdownEditResult) == 56, "InflowMarkdownEditResult ABI layout changed");
 #endif
@@ -449,6 +486,15 @@ InflowReferenceResult inflow_document_references(
     uintptr_t length
 );
 
+/// Returns semantic syntax spans for UTF-8 Markdown. Spans use end-exclusive
+/// byte offsets into the exact source and can overlap for nested constructs.
+/// The returned array belongs to Inflow and must be released with
+/// inflow_owned_highlight_spans_free.
+InflowHighlightResult inflow_markdown_highlight(
+    const uint8_t *utf8,
+    uintptr_t length
+);
+
 /// Releases an unchanged pointer and length returned by Inflow.
 void inflow_owned_bytes_free(uint8_t *data, uintptr_t length);
 
@@ -464,6 +510,12 @@ void inflow_owned_search_matches_free(
 /// Releases an unchanged Markdown-reference pointer and length from Inflow.
 void inflow_owned_references_free(
     InflowReference *data,
+    uintptr_t length
+);
+
+/// Releases an unchanged syntax-span pointer and length returned by Inflow.
+void inflow_owned_highlight_spans_free(
+    InflowHighlightSpan *data,
     uintptr_t length
 );
 

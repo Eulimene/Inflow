@@ -7,6 +7,7 @@ mod document;
 mod export;
 mod ffi;
 mod format;
+mod highlight;
 mod math;
 mod mermaid;
 mod reference;

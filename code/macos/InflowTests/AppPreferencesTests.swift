@@ -10,6 +10,7 @@ final class AppPreferencesTests: XCTestCase {
 
             XCTAssertEqual(preferences.editorFontSize, 15)
             XCTAssertEqual(preferences.editorLineHeight, 1.6)
+            XCTAssertTrue(preferences.syntaxHighlightingEnabled)
             XCTAssertTrue(preferences.spellingEnabled)
             XCTAssertTrue(preferences.scrollSyncEnabled)
             XCTAssertTrue(preferences.headingNavigationEnabled)
@@ -27,6 +28,7 @@ final class AppPreferencesTests: XCTestCase {
             let first = AppPreferences(defaults: defaults)
             first.editorFontSize = 24
             first.editorLineHeight = 1.9
+            first.syntaxHighlightingEnabled = false
             first.spellingEnabled = false
             first.scrollSyncEnabled = false
             first.headingNavigationEnabled = false
@@ -40,6 +42,7 @@ final class AppPreferencesTests: XCTestCase {
             let second = AppPreferences(defaults: defaults)
             XCTAssertEqual(second.editorFontSize, 24)
             XCTAssertEqual(second.editorLineHeight, 1.9)
+            XCTAssertFalse(second.syntaxHighlightingEnabled)
             XCTAssertFalse(second.spellingEnabled)
             XCTAssertFalse(second.scrollSyncEnabled)
             XCTAssertFalse(second.headingNavigationEnabled)
@@ -85,6 +88,7 @@ final class AppPreferencesTests: XCTestCase {
             preferences.editorFontSize = 27
             preferences.previewZoom = 1.8
             preferences.previewTheme = .code
+            preferences.syntaxHighlightingEnabled = false
             preferences.scrollSyncEnabled = false
             preferences.headingNavigationEnabled = false
             preferences.increasedContrast = .enabled
@@ -94,6 +98,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.editorFontSize, 15)
             XCTAssertEqual(preferences.previewZoom, 1)
             XCTAssertEqual(preferences.previewTheme, .standard)
+            XCTAssertTrue(preferences.syntaxHighlightingEnabled)
             XCTAssertTrue(preferences.scrollSyncEnabled)
             XCTAssertTrue(preferences.headingNavigationEnabled)
             XCTAssertEqual(preferences.increasedContrast, .followSystem)

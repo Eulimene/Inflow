@@ -107,6 +107,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     fileprivate var updateBoundText: ((String) -> Void)?
     private(set) var sourceAppearance = SourceEditorAppearance.default
     private var hasAppliedSourceAppearance = false
+    private var syntaxHighlightingEnabled = false
+    private var syntaxHighlightingSourceUTF8 = Data()
+    private var syntaxHighlightingSpans: [MarkdownSyntaxSpan] = []
+    private var syntaxApplicationGeneration = 0
+    private var syntaxApplicationTask: Task<Void, Never>?
 
     override init() {
         let scrollView = NSScrollView()
@@ -153,6 +158,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         self.textView = textView
         super.init()
         textView.textDidChangeHandler = { [weak self] text in
+            self?.invalidateSyntaxApplication()
             self?.updateBoundText?(text)
         }
         NotificationCenter.default.addObserver(
@@ -208,13 +214,119 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
 
         if let textStorage = textView.textStorage, textStorage.length > 0 {
             textStorage.beginEditing()
-            textStorage.addAttributes(
-                [.font: font, .paragraphStyle: paragraphStyle],
+            textStorage.setAttributes(
+                [
+                    .font: font,
+                    .foregroundColor: NSColor.textColor,
+                    .paragraphStyle: paragraphStyle,
+                ],
                 range: NSRange(location: 0, length: textStorage.length)
             )
             textStorage.endEditing()
         }
         textView.setSelectedRange(selection)
+        scheduleCachedSyntaxHighlighting(baseFont: font)
+    }
+
+    @discardableResult
+    func applySyntaxHighlighting(
+        _ spans: [MarkdownSyntaxSpan],
+        source: String,
+        enabled: Bool
+    ) -> Bool {
+        syntaxHighlightingEnabled = enabled
+        syntaxHighlightingSourceUTF8 = Data(source.utf8)
+        syntaxHighlightingSpans = enabled ? spans : []
+        guard UTF8Text.isExactlyEqual(textView.string, source) else { return false }
+        applySourceAppearance(sourceAppearance, force: true)
+        return true
+    }
+
+    private func scheduleCachedSyntaxHighlighting(baseFont: NSFont) {
+        syntaxApplicationTask?.cancel()
+        syntaxApplicationGeneration &+= 1
+        let generation = syntaxApplicationGeneration
+        guard syntaxHighlightingEnabled,
+              syntaxHighlightingSourceUTF8 == Data(textView.string.utf8)
+        else {
+            return
+        }
+
+        let boldFont = NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
+        let sortedSpans = syntaxHighlightingSpans
+        syntaxApplicationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for batchStart in stride(from: 0, to: sortedSpans.count, by: 512) {
+                guard !Task.isCancelled,
+                      generation == self.syntaxApplicationGeneration,
+                      let textStorage = self.textView.textStorage
+                else {
+                    return
+                }
+                let batchEnd = min(batchStart + 512, sortedSpans.count)
+                textStorage.beginEditing()
+                for span in sortedSpans[batchStart..<batchEnd] {
+                    let range = span.utf16Range
+                    guard NSMaxRange(range) <= textStorage.length
+                    else {
+                        continue
+                    }
+                    textStorage.addAttributes(
+                        self.syntaxAttributes(for: span.kind, boldFont: boldFont),
+                        range: range
+                    )
+                }
+                textStorage.endEditing()
+                await Task.yield()
+            }
+        }
+    }
+
+    private func invalidateSyntaxApplication() {
+        syntaxApplicationTask?.cancel()
+        syntaxApplicationGeneration &+= 1
+    }
+
+    private func syntaxAttributes(
+        for kind: MarkdownSyntaxKind,
+        boldFont: NSFont
+    ) -> [NSAttributedString.Key: Any] {
+        switch kind {
+        case .heading:
+            [.foregroundColor: NSColor.systemBlue, .font: boldFont]
+        case .emphasis:
+            [.obliqueness: 0.18]
+        case .strong:
+            [.font: boldFont]
+        case .strikethrough:
+            [.strikethroughStyle: NSUnderlineStyle.single.rawValue]
+        case .code:
+            [
+                .foregroundColor: NSColor.systemOrange,
+                .backgroundColor: NSColor.quaternaryLabelColor.withAlphaComponent(0.18),
+            ]
+        case .link:
+            [
+                .foregroundColor: NSColor.systemPurple,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+            ]
+        case .image:
+            [.foregroundColor: NSColor.systemPink]
+        case .blockQuote:
+            [.foregroundColor: NSColor.secondaryLabelColor]
+        case .list:
+            [.foregroundColor: NSColor.systemIndigo]
+        case .table:
+            [.foregroundColor: NSColor.systemTeal]
+        case .footnote:
+            [.foregroundColor: NSColor.systemMint]
+        case .math:
+            [.foregroundColor: NSColor.systemGreen]
+        case .raw:
+            [.foregroundColor: NSColor.systemRed]
+        case .rule:
+            [.foregroundColor: NSColor.tertiaryLabelColor]
+        }
     }
 
     @objc
@@ -261,6 +373,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     func resetAfterExternalReload(_ text: String) {
+        invalidateSyntaxApplication()
         let previousSelection = textView.selectedRange()
         textView.string = text
         let utf16Length = (text as NSString).length

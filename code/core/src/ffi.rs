@@ -7,6 +7,7 @@ use crate::analysis;
 use crate::document::{self, DecodeError, LineEnding};
 use crate::export::{self, ExportError};
 use crate::format::{self, FormatError, InlineFormat, ListFormat};
+use crate::highlight;
 use crate::reference::{self, ReferenceKind};
 use crate::render;
 use crate::search;
@@ -33,6 +34,21 @@ pub const LIST_FORMAT_TASK: u8 = 3;
 
 pub const REFERENCE_KIND_LINK: u8 = 1;
 pub const REFERENCE_KIND_IMAGE: u8 = 2;
+
+pub const HIGHLIGHT_KIND_HEADING: u8 = 1;
+pub const HIGHLIGHT_KIND_EMPHASIS: u8 = 2;
+pub const HIGHLIGHT_KIND_STRONG: u8 = 3;
+pub const HIGHLIGHT_KIND_STRIKETHROUGH: u8 = 4;
+pub const HIGHLIGHT_KIND_CODE: u8 = 5;
+pub const HIGHLIGHT_KIND_LINK: u8 = 6;
+pub const HIGHLIGHT_KIND_IMAGE: u8 = 7;
+pub const HIGHLIGHT_KIND_BLOCK_QUOTE: u8 = 8;
+pub const HIGHLIGHT_KIND_LIST: u8 = 9;
+pub const HIGHLIGHT_KIND_TABLE: u8 = 10;
+pub const HIGHLIGHT_KIND_FOOTNOTE: u8 = 11;
+pub const HIGHLIGHT_KIND_MATH: u8 = 12;
+pub const HIGHLIGHT_KIND_RAW: u8 = 13;
+pub const HIGHLIGHT_KIND_RULE: u8 = 14;
 
 #[repr(C)]
 pub struct InflowOwnedBytes {
@@ -163,6 +179,38 @@ impl InflowOwnedReferences {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+pub struct InflowHighlightSpan {
+    pub kind: u8,
+    pub source_start: usize,
+    pub source_end: usize,
+}
+
+#[repr(C)]
+pub struct InflowOwnedHighlightSpans {
+    pub data: *mut InflowHighlightSpan,
+    pub length: usize,
+}
+
+impl InflowOwnedHighlightSpans {
+    const fn empty() -> Self {
+        Self {
+            data: ptr::null_mut(),
+            length: 0,
+        }
+    }
+
+    fn from_vec(spans: Vec<InflowHighlightSpan>) -> Self {
+        if spans.is_empty() {
+            return Self::empty();
+        }
+        let length = spans.len();
+        let data = Box::into_raw(spans.into_boxed_slice()).cast::<InflowHighlightSpan>();
+        Self { data, length }
+    }
+}
+
+#[repr(C)]
 pub struct InflowDecodeResult {
     pub status: i32,
     pub utf8: InflowOwnedBytes,
@@ -251,6 +299,21 @@ pub struct InflowReferenceResult {
     pub status: i32,
     pub references: InflowOwnedReferences,
     pub target_text_utf8: InflowOwnedBytes,
+}
+
+#[repr(C)]
+pub struct InflowHighlightResult {
+    pub status: i32,
+    pub spans: InflowOwnedHighlightSpans,
+}
+
+impl InflowHighlightResult {
+    const fn error(status: i32) -> Self {
+        Self {
+            status,
+            spans: InflowOwnedHighlightSpans::empty(),
+        }
+    }
 }
 
 impl InflowReferenceResult {
@@ -1048,6 +1111,56 @@ pub unsafe extern "C" fn inflow_document_references(
     .unwrap_or_else(|_| InflowReferenceResult::error(STATUS_PANIC))
 }
 
+/// Returns semantic syntax spans for UTF-8 Markdown source.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_markdown_highlight(
+    utf8: *const u8,
+    length: usize,
+) -> InflowHighlightResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowHighlightResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Ok(markdown) = std::str::from_utf8(input) else {
+            return InflowHighlightResult::error(STATUS_INVALID_UTF8);
+        };
+
+        let spans = highlight::spans(markdown)
+            .into_iter()
+            .map(|span| InflowHighlightSpan {
+                kind: match span.kind {
+                    highlight::HighlightKind::Heading => HIGHLIGHT_KIND_HEADING,
+                    highlight::HighlightKind::Emphasis => HIGHLIGHT_KIND_EMPHASIS,
+                    highlight::HighlightKind::Strong => HIGHLIGHT_KIND_STRONG,
+                    highlight::HighlightKind::Strikethrough => HIGHLIGHT_KIND_STRIKETHROUGH,
+                    highlight::HighlightKind::Code => HIGHLIGHT_KIND_CODE,
+                    highlight::HighlightKind::Link => HIGHLIGHT_KIND_LINK,
+                    highlight::HighlightKind::Image => HIGHLIGHT_KIND_IMAGE,
+                    highlight::HighlightKind::BlockQuote => HIGHLIGHT_KIND_BLOCK_QUOTE,
+                    highlight::HighlightKind::List => HIGHLIGHT_KIND_LIST,
+                    highlight::HighlightKind::Table => HIGHLIGHT_KIND_TABLE,
+                    highlight::HighlightKind::Footnote => HIGHLIGHT_KIND_FOOTNOTE,
+                    highlight::HighlightKind::Math => HIGHLIGHT_KIND_MATH,
+                    highlight::HighlightKind::Raw => HIGHLIGHT_KIND_RAW,
+                    highlight::HighlightKind::Rule => HIGHLIGHT_KIND_RULE,
+                },
+                source_start: span.source_range.start,
+                source_end: span.source_range.end,
+            })
+            .collect();
+        InflowHighlightResult {
+            status: STATUS_OK,
+            spans: InflowOwnedHighlightSpans::from_vec(spans),
+        }
+    }))
+    .unwrap_or_else(|_| InflowHighlightResult::error(STATUS_PANIC))
+}
+
 /// Finds non-overlapping literal matches in UTF-8 Markdown source.
 ///
 /// # Safety
@@ -1138,6 +1251,25 @@ pub unsafe extern "C" fn inflow_owned_headings_free(data: *mut InflowHeading, le
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn inflow_owned_search_matches_free(
     data: *mut InflowSearchMatch,
+    length: usize,
+) {
+    if data.is_null() {
+        return;
+    }
+
+    let slice = ptr::slice_from_raw_parts_mut(data, length);
+    drop(unsafe { Box::from_raw(slice) });
+}
+
+/// Releases syntax spans returned by this library.
+///
+/// # Safety
+///
+/// `data` and `length` must be an unchanged pair returned by this library and
+/// must not have been released previously. A null pointer is accepted.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_owned_highlight_spans_free(
+    data: *mut InflowHighlightSpan,
     length: usize,
 ) {
     if data.is_null() {
@@ -1330,6 +1462,10 @@ mod tests {
         assert_eq!(std::mem::align_of::<InflowReference>(), 8);
         assert_eq!(std::mem::size_of::<InflowOwnedReferences>(), 16);
         assert_eq!(std::mem::size_of::<InflowReferenceResult>(), 40);
+        assert_eq!(std::mem::size_of::<InflowHighlightSpan>(), 24);
+        assert_eq!(std::mem::align_of::<InflowHighlightSpan>(), 8);
+        assert_eq!(std::mem::size_of::<InflowOwnedHighlightSpans>(), 16);
+        assert_eq!(std::mem::size_of::<InflowHighlightResult>(), 24);
         assert_eq!(std::mem::size_of::<InflowHTMLExportResult>(), 32);
         assert_eq!(std::mem::size_of::<InflowMarkdownEditResult>(), 56);
     }
@@ -1414,6 +1550,44 @@ mod tests {
             assert_eq!(result.references.length, 0);
             assert!(result.target_text_utf8.data.is_null());
             assert_eq!(result.target_text_utf8.length, 0);
+        }
+    }
+
+    #[test]
+    fn ffi_highlights_unicode_markdown_and_releases_spans() {
+        let markdown = "# 标题\n\n**bold** and `code`";
+        let result = unsafe { inflow_markdown_highlight(markdown.as_ptr(), markdown.len()) };
+
+        assert_eq!(result.status, STATUS_OK);
+        let spans = unsafe { std::slice::from_raw_parts(result.spans.data, result.spans.length) };
+        assert!(spans.iter().any(|span| {
+            span.kind == HIGHLIGHT_KIND_HEADING
+                && &markdown[span.source_start..span.source_end] == "# 标题"
+        }));
+        assert!(spans.iter().any(|span| {
+            span.kind == HIGHLIGHT_KIND_STRONG
+                && &markdown[span.source_start..span.source_end] == "**bold**"
+        }));
+        assert!(spans.iter().any(|span| {
+            span.kind == HIGHLIGHT_KIND_CODE
+                && &markdown[span.source_start..span.source_end] == "`code`"
+        }));
+
+        unsafe { inflow_owned_highlight_spans_free(result.spans.data, result.spans.length) };
+    }
+
+    #[test]
+    fn ffi_highlight_rejects_invalid_inputs_without_allocating() {
+        for result in [
+            unsafe { inflow_markdown_highlight(ptr::null(), 1) },
+            unsafe { inflow_markdown_highlight([0xFF].as_ptr(), 1) },
+        ] {
+            assert!(matches!(
+                result.status,
+                STATUS_INVALID_ARGUMENT | STATUS_INVALID_UTF8
+            ));
+            assert!(result.spans.data.is_null());
+            assert_eq!(result.spans.length, 0);
         }
     }
 
