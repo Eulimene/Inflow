@@ -112,6 +112,7 @@ struct MarkdownEditorView: View {
     @State private var htmlExportWorker = HTMLExportWorker()
     @State private var htmlExportNotice: HTMLExportNotice?
     @State private var markdownFormatErrorMessage: String?
+    @State private var linkInsertionRequest: MarkdownLinkInsertionRequest?
 
     private var viewMode: EditorViewMode {
         get { EditorViewMode.resolve(storedValue: storedViewMode) }
@@ -149,6 +150,7 @@ struct MarkdownEditorView: View {
         .focusedSceneValue(\.documentFindActions, findCommandActions)
         .focusedSceneValue(\.htmlExportActions, htmlExportCommandActions)
         .focusedSceneValue(\.markdownFormatActions, markdownFormatCommandActions)
+        .focusedSceneValue(\.markdownInsertActions, markdownInsertCommandActions)
         .toolbar {
             ToolbarItem {
                 Button {
@@ -249,11 +251,18 @@ struct MarkdownEditorView: View {
                 onApply: { applyReplaceAll(plan) }
             )
         }
+        .sheet(item: $linkInsertionRequest) { request in
+            MarkdownLinkInsertionView(
+                request: request,
+                onCancel: { linkInsertionRequest = nil },
+                onInsert: { destination in insertLink(request, destination: destination) }
+            )
+        }
         .alert(item: $htmlExportNotice) { notice in
             notice.alert
         }
         .alert(
-            "无法应用 Markdown 格式",
+            "无法修改 Markdown",
             isPresented: Binding(
                 get: { markdownFormatErrorMessage != nil },
                 set: { isPresented in
@@ -391,6 +400,50 @@ struct MarkdownEditorView: View {
             canFormat: isEditable,
             apply: applyMarkdownFormat
         )
+    }
+
+    private var markdownInsertCommandActions: MarkdownInsertCommandActions {
+        MarkdownInsertCommandActions(
+            canInsert: isEditable,
+            insertLink: presentLinkInsertion
+        )
+    }
+
+    private func presentLinkInsertion() {
+        guard isEditable, linkInsertionRequest == nil else { return }
+        linkInsertionRequest = MarkdownLinkInsertionRequest(
+            sourceSnapshot: document.text,
+            selectedUTF16Range: sourceEditorSession.textView.selectedRange()
+        )
+    }
+
+    private func insertLink(
+        _ request: MarkdownLinkInsertionRequest,
+        destination: String
+    ) {
+        guard linkInsertionRequest?.id == request.id else { return }
+        do {
+            let plan = try MarkdownFormatter.linkPlan(
+                source: request.sourceSnapshot,
+                selectedUTF16Range: request.selectedUTF16Range,
+                destination: destination
+            )
+            viewMode = viewMode.sourceVisible
+            guard sourceEditorSession.applyMarkdownFormat(plan, actionName: "插入链接") else {
+                linkInsertionRequest = nil
+                markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未插入链接。"
+                return
+            }
+            linkInsertionRequest = nil
+            Task { @MainActor in
+                await Task.yield()
+                _ = sourceEditorSession.focusEditor()
+            }
+        } catch {
+            linkInsertionRequest = nil
+            markdownFormatErrorMessage = (error as? LocalizedError)?.errorDescription
+                ?? MarkdownFormatError.coreFailure.localizedDescription
+        }
     }
 
     private func applyMarkdownFormat(_ command: MarkdownFormatCommand) {

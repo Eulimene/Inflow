@@ -106,6 +106,7 @@ struct MarkdownFormatPlan: Sendable {
 
 enum MarkdownFormatError: Error, LocalizedError {
     case ambiguousSelection
+    case invalidDestination
     case invalidSelection
     case invalidCoreResult
     case coreFailure
@@ -114,6 +115,8 @@ enum MarkdownFormatError: Error, LocalizedError {
         switch self {
         case .ambiguousSelection:
             "当前选区包含部分或混合格式，或无法形成有效的 Markdown 结构。请调整选区后重试。"
+        case .invalidDestination:
+            "链接地址不能为空，也不能包含换行、控制字符、尖括号或反斜杠。正文未被修改。"
         case .invalidSelection:
             "当前选区无法安全映射到完整字符，请调整选区后重试。"
         case .invalidCoreResult:
@@ -125,6 +128,54 @@ enum MarkdownFormatError: Error, LocalizedError {
 }
 
 enum MarkdownFormatter {
+    static func linkPlan(
+        source: String,
+        selectedUTF16Range: NSRange,
+        destination: String
+    ) throws -> MarkdownFormatPlan {
+        guard InflowCoreBridge.isCompatible else {
+            throw MarkdownFormatError.coreFailure
+        }
+        let destination = destination.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !destination.isEmpty,
+              !destination.unicodeScalars.contains(where: {
+                  $0.value < 0x20
+                      || $0.value == 0x7F
+                      || $0 == "<"
+                      || $0 == ">"
+                      || $0 == "\\"
+              })
+        else {
+            throw MarkdownFormatError.invalidDestination
+        }
+        guard let selectedUTF8Range = MarkdownSourceRange.utf8Range(
+            forUTF16Range: selectedUTF16Range,
+            in: source
+        ) else {
+            throw MarkdownFormatError.invalidSelection
+        }
+
+        let sourceUTF8 = Data(source.utf8)
+        let destinationUTF8 = Data(destination.utf8)
+        let result: InflowMarkdownEditResult = sourceUTF8.withUnsafeBytes { sourceBuffer in
+            destinationUTF8.withUnsafeBytes { destinationBuffer in
+                inflow_markdown_insert_link(
+                    sourceBuffer.bindMemory(to: UInt8.self).baseAddress,
+                    UInt(sourceBuffer.count),
+                    UInt(selectedUTF8Range.lowerBound),
+                    UInt(selectedUTF8Range.upperBound),
+                    destinationBuffer.bindMemory(to: UInt8.self).baseAddress,
+                    UInt(destinationBuffer.count)
+                )
+            }
+        }
+        do {
+            return try decodePlan(result: result, source: source, sourceUTF8: sourceUTF8)
+        } catch MarkdownFormatError.invalidSelection {
+            throw MarkdownFormatError.invalidDestination
+        }
+    }
+
     static func plan(
         source: String,
         selectedUTF16Range: NSRange,
@@ -216,6 +267,14 @@ enum MarkdownFormatter {
             }
         }
 
+        return try decodePlan(result: result, source: source, sourceUTF8: sourceUTF8)
+    }
+
+    private static func decodePlan(
+        result: InflowMarkdownEditResult,
+        source: String,
+        sourceUTF8: Data
+    ) throws -> MarkdownFormatPlan {
         guard result.status == INFLOW_STATUS_OK else {
             inflow_owned_bytes_free(result.replacement.data, result.replacement.length)
             switch result.status {
@@ -277,4 +336,5 @@ enum MarkdownFormatter {
             selectionUTF8Range: selectionStart..<selectionEnd
         )
     }
+
 }

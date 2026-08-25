@@ -212,6 +212,23 @@ InflowMarkdownEditResult inflow_markdown_format_code_block(
     uintptr_t selection_end
 );
 
+/// Plans one inline Markdown link insertion. Plain selected source becomes the
+/// label; an empty selection receives an editable label placeholder. Selecting
+/// a complete existing link or its complete label updates the destination
+/// without nesting. Partial existing links and destinations containing control
+/// bytes, angle brackets or backslashes are rejected without a replacement.
+/// Both source and destination are UTF-8. Selection and returned ranges use
+/// end-exclusive UTF-8 byte offsets aligned to complete extended graphemes.
+/// Returned replacement bytes must be released with inflow_owned_bytes_free.
+InflowMarkdownEditResult inflow_markdown_insert_link(
+    const uint8_t *utf8,
+    uintptr_t length,
+    uintptr_t selection_start,
+    uintptr_t selection_end,
+    const uint8_t *destination_utf8,
+    uintptr_t destination_length
+);
+
 /// Plans a heading edit over complete source lines without modifying the
 /// source. `heading_level` must be 1...6. Mixed levels are unified; if every
 /// nonblank selected line already has the requested level, heading markers are

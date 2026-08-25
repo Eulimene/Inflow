@@ -49,6 +49,12 @@ struct FencedCodeSpan {
 }
 
 #[derive(Debug)]
+struct LinkSpan {
+    full: Range<usize>,
+    label: Range<usize>,
+}
+
+#[derive(Debug)]
 struct BlockUnit {
     source_range: Range<usize>,
     content_range: Range<usize>,
@@ -332,6 +338,63 @@ pub fn format_code_block(
         replace_range: block_range,
         replacement,
         selection_range: content_start..content_start + without_trailing_line_ending(content),
+    })
+}
+
+pub fn insert_link(
+    source: &str,
+    requested_selection: Range<usize>,
+    destination: &str,
+) -> Result<MarkdownEdit, FormatError> {
+    if !is_valid_selection(source, &requested_selection) {
+        return Err(FormatError::InvalidSelection);
+    }
+    let destination = destination.trim();
+    if destination.is_empty()
+        || destination
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '<' | '>' | '\\'))
+    {
+        return Err(FormatError::InvalidSelection);
+    }
+
+    let spans = link_spans(source);
+    let existing = spans
+        .iter()
+        .find(|span| requested_selection == span.full || requested_selection == span.label);
+    if existing.is_none()
+        && spans
+            .iter()
+            .any(|span| ranges_overlap(&requested_selection, &span.full))
+    {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    let (replace_range, label) = if let Some(span) = existing {
+        (span.full.clone(), source[span.label.clone()].to_owned())
+    } else if requested_selection.is_empty() {
+        (requested_selection.clone(), "链接文字".to_owned())
+    } else {
+        (
+            requested_selection.clone(),
+            escaped_link_label(&source[requested_selection.clone()]),
+        )
+    };
+    let replacement = format!("[{label}](<{destination}>)");
+    let label_range = replace_range.start + 1..replace_range.start + 1 + label.len();
+    let full_range = replace_range.start..replace_range.start + replacement.len();
+    let candidate = replacing(source, replace_range.clone(), &replacement);
+    if !link_spans(&candidate)
+        .iter()
+        .any(|span| span.full == full_range && span.label == label_range)
+    {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    Ok(MarkdownEdit {
+        replace_range,
+        replacement,
+        selection_range: label_range,
     })
 }
 
@@ -1258,6 +1321,66 @@ fn fenced_code_spans(source: &str) -> Vec<FencedCodeSpan> {
         .collect()
 }
 
+fn link_spans(source: &str) -> Vec<LinkSpan> {
+    #[derive(Debug)]
+    struct OpenLink {
+        full: Range<usize>,
+        label_start: Option<usize>,
+        label_end: Option<usize>,
+    }
+
+    let mut stack: Vec<OpenLink> = Vec::new();
+    let mut spans = Vec::new();
+    for (event, range) in Parser::new_ext(source, render::options()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Link { .. }) => stack.push(OpenLink {
+                full: range,
+                label_start: None,
+                label_end: None,
+            }),
+            Event::End(TagEnd::Link) => {
+                let Some(link) = stack.pop() else { continue };
+                let empty_label = link.full.start.saturating_add(1);
+                let label_start = link.label_start.unwrap_or(empty_label);
+                let label_end = link.label_end.unwrap_or(label_start);
+                if link.full.start <= label_start
+                    && label_start <= label_end
+                    && label_end <= link.full.end
+                {
+                    spans.push(LinkSpan {
+                        full: link.full,
+                        label: label_start..label_end,
+                    });
+                }
+            }
+            _ => {
+                if let Some(link) = stack.last_mut() {
+                    link.label_start = Some(
+                        link.label_start
+                            .map_or(range.start, |start| start.min(range.start)),
+                    );
+                    link.label_end =
+                        Some(link.label_end.map_or(range.end, |end| end.max(range.end)));
+                }
+            }
+        }
+    }
+    spans
+}
+
+fn escaped_link_label(label: &str) -> String {
+    label.chars().fold(
+        String::with_capacity(label.len()),
+        |mut escaped, character| {
+            if matches!(character, '\\' | '[' | ']') {
+                escaped.push('\\');
+            }
+            escaped.push(character);
+            escaped
+        },
+    )
+}
+
 fn fence_marker(source: &str, line: Range<usize>) -> Option<(u8, usize)> {
     let bytes = source.as_bytes();
     let content_end = trailing_line_ending_start(source, line.clone());
@@ -1722,6 +1845,64 @@ mod tests {
         );
         assert_eq!(
             format_code_block("e\u{301}", 1..1),
+            Err(FormatError::InvalidSelection)
+        );
+    }
+
+    #[test]
+    fn link_wraps_unicode_selection_and_inserts_empty_template() {
+        let source = "Read 文档\u{1f469}\u{200d}\u{1f4bb} now";
+        let start = "Read ".len();
+        let end = source.len() - " now".len();
+        let edit = insert_link(source, start..end, " https://example.com/a b ").unwrap();
+        assert_eq!(
+            edit.replacement,
+            "[文档\u{1f469}\u{200d}\u{1f4bb}](<https://example.com/a b>)"
+        );
+        assert_eq!(edit.selection_range, start + 1..end + 1);
+        let formatted = replacing(source, edit.replace_range, &edit.replacement);
+        assert!(
+            render::html_fragment(&formatted)
+                .contains("href=\"https://example.com/a%20b\">文档\u{1f469}\u{200d}\u{1f4bb}</a>")
+        );
+
+        let empty = insert_link("", 0..0, "#section").unwrap();
+        assert_eq!(empty.replacement, "[链接文字](<#section>)");
+        assert_eq!(empty.selection_range, 1..13);
+    }
+
+    #[test]
+    fn link_updates_complete_existing_link_without_nesting() {
+        let source = "before [**bold**](old.md) after";
+        let label_start = source.find("**bold**").unwrap();
+        let label_end = label_start + "**bold**".len();
+        let edit = insert_link(source, label_start..label_end, "guide/new.md").unwrap();
+        assert_eq!(edit.replacement, "[**bold**](<guide/new.md>)");
+        assert_eq!(
+            replacing(source, edit.replace_range, &edit.replacement),
+            "before [**bold**](<guide/new.md>) after"
+        );
+    }
+
+    #[test]
+    fn link_escapes_label_and_rejects_ambiguous_or_invalid_input() {
+        let source = "choose [one]";
+        let edit = insert_link(source, 0..source.len(), "mailto:a@example.com").unwrap();
+        assert_eq!(
+            edit.replacement,
+            "[choose \\[one\\]](<mailto:a@example.com>)"
+        );
+
+        assert_eq!(
+            insert_link("[label](old)", 2..4, "new"),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            insert_link("text", 0..4, "https://example.com/<unsafe>"),
+            Err(FormatError::InvalidSelection)
+        );
+        assert_eq!(
+            insert_link("e\u{301}", 1..1, "https://example.com"),
             Err(FormatError::InvalidSelection)
         );
     }

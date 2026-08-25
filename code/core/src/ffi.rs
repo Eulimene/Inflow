@@ -469,6 +469,44 @@ pub unsafe extern "C" fn inflow_markdown_format_code_block(
     .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
 }
 
+/// Plans one predictable inline Markdown link insertion for a UTF-8 snapshot.
+///
+/// # Safety
+///
+/// Non-zero source and destination lengths require pointers to that many
+/// readable bytes for the duration of this call. Selection offsets are
+/// end-exclusive UTF-8 byte offsets aligned with extended grapheme boundaries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_markdown_insert_link(
+    utf8: *const u8,
+    length: usize,
+    selection_start: usize,
+    selection_end: usize,
+    destination_utf8: *const u8,
+    destination_length: usize,
+) -> InflowMarkdownEditResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Some(destination) = (unsafe { borrowed_bytes(destination_utf8, destination_length) })
+        else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let (Ok(source), Ok(destination)) =
+            (std::str::from_utf8(input), std::str::from_utf8(destination))
+        else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_UTF8);
+        };
+        markdown_edit_result(format::insert_link(
+            source,
+            selection_start..selection_end,
+            destination,
+        ))
+    }))
+    .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
+}
+
 /// Plans one predictable ATX heading edit for complete source lines.
 ///
 /// # Safety
@@ -1071,6 +1109,53 @@ mod tests {
         let invalid = unsafe { inflow_markdown_format_code_block(ptr::null(), 1, 0, 0) };
         assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
         assert!(invalid.replacement.data.is_null());
+    }
+
+    #[test]
+    fn ffi_inserts_link_and_releases_result() {
+        let source = "Read 文档";
+        let destination = "https://example.com";
+        let start = "Read ".len();
+        let result = unsafe {
+            inflow_markdown_insert_link(
+                source.as_ptr(),
+                source.len(),
+                start,
+                source.len(),
+                destination.as_ptr(),
+                destination.len(),
+            )
+        };
+        assert_eq!(result.status, STATUS_OK);
+        let replacement = unsafe {
+            std::slice::from_raw_parts(result.replacement.data, result.replacement.length)
+        };
+        assert_eq!(
+            std::str::from_utf8(replacement).unwrap(),
+            "[文档](<https://example.com>)"
+        );
+        unsafe {
+            inflow_owned_bytes_free(result.replacement.data, result.replacement.length);
+        }
+
+        for invalid in [
+            unsafe {
+                inflow_markdown_insert_link(
+                    ptr::null(),
+                    1,
+                    0,
+                    0,
+                    destination.as_ptr(),
+                    destination.len(),
+                )
+            },
+            unsafe {
+                inflow_markdown_insert_link(source.as_ptr(), source.len(), 0, 0, ptr::null(), 1)
+            },
+        ] {
+            assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
+            assert!(invalid.replacement.data.is_null());
+        }
     }
 
     #[test]

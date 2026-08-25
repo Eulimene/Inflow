@@ -44,6 +44,7 @@ struct InflowApp: App {
             DocumentFindCommands()
             HTMLExportCommands()
             MarkdownFormatCommands()
+            MarkdownInsertCommands()
         }
     }
 }

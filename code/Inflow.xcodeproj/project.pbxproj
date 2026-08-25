@@ -33,6 +33,9 @@
 		A10000000000000000000018 /* MarkdownFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001D /* MarkdownFormatter.swift */; };
 		A10000000000000000000019 /* MarkdownFormatCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001E /* MarkdownFormatCommands.swift */; };
 		A1000000000000000000001A /* MarkdownFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001F /* MarkdownFormatterTests.swift */; };
+		A1000000000000000000001B /* MarkdownInsertCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000020 /* MarkdownInsertCommands.swift */; };
+		A1000000000000000000001C /* MarkdownLinkInsertionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000021 /* MarkdownLinkInsertionView.swift */; };
+		A1000000000000000000001D /* MarkdownInsertionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000022 /* MarkdownInsertionTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -77,6 +80,9 @@
 		A2000000000000000000001D /* MarkdownFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatting/MarkdownFormatter.swift; sourceTree = "<group>"; };
 		A2000000000000000000001E /* MarkdownFormatCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatting/MarkdownFormatCommands.swift; sourceTree = "<group>"; };
 		A2000000000000000000001F /* MarkdownFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFormatterTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000020 /* MarkdownInsertCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Insertion/MarkdownInsertCommands.swift; sourceTree = "<group>"; };
+		A20000000000000000000021 /* MarkdownLinkInsertionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Insertion/MarkdownLinkInsertionView.swift; sourceTree = "<group>"; };
+		A20000000000000000000022 /* MarkdownInsertionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownInsertionTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -118,6 +124,8 @@
 				A2000000000000000000001B /* HTMLExportCommands.swift */,
 				A2000000000000000000001D /* MarkdownFormatter.swift */,
 				A2000000000000000000001E /* MarkdownFormatCommands.swift */,
+				A20000000000000000000020 /* MarkdownInsertCommands.swift */,
+				A20000000000000000000021 /* MarkdownLinkInsertionView.swift */,
 				A20000000000000000000006 /* MarkdownDocument.swift */,
 				A20000000000000000000007 /* MarkdownCodec.swift */,
 				A2000000000000000000000D /* MarkdownRenderer.swift */,
@@ -154,6 +162,7 @@
 				A20000000000000000000019 /* EditorViewModeCommandsTests.swift */,
 				A2000000000000000000001C /* HTMLExporterTests.swift */,
 				A2000000000000000000001F /* MarkdownFormatterTests.swift */,
+				A20000000000000000000022 /* MarkdownInsertionTests.swift */,
 			);
 			path = macos/InflowTests;
 			sourceTree = "<group>";
@@ -311,6 +320,8 @@
 				A10000000000000000000016 /* HTMLExportCommands.swift in Sources */,
 				A10000000000000000000018 /* MarkdownFormatter.swift in Sources */,
 				A10000000000000000000019 /* MarkdownFormatCommands.swift in Sources */,
+				A1000000000000000000001B /* MarkdownInsertCommands.swift in Sources */,
+				A1000000000000000000001C /* MarkdownLinkInsertionView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -325,6 +336,7 @@
 				A10000000000000000000014 /* EditorViewModeCommandsTests.swift in Sources */,
 				A10000000000000000000017 /* HTMLExporterTests.swift in Sources */,
 				A1000000000000000000001A /* MarkdownFormatterTests.swift in Sources */,
+				A1000000000000000000001D /* MarkdownInsertionTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
