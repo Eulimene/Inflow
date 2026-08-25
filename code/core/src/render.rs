@@ -1,14 +1,45 @@
 //! Safe Markdown-to-HTML rendering shared by platform clients.
 
-use pulldown_cmark::{Event, Options, Parser, html};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 
-use crate::math;
+use crate::{math, mermaid};
 
 pub fn html_fragment(markdown: &str) -> String {
-    let events = Parser::new_ext(markdown, options()).map(sanitize_event);
+    let events = safe_events(markdown);
     let mut output = String::with_capacity(markdown.len());
-    html::push_html(&mut output, events);
+    html::push_html(&mut output, events.into_iter());
     output
+}
+
+fn safe_events(markdown: &str) -> Vec<Event<'_>> {
+    let mut parser = Parser::new_ext(markdown, options());
+    let mut events = Vec::new();
+    while let Some(event) = parser.next() {
+        if matches!(
+            &event,
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(language)))
+                if language
+                    .split_ascii_whitespace()
+                    .next()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("mermaid"))
+        ) {
+            let mut source = String::new();
+            for code_event in parser.by_ref() {
+                match code_event {
+                    Event::End(TagEnd::CodeBlock) => break,
+                    Event::Text(text) | Event::Code(text) => source.push_str(&text),
+                    Event::SoftBreak | Event::HardBreak => source.push('\n'),
+                    _ => {}
+                }
+            }
+            let diagram = mermaid::svg(source.trim_end())
+                .unwrap_or_else(|error| mermaid::fallback(source.trim_end(), &error));
+            events.push(Event::InlineHtml(diagram.into()));
+        } else {
+            events.push(sanitize_event(event));
+        }
+    }
+    events
 }
 
 pub(crate) fn options() -> Options {
@@ -79,5 +110,21 @@ mod tests {
         assert!(html.contains("<msubsup>") || html.contains("<msup>"));
         assert!(html.contains("<mfrac>"));
         assert!(!html.contains("<script"));
+    }
+
+    #[test]
+    fn renders_mermaid_offline_and_localizes_single_diagram_failure() {
+        let html =
+            html_fragment("Before\n\n```mermaid\nflowchart TD\nA[开始] --> B[结束]\n```\n\nAfter");
+        assert!(html.contains("class=\"mermaid-diagram\""));
+        assert!(html.contains("<svg"));
+        assert!(html.contains("开始"));
+        assert!(html.contains("<p>After</p>"));
+        assert!(!html.contains("<script"));
+
+        let fallback = html_fragment("```mermaid\npie\ntitle Values\n```\n\nStill readable");
+        assert!(fallback.contains("无法呈现这个图表"));
+        assert!(fallback.contains("pie"));
+        assert!(fallback.contains("<p>Still readable</p>"));
     }
 }

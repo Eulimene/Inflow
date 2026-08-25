@@ -5,7 +5,7 @@ use std::ops::Range;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::{analysis, render};
+use crate::{analysis, mermaid, render};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InlineFormat {
@@ -611,6 +611,66 @@ pub fn insert_math(
     if !math_spans(&candidate).iter().any(|span| {
         span.full.start == full_start && span.content == content_range && span.display == display
     }) {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    Ok(MarkdownEdit {
+        replace_range: requested_selection,
+        replacement,
+        selection_range: content_range,
+    })
+}
+
+pub fn insert_mermaid(
+    source: &str,
+    requested_selection: Range<usize>,
+) -> Result<MarkdownEdit, FormatError> {
+    if !is_valid_selection(source, &requested_selection) {
+        return Err(FormatError::InvalidSelection);
+    }
+    if fenced_code_spans(source)
+        .iter()
+        .any(|span| ranges_overlap(&requested_selection, &span.full))
+    {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    let content = if requested_selection.is_empty() {
+        "flowchart TD\n    A[开始] --> B[结束]"
+    } else {
+        &source[requested_selection.clone()]
+    };
+    mermaid::svg(content).map_err(|_| FormatError::AmbiguousSelection)?;
+    let prefix = if requested_selection.start > 0
+        && source.as_bytes()[requested_selection.start - 1] != b'\n'
+    {
+        "\n\n"
+    } else {
+        ""
+    };
+    let suffix = if requested_selection.end < source.len()
+        && source.as_bytes()[requested_selection.end] != b'\n'
+    {
+        "\n\n"
+    } else {
+        ""
+    };
+    let fence = "`".repeat(longest_backtick_run(content).saturating_add(1).max(3));
+    let content_has_line_ending = content.ends_with('\n');
+    let mut replacement = format!("{prefix}{fence}mermaid\n{content}");
+    if !content_has_line_ending {
+        replacement.push('\n');
+    }
+    replacement.push_str(&fence);
+    replacement.push_str(suffix);
+    let full_start = requested_selection.start + prefix.len();
+    let content_start = full_start + fence.len() + "mermaid\n".len();
+    let content_range = content_start..content_start + without_trailing_line_ending(content);
+    let candidate = replacing(source, requested_selection.clone(), &replacement);
+    if !mermaid_code_ranges(&candidate)
+        .iter()
+        .any(|range| range.start == full_start)
+    {
         return Err(FormatError::AmbiguousSelection);
     }
 
@@ -1692,6 +1752,23 @@ fn math_spans(source: &str) -> Vec<MathSpan> {
         .collect()
 }
 
+fn mermaid_code_ranges(source: &str) -> Vec<Range<usize>> {
+    Parser::new_ext(source, render::options())
+        .into_offset_iter()
+        .filter_map(|(event, range)| match event {
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(language)))
+                if language
+                    .split_ascii_whitespace()
+                    .next()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("mermaid")) =>
+            {
+                Some(range)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn consecutive_newlines_before(source: &str, position: usize) -> usize {
     source.as_bytes()[..position]
         .iter()
@@ -2407,6 +2484,47 @@ mod tests {
         assert_eq!(
             insert_math("e\u{301}", 1..1),
             Err(FormatError::InvalidSelection)
+        );
+    }
+
+    #[test]
+    fn mermaid_inserts_editable_offline_flowchart_template() {
+        let edit = insert_mermaid("", 0..0).unwrap();
+        assert_eq!(
+            edit.replacement,
+            "```mermaid\nflowchart TD\n    A[开始] --> B[结束]\n```"
+        );
+        assert_eq!(
+            &edit.replacement[edit.selection_range],
+            "flowchart TD\n    A[开始] --> B[结束]"
+        );
+        let html = render::html_fragment(&edit.replacement);
+        assert!(html.contains("class=\"mermaid-diagram\""));
+        assert!(html.contains("<svg"));
+        assert!(!html.contains("<script"));
+    }
+
+    #[test]
+    fn mermaid_wraps_supported_selection_and_rejects_invalid_diagram() {
+        let source = "before sequenceDiagram\nAlice->>Bob: Hi after";
+        let start = "before ".len();
+        let end = source.find(" after").unwrap();
+        let edit = insert_mermaid(source, start..end).unwrap();
+        assert!(
+            edit.replacement
+                .starts_with("\n\n```mermaid\nsequenceDiagram")
+        );
+        assert!(edit.replacement.ends_with("```\n\n"));
+        let formatted = replacing(source, edit.replace_range, &edit.replacement);
+        assert!(render::html_fragment(&formatted).contains("时序图"));
+
+        assert_eq!(
+            insert_mermaid("pie\ntitle Values", 0.."pie\ntitle Values".len()),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            insert_mermaid("```mermaid\nflowchart TD\nA-->B\n```", 15..15),
+            Err(FormatError::AmbiguousSelection)
         );
     }
 

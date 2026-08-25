@@ -42,7 +42,7 @@ final class HTMLExporterTests: XCTestCase {
             }
             XCTAssertEqual(
                 Set(issues),
-                Set([.image, .mermaid, .localLink, .unsafeLink])
+                Set([.image, .localLink, .unsafeLink])
             )
             XCTAssertTrue(error.localizedDescription.contains("导出前检查未通过"))
         }
@@ -58,6 +58,21 @@ final class HTMLExporterTests: XCTestCase {
         XCTAssertTrue(html.contains("<msubsup>"))
         XCTAssertTrue(html.contains("<mfrac>"))
         XCTAssertFalse(html.contains("<script"))
+    }
+
+    func testExportRendersMermaidAsSelfContainedSVG() throws {
+        let data = try HTMLExporter.generate(
+            snapshot: HTMLExportSnapshot(
+                markdown: "```mermaid\nflowchart TD\nA[开始] --> B[结束]\n```"
+            )
+        )
+        let html = try XCTUnwrap(String(data: data, encoding: .utf8))
+
+        XCTAssertTrue(html.contains("class=\"mermaid-diagram\""))
+        XCTAssertTrue(html.contains("<svg"))
+        XCTAssertTrue(html.contains("开始"))
+        XCTAssertFalse(html.contains("<script"))
+        XCTAssertFalse(html.contains("cdn"))
     }
 
     func testWriterCreatesNewFileWithoutLeavingTemporaryArtifacts() throws {

@@ -8,6 +8,7 @@ final class MarkdownInsertCommandActions {
     let insertHorizontalRule: () -> Void
     let insertFootnote: () -> Void
     let insertFormula: () -> Void
+    let insertDiagram: () -> Void
 
     init(
         canInsert: Bool,
@@ -15,7 +16,8 @@ final class MarkdownInsertCommandActions {
         insertTable: @escaping () -> Void,
         insertHorizontalRule: @escaping () -> Void,
         insertFootnote: @escaping () -> Void,
-        insertFormula: @escaping () -> Void
+        insertFormula: @escaping () -> Void,
+        insertDiagram: @escaping () -> Void
     ) {
         self.canInsert = canInsert
         self.insertLink = insertLink
@@ -23,6 +25,7 @@ final class MarkdownInsertCommandActions {
         self.insertHorizontalRule = insertHorizontalRule
         self.insertFootnote = insertFootnote
         self.insertFormula = insertFormula
+        self.insertDiagram = insertDiagram
     }
 }
 
@@ -65,6 +68,11 @@ struct MarkdownInsertCommands: Commands {
 
             Button("公式") {
                 actions?.insertFormula()
+            }
+            .disabled(actions?.canInsert != true)
+
+            Button("图表") {
+                actions?.insertDiagram()
             }
             .disabled(actions?.canInsert != true)
         }

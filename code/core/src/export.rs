@@ -1,12 +1,13 @@
 //! Self-contained HTML export for immutable Markdown snapshots.
 
-use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag};
+use pulldown_cmark::{Event, Parser, Tag};
 
 use crate::render;
 
 pub const ISSUE_IMAGE: u64 = 1 << 0;
 #[allow(dead_code)] // Reserved by the stable v1 C ABI for older core binaries.
 pub const ISSUE_FORMULA: u64 = 1 << 1;
+#[allow(dead_code)] // Reserved by the stable v1 C ABI for older core binaries.
 pub const ISSUE_MERMAID: u64 = 1 << 2;
 pub const ISSUE_LOCAL_LINK: u64 = 1 << 3;
 pub const ISSUE_UNSAFE_LINK: u64 = 1 << 4;
@@ -45,14 +46,6 @@ pub fn blocking_issues(markdown: &str) -> u64 {
             Event::Start(Tag::Image { .. }) => issues |= ISSUE_IMAGE,
             Event::Start(Tag::Link { dest_url, .. }) => {
                 issues |= link_issue(dest_url.as_ref());
-            }
-            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(language)))
-                if language
-                    .split_ascii_whitespace()
-                    .next()
-                    .is_some_and(|name| name.eq_ignore_ascii_case("mermaid")) =>
-            {
-                issues |= ISSUE_MERMAID;
             }
             _ => {}
         }
@@ -108,6 +101,11 @@ const DOCUMENT_PREFIX: &str = r#"<!doctype html>
     hr { height: 1px; border: 0; background: #d8dee4; margin: 2em 0; }
     math { font-family: STIX Two Math, STIXGeneral, serif; }
     math[display="block"] { display: block; max-width: 100%; overflow-x: auto; margin: 1.2em 0; text-align: center; }
+    .mermaid-diagram { margin: 1.4em 0; overflow-x: auto; }
+    .mermaid-diagram svg { min-width: 420px; width: 100%; height: auto; color: currentColor; }
+    .mermaid-diagram .node rect { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
+    .mermaid-diagram text { fill: currentColor; font: 14px -apple-system, BlinkMacSystemFont, sans-serif; }
+    .mermaid-error { border: 1px solid #d4a72c; border-radius: 8px; padding: 12px 14px; color: #9a6700; }
     .task-list-item { list-style: none; } input[type="checkbox"] { margin: 0 .45em 0 -1.35em; }
     @media (prefers-color-scheme: dark) {
       body { color: #e6edf3; background: #0d1117; }
@@ -117,6 +115,8 @@ const DOCUMENT_PREFIX: &str = r#"<!doctype html>
       pre, tr:nth-child(even) { background: #161b22; }
       code { background: #6e768166; }
       hr { background: #30363d; }
+      .mermaid-diagram .node rect { fill: #161b22; stroke: #8b949e; }
+      .mermaid-error { color: #d29922; border-color: #9e6a03; }
     }
   </style>
 </head>
@@ -167,14 +167,13 @@ mod tests {
     fn reports_every_blocking_content_category() {
         let markdown = concat!(
             "![local](image.png)\n\n",
-            "```mermaid\ngraph TD; A-->B\n```\n\n",
             "[local](../notes.md)\n\n",
             "[unsafe](javascript:alert(1))\n",
         );
 
         assert_eq!(
             blocking_issues(markdown),
-            ISSUE_IMAGE | ISSUE_MERMAID | ISSUE_LOCAL_LINK | ISSUE_UNSAFE_LINK
+            ISSUE_IMAGE | ISSUE_LOCAL_LINK | ISSUE_UNSAFE_LINK
         );
         assert_eq!(
             html_document(markdown),
@@ -226,10 +225,11 @@ mod tests {
 
     #[test]
     fn mermaid_language_matching_is_case_insensitive() {
-        assert_eq!(
-            blocking_issues("```MerMaid title=flow\ngraph LR\n```"),
-            ISSUE_MERMAID
-        );
+        let html = String::from_utf8(
+            html_document("```MerMaid\ngraph LR\nA --> B\n```").expect("Mermaid is self-contained"),
+        )
+        .expect("export is UTF-8");
+        assert!(html.contains("class=\"mermaid-diagram\""));
         assert_eq!(blocking_issues("```rust\nlet mermaid = true;\n```"), 0);
     }
 

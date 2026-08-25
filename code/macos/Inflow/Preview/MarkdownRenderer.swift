@@ -78,6 +78,11 @@ enum MarkdownRenderer {
             hr { height: 1px; border: 0; background: #d8dee4; margin: 2em 0; }
             math { font-family: STIX Two Math, STIXGeneral, serif; }
             math[display="block"] { display: block; max-width: 100%; overflow-x: auto; margin: 1.2em 0; text-align: center; }
+            .mermaid-diagram { margin: 1.4em 0; overflow-x: auto; }
+            .mermaid-diagram svg { min-width: 420px; width: 100%; height: auto; color: currentColor; }
+            .mermaid-diagram .node rect { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
+            .mermaid-diagram text { fill: currentColor; font: 14px -apple-system, BlinkMacSystemFont, sans-serif; }
+            .mermaid-error { border: 1px solid #d4a72c; border-radius: 8px; padding: 12px 14px; color: #9a6700; }
             .task-list-item { list-style: none; } input[type="checkbox"] { margin: 0 .45em 0 -1.35em; }
             .preview-error { margin-top: 30vh; text-align: center; color: #9a6700; }
             @media (prefers-color-scheme: dark) {
@@ -88,6 +93,8 @@ enum MarkdownRenderer {
               pre, tr:nth-child(even) { background: #161b22; }
               code { background: #6e768166; }
               hr { background: #30363d; }
+              .mermaid-diagram .node rect { fill: #161b22; stroke: #8b949e; }
+              .mermaid-error { color: #d29922; border-color: #9e6a03; }
             }
           </style>
         </head>

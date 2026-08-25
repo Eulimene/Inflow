@@ -617,6 +617,35 @@ pub unsafe extern "C" fn inflow_markdown_insert_math(
     .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
 }
 
+/// Plans one supported Mermaid fenced-diagram insertion.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call. Selection offsets are end-exclusive UTF-8 byte
+/// offsets and must align with extended grapheme boundaries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_markdown_insert_mermaid(
+    utf8: *const u8,
+    length: usize,
+    selection_start: usize,
+    selection_end: usize,
+) -> InflowMarkdownEditResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Ok(source) = std::str::from_utf8(input) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_UTF8);
+        };
+        markdown_edit_result(format::insert_mermaid(
+            source,
+            selection_start..selection_end,
+        ))
+    }))
+    .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
+}
+
 /// Plans one predictable ATX heading edit for complete source lines.
 ///
 /// # Safety
@@ -1363,6 +1392,27 @@ mod tests {
         }
 
         let invalid = unsafe { inflow_markdown_insert_math(ptr::null(), 1, 0, 0) };
+        assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
+        assert!(invalid.replacement.data.is_null());
+    }
+
+    #[test]
+    fn ffi_inserts_mermaid_and_releases_result() {
+        let result = unsafe { inflow_markdown_insert_mermaid(ptr::null(), 0, 0, 0) };
+        assert_eq!(result.status, STATUS_OK);
+        let replacement = unsafe {
+            std::slice::from_raw_parts(result.replacement.data, result.replacement.length)
+        };
+        assert!(
+            std::str::from_utf8(replacement)
+                .unwrap()
+                .starts_with("```mermaid\nflowchart TD")
+        );
+        unsafe {
+            inflow_owned_bytes_free(result.replacement.data, result.replacement.length);
+        }
+
+        let invalid = unsafe { inflow_markdown_insert_mermaid(ptr::null(), 1, 0, 0) };
         assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
         assert!(invalid.replacement.data.is_null());
     }

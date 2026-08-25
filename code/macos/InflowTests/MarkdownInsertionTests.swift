@@ -184,6 +184,31 @@ final class MarkdownInsertionTests: XCTestCase {
         ))
     }
 
+    func testMermaidPlanCreatesEditableOfflineDiagram() throws {
+        let template = try MarkdownFormatter.mermaidPlan(
+            source: "",
+            selectedUTF16Range: NSRange(location: 0, length: 0)
+        )
+        XCTAssertEqual(
+            template.resultingSource,
+            "```mermaid\nflowchart TD\n    A[开始] --> B[结束]\n```"
+        )
+        let target = try XCTUnwrap(
+            MarkdownSourceRange.navigationTarget(
+                forUTF8Range: template.selectionUTF8Range,
+                in: template.resultingSource
+            )
+        )
+        XCTAssertEqual(
+            (template.resultingSource as NSString).substring(with: target.revealRange),
+            "flowchart TD\n    A[开始] --> B[结束]"
+        )
+        let html = try MarkdownRenderer.htmlFragment(for: template.resultingSource)
+        XCTAssertTrue(html.contains("class=\"mermaid-diagram\""))
+        XCTAssertTrue(html.contains("<svg"))
+        XCTAssertFalse(html.contains("<script"))
+    }
+
     @MainActor
     func testInsertionPlansApplyAsOneUndoUnit() throws {
         let source = "Read docs"
@@ -254,6 +279,19 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertEqual(session.textView.string, "x^2")
         session.textView.undoManager?.redo()
         XCTAssertEqual(session.textView.string, "$x^2$")
+
+        session.textView.string = ""
+        session.textView.setSelectedRange(NSRange(location: 0, length: 0))
+        let diagram = try MarkdownFormatter.mermaidPlan(
+            source: session.textView.string,
+            selectedUTF16Range: session.textView.selectedRange()
+        )
+        XCTAssertTrue(session.applyMarkdownFormat(diagram, actionName: "插入图表"))
+        XCTAssertTrue(session.textView.string.hasPrefix("```mermaid\nflowchart TD"))
+        session.textView.undoManager?.undo()
+        XCTAssertEqual(session.textView.string, "")
+        session.textView.undoManager?.redo()
+        XCTAssertTrue(session.textView.string.hasPrefix("```mermaid\nflowchart TD"))
     }
 
     @MainActor
@@ -264,13 +302,15 @@ final class MarkdownInsertionTests: XCTestCase {
         var firstRuleCount = 0
         var firstFootnoteCount = 0
         var firstFormulaCount = 0
+        var firstDiagramCount = 0
         let first = MarkdownInsertCommandActions(
             canInsert: true,
             insertLink: { firstCount += 1 },
             insertTable: { firstTableCount += 1 },
             insertHorizontalRule: { firstRuleCount += 1 },
             insertFootnote: { firstFootnoteCount += 1 },
-            insertFormula: { firstFormulaCount += 1 }
+            insertFormula: { firstFormulaCount += 1 },
+            insertDiagram: { firstDiagramCount += 1 }
         )
         let second = MarkdownInsertCommandActions(
             canInsert: false,
@@ -278,18 +318,21 @@ final class MarkdownInsertionTests: XCTestCase {
             insertTable: { secondCount += 1 },
             insertHorizontalRule: { secondCount += 1 },
             insertFootnote: { secondCount += 1 },
-            insertFormula: { secondCount += 1 }
+            insertFormula: { secondCount += 1 },
+            insertDiagram: { secondCount += 1 }
         )
         first.insertLink()
         first.insertTable()
         first.insertHorizontalRule()
         first.insertFootnote()
         first.insertFormula()
+        first.insertDiagram()
         XCTAssertEqual(firstCount, 1)
         XCTAssertEqual(firstTableCount, 1)
         XCTAssertEqual(firstRuleCount, 1)
         XCTAssertEqual(firstFootnoteCount, 1)
         XCTAssertEqual(firstFormulaCount, 1)
+        XCTAssertEqual(firstDiagramCount, 1)
         XCTAssertEqual(secondCount, 0)
         XCTAssertFalse(second.canInsert)
 
@@ -327,6 +370,12 @@ final class MarkdownInsertionTests: XCTestCase {
         }
         XCTAssertEqual(formulaItems.count, 1)
         XCTAssertEqual(formulaItems.first?.keyEquivalent, "")
+
+        let diagramItems = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu)).filter {
+            $0.title == "图表"
+        }
+        XCTAssertEqual(diagramItems.count, 1)
+        XCTAssertEqual(diagramItems.first?.keyEquivalent, "")
     }
 
     @MainActor

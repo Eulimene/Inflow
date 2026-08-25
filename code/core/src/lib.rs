@@ -8,6 +8,7 @@ mod export;
 mod ffi;
 mod format;
 mod math;
+mod mermaid;
 mod render;
 mod search;
 

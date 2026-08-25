@@ -128,6 +128,31 @@ enum MarkdownFormatError: Error, LocalizedError {
 }
 
 enum MarkdownFormatter {
+    static func mermaidPlan(
+        source: String,
+        selectedUTF16Range: NSRange
+    ) throws -> MarkdownFormatPlan {
+        guard InflowCoreBridge.isCompatible else {
+            throw MarkdownFormatError.coreFailure
+        }
+        guard let selectedUTF8Range = MarkdownSourceRange.utf8Range(
+            forUTF16Range: selectedUTF16Range,
+            in: source
+        ) else {
+            throw MarkdownFormatError.invalidSelection
+        }
+        let sourceUTF8 = Data(source.utf8)
+        let result: InflowMarkdownEditResult = sourceUTF8.withUnsafeBytes { buffer in
+            inflow_markdown_insert_mermaid(
+                buffer.bindMemory(to: UInt8.self).baseAddress,
+                UInt(buffer.count),
+                UInt(selectedUTF8Range.lowerBound),
+                UInt(selectedUTF8Range.upperBound)
+            )
+        }
+        return try decodePlan(result: result, source: source, sourceUTF8: sourceUTF8)
+    }
+
     static func mathPlan(
         source: String,
         selectedUTF16Range: NSRange
