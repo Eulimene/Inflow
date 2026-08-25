@@ -2,6 +2,7 @@ import SwiftUI
 
 struct InflowSettingsView: View {
     @ObservedObject var preferences: AppPreferences
+    @ObservedObject var anonymousUsage: AnonymousUsageDataController
     @State private var isResetConfirmationPresented = false
 
     var body: some View {
@@ -14,6 +15,9 @@ struct InflowSettingsView: View {
 
             accessibilitySettings
                 .tabItem { Label("辅助功能", systemImage: "accessibility") }
+
+            AnonymousUsagePrivacyView(controller: anonymousUsage)
+                .tabItem { Label("隐私", systemImage: "hand.raised") }
         }
         .padding(20)
         .frame(width: 560, height: 410)

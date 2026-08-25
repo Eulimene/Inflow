@@ -110,19 +110,22 @@ struct MarkdownEditorView: View {
     let isEditable: Bool
     var recoveryCoordinator: DocumentRecoveryCoordinator? = nil
     @ObservedObject private var preferences: AppPreferences
+    private let anonymousUsage: AnonymousUsageDataController?
 
     init(
         document: Binding<MarkdownDocument>,
         fileURL: URL?,
         isEditable: Bool,
         recoveryCoordinator: DocumentRecoveryCoordinator? = nil,
-        preferences: AppPreferences? = nil
+        preferences: AppPreferences? = nil,
+        anonymousUsage: AnonymousUsageDataController? = nil
     ) {
         _document = document
         self.fileURL = fileURL
         self.isEditable = isEditable
         self.recoveryCoordinator = recoveryCoordinator
         _preferences = ObservedObject(wrappedValue: preferences ?? AppPreferences())
+        self.anonymousUsage = anonymousUsage
     }
 
     @SceneStorage("editorViewMode") private var storedViewMode = EditorViewMode.split.rawValue
@@ -1253,6 +1256,7 @@ struct MarkdownEditorView: View {
                 markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未修改文档。"
                 return
             }
+            anonymousUsage?.record(feature: .formatting, command: .formatMarkdown)
 
             Task { @MainActor in
                 await Task.yield()
@@ -1266,6 +1270,7 @@ struct MarkdownEditorView: View {
 
     private func startHTMLExport() {
         guard !isExportingHTML, !isExportingPDF else { return }
+        anonymousUsage?.record(feature: .export, command: .exportHTML)
         let snapshot = HTMLExportSnapshot(
             markdown: document.text,
             documentDirectory: fileURL?.deletingLastPathComponent(),
@@ -1328,6 +1333,7 @@ struct MarkdownEditorView: View {
 
     private func startPDFExport() {
         guard !isExportingHTML, !isExportingPDF else { return }
+        anonymousUsage?.record(feature: .export, command: .exportPDF)
         let snapshot = HTMLExportSnapshot(
             markdown: document.text,
             documentDirectory: fileURL?.deletingLastPathComponent(),
@@ -1390,6 +1396,12 @@ struct MarkdownEditorView: View {
 
     private func selectViewMode(_ mode: EditorViewMode) {
         viewMode = mode
+        let command: AnonymousUsageCommand = switch mode {
+        case .source: .selectSourceView
+        case .split: .selectSplitView
+        case .preview: .selectPreviewView
+        }
+        anonymousUsage?.record(feature: .preview, command: command)
         guard mode != .preview, !findSession.isPresented else { return }
 
         Task { @MainActor in

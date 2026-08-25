@@ -39,6 +39,8 @@
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>InflowAnonymousUsageEndpoint</key>
+	<string>$(INFLOW_ANONYMOUS_USAGE_ENDPOINT)</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Inflow. All rights reserved.</string>
 	<key>NSPrincipalClass</key>

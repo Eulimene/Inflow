@@ -52,6 +52,9 @@
 		A1000000000000000000002B /* AppPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000030 /* AppPreferences.swift */; };
 		A1000000000000000000002C /* InflowSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000031 /* InflowSettingsView.swift */; };
 		A1000000000000000000002D /* AppPreferencesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000032 /* AppPreferencesTests.swift */; };
+		A1000000000000000000002E /* AnonymousUsageData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000033 /* AnonymousUsageData.swift */; };
+		A1000000000000000000002F /* AnonymousUsagePrivacyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000034 /* AnonymousUsagePrivacyView.swift */; };
+		A10000000000000000000030 /* AnonymousUsageDataTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000035 /* AnonymousUsageDataTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -115,6 +118,9 @@
 		A20000000000000000000030 /* AppPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings/AppPreferences.swift; sourceTree = "<group>"; };
 		A20000000000000000000031 /* InflowSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings/InflowSettingsView.swift; sourceTree = "<group>"; };
 		A20000000000000000000032 /* AppPreferencesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPreferencesTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000033 /* AnonymousUsageData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Privacy/AnonymousUsageData.swift; sourceTree = "<group>"; };
+		A20000000000000000000034 /* AnonymousUsagePrivacyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Privacy/AnonymousUsagePrivacyView.swift; sourceTree = "<group>"; };
+		A20000000000000000000035 /* AnonymousUsageDataTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnonymousUsageDataTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -164,6 +170,8 @@
 				A2000000000000000000002E /* DocumentRelocationView.swift */,
 				A20000000000000000000030 /* AppPreferences.swift */,
 				A20000000000000000000031 /* InflowSettingsView.swift */,
+				A20000000000000000000033 /* AnonymousUsageData.swift */,
+				A20000000000000000000034 /* AnonymousUsagePrivacyView.swift */,
 				A2000000000000000000001D /* MarkdownFormatter.swift */,
 				A2000000000000000000001E /* MarkdownFormatCommands.swift */,
 				A20000000000000000000020 /* MarkdownInsertCommands.swift */,
@@ -211,6 +219,7 @@
 				A2000000000000000000002B /* DocumentFileSafetyTests.swift */,
 				A2000000000000000000002F /* DocumentRelocationTests.swift */,
 				A20000000000000000000032 /* AppPreferencesTests.swift */,
+				A20000000000000000000035 /* AnonymousUsageDataTests.swift */,
 			);
 			path = macos/InflowTests;
 			sourceTree = "<group>";
@@ -385,6 +394,8 @@
 				A10000000000000000000029 /* DocumentRelocationView.swift in Sources */,
 				A1000000000000000000002B /* AppPreferences.swift in Sources */,
 				A1000000000000000000002C /* InflowSettingsView.swift in Sources */,
+				A1000000000000000000002E /* AnonymousUsageData.swift in Sources */,
+				A1000000000000000000002F /* AnonymousUsagePrivacyView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -404,6 +415,7 @@
 				A10000000000000000000026 /* DocumentFileSafetyTests.swift in Sources */,
 				A1000000000000000000002A /* DocumentRelocationTests.swift in Sources */,
 				A1000000000000000000002D /* AppPreferencesTests.swift in Sources */,
+				A10000000000000000000030 /* AnonymousUsageDataTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -475,6 +487,7 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/core/include",
 				);
+				INFLOW_ANONYMOUS_USAGE_ENDPOINT = "";
 				INFOPLIST_FILE = macos/Inflow/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -515,6 +528,7 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)/core/include",
 				);
+				INFLOW_ANONYMOUS_USAGE_ENDPOINT = "";
 				INFOPLIST_FILE = macos/Inflow/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
