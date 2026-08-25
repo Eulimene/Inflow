@@ -49,6 +49,7 @@ struct InflowApp: App {
             DocumentSaveCommands()
             EditorViewModeCommands()
             OutlineCommands()
+            WritingModeCommands()
             DocumentFindCommands()
             HTMLExportCommands()
             MarkdownFormatCommands()

@@ -133,6 +133,8 @@ struct MarkdownEditorView: View {
     @SceneStorage("isDocumentOutlineVisible") private var isOutlineVisible = true
     @SceneStorage("editorStatisticMode") private var storedStatisticMode =
         EditorStatisticMode.words.rawValue
+    @SceneStorage("isFocusModeEnabled") private var isFocusModeEnabled = false
+    @SceneStorage("isTypewriterModeEnabled") private var isTypewriterModeEnabled = false
     @State private var previewHTML = MarkdownRenderer.htmlDocument(for: "")
     @State private var analysisState = DocumentAnalysisState.updating(previous: .empty)
     @State private var derivedContentGeneration = 0
@@ -248,6 +250,7 @@ struct MarkdownEditorView: View {
         .background(Color(nsColor: .textBackgroundColor))
         .focusedValue(\.outlineVisibility, $isOutlineVisible)
         .focusedSceneValue(\.editorViewModeActions, editorViewModeCommandActions)
+        .focusedSceneValue(\.writingModeActions, writingModeCommandActions)
         .focusedSceneValue(\.documentFindActions, findCommandActions)
         .focusedSceneValue(\.htmlExportActions, htmlExportCommandActions)
         .focusedSceneValue(\.markdownFormatActions, markdownFormatCommandActions)
@@ -312,6 +315,15 @@ struct MarkdownEditorView: View {
             }
             updateRecoveryProtection()
             fileSafetySession.update(document: document, fileURL: fileURL)
+            if canEditDocument {
+                sourceEditorSession.setWritingModes(
+                    focusModeEnabled: isFocusModeEnabled,
+                    typewriterModeEnabled: isTypewriterModeEnabled
+                )
+            } else {
+                isFocusModeEnabled = false
+                isTypewriterModeEnabled = false
+            }
             if let recoveryCoordinator {
                 Task {
                     await recoveryCoordinator.loadIfNeeded()
@@ -410,6 +422,17 @@ struct MarkdownEditorView: View {
             if isEnabled {
                 requestPreviewScroll()
             }
+        }
+        .onChange(of: isFocusModeEnabled) { _, _ in
+            applyWritingModes()
+        }
+        .onChange(of: isTypewriterModeEnabled) { _, _ in
+            applyWritingModes()
+        }
+        .onChange(of: canEditDocument) { _, canEdit in
+            guard !canEdit else { return }
+            isFocusModeEnabled = false
+            isTypewriterModeEnabled = false
         }
     }
 
@@ -636,6 +659,15 @@ struct MarkdownEditorView: View {
 
             Text(viewMode.label)
 
+            if isFocusModeEnabled {
+                Label("专注", systemImage: "scope")
+                    .accessibilityLabel("专注模式已开启")
+            }
+            if isTypewriterModeEnabled {
+                Label("打字机", systemImage: "text.cursor")
+                    .accessibilityLabel("打字机模式已开启")
+            }
+
             Spacer()
 
             statisticsMenu
@@ -684,6 +716,36 @@ struct MarkdownEditorView: View {
         guard recoveryCoordinator != nil else { return nil }
         return RecoveryCommandActions {
             isRecoveryCenterPresented = true
+        }
+    }
+
+    private var writingModeCommandActions: WritingModeCommandActions {
+        WritingModeCommandActions(
+            isFocusModeEnabled: isFocusModeEnabled,
+            isTypewriterModeEnabled: isTypewriterModeEnabled,
+            canEdit: canEditDocument,
+            setFocusMode: { isEnabled in
+                guard canEditDocument || !isEnabled else { return }
+                isFocusModeEnabled = isEnabled
+            },
+            setTypewriterMode: { isEnabled in
+                guard canEditDocument || !isEnabled else { return }
+                isTypewriterModeEnabled = isEnabled
+            }
+        )
+    }
+
+    private func applyWritingModes() {
+        sourceEditorSession.setWritingModes(
+            focusModeEnabled: isFocusModeEnabled,
+            typewriterModeEnabled: isTypewriterModeEnabled
+        )
+        if isFocusModeEnabled || isTypewriterModeEnabled {
+            viewMode = viewMode.sourceVisible
+            Task { @MainActor in
+                await Task.yield()
+                _ = sourceEditorSession.focusEditor()
+            }
         }
     }
 

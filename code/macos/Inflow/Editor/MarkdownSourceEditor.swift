@@ -113,6 +113,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var syntaxApplicationGeneration = 0
     private var syntaxApplicationTask: Task<Void, Never>?
     private let lineNumberRuler: MarkdownLineNumberRulerView
+    private var focusModeEnabled = false
+    private var typewriterModeEnabled = false
 
     override init() {
         let scrollView = NSScrollView()
@@ -167,6 +169,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.textDidChangeHandler = { [weak self] text in
             self?.invalidateSyntaxApplication()
             self?.lineNumberRuler.updateText(text)
+            self?.refreshWritingModePresentation()
             self?.updateBoundText?(text)
         }
         NotificationCenter.default.addObserver(
@@ -238,6 +241,82 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
         textView.setSelectedRange(selection)
         scheduleCachedSyntaxHighlighting(baseFont: font)
+        refreshWritingModePresentation()
+    }
+
+    func setWritingModes(
+        focusModeEnabled: Bool,
+        typewriterModeEnabled: Bool
+    ) {
+        let focusChanged = self.focusModeEnabled != focusModeEnabled
+        let typewriterChanged = self.typewriterModeEnabled != typewriterModeEnabled
+        guard focusChanged || typewriterChanged else { return }
+        self.focusModeEnabled = focusModeEnabled
+        self.typewriterModeEnabled = typewriterModeEnabled
+        refreshWritingModePresentation()
+    }
+
+    private func refreshWritingModePresentation() {
+        applyFocusModePresentation()
+        centerSelectionForTypewriterMode()
+    }
+
+    private func applyFocusModePresentation() {
+        guard let layoutManager = textView.layoutManager else { return }
+        let length = (textView.string as NSString).length
+        let fullRange = NSRange(location: 0, length: length)
+        layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
+        guard focusModeEnabled, length > 0 else { return }
+
+        layoutManager.addTemporaryAttribute(
+            .foregroundColor,
+            value: NSColor.secondaryLabelColor,
+            forCharacterRange: fullRange
+        )
+        let selection = textView.selectedRange()
+        let location = min(selection.location, length)
+        let paragraph = (textView.string as NSString).paragraphRange(
+            for: NSRange(location: location, length: 0)
+        )
+        layoutManager.removeTemporaryAttribute(
+            .foregroundColor,
+            forCharacterRange: paragraph
+        )
+    }
+
+    private func centerSelectionForTypewriterMode() {
+        guard typewriterModeEnabled,
+              textView.window != nil,
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer
+        else {
+            return
+        }
+        layoutManager.ensureLayout(for: textContainer)
+        let length = (textView.string as NSString).length
+        let selectionLocation = min(textView.selectedRange().location, length)
+        let caretRect: NSRect
+        if selectionLocation == length {
+            caretRect = layoutManager.extraLineFragmentRect
+        } else {
+            let glyphIndex = layoutManager.glyphIndexForCharacter(at: selectionLocation)
+            caretRect = layoutManager.lineFragmentRect(
+                forGlyphAt: glyphIndex,
+                effectiveRange: nil,
+                withoutAdditionalLayout: true
+            )
+        }
+        let caretMidpoint = caretRect.midY + textView.textContainerOrigin.y
+        let clipView = scrollView.contentView
+        let maximumOffset = max(0, textView.bounds.height - clipView.bounds.height)
+        let targetOffset = min(
+            max(0, caretMidpoint - clipView.bounds.height / 2),
+            maximumOffset
+        )
+        clipView.scroll(to: NSPoint(x: clipView.bounds.origin.x, y: targetOffset))
+        scrollView.reflectScrolledClipView(clipView)
+        verticalScrollOffset = Double(targetOffset)
+        updateScrollFraction(using: clipView, offset: targetOffset)
     }
 
     private func configureLineWrapping(_ wrapsLines: Bool) {
@@ -396,6 +475,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         if selectedUTF16Range != range {
             selectedUTF16Range = range
         }
+        refreshWritingModePresentation()
     }
 
     func requestRestoration(_ state: MarkdownRestorationState) {
@@ -415,6 +495,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         updateSelectedRange(selection)
         textView.undoManager?.removeAllActions()
         lineNumberRuler.updateText(text)
+        refreshWritingModePresentation()
     }
 
     fileprivate func applyPendingRestorationIfPossible() {
