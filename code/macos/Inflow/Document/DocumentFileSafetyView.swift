@@ -272,12 +272,14 @@ struct DocumentConflictReviewView: View {
 enum DocumentFileSafetyNotice: Identifiable {
     case conflictCopySaved(URL)
     case copySaved(URL)
+    case savedAs(URL)
     case failure(String)
 
     var id: String {
         switch self {
         case let .conflictCopySaved(url): "conflict-\(url.path)"
         case let .copySaved(url): "copy-\(url.path)"
+        case let .savedAs(url): "save-as-\(url.path)"
         case let .failure(message): "failure-\(message)"
         }
     }
@@ -294,6 +296,12 @@ enum DocumentFileSafetyNotice: Identifiable {
             Alert(
                 title: Text("副本已保存"),
                 message: Text(url.path),
+                dismissButton: .default(Text("好"))
+            )
+        case let .savedAs(url):
+            Alert(
+                title: Text("已另存为"),
+                message: Text("当前窗口现在编辑：\(url.path)"),
                 dismissButton: .default(Text("好"))
             )
         case let .failure(message):

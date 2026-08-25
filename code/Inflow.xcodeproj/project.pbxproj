@@ -45,6 +45,10 @@
 		A10000000000000000000024 /* DocumentFileSafety.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000029 /* DocumentFileSafety.swift */; };
 		A10000000000000000000025 /* DocumentFileSafetyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002A /* DocumentFileSafetyView.swift */; };
 		A10000000000000000000026 /* DocumentFileSafetyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002B /* DocumentFileSafetyTests.swift */; };
+		A10000000000000000000027 /* DocumentRelocation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002C /* DocumentRelocation.swift */; };
+		A10000000000000000000028 /* DocumentSaveCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002D /* DocumentSaveCommands.swift */; };
+		A10000000000000000000029 /* DocumentRelocationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002E /* DocumentRelocationView.swift */; };
+		A1000000000000000000002A /* DocumentRelocationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002F /* DocumentRelocationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -101,6 +105,10 @@
 		A20000000000000000000029 /* DocumentFileSafety.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Document/DocumentFileSafety.swift; sourceTree = "<group>"; };
 		A2000000000000000000002A /* DocumentFileSafetyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Document/DocumentFileSafetyView.swift; sourceTree = "<group>"; };
 		A2000000000000000000002B /* DocumentFileSafetyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentFileSafetyTests.swift; sourceTree = "<group>"; };
+		A2000000000000000000002C /* DocumentRelocation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Document/DocumentRelocation.swift; sourceTree = "<group>"; };
+		A2000000000000000000002D /* DocumentSaveCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Document/DocumentSaveCommands.swift; sourceTree = "<group>"; };
+		A2000000000000000000002E /* DocumentRelocationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Document/DocumentRelocationView.swift; sourceTree = "<group>"; };
+		A2000000000000000000002F /* DocumentRelocationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentRelocationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -145,6 +153,9 @@
 				A20000000000000000000027 /* RecoveryCenterView.swift */,
 				A20000000000000000000029 /* DocumentFileSafety.swift */,
 				A2000000000000000000002A /* DocumentFileSafetyView.swift */,
+				A2000000000000000000002C /* DocumentRelocation.swift */,
+				A2000000000000000000002D /* DocumentSaveCommands.swift */,
+				A2000000000000000000002E /* DocumentRelocationView.swift */,
 				A2000000000000000000001D /* MarkdownFormatter.swift */,
 				A2000000000000000000001E /* MarkdownFormatCommands.swift */,
 				A20000000000000000000020 /* MarkdownInsertCommands.swift */,
@@ -190,6 +201,7 @@
 				A20000000000000000000022 /* MarkdownInsertionTests.swift */,
 				A20000000000000000000028 /* DocumentRecoveryTests.swift */,
 				A2000000000000000000002B /* DocumentFileSafetyTests.swift */,
+				A2000000000000000000002F /* DocumentRelocationTests.swift */,
 			);
 			path = macos/InflowTests;
 			sourceTree = "<group>";
@@ -309,6 +321,7 @@
 				"$(PROJECT_DIR)/core/src/lib.rs",
 				"$(PROJECT_DIR)/core/src/math.rs",
 				"$(PROJECT_DIR)/core/src/mermaid.rs",
+				"$(PROJECT_DIR)/core/src/reference.rs",
 				"$(PROJECT_DIR)/core/src/render.rs",
 				"$(PROJECT_DIR)/core/src/search.rs",
 				"$(PROJECT_DIR)/rust-toolchain.toml",
@@ -358,6 +371,9 @@
 				A10000000000000000000022 /* RecoveryCenterView.swift in Sources */,
 				A10000000000000000000024 /* DocumentFileSafety.swift in Sources */,
 				A10000000000000000000025 /* DocumentFileSafetyView.swift in Sources */,
+				A10000000000000000000027 /* DocumentRelocation.swift in Sources */,
+				A10000000000000000000028 /* DocumentSaveCommands.swift in Sources */,
+				A10000000000000000000029 /* DocumentRelocationView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -375,6 +391,7 @@
 				A1000000000000000000001D /* MarkdownInsertionTests.swift in Sources */,
 				A10000000000000000000023 /* DocumentRecoveryTests.swift in Sources */,
 				A10000000000000000000026 /* DocumentFileSafetyTests.swift in Sources */,
+				A1000000000000000000002A /* DocumentRelocationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

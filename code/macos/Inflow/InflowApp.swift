@@ -42,6 +42,7 @@ struct InflowApp: App {
         }
         .defaultSize(width: 1_080, height: 720)
         .commands {
+            DocumentSaveCommands()
             EditorViewModeCommands()
             OutlineCommands()
             DocumentFindCommands()

@@ -9,6 +9,7 @@ mod ffi;
 mod format;
 mod math;
 mod mermaid;
+mod reference;
 mod render;
 mod search;
 

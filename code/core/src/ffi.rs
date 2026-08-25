@@ -7,6 +7,7 @@ use crate::analysis;
 use crate::document::{self, DecodeError, LineEnding};
 use crate::export::{self, ExportError};
 use crate::format::{self, FormatError, InlineFormat, ListFormat};
+use crate::reference::{self, ReferenceKind};
 use crate::render;
 use crate::search;
 
@@ -29,6 +30,9 @@ pub const INLINE_FORMAT_STRIKETHROUGH: u8 = 3;
 pub const LIST_FORMAT_UNORDERED: u8 = 1;
 pub const LIST_FORMAT_ORDERED: u8 = 2;
 pub const LIST_FORMAT_TASK: u8 = 3;
+
+pub const REFERENCE_KIND_LINK: u8 = 1;
+pub const REFERENCE_KIND_IMAGE: u8 = 2;
 
 #[repr(C)]
 pub struct InflowOwnedBytes {
@@ -126,6 +130,39 @@ impl InflowOwnedSearchMatches {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+pub struct InflowReference {
+    pub kind: u8,
+    pub target_start: usize,
+    pub target_length: usize,
+}
+
+#[repr(C)]
+pub struct InflowOwnedReferences {
+    pub data: *mut InflowReference,
+    pub length: usize,
+}
+
+impl InflowOwnedReferences {
+    const fn empty() -> Self {
+        Self {
+            data: ptr::null_mut(),
+            length: 0,
+        }
+    }
+
+    fn from_vec(references: Vec<InflowReference>) -> Self {
+        if references.is_empty() {
+            return Self::empty();
+        }
+        let length = references.len();
+        let boxed = references.into_boxed_slice();
+        let data = Box::into_raw(boxed).cast::<InflowReference>();
+        Self { data, length }
+    }
+}
+
+#[repr(C)]
 pub struct InflowDecodeResult {
     pub status: i32,
     pub utf8: InflowOwnedBytes,
@@ -207,6 +244,23 @@ impl InflowAnalysisResult {
 pub struct InflowSearchResult {
     pub status: i32,
     pub matches: InflowOwnedSearchMatches,
+}
+
+#[repr(C)]
+pub struct InflowReferenceResult {
+    pub status: i32,
+    pub references: InflowOwnedReferences,
+    pub target_text_utf8: InflowOwnedBytes,
+}
+
+impl InflowReferenceResult {
+    const fn error(status: i32) -> Self {
+        Self {
+            status,
+            references: InflowOwnedReferences::empty(),
+            target_text_utf8: InflowOwnedBytes::empty(),
+        }
+    }
 }
 
 #[repr(C)]
@@ -947,6 +1001,53 @@ pub unsafe extern "C" fn inflow_document_analyze(
     .unwrap_or_else(|_| InflowAnalysisResult::error(STATUS_PANIC))
 }
 
+/// Extracts parsed Markdown link and image destinations in source order.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_document_references(
+    utf8: *const u8,
+    length: usize,
+) -> InflowReferenceResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowReferenceResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Ok(markdown) = std::str::from_utf8(input) else {
+            return InflowReferenceResult::error(STATUS_INVALID_UTF8);
+        };
+
+        let mut target_text_utf8 = Vec::new();
+        let references = reference::references(markdown)
+            .into_iter()
+            .map(|reference| {
+                let target_start = target_text_utf8.len();
+                let target = reference.target.as_bytes();
+                target_text_utf8.extend_from_slice(target);
+
+                InflowReference {
+                    kind: match reference.kind {
+                        ReferenceKind::Link => REFERENCE_KIND_LINK,
+                        ReferenceKind::Image => REFERENCE_KIND_IMAGE,
+                    },
+                    target_start,
+                    target_length: target.len(),
+                }
+            })
+            .collect();
+
+        InflowReferenceResult {
+            status: STATUS_OK,
+            references: InflowOwnedReferences::from_vec(references),
+            target_text_utf8: InflowOwnedBytes::from_vec(target_text_utf8),
+        }
+    }))
+    .unwrap_or_else(|_| InflowReferenceResult::error(STATUS_PANIC))
+}
+
 /// Finds non-overlapping literal matches in UTF-8 Markdown source.
 ///
 /// # Safety
@@ -1039,6 +1140,22 @@ pub unsafe extern "C" fn inflow_owned_search_matches_free(
     data: *mut InflowSearchMatch,
     length: usize,
 ) {
+    if data.is_null() {
+        return;
+    }
+
+    let slice = ptr::slice_from_raw_parts_mut(data, length);
+    drop(unsafe { Box::from_raw(slice) });
+}
+
+/// Releases Markdown references returned by this library.
+///
+/// # Safety
+///
+/// `data` and `length` must be an unchanged pair returned by this library and
+/// must not have been released previously. A null pointer is accepted.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_owned_references_free(data: *mut InflowReference, length: usize) {
     if data.is_null() {
         return;
     }
@@ -1209,6 +1326,10 @@ mod tests {
         assert_eq!(std::mem::align_of::<InflowSearchMatch>(), 8);
         assert_eq!(std::mem::size_of::<InflowOwnedSearchMatches>(), 16);
         assert_eq!(std::mem::size_of::<InflowSearchResult>(), 24);
+        assert_eq!(std::mem::size_of::<InflowReference>(), 24);
+        assert_eq!(std::mem::align_of::<InflowReference>(), 8);
+        assert_eq!(std::mem::size_of::<InflowOwnedReferences>(), 16);
+        assert_eq!(std::mem::size_of::<InflowReferenceResult>(), 40);
         assert_eq!(std::mem::size_of::<InflowHTMLExportResult>(), 32);
         assert_eq!(std::mem::size_of::<InflowMarkdownEditResult>(), 56);
     }
@@ -1240,6 +1361,60 @@ mod tests {
             "alpha"
         );
         unsafe { inflow_owned_search_matches_free(result.matches.data, result.matches.length) };
+    }
+
+    #[test]
+    fn ffi_extracts_markdown_references_and_releases_owned_results() {
+        let markdown = "[文档](../notes/一.md#part) ![图片](assets/photo.png)";
+        let result = unsafe { inflow_document_references(markdown.as_ptr(), markdown.len()) };
+
+        assert_eq!(result.status, STATUS_OK);
+        let references =
+            unsafe { std::slice::from_raw_parts(result.references.data, result.references.length) };
+        let targets = unsafe {
+            std::slice::from_raw_parts(result.target_text_utf8.data, result.target_text_utf8.length)
+        };
+        assert_eq!(references.len(), 2);
+        assert_eq!(references[0].kind, REFERENCE_KIND_LINK);
+        assert_eq!(references[1].kind, REFERENCE_KIND_IMAGE);
+        assert_eq!(
+            std::str::from_utf8(
+                &targets[references[0].target_start
+                    ..references[0].target_start + references[0].target_length]
+            )
+            .unwrap(),
+            "../notes/一.md#part"
+        );
+        assert_eq!(
+            std::str::from_utf8(
+                &targets[references[1].target_start
+                    ..references[1].target_start + references[1].target_length]
+            )
+            .unwrap(),
+            "assets/photo.png"
+        );
+
+        unsafe {
+            inflow_owned_references_free(result.references.data, result.references.length);
+            inflow_owned_bytes_free(result.target_text_utf8.data, result.target_text_utf8.length);
+        }
+    }
+
+    #[test]
+    fn ffi_reference_extraction_rejects_invalid_inputs_without_allocating() {
+        for result in [
+            unsafe { inflow_document_references(ptr::null(), 1) },
+            unsafe { inflow_document_references([0xFF].as_ptr(), 1) },
+        ] {
+            assert!(matches!(
+                result.status,
+                STATUS_INVALID_ARGUMENT | STATUS_INVALID_UTF8
+            ));
+            assert!(result.references.data.is_null());
+            assert_eq!(result.references.length, 0);
+            assert!(result.target_text_utf8.data.is_null());
+            assert_eq!(result.target_text_utf8.length, 0);
+        }
     }
 
     #[test]

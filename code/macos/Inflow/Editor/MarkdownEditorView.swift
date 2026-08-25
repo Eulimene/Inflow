@@ -146,6 +146,9 @@ struct MarkdownEditorView: View {
     @StateObject private var fileSafetySession = DocumentFileSafetySession()
     @State private var isFileSafetyPresented = false
     @State private var fileSafetyNotice: DocumentFileSafetyNotice?
+    @State private var relocationRequest: DocumentRelocationRequest?
+    @State private var isRelocatingDocument = false
+    @State private var relocationNativeDocument: NSDocument?
 
     private var viewMode: EditorViewMode {
         get { EditorViewMode.resolve(storedValue: storedViewMode) }
@@ -187,7 +190,7 @@ struct MarkdownEditorView: View {
             DocumentFileSafetyBanner(
                 state: displayedFileSafetyState,
                 onCompare: { isFileSafetyPresented = true },
-                onSaveCopy: saveCurrentDocumentCopy
+                onSaveCopy: { beginDocumentRelocation(.saveCopy) }
             )
 
             if document.properties.requiresLineEndingChoice {
@@ -221,6 +224,7 @@ struct MarkdownEditorView: View {
         .focusedSceneValue(\.markdownFormatActions, markdownFormatCommandActions)
         .focusedSceneValue(\.markdownInsertActions, markdownInsertCommandActions)
         .focusedSceneValue(\.recoveryActions, recoveryCommandActions)
+        .focusedSceneValue(\.documentSaveActions, documentSaveCommandActions)
         .toolbar {
             ToolbarItem {
                 Button {
@@ -419,6 +423,16 @@ struct MarkdownEditorView: View {
                 .frame(minWidth: 520, minHeight: 280)
             }
         }
+        .sheet(item: $relocationRequest) { request in
+            DocumentRelocationView(
+                request: request,
+                onCancel: {
+                    relocationRequest = nil
+                    relocationNativeDocument = nil
+                },
+                onConfirm: { await confirmDocumentRelocation(request) }
+            )
+        }
         .alert(item: $htmlExportNotice) { notice in
             notice.alert
         }
@@ -603,59 +617,175 @@ struct MarkdownEditorView: View {
         try await fileSafetySession.recreate(snapshot)
     }
 
-    private func saveCurrentDocumentCopy() {
+    private var documentSaveCommandActions: DocumentSaveCommandActions {
+        DocumentSaveCommandActions(
+            isBusy: isRelocatingDocument || relocationRequest != nil,
+            save: {
+                NSApp.sendAction(#selector(NSDocument.save(_:)), to: nil, from: nil)
+            },
+            saveAs: { beginDocumentRelocation(.saveAs) },
+            saveCopy: { beginDocumentRelocation(.saveCopy) },
+            showInFinder: fileURL.map { url in
+                { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            }
+        )
+    }
+
+    private func beginDocumentRelocation(_ operation: DocumentRelocationOperation) {
+        guard !isRelocatingDocument, relocationRequest == nil else { return }
+        guard let nativeDocument = NativeDocumentSaveCoordinator.activeDocument(
+            sourceURL: fileURL
+        ) else {
+            presentFileOperationFailure(DocumentRelocationError.cannotInspect)
+            return
+        }
         let snapshotData: Data
         do {
             snapshotData = try document.encodedFileData()
         } catch {
-            fileSafetyNotice = .failure(
-                (error as? LocalizedError)?.errorDescription
-                    ?? "当前正文无法编码，未写入任何文件。"
-            )
+            presentFileOperationFailure(error, fallback: "当前正文无法编码，未写入任何文件。")
             return
         }
 
         let panel = NSSavePanel()
-        panel.title = "保存 Markdown 副本"
-        panel.prompt = "保存副本"
+        panel.title = operation.panelTitle
+        panel.prompt = operation.actionTitle
         panel.allowedContentTypes = [.inflowMarkdown]
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
         panel.nameFieldStringValue = fileURL?.lastPathComponent ?? "未命名文档.md"
+        isRelocatingDocument = true
+        relocationNativeDocument = nativeDocument
 
         Task { @MainActor in
             let response = await withCheckedContinuation { continuation in
-                panel.begin { continuation.resume(returning: $0) }
+                if let window = sourceEditorSession.textView.window ?? NSApp.keyWindow {
+                    panel.beginSheetModal(for: window) { continuation.resume(returning: $0) }
+                } else {
+                    panel.begin { continuation.resume(returning: $0) }
+                }
             }
-            guard response == .OK, let targetURL = panel.url else { return }
+            defer { isRelocatingDocument = false }
+            guard response == .OK, let targetURL = panel.url else {
+                relocationNativeDocument = nil
+                return
+            }
 
             let accessed = targetURL.startAccessingSecurityScopedResource()
             defer {
                 if accessed { targetURL.stopAccessingSecurityScopedResource() }
             }
 
+            if let openDocument = NativeDocumentSaveCoordinator.documentAlreadyOpen(
+                at: targetURL,
+                excluding: nativeDocument
+            ) {
+                openDocument.showWindows()
+                openDocument.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
+                presentFileOperationFailure(DocumentRelocationError.targetOpen)
+                relocationNativeDocument = nil
+                return
+            }
+
             do {
-                let targetSnapshot = try HTMLExportTargetSnapshot.capture(targetURL)
-                try await fileSafetySession.saveCopy(
-                    snapshotData,
-                    to: targetURL,
-                    expectedTarget: targetSnapshot
+                guard try document.encodedFileData() == snapshotData else {
+                    throw DocumentRelocationError.staleDecision
+                }
+                let plan = try DocumentRelocationAnalyzer.plan(
+                    markdown: document.text,
+                    sourceData: snapshotData,
+                    sourceURL: fileURL,
+                    targetURL: targetURL
                 )
-                fileSafetyNotice = .copySaved(targetURL)
+                relocationRequest = DocumentRelocationRequest(
+                    operation: operation,
+                    plan: plan
+                )
             } catch {
-                fileSafetyNotice = .failure(
-                    (error as? LocalizedError)?.errorDescription
-                        ?? "未能安全保存副本；原文件与当前编辑均未改变。"
-                )
+                presentFileOperationFailure(error)
+                relocationNativeDocument = nil
             }
         }
+    }
+
+    private func confirmDocumentRelocation(_ request: DocumentRelocationRequest) async {
+        guard !isRelocatingDocument else { return }
+        isRelocatingDocument = true
+        defer { isRelocatingDocument = false }
+
+        let accessed = request.plan.targetURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessed { request.plan.targetURL.stopAccessingSecurityScopedResource() }
+        }
+
+        do {
+            let currentData = try document.encodedFileData()
+            try DocumentRelocationAnalyzer.verify(
+                request.plan,
+                currentData: currentData,
+                currentSourceURL: fileURL
+            )
+            guard let nativeDocument = relocationNativeDocument,
+                  NativeDocumentSaveCoordinator.represents(
+                      nativeDocument,
+                      sourceURL: request.plan.sourceURL
+                  )
+            else {
+                throw DocumentRelocationError.cannotInspect
+            }
+            if let openDocument = NativeDocumentSaveCoordinator.documentAlreadyOpen(
+                at: request.plan.targetURL,
+                excluding: nativeDocument
+            ) {
+                openDocument.showWindows()
+                openDocument.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
+                throw DocumentRelocationError.targetOpen
+            }
+
+            try document.writeGuard.authorizeRelocation(
+                to: request.plan.targetURL,
+                targetSnapshot: request.plan.targetSnapshot,
+                proposedData: currentData,
+                additionalValidation: {
+                    DocumentRelocationAnalyzer.resourcesAreCurrent(request.plan)
+                }
+            )
+            defer { document.writeGuard.cancelRelocationAuthorization() }
+            try await NativeDocumentSaveCoordinator.save(
+                document: nativeDocument,
+                to: request.plan.targetURL,
+                operation: request.operation
+            )
+
+            relocationRequest = nil
+            relocationNativeDocument = nil
+            switch request.operation {
+            case .saveAs:
+                fileSafetyNotice = .savedAs(request.plan.targetURL)
+            case .saveCopy:
+                fileSafetyNotice = .copySaved(request.plan.targetURL)
+            }
+        } catch {
+            relocationRequest = nil
+            relocationNativeDocument = nil
+            presentFileOperationFailure(error)
+        }
+    }
+
+    private func presentFileOperationFailure(
+        _ error: Error,
+        fallback: String = "未能安全完成文件操作；原文件与当前编辑均未改变。"
+    ) {
+        fileSafetyNotice = .failure(
+            (error as? LocalizedError)?.errorDescription ?? fallback
+        )
     }
 
     private func saveCopyFromConflictReview() {
         isFileSafetyPresented = false
         Task { @MainActor in
             await Task.yield()
-            saveCurrentDocumentCopy()
+            beginDocumentRelocation(.saveCopy)
         }
     }
 

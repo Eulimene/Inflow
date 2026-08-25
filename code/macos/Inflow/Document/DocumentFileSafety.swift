@@ -4,6 +4,7 @@ enum MarkdownWriteGuardError: Error, Equatable, LocalizedError, Sendable {
     case externalChange
     case deletedTarget
     case readOnlyTarget
+    case targetChanged
 
     var errorDescription: String? {
         switch self {
@@ -13,27 +14,92 @@ enum MarkdownWriteGuardError: Error, Equatable, LocalizedError, Sendable {
             "原文件已从磁盘删除。Inflow 不会自动重建它。"
         case .readOnlyTarget:
             "原文件当前不可写。原文件和当前编辑均未被丢弃。"
+        case .targetChanged:
+            "文档或目标已变化。请重新检查后再继续。"
         }
     }
 }
 
 final class MarkdownWriteGuard: @unchecked Sendable {
+    private struct RelocationAuthorization {
+        let targetURL: URL
+        let targetSnapshot: HTMLExportTargetSnapshot
+        let targetData: Data?
+        let proposedData: Data
+        let additionalValidation: @Sendable () -> Bool
+    }
+
     private let lock = NSLock()
     private var currentURL: URL?
     private var baselineData: Data?
     private var pendingWriteData: Data?
+    private var relocationAuthorization: RelocationAuthorization?
 
     func configure(url: URL?, baselineData: Data?) {
         lock.lock()
         currentURL = url?.standardizedFileURL
         self.baselineData = baselineData
         pendingWriteData = nil
+        relocationAuthorization = nil
+        lock.unlock()
+    }
+
+    func authorizeRelocation(
+        to targetURL: URL,
+        targetSnapshot: HTMLExportTargetSnapshot,
+        proposedData: Data,
+        additionalValidation: @escaping @Sendable () -> Bool = { true }
+    ) throws {
+        guard try HTMLExportTargetSnapshot.capture(targetURL) == targetSnapshot,
+              additionalValidation()
+        else {
+            throw MarkdownWriteGuardError.targetChanged
+        }
+        let targetData = targetSnapshot.isExistingTarget
+            ? try Data(contentsOf: targetURL, options: [.mappedIfSafe])
+            : nil
+        guard try HTMLExportTargetSnapshot.capture(targetURL) == targetSnapshot,
+              additionalValidation()
+        else {
+            throw MarkdownWriteGuardError.targetChanged
+        }
+        lock.lock()
+        relocationAuthorization = RelocationAuthorization(
+            targetURL: targetURL.standardizedFileURL,
+            targetSnapshot: targetSnapshot,
+            targetData: targetData,
+            proposedData: proposedData,
+            additionalValidation: additionalValidation
+        )
+        lock.unlock()
+    }
+
+    func cancelRelocationAuthorization() {
+        lock.lock()
+        relocationAuthorization = nil
         lock.unlock()
     }
 
     func authorize(existingFile: FileWrapper?, proposedData: Data) throws {
         lock.lock()
         defer { lock.unlock() }
+        let existingData = existingFile?.regularFileContents
+
+        if let authorization = relocationAuthorization,
+           authorization.proposedData == proposedData,
+           existingData == authorization.targetData
+                || (!authorization.targetSnapshot.isExistingTarget && existingData == nil)
+        {
+            guard (try? HTMLExportTargetSnapshot.capture(authorization.targetURL))
+                    == authorization.targetSnapshot,
+                  authorization.additionalValidation()
+            else {
+                relocationAuthorization = nil
+                throw MarkdownWriteGuardError.targetChanged
+            }
+            return
+        }
+
         guard let currentURL, let baselineData else { return }
 
         let diskData = try? Data(contentsOf: currentURL, options: [.mappedIfSafe])
@@ -42,7 +108,6 @@ final class MarkdownWriteGuard: @unchecked Sendable {
             self.pendingWriteData = nil
         }
         let effectiveBaseline = self.baselineData ?? baselineData
-        let existingData = existingFile?.regularFileContents
         // FileDocument may provide either the coordinated current bytes or its
         // last read wrapper for an in-place save. Treat both as the current
         // document; only a demonstrably different target is considered Save As.

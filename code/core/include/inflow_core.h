@@ -29,6 +29,9 @@ static const uint8_t INFLOW_LIST_FORMAT_UNORDERED = 1;
 static const uint8_t INFLOW_LIST_FORMAT_ORDERED = 2;
 static const uint8_t INFLOW_LIST_FORMAT_TASK = 3;
 
+static const uint8_t INFLOW_REFERENCE_KIND_LINK = 1;
+static const uint8_t INFLOW_REFERENCE_KIND_IMAGE = 2;
+
 typedef uint64_t InflowHTMLExportIssues;
 static const InflowHTMLExportIssues INFLOW_HTML_EXPORT_ISSUE_IMAGE = UINT64_C(1) << 0;
 static const InflowHTMLExportIssues INFLOW_HTML_EXPORT_ISSUE_FORMULA = UINT64_C(1) << 1;
@@ -91,6 +94,19 @@ typedef struct InflowOwnedSearchMatches {
     uintptr_t length;
 } InflowOwnedSearchMatches;
 
+typedef struct InflowReference {
+    uint8_t kind;
+    /// Start/length are UTF-8 byte offsets into target_text_utf8 in the same
+    /// InflowReferenceResult.
+    uintptr_t target_start;
+    uintptr_t target_length;
+} InflowReference;
+
+typedef struct InflowOwnedReferences {
+    InflowReference *data;
+    uintptr_t length;
+} InflowOwnedReferences;
+
 typedef struct InflowAnalysisResult {
     InflowStatus status;
     InflowOwnedHeadings headings;
@@ -104,6 +120,12 @@ typedef struct InflowSearchResult {
     InflowStatus status;
     InflowOwnedSearchMatches matches;
 } InflowSearchResult;
+
+typedef struct InflowReferenceResult {
+    InflowStatus status;
+    InflowOwnedReferences references;
+    InflowOwnedBytes target_text_utf8;
+} InflowReferenceResult;
 
 typedef struct InflowHTMLExportResult {
     InflowStatus status;
@@ -127,6 +149,8 @@ static_assert(sizeof(InflowDocumentOpenResult) == 32, "InflowDocumentOpenResult 
 static_assert(sizeof(InflowAnalysisResult) == 64, "InflowAnalysisResult ABI layout changed");
 static_assert(sizeof(InflowSearchMatch) == 16, "InflowSearchMatch ABI layout changed");
 static_assert(sizeof(InflowSearchResult) == 24, "InflowSearchResult ABI layout changed");
+static_assert(sizeof(InflowReference) == 24, "InflowReference ABI layout changed");
+static_assert(sizeof(InflowReferenceResult) == 40, "InflowReferenceResult ABI layout changed");
 static_assert(sizeof(InflowHTMLExportResult) == 32, "InflowHTMLExportResult ABI layout changed");
 static_assert(sizeof(InflowMarkdownEditResult) == 56, "InflowMarkdownEditResult ABI layout changed");
 #else
@@ -135,6 +159,8 @@ _Static_assert(sizeof(InflowDocumentOpenResult) == 32, "InflowDocumentOpenResult
 _Static_assert(sizeof(InflowAnalysisResult) == 64, "InflowAnalysisResult ABI layout changed");
 _Static_assert(sizeof(InflowSearchMatch) == 16, "InflowSearchMatch ABI layout changed");
 _Static_assert(sizeof(InflowSearchResult) == 24, "InflowSearchResult ABI layout changed");
+_Static_assert(sizeof(InflowReference) == 24, "InflowReference ABI layout changed");
+_Static_assert(sizeof(InflowReferenceResult) == 40, "InflowReferenceResult ABI layout changed");
 _Static_assert(sizeof(InflowHTMLExportResult) == 32, "InflowHTMLExportResult ABI layout changed");
 _Static_assert(sizeof(InflowMarkdownEditResult) == 56, "InflowMarkdownEditResult ABI layout changed");
 #endif
@@ -414,6 +440,15 @@ InflowSearchResult inflow_document_search(
     uint8_t case_sensitive
 );
 
+/// Extracts parsed Markdown link and image destinations in source order.
+/// Reference definitions are resolved and literal code is ignored. Each
+/// target uses UTF-8 offsets into target_text_utf8. Both returned allocations
+/// belong to Inflow and must be released with their matching free functions.
+InflowReferenceResult inflow_document_references(
+    const uint8_t *utf8,
+    uintptr_t length
+);
+
 /// Releases an unchanged pointer and length returned by Inflow.
 void inflow_owned_bytes_free(uint8_t *data, uintptr_t length);
 
@@ -423,6 +458,12 @@ void inflow_owned_headings_free(InflowHeading *data, uintptr_t length);
 /// Releases an unchanged search-match pointer and length returned by Inflow.
 void inflow_owned_search_matches_free(
     InflowSearchMatch *data,
+    uintptr_t length
+);
+
+/// Releases an unchanged Markdown-reference pointer and length from Inflow.
+void inflow_owned_references_free(
+    InflowReference *data,
     uintptr_t length
 );
 
