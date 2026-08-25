@@ -61,6 +61,10 @@ struct InflowSettingsView: View {
                 .help("只改变源码编辑器的视觉样式，不会修改 Markdown 正文。")
             Toggle("连续拼写检查", isOn: $preferences.spellingEnabled)
                 .help("只影响编辑器提示，不会修改 Markdown 正文。")
+            Toggle("自动换行", isOn: $preferences.wrapsLines)
+                .help("关闭后可水平滚动查看长行，不会修改 Markdown 正文。")
+            Toggle("显示行号", isOn: $preferences.showsLineNumbers)
+                .help("按源文本的物理行编号，自动换行不会新增行号。")
         }
         .formStyle(.grouped)
     }

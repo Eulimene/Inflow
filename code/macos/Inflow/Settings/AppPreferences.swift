@@ -3,11 +3,33 @@ import Combine
 import Foundation
 
 struct SourceEditorAppearance: Equatable, Sendable {
-    static let `default` = Self(fontSize: 15, lineHeight: 1.6, spellingEnabled: true)
+    static let `default` = Self(
+        fontSize: 15,
+        lineHeight: 1.6,
+        spellingEnabled: true,
+        wrapsLines: true,
+        showsLineNumbers: false
+    )
 
     let fontSize: Double
     let lineHeight: Double
     let spellingEnabled: Bool
+    let wrapsLines: Bool
+    let showsLineNumbers: Bool
+
+    init(
+        fontSize: Double,
+        lineHeight: Double,
+        spellingEnabled: Bool,
+        wrapsLines: Bool = true,
+        showsLineNumbers: Bool = false
+    ) {
+        self.fontSize = fontSize
+        self.lineHeight = lineHeight
+        self.spellingEnabled = spellingEnabled
+        self.wrapsLines = wrapsLines
+        self.showsLineNumbers = showsLineNumbers
+    }
 }
 
 enum PreviewColorScheme: String, CaseIterable, Identifiable, Sendable {
@@ -100,6 +122,8 @@ final class AppPreferences: ObservableObject {
         static let editorLineHeight = "preferences.editor.lineHeight"
         static let syntaxHighlightingEnabled = "preferences.editor.syntaxHighlightingEnabled"
         static let spellingEnabled = "preferences.editor.spellingEnabled"
+        static let wrapsLines = "preferences.editor.wrapsLines"
+        static let showsLineNumbers = "preferences.editor.showsLineNumbers"
         static let scrollSyncEnabled = "preferences.preview.scrollSyncEnabled"
         static let headingNavigationEnabled = "preferences.preview.headingNavigationEnabled"
         static let previewContentWidth = "preferences.preview.contentWidth"
@@ -143,6 +167,14 @@ final class AppPreferences: ObservableObject {
         didSet {
             defaults.set(syntaxHighlightingEnabled, forKey: Key.syntaxHighlightingEnabled)
         }
+    }
+
+    @Published var wrapsLines: Bool {
+        didSet { defaults.set(wrapsLines, forKey: Key.wrapsLines) }
+    }
+
+    @Published var showsLineNumbers: Bool {
+        didSet { defaults.set(showsLineNumbers, forKey: Key.showsLineNumbers) }
     }
 
     @Published var scrollSyncEnabled: Bool {
@@ -215,6 +247,16 @@ final class AppPreferences: ObservableObject {
             in: defaults,
             defaultValue: SourceEditorAppearance.default.spellingEnabled
         )
+        wrapsLines = Self.bool(
+            forKey: Key.wrapsLines,
+            in: defaults,
+            defaultValue: SourceEditorAppearance.default.wrapsLines
+        )
+        showsLineNumbers = Self.bool(
+            forKey: Key.showsLineNumbers,
+            in: defaults,
+            defaultValue: SourceEditorAppearance.default.showsLineNumbers
+        )
         scrollSyncEnabled = Self.bool(
             forKey: Key.scrollSyncEnabled,
             in: defaults,
@@ -276,7 +318,9 @@ final class AppPreferences: ObservableObject {
         SourceEditorAppearance(
             fontSize: editorFontSize,
             lineHeight: editorLineHeight,
-            spellingEnabled: spellingEnabled
+            spellingEnabled: spellingEnabled,
+            wrapsLines: wrapsLines,
+            showsLineNumbers: showsLineNumbers
         )
     }
 
@@ -301,6 +345,8 @@ final class AppPreferences: ObservableObject {
         editorLineHeight = SourceEditorAppearance.default.lineHeight
         syntaxHighlightingEnabled = true
         spellingEnabled = SourceEditorAppearance.default.spellingEnabled
+        wrapsLines = SourceEditorAppearance.default.wrapsLines
+        showsLineNumbers = SourceEditorAppearance.default.showsLineNumbers
         scrollSyncEnabled = true
         headingNavigationEnabled = true
         previewContentWidth = PreviewAppearanceConfiguration.default.contentWidth
@@ -316,6 +362,8 @@ final class AppPreferences: ObservableObject {
         defaults.set(editorLineHeight, forKey: Key.editorLineHeight)
         defaults.set(syntaxHighlightingEnabled, forKey: Key.syntaxHighlightingEnabled)
         defaults.set(spellingEnabled, forKey: Key.spellingEnabled)
+        defaults.set(wrapsLines, forKey: Key.wrapsLines)
+        defaults.set(showsLineNumbers, forKey: Key.showsLineNumbers)
         defaults.set(scrollSyncEnabled, forKey: Key.scrollSyncEnabled)
         defaults.set(headingNavigationEnabled, forKey: Key.headingNavigationEnabled)
         defaults.set(previewContentWidth, forKey: Key.previewContentWidth)

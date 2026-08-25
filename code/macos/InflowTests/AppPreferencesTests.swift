@@ -12,6 +12,8 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.editorLineHeight, 1.6)
             XCTAssertTrue(preferences.syntaxHighlightingEnabled)
             XCTAssertTrue(preferences.spellingEnabled)
+            XCTAssertTrue(preferences.wrapsLines)
+            XCTAssertFalse(preferences.showsLineNumbers)
             XCTAssertTrue(preferences.scrollSyncEnabled)
             XCTAssertTrue(preferences.headingNavigationEnabled)
             XCTAssertEqual(preferences.previewContentWidth, 760)
@@ -30,6 +32,8 @@ final class AppPreferencesTests: XCTestCase {
             first.editorLineHeight = 1.9
             first.syntaxHighlightingEnabled = false
             first.spellingEnabled = false
+            first.wrapsLines = false
+            first.showsLineNumbers = true
             first.scrollSyncEnabled = false
             first.headingNavigationEnabled = false
             first.previewContentWidth = 1_040
@@ -44,6 +48,8 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(second.editorLineHeight, 1.9)
             XCTAssertFalse(second.syntaxHighlightingEnabled)
             XCTAssertFalse(second.spellingEnabled)
+            XCTAssertFalse(second.wrapsLines)
+            XCTAssertTrue(second.showsLineNumbers)
             XCTAssertFalse(second.scrollSyncEnabled)
             XCTAssertFalse(second.headingNavigationEnabled)
             XCTAssertEqual(second.previewContentWidth, 1_040)
@@ -89,6 +95,8 @@ final class AppPreferencesTests: XCTestCase {
             preferences.previewZoom = 1.8
             preferences.previewTheme = .code
             preferences.syntaxHighlightingEnabled = false
+            preferences.wrapsLines = false
+            preferences.showsLineNumbers = true
             preferences.scrollSyncEnabled = false
             preferences.headingNavigationEnabled = false
             preferences.increasedContrast = .enabled
@@ -99,6 +107,8 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.previewZoom, 1)
             XCTAssertEqual(preferences.previewTheme, .standard)
             XCTAssertTrue(preferences.syntaxHighlightingEnabled)
+            XCTAssertTrue(preferences.wrapsLines)
+            XCTAssertFalse(preferences.showsLineNumbers)
             XCTAssertTrue(preferences.scrollSyncEnabled)
             XCTAssertTrue(preferences.headingNavigationEnabled)
             XCTAssertEqual(preferences.increasedContrast, .followSystem)
@@ -118,7 +128,13 @@ final class AppPreferencesTests: XCTestCase {
         let canUndo = session.textView.undoManager?.canUndo
 
         session.applySourceAppearance(
-            SourceEditorAppearance(fontSize: 22, lineHeight: 1.9, spellingEnabled: false),
+            SourceEditorAppearance(
+                fontSize: 22,
+                lineHeight: 1.9,
+                spellingEnabled: false,
+                wrapsLines: false,
+                showsLineNumbers: true
+            ),
             force: true
         )
 
@@ -127,12 +143,54 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertEqual(session.textView.undoManager?.canUndo, canUndo)
         XCTAssertEqual(session.textView.font?.pointSize, 22)
         XCTAssertFalse(session.textView.isContinuousSpellCheckingEnabled)
+        XCTAssertTrue(session.scrollView.hasHorizontalScroller)
+        XCTAssertFalse(try XCTUnwrap(session.textView.textContainer).widthTracksTextView)
+        XCTAssertTrue(session.scrollView.hasVerticalRuler)
+        XCTAssertTrue(session.scrollView.rulersVisible)
+        let ruler = try XCTUnwrap(
+            session.scrollView.verticalRulerView as? MarkdownLineNumberRulerView
+        )
+        XCTAssertEqual(ruler.lineCount, textAfterEdit.filter { $0 == "\n" }.count + 1)
         let style = session.textView.textStorage?.attribute(
             .paragraphStyle,
             at: 0,
             effectiveRange: nil
         ) as? NSParagraphStyle
         XCTAssertEqual(try XCTUnwrap(style).lineHeightMultiple, 1.9, accuracy: 0.001)
+
+        session.applySourceAppearance(.default, force: true)
+        XCTAssertFalse(session.scrollView.hasHorizontalScroller)
+        XCTAssertTrue(try XCTUnwrap(session.textView.textContainer).widthTracksTextView)
+        XCTAssertFalse(session.scrollView.rulersVisible)
+    }
+
+    func testLineNumbersTrackPhysicalLinesWithoutChangingTextOrUndo() throws {
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = "first\nsecond\n"
+        session.applySourceAppearance(
+            SourceEditorAppearance(
+                fontSize: 15,
+                lineHeight: 1.6,
+                spellingEnabled: true,
+                wrapsLines: true,
+                showsLineNumbers: true
+            ),
+            force: true
+        )
+        let ruler = try XCTUnwrap(
+            session.scrollView.verticalRulerView as? MarkdownLineNumberRulerView
+        )
+        XCTAssertEqual(ruler.lineCount, 3)
+
+        session.textView.setSelectedRange(NSRange(location: 5, length: 0))
+        session.textView.insertText("\ninserted", replacementRange: session.textView.selectedRange())
+
+        XCTAssertEqual(ruler.lineCount, 4)
+        XCTAssertEqual(session.textView.string, "first\ninserted\nsecond\n")
+        XCTAssertTrue(try XCTUnwrap(session.textView.undoManager).canUndo)
+        session.textView.undoManager?.undo()
+        XCTAssertEqual(ruler.lineCount, 3)
+        XCTAssertEqual(session.textView.string, "first\nsecond\n")
     }
 
     func testPreviewConfigurationProducesSafeDeterministicCSS() {
