@@ -5,9 +5,11 @@ import UniformTypeIdentifiers
 
 struct HTMLExportSnapshot: Sendable {
     let utf8: Data
+    let documentDirectory: URL?
 
-    init(markdown: String) {
+    init(markdown: String, documentDirectory: URL? = nil) {
         utf8 = Data(markdown.utf8)
+        self.documentDirectory = documentDirectory
     }
 }
 
@@ -38,6 +40,7 @@ enum HTMLExportError: Error, LocalizedError, Sendable {
     case unsupportedContent([HTMLExportIssue])
     case outputTooLarge
     case invalidUTF8
+    case unavailableResource
     case coreFailure
 
     var errorDescription: String? {
@@ -49,6 +52,8 @@ enum HTMLExportError: Error, LocalizedError, Sendable {
             return "HTML 交付物超过 100 MiB 上限，已在写入前停止。"
         case .invalidUTF8:
             return "导出快照不是有效的 UTF-8 文本，未创建文件。"
+        case .unavailableResource:
+            return LocalImageExportError.unavailableResource.localizedDescription
         case .coreFailure:
             return "HTML 导出暂时失败，未创建文件。当前 Markdown 不受影响。"
         }
@@ -67,7 +72,23 @@ enum HTMLExporter {
         switch result.status {
         case INFLOW_STATUS_OK:
             do {
-                return try InflowCoreBridge.copyAndFree(result.html)
+                let coreData = try InflowCoreBridge.copyAndFree(result.html)
+                guard let coreHTML = String(data: coreData, encoding: .utf8) else {
+                    throw HTMLExportError.coreFailure
+                }
+                let resolved = try LocalImageResolver.resolveSlotsForExport(
+                    in: coreHTML,
+                    documentDirectory: snapshot.documentDirectory
+                )
+                let output = Data(resolved.utf8)
+                guard output.count <= LocalImageValidator.maximumBytes else {
+                    throw HTMLExportError.outputTooLarge
+                }
+                return output
+            } catch is LocalImageExportError {
+                throw HTMLExportError.unavailableResource
+            } catch let error as HTMLExportError {
+                throw error
             } catch {
                 throw HTMLExportError.coreFailure
             }

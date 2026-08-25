@@ -1202,11 +1202,11 @@ mod tests {
         );
         unsafe { inflow_owned_bytes_free(result.html.data, result.html.length) };
 
-        let unsupported = "![image](photo.png) and $formula$";
+        let unsupported = "![image](photo.png) and [local](../note.md)";
         let result =
             unsafe { inflow_markdown_export_html(unsupported.as_ptr(), unsupported.len()) };
         assert_eq!(result.status, STATUS_UNSUPPORTED_CONTENT);
-        assert_eq!(result.blocking_issues, export::ISSUE_IMAGE);
+        assert_eq!(result.blocking_issues, export::ISSUE_LOCAL_LINK);
         assert!(result.html.data.is_null());
         assert_eq!(result.html.length, 0);
 

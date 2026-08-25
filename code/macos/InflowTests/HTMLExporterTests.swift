@@ -42,10 +42,48 @@ final class HTMLExporterTests: XCTestCase {
             }
             XCTAssertEqual(
                 Set(issues),
-                Set([.image, .localLink, .unsafeLink])
+                Set([.localLink, .unsafeLink])
             )
             XCTAssertTrue(error.localizedDescription.contains("导出前检查未通过"))
         }
+    }
+
+    func testExportInlinesValidatedLocalImageWithoutFilePath() throws {
+        try withTemporaryDirectory { directory in
+            let imageURL = directory.appendingPathComponent("photo.png")
+            try testPNGData().write(to: imageURL)
+            let data = try HTMLExporter.generate(
+                snapshot: HTMLExportSnapshot(
+                    markdown: "![本地图片](photo.png)",
+                    documentDirectory: directory
+                )
+            )
+            let html = try XCTUnwrap(String(data: data, encoding: .utf8))
+            XCTAssertTrue(html.contains("src=\"data:image/png;base64,"))
+            XCTAssertTrue(html.contains("alt=\"本地图片\""))
+            XCTAssertFalse(html.contains("inflow-image-slot"))
+            XCTAssertFalse(html.contains(imageURL.path))
+            XCTAssertFalse(html.contains("file:"))
+        }
+    }
+
+    func testExportRejectsMissingOrUnavailableImageBeforeWriting() {
+        let snapshot = HTMLExportSnapshot(
+            markdown: "![missing](assets/missing.png)",
+            documentDirectory: FileManager.default.temporaryDirectory
+        )
+        XCTAssertThrowsError(try HTMLExporter.generate(snapshot: snapshot)) { error in
+            guard case HTMLExportError.unavailableResource = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testExportDoesNotMistakeCodeTextForImageFailureMarkup() throws {
+        let data = try HTMLExporter.generate(
+            snapshot: HTMLExportSnapshot(markdown: "```html\nclass=\"image-warning\"\n```")
+        )
+        XCTAssertNotNil(String(data: data, encoding: .utf8))
     }
 
     func testExportRendersFormulaAsSelfContainedMathML() throws {
@@ -220,6 +258,29 @@ final class HTMLExporterTests: XCTestCase {
     private func temporaryExportFiles(in directory: URL) throws -> [String] {
         try FileManager.default.contentsOfDirectory(atPath: directory.path)
             .filter { $0.hasPrefix(".inflow-export-") }
+    }
+
+    private func testPNGData() throws -> Data {
+        let representation = try XCTUnwrap(
+            NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: 1,
+                pixelsHigh: 1,
+                bitsPerSample: 8,
+                samplesPerPixel: 4,
+                hasAlpha: true,
+                isPlanar: false,
+                colorSpaceName: .deviceRGB,
+                bytesPerRow: 4,
+                bitsPerPixel: 32
+            )
+        )
+        let pixels = try XCTUnwrap(representation.bitmapData)
+        pixels[0] = 40
+        pixels[1] = 100
+        pixels[2] = 220
+        pixels[3] = 255
+        return try XCTUnwrap(representation.representation(using: .png, properties: [:]))
     }
 
     @MainActor

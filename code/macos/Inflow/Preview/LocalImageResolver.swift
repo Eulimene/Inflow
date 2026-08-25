@@ -6,17 +6,26 @@ enum LocalImageResolver {
     )
 
     static func resolveSlots(in fragment: String, documentDirectory: URL?) -> String {
+        resolution(in: fragment, documentDirectory: documentDirectory).html
+    }
+
+    private static func resolution(
+        in fragment: String,
+        documentDirectory: URL?
+    ) -> (html: String, hasFailure: Bool) {
         let fullRange = NSRange(location: 0, length: (fragment as NSString).length)
         let matches = slotExpression.matches(in: fragment, range: fullRange)
-        guard !matches.isEmpty else { return fragment }
+        guard !matches.isEmpty else { return (fragment, false) }
 
         let output = NSMutableString(string: fragment)
+        var hasFailure = false
         for match in matches.reversed() {
             guard let target = decodedHexString(
                 (fragment as NSString).substring(with: match.range(at: 1))
             ), let alternative = decodedHexString(
                 (fragment as NSString).substring(with: match.range(at: 2))
             ) else {
+                hasFailure = true
                 output.replaceCharacters(
                     in: match.range,
                     with: warning(title: "无法读取图片引用", detail: "图片引用不是有效的 UTF-8。")
@@ -24,16 +33,28 @@ enum LocalImageResolver {
                 continue
             }
 
-            output.replaceCharacters(
-                in: match.range,
-                with: resolvedImage(
-                    target: target,
-                    alternative: alternative,
-                    documentDirectory: documentDirectory
-                )
+            let replacement = resolvedImage(
+                target: target,
+                alternative: alternative,
+                documentDirectory: documentDirectory
             )
+            if !replacement.hasPrefix("<img class=\"inflow-local-image\"") {
+                hasFailure = true
+            }
+            output.replaceCharacters(in: match.range, with: replacement)
         }
-        return output as String
+        return (output as String, hasFailure)
+    }
+
+    static func resolveSlotsForExport(
+        in fragment: String,
+        documentDirectory: URL?
+    ) throws -> String {
+        let result = resolution(in: fragment, documentDirectory: documentDirectory)
+        guard !result.hasFailure else {
+            throw LocalImageExportError.unavailableResource
+        }
+        return result.html
     }
 
     private static func resolvedImage(
@@ -151,5 +172,13 @@ enum LocalImageResolver {
         escapeText(text)
             .replacingOccurrences(of: "\"", with: "&quot;")
             .replacingOccurrences(of: "'", with: "&#39;")
+    }
+}
+
+enum LocalImageExportError: Error, LocalizedError {
+    case unavailableResource
+
+    var errorDescription: String? {
+        "HTML 导出需要的本地图片缺失、未授权、不受支持或不安全，未创建文件。"
     }
 }

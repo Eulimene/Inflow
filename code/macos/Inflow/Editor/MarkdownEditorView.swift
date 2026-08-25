@@ -822,7 +822,10 @@ struct MarkdownEditorView: View {
 
     private func startHTMLExport() {
         guard !isExportingHTML else { return }
-        let snapshot = HTMLExportSnapshot(markdown: document.text)
+        let snapshot = HTMLExportSnapshot(
+            markdown: document.text,
+            documentDirectory: fileURL?.deletingLastPathComponent()
+        )
         let basename = fileURL?.deletingPathExtension().lastPathComponent ?? "未命名文档"
         let suggestedFilename = "\(basename).html"
         let worker = htmlExportWorker

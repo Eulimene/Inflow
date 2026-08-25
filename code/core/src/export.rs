@@ -4,6 +4,7 @@ use pulldown_cmark::{Event, Parser, Tag};
 
 use crate::render;
 
+#[allow(dead_code)] // Reserved by the stable v1 C ABI for older core binaries.
 pub const ISSUE_IMAGE: u64 = 1 << 0;
 #[allow(dead_code)] // Reserved by the stable v1 C ABI for older core binaries.
 pub const ISSUE_FORMULA: u64 = 1 << 1;
@@ -42,12 +43,8 @@ pub fn blocking_issues(markdown: &str) -> u64 {
     let mut issues = 0;
 
     for event in Parser::new_ext(markdown, render::options()) {
-        match event {
-            Event::Start(Tag::Image { .. }) => issues |= ISSUE_IMAGE,
-            Event::Start(Tag::Link { dest_url, .. }) => {
-                issues |= link_issue(dest_url.as_ref());
-            }
-            _ => {}
+        if let Event::Start(Tag::Link { dest_url, .. }) = event {
+            issues |= link_issue(dest_url.as_ref());
         }
     }
 
@@ -99,6 +96,7 @@ const DOCUMENT_PREFIX: &str = r#"<!doctype html>
     th, td { border: 1px solid #d0d7de; padding: 7px 12px; }
     tr:nth-child(even) { background: #f6f8fa; }
     hr { height: 1px; border: 0; background: #d8dee4; margin: 2em 0; }
+    img { display: block; max-width: 100%; height: auto; margin: 1em 0; }
     math { font-family: STIX Two Math, STIXGeneral, serif; }
     math[display="block"] { display: block; max-width: 100%; overflow-x: auto; margin: 1.2em 0; text-align: center; }
     .mermaid-diagram { margin: 1.4em 0; overflow-x: auto; }
@@ -173,12 +171,22 @@ mod tests {
 
         assert_eq!(
             blocking_issues(markdown),
-            ISSUE_IMAGE | ISSUE_LOCAL_LINK | ISSUE_UNSAFE_LINK
+            ISSUE_LOCAL_LINK | ISSUE_UNSAFE_LINK
         );
         assert_eq!(
             html_document(markdown),
             Err(ExportError::UnsupportedContent(blocking_issues(markdown)))
         );
+    }
+
+    #[test]
+    fn leaves_images_as_inert_slots_for_platform_export_resolution() {
+        let html = String::from_utf8(
+            html_document("![photo](assets/photo.png)").expect("platform resolves image"),
+        )
+        .expect("export is UTF-8");
+        assert!(html.contains("class=\"inflow-image-slot\""));
+        assert!(!html.contains("src=\"assets/photo.png\""));
     }
 
     #[test]
