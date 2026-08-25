@@ -100,6 +100,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     let textView: WindowAwareTextView
     @Published private(set) var selectedUTF16Range = NSRange(location: 0, length: 0)
     @Published private(set) var verticalScrollOffset = 0.0
+    @Published private(set) var verticalScrollFraction = 0.0
     fileprivate var appliedSelectionGeneration: Int?
     fileprivate var pendingSelectionRequest: SourceSelectionRequest?
     fileprivate var pendingRestorationState: MarkdownRestorationState?
@@ -223,6 +224,18 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         if verticalScrollOffset != offset {
             verticalScrollOffset = offset
         }
+        updateScrollFraction(using: clipView, offset: offset)
+    }
+
+    private func updateScrollFraction(using clipView: NSClipView, offset: CGFloat) {
+        let documentHeight = scrollView.documentView?.bounds.height ?? 0
+        let maximumOffset = max(0, documentHeight - clipView.bounds.height)
+        let fraction = maximumOffset > 0
+            ? min(max(Double(offset / maximumOffset), 0), 1)
+            : 0
+        if abs(verticalScrollFraction - fraction) > 0.000_1 {
+            verticalScrollFraction = fraction
+        }
     }
 
     @objc
@@ -283,6 +296,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: offset))
         scrollView.reflectScrolledClipView(scrollView.contentView)
         verticalScrollOffset = Double(offset)
+        updateScrollFraction(using: scrollView.contentView, offset: offset)
         pendingRestorationState = nil
     }
 

@@ -137,6 +137,9 @@ struct MarkdownEditorView: View {
     @State private var derivedContentGeneration = 0
     @State private var derivedContentTask: Task<Void, Never>?
     @State private var contentDeriver = DocumentContentDeriver()
+    @State private var previewScrollGeneration = 0
+    @State private var previewScrollRequest: PreviewScrollRequest?
+    @State private var previewScrollPausedByUser = false
     @StateObject private var sourceEditorSession = MarkdownSourceEditorSession()
     @State private var selectedHeadingID: DocumentHeading.ID?
     @State private var sourceSelectionRequest: SourceSelectionRequest?
@@ -285,8 +288,10 @@ struct MarkdownEditorView: View {
                 for: document.text,
                 documentDirectory: fileURL?.deletingLastPathComponent(),
                 configuration: preferences.previewConfiguration,
+                headingNavigationEnabled: preferences.headingNavigationEnabled,
                 delayNanoseconds: 0
             )
+            requestPreviewScroll()
             if !findSession.query.isEmpty {
                 scheduleFindSearch(
                     source: document.text,
@@ -315,6 +320,7 @@ struct MarkdownEditorView: View {
                 for: markdown,
                 documentDirectory: fileURL?.deletingLastPathComponent(),
                 configuration: preferences.previewConfiguration,
+                headingNavigationEnabled: preferences.headingNavigationEnabled,
                 delayNanoseconds: 120_000_000
             )
             if findSession.isPresented || !findSession.query.isEmpty {
@@ -336,6 +342,7 @@ struct MarkdownEditorView: View {
                 for: document.text,
                 documentDirectory: newURL?.deletingLastPathComponent(),
                 configuration: preferences.previewConfiguration,
+                headingNavigationEnabled: preferences.headingNavigationEnabled,
                 delayNanoseconds: 0
             )
             updateRecoveryProtection()
@@ -353,8 +360,24 @@ struct MarkdownEditorView: View {
                 for: document.text,
                 documentDirectory: fileURL?.deletingLastPathComponent(),
                 configuration: configuration,
+                headingNavigationEnabled: preferences.headingNavigationEnabled,
                 delayNanoseconds: 0
             )
+        }
+        .onChange(of: preferences.headingNavigationEnabled) { _, isEnabled in
+            scheduleDerivedContent(
+                for: document.text,
+                documentDirectory: fileURL?.deletingLastPathComponent(),
+                configuration: preferences.previewConfiguration,
+                headingNavigationEnabled: isEnabled,
+                delayNanoseconds: 0
+            )
+        }
+        .onChange(of: preferences.scrollSyncEnabled) { _, isEnabled in
+            previewScrollPausedByUser = false
+            if isEnabled {
+                requestPreviewScroll()
+            }
         }
     }
 
@@ -365,6 +388,11 @@ struct MarkdownEditorView: View {
         }
         .onChange(of: sourceEditorSession.verticalScrollOffset) { _, _ in
             updateRecoveryProtection()
+        }
+        .onChange(of: sourceEditorSession.verticalScrollFraction) { _, _ in
+            guard preferences.scrollSyncEnabled else { return }
+            previewScrollPausedByUser = false
+            requestPreviewScroll()
         }
         .onChange(of: Data(findSession.query.utf8)) { _, _ in
             findSession.clearNotice()
@@ -537,7 +565,16 @@ struct MarkdownEditorView: View {
     private var preview: some View {
         MarkdownPreviewView(
             html: previewHTML,
-            baseURL: fileURL?.deletingLastPathComponent()
+            baseURL: fileURL?.deletingLastPathComponent(),
+            scrollRequest: preferences.scrollSyncEnabled && !previewScrollPausedByUser
+                ? previewScrollRequest
+                : nil,
+            onHeadingActivated: activatePreviewHeading,
+            onManualScroll: {
+                if preferences.scrollSyncEnabled {
+                    previewScrollPausedByUser = true
+                }
+            }
         )
     }
 
@@ -832,6 +869,27 @@ struct MarkdownEditorView: View {
         sourceSelectionRequest = SourceSelectionRequest(
             generation: sourceSelectionGeneration,
             utf8Range: heading.sourceUTF8Range
+        )
+    }
+
+    private func activatePreviewHeading(sourceUTF8Offset: Int) {
+        guard preferences.headingNavigationEnabled,
+              analysisState.allowsNavigation,
+              let heading = analysisState.displayedAnalysis.headings.first(where: {
+                  $0.sourceUTF8Range.lowerBound == sourceUTF8Offset
+              })
+        else {
+            return
+        }
+        selectHeading(heading)
+    }
+
+    private func requestPreviewScroll() {
+        guard preferences.scrollSyncEnabled else { return }
+        previewScrollGeneration &+= 1
+        previewScrollRequest = PreviewScrollRequest(
+            generation: previewScrollGeneration,
+            fraction: sourceEditorSession.verticalScrollFraction
         )
     }
 
@@ -1657,6 +1715,7 @@ struct MarkdownEditorView: View {
         for markdown: String,
         documentDirectory: URL?,
         configuration: PreviewAppearanceConfiguration,
+        headingNavigationEnabled: Bool,
         delayNanoseconds: UInt64
     ) {
         derivedContentTask?.cancel()
@@ -1672,7 +1731,8 @@ struct MarkdownEditorView: View {
             guard let content = await contentDeriver.derive(
                 markdown: markdown,
                 documentDirectory: documentDirectory,
-                configuration: configuration
+                configuration: configuration,
+                headingNavigationEnabled: headingNavigationEnabled
             ) else { return }
 
             guard !Task.isCancelled, generation == derivedContentGeneration else { return }
@@ -1779,16 +1839,10 @@ private actor DocumentContentDeriver {
     func derive(
         markdown: String,
         documentDirectory: URL?,
-        configuration: PreviewAppearanceConfiguration
+        configuration: PreviewAppearanceConfiguration,
+        headingNavigationEnabled: Bool
     ) -> DerivedDocumentContent? {
         guard !Task.isCancelled else { return nil }
-        let html = MarkdownRenderer.htmlDocument(
-            for: markdown,
-            documentDirectory: documentDirectory,
-            configuration: configuration
-        )
-        guard !Task.isCancelled else { return nil }
-
         let analysis: DocumentAnalysisOutcome
         do {
             analysis = .success(try MarkdownAnalyzer.analyze(markdown))
@@ -1798,6 +1852,19 @@ private actor DocumentContentDeriver {
             analysis = .failure(message)
         }
 
+        guard !Task.isCancelled else { return nil }
+        let headings: [DocumentHeading]
+        if headingNavigationEnabled, case let .success(documentAnalysis) = analysis {
+            headings = documentAnalysis.headings
+        } else {
+            headings = []
+        }
+        let html = MarkdownRenderer.htmlDocument(
+            for: markdown,
+            documentDirectory: documentDirectory,
+            configuration: configuration,
+            navigationHeadings: headings
+        )
         guard !Task.isCancelled else { return nil }
         return DerivedDocumentContent(html: html, analysis: analysis)
     }

@@ -89,6 +89,10 @@ struct InflowSettingsView: View {
                     Text(theme.label).tag(theme)
                 }
             }
+            Toggle("编辑器到预览滚动同步", isOn: $preferences.scrollSyncEnabled)
+                .help("手动滚动预览后会暂停跟随，直到再次滚动源码编辑器。")
+            Toggle("点击预览标题定位源码", isOn: $preferences.headingNavigationEnabled)
+                .help("定位时会从纯预览进入实时预览，不会修改 Markdown。")
         }
         .formStyle(.grouped)
     }

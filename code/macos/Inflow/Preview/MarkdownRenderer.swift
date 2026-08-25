@@ -45,10 +45,14 @@ enum MarkdownRenderer {
     static func htmlDocument(
         for markdown: String,
         documentDirectory: URL? = nil,
-        configuration: PreviewAppearanceConfiguration = .default
+        configuration: PreviewAppearanceConfiguration = .default,
+        navigationHeadings: [DocumentHeading] = []
     ) -> String {
         do {
-            let fragment = try htmlFragment(for: markdown)
+            let fragment = PreviewNavigationMarkup.annotateHeadings(
+                in: try htmlFragment(for: markdown),
+                headings: navigationHeadings
+            )
             return document(
                 containing: LocalImageResolver.resolveSlots(
                     in: fragment,
@@ -78,6 +82,7 @@ enum MarkdownRenderer {
             :root { color-scheme: light dark; font: 17px/1.65 -apple-system, BlinkMacSystemFont, sans-serif; }
             body { box-sizing: border-box; max-width: 760px; margin: 0 auto; padding: 32px 36px 72px; color: #24292f; background: #ffffff; overflow-wrap: break-word; }
             h1, h2, h3, h4, h5, h6 { line-height: 1.28; margin: 1.45em 0 .55em; }
+            h1[data-inflow-source-start], h2[data-inflow-source-start], h3[data-inflow-source-start], h4[data-inflow-source-start], h5[data-inflow-source-start], h6[data-inflow-source-start] { cursor: pointer; }
             h1, h2 { border-bottom: 1px solid #d8dee4; padding-bottom: .28em; }
             h1 { font-size: 2em; } h2 { font-size: 1.5em; } h3 { font-size: 1.25em; }
             a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
@@ -135,6 +140,40 @@ enum MarkdownRenderer {
             containing: "<p class=\"preview-error\">\(escaped)</p>",
             configuration: configuration
         )
+    }
+}
+
+enum PreviewNavigationMarkup {
+    static func annotateHeadings(
+        in fragment: String,
+        headings: [DocumentHeading]
+    ) -> String {
+        guard !headings.isEmpty,
+              let headingPattern = try? NSRegularExpression(pattern: #"<h([1-6])>"#)
+        else {
+            return fragment
+        }
+        let fullRange = NSRange(location: 0, length: (fragment as NSString).length)
+        let matches = headingPattern.matches(in: fragment, range: fullRange)
+        guard matches.count == headings.count else { return fragment }
+
+        for (match, heading) in zip(matches, headings) {
+            guard match.numberOfRanges == 2,
+                  let levelRange = Range(match.range(at: 1), in: fragment),
+                  Int(fragment[levelRange]) == heading.level
+            else {
+                return fragment
+            }
+        }
+
+        let result = NSMutableString(string: fragment)
+        for (match, heading) in zip(matches, headings).reversed() {
+            result.replaceCharacters(
+                in: match.range,
+                with: "<h\(heading.level) data-inflow-source-start=\"\(heading.sourceUTF8Range.lowerBound)\" tabindex=\"0\" title=\"在源码中定位\">"
+            )
+        }
+        return result as String
     }
 }
 

@@ -11,6 +11,8 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.editorFontSize, 15)
             XCTAssertEqual(preferences.editorLineHeight, 1.6)
             XCTAssertTrue(preferences.spellingEnabled)
+            XCTAssertTrue(preferences.scrollSyncEnabled)
+            XCTAssertTrue(preferences.headingNavigationEnabled)
             XCTAssertEqual(preferences.previewContentWidth, 760)
             XCTAssertEqual(preferences.previewZoom, 1)
             XCTAssertEqual(preferences.previewColorScheme, .system)
@@ -26,6 +28,8 @@ final class AppPreferencesTests: XCTestCase {
             first.editorFontSize = 24
             first.editorLineHeight = 1.9
             first.spellingEnabled = false
+            first.scrollSyncEnabled = false
+            first.headingNavigationEnabled = false
             first.previewContentWidth = 1_040
             first.previewZoom = 1.65
             first.previewColorScheme = .dark
@@ -37,6 +41,8 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(second.editorFontSize, 24)
             XCTAssertEqual(second.editorLineHeight, 1.9)
             XCTAssertFalse(second.spellingEnabled)
+            XCTAssertFalse(second.scrollSyncEnabled)
+            XCTAssertFalse(second.headingNavigationEnabled)
             XCTAssertEqual(second.previewContentWidth, 1_040)
             XCTAssertEqual(second.previewZoom, 1.65)
             XCTAssertEqual(second.previewColorScheme, .dark)
@@ -79,6 +85,8 @@ final class AppPreferencesTests: XCTestCase {
             preferences.editorFontSize = 27
             preferences.previewZoom = 1.8
             preferences.previewTheme = .code
+            preferences.scrollSyncEnabled = false
+            preferences.headingNavigationEnabled = false
             preferences.increasedContrast = .enabled
 
             preferences.resetWritingAndPreview()
@@ -86,6 +94,8 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.editorFontSize, 15)
             XCTAssertEqual(preferences.previewZoom, 1)
             XCTAssertEqual(preferences.previewTheme, .standard)
+            XCTAssertTrue(preferences.scrollSyncEnabled)
+            XCTAssertTrue(preferences.headingNavigationEnabled)
             XCTAssertEqual(preferences.increasedContrast, .followSystem)
             XCTAssertEqual(defaults.string(forKey: "document.recovery.record"), "recovery-sentinel")
         }

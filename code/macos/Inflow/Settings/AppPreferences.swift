@@ -99,6 +99,8 @@ final class AppPreferences: ObservableObject {
         static let editorFontSize = "preferences.editor.fontSize"
         static let editorLineHeight = "preferences.editor.lineHeight"
         static let spellingEnabled = "preferences.editor.spellingEnabled"
+        static let scrollSyncEnabled = "preferences.preview.scrollSyncEnabled"
+        static let headingNavigationEnabled = "preferences.preview.headingNavigationEnabled"
         static let previewContentWidth = "preferences.preview.contentWidth"
         static let previewZoom = "preferences.preview.zoom"
         static let previewColorScheme = "preferences.preview.colorScheme"
@@ -134,6 +136,14 @@ final class AppPreferences: ObservableObject {
 
     @Published var spellingEnabled: Bool {
         didSet { defaults.set(spellingEnabled, forKey: Key.spellingEnabled) }
+    }
+
+    @Published var scrollSyncEnabled: Bool {
+        didSet { defaults.set(scrollSyncEnabled, forKey: Key.scrollSyncEnabled) }
+    }
+
+    @Published var headingNavigationEnabled: Bool {
+        didSet { defaults.set(headingNavigationEnabled, forKey: Key.headingNavigationEnabled) }
     }
 
     @Published var previewContentWidth: Double {
@@ -192,6 +202,16 @@ final class AppPreferences: ObservableObject {
             forKey: Key.spellingEnabled,
             in: defaults,
             defaultValue: SourceEditorAppearance.default.spellingEnabled
+        )
+        scrollSyncEnabled = Self.bool(
+            forKey: Key.scrollSyncEnabled,
+            in: defaults,
+            defaultValue: true
+        )
+        headingNavigationEnabled = Self.bool(
+            forKey: Key.headingNavigationEnabled,
+            in: defaults,
+            defaultValue: true
         )
         previewContentWidth = Self.number(
             forKey: Key.previewContentWidth,
@@ -268,6 +288,8 @@ final class AppPreferences: ObservableObject {
         editorFontSize = SourceEditorAppearance.default.fontSize
         editorLineHeight = SourceEditorAppearance.default.lineHeight
         spellingEnabled = SourceEditorAppearance.default.spellingEnabled
+        scrollSyncEnabled = true
+        headingNavigationEnabled = true
         previewContentWidth = PreviewAppearanceConfiguration.default.contentWidth
         previewZoom = PreviewAppearanceConfiguration.default.zoom
         previewColorScheme = .system
@@ -280,6 +302,8 @@ final class AppPreferences: ObservableObject {
         defaults.set(editorFontSize, forKey: Key.editorFontSize)
         defaults.set(editorLineHeight, forKey: Key.editorLineHeight)
         defaults.set(spellingEnabled, forKey: Key.spellingEnabled)
+        defaults.set(scrollSyncEnabled, forKey: Key.scrollSyncEnabled)
+        defaults.set(headingNavigationEnabled, forKey: Key.headingNavigationEnabled)
         defaults.set(previewContentWidth, forKey: Key.previewContentWidth)
         defaults.set(previewZoom, forKey: Key.previewZoom)
         defaults.set(previewColorScheme.rawValue, forKey: Key.previewColorScheme)
