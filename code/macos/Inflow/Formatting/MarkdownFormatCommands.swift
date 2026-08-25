@@ -71,6 +71,11 @@ struct MarkdownFormatCommands: Commands {
                 actions?.apply(.inlineCode)
             }
             .disabled(actions?.canFormat != true)
+
+            Button("代码块") {
+                actions?.apply(.codeBlock)
+            }
+            .disabled(actions?.canFormat != true)
         }
     }
 }

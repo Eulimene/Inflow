@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{analysis, render};
@@ -38,6 +38,14 @@ pub enum FormatError {
 struct FormatSpan {
     full_range: Range<usize>,
     content_range: Range<usize>,
+}
+
+#[derive(Debug)]
+struct FencedCodeSpan {
+    full: Range<usize>,
+    content: Range<usize>,
+    unwrapped_content: Range<usize>,
+    selection_content: Range<usize>,
 }
 
 #[derive(Debug)]
@@ -219,6 +227,111 @@ pub fn format_inline_code(
         replace_range: requested_selection,
         replacement,
         selection_range: content_range,
+    })
+}
+
+pub fn format_code_block(
+    source: &str,
+    requested_selection: Range<usize>,
+) -> Result<MarkdownEdit, FormatError> {
+    if !is_valid_selection(source, &requested_selection) {
+        return Err(FormatError::InvalidSelection);
+    }
+
+    let spans = fenced_code_spans(source);
+    if let Some(span) = spans.iter().find(|span| {
+        requested_selection == span.full
+            || requested_selection == span.content
+            || requested_selection == span.unwrapped_content
+            || requested_selection == span.selection_content
+            || (requested_selection.is_empty()
+                && span.full.start <= requested_selection.start
+                && requested_selection.start <= span.full.end)
+    }) {
+        let replacement = source[span.unwrapped_content.clone()].to_owned();
+        let selection_range = if requested_selection.is_empty() {
+            let offset = requested_selection
+                .start
+                .saturating_sub(span.content.start)
+                .min(replacement.len());
+            let caret = span.full.start + offset;
+            caret..caret
+        } else {
+            span.full.start..span.full.start + without_trailing_line_ending(&replacement)
+        };
+        return Ok(MarkdownEdit {
+            replace_range: span.full.clone(),
+            replacement,
+            selection_range,
+        });
+    }
+
+    if requested_selection.is_empty() {
+        let caret = requested_selection.start;
+        let prefix = if caret > 0 && source.as_bytes()[caret - 1] != b'\n' {
+            "\n"
+        } else {
+            ""
+        };
+        let suffix = if caret < source.len() && source.as_bytes()[caret] != b'\n' {
+            "\n"
+        } else {
+            ""
+        };
+        let replacement = format!("{prefix}```\n\n```{suffix}");
+        let content_start = caret + prefix.len() + 4;
+        let candidate = replacing(source, requested_selection.clone(), &replacement);
+        if !fenced_code_spans(&candidate).iter().any(|span| {
+            span.full.start == caret + prefix.len() && span.content.start == content_start
+        }) {
+            return Err(FormatError::AmbiguousSelection);
+        }
+        return Ok(MarkdownEdit {
+            replace_range: requested_selection,
+            replacement,
+            selection_range: content_start..content_start,
+        });
+    }
+
+    let block_range = selected_line_range(source, requested_selection.clone());
+    if spans.iter().any(|span| {
+        ranges_overlap(&block_range, &span.full)
+            && !(block_range.start <= span.full.start && span.full.end <= block_range.end)
+    }) {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    let content = &source[block_range.clone()];
+    let fence = "`".repeat(longest_backtick_run(content).saturating_add(1).max(3));
+    let content_has_line_ending = content.ends_with('\n');
+    let mut replacement = String::with_capacity(block_range.len() + fence.len() * 2 + 2);
+    replacement.push_str(&fence);
+    replacement.push('\n');
+    replacement.push_str(content);
+    if !content_has_line_ending {
+        replacement.push('\n');
+    }
+    replacement.push_str(&fence);
+    if content_has_line_ending {
+        replacement.push('\n');
+    }
+
+    let content_start = block_range.start + fence.len() + 1;
+    let candidate = replacing(source, block_range.clone(), &replacement);
+    let expected_full_start = block_range.start;
+    let expected_content_end =
+        content_start + content.len() + usize::from(!content_has_line_ending);
+    if !fenced_code_spans(&candidate).iter().any(|span| {
+        span.full.start == expected_full_start
+            && span.content == (content_start..expected_content_end)
+    }) {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    Ok(MarkdownEdit {
+        replace_range: block_range,
+        replacement,
+        selection_range: content_start..content_start + without_trailing_line_ending(content),
     })
 }
 
@@ -1097,6 +1210,95 @@ fn inline_code_spans(source: &str) -> Vec<FormatSpan> {
         .collect()
 }
 
+fn fenced_code_spans(source: &str) -> Vec<FencedCodeSpan> {
+    Parser::new_ext(source, render::options())
+        .into_offset_iter()
+        .filter_map(|(event, full_range)| {
+            if !matches!(
+                event,
+                Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(_)))
+            ) {
+                return None;
+            }
+            let opening_line = line_start(source, full_range.start)
+                ..line_end_including_ending(source, full_range.start).min(full_range.end);
+            let (marker, opening_length) = fence_marker(source, opening_line.clone())?;
+            let mut cursor = opening_line.end;
+            let mut closing_line = None;
+            while cursor < full_range.end {
+                let line = cursor..line_end_including_ending(source, cursor).min(full_range.end);
+                if closing_fence_length(source, line.clone(), marker)
+                    .is_some_and(|length| length >= opening_length)
+                {
+                    closing_line = Some(line.clone());
+                }
+                if line.end == cursor {
+                    break;
+                }
+                cursor = line.end;
+            }
+            let closing_line = closing_line?;
+            let content_range = opening_line.end..closing_line.start;
+            let closing_has_line_ending = source[closing_line.clone()].ends_with('\n');
+            let unwrapped_end =
+                if !closing_has_line_ending && source[content_range.clone()].ends_with('\n') {
+                    content_range.end - 1
+                } else {
+                    content_range.end
+                };
+            Some(FencedCodeSpan {
+                full: full_range,
+                content: content_range.clone(),
+                unwrapped_content: content_range.start..unwrapped_end,
+                selection_content: content_range.start
+                    ..content_range.start
+                        + without_trailing_line_ending(&source[content_range.clone()]),
+            })
+        })
+        .collect()
+}
+
+fn fence_marker(source: &str, line: Range<usize>) -> Option<(u8, usize)> {
+    let bytes = source.as_bytes();
+    let content_end = trailing_line_ending_start(source, line.clone());
+    let mut cursor = line.start;
+    let mut indentation = 0;
+    while cursor < content_end && bytes[cursor] == b' ' && indentation < 3 {
+        cursor += 1;
+        indentation += 1;
+    }
+    if cursor >= content_end || !matches!(bytes[cursor], b'`' | b'~') {
+        return None;
+    }
+    let marker = bytes[cursor];
+    let marker_start = cursor;
+    while cursor < content_end && bytes[cursor] == marker {
+        cursor += 1;
+    }
+    let marker_length = cursor - marker_start;
+    (marker_length >= 3).then_some((marker, marker_length))
+}
+
+fn closing_fence_length(source: &str, line: Range<usize>, marker: u8) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let content_end = trailing_line_ending_start(source, line.clone());
+    let mut cursor = line.start;
+    let mut indentation = 0;
+    while cursor < content_end && bytes[cursor] == b' ' && indentation < 3 {
+        cursor += 1;
+        indentation += 1;
+    }
+    let marker_start = cursor;
+    while cursor < content_end && bytes[cursor] == marker {
+        cursor += 1;
+    }
+    let marker_length = cursor - marker_start;
+    while cursor < content_end && matches!(bytes[cursor], b' ' | b'\t') {
+        cursor += 1;
+    }
+    (marker_length >= 3 && cursor == content_end).then_some(marker_length)
+}
+
 fn longest_backtick_run(text: &str) -> usize {
     text.bytes()
         .fold((0, 0), |(longest, current), byte| {
@@ -1452,6 +1654,74 @@ mod tests {
         );
         assert_eq!(
             format_inline_code("e\u{301}", 1..1),
+            Err(FormatError::InvalidSelection)
+        );
+    }
+
+    #[test]
+    fn code_block_wraps_complete_lines_with_a_safe_fence_and_round_trips() {
+        let source = "before\nlet value = ```raw```;\nprint(\"\u{4e2d}\u{6587}\")\nafter\n";
+        let start = "before\n".len();
+        let end = source.len() - "after\n".len() - 1;
+        let added = format_code_block(source, start..end).unwrap();
+        assert_eq!(added.replace_range, start..source.len() - "after\n".len());
+        assert_eq!(
+            added.replacement,
+            "````\nlet value = ```raw```;\nprint(\"\u{4e2d}\u{6587}\")\n````\n"
+        );
+        let formatted = replacing(source, added.replace_range, &added.replacement);
+        assert!(render::html_fragment(&formatted).contains("<pre><code>"));
+
+        let removed = format_code_block(&formatted, added.selection_range).unwrap();
+        assert_eq!(
+            replacing(&formatted, removed.replace_range, &removed.replacement),
+            source
+        );
+    }
+
+    #[test]
+    fn code_block_inserts_an_editable_template_at_empty_caret() {
+        assert_eq!(
+            format_code_block("", 0..0),
+            Ok(MarkdownEdit {
+                replace_range: 0..0,
+                replacement: "```\n\n```".to_owned(),
+                selection_range: 4..4,
+            })
+        );
+        assert_eq!(
+            format_code_block("text", 2..2),
+            Ok(MarkdownEdit {
+                replace_range: 2..2,
+                replacement: "\n```\n\n```\n".to_owned(),
+                selection_range: 7..7,
+            })
+        );
+
+        let templated = "```\n\n```";
+        let removed = format_code_block(templated, 4..4).unwrap();
+        assert_eq!(removed.replacement, "");
+        assert_eq!(removed.selection_range, 0..0);
+    }
+
+    #[test]
+    fn code_block_removes_tilde_fence_and_rejects_partial_existing_block() {
+        let source = "~~~swift\nprint(\"ok\")\n~~~\n";
+        let caret = source.find("print").unwrap() + 2;
+        let removed = format_code_block(source, caret..caret).unwrap();
+        assert_eq!(removed.replacement, "print(\"ok\")");
+        assert_eq!(removed.selection_range, 2..2);
+        assert_eq!(
+            replacing(source, removed.replace_range, &removed.replacement),
+            "print(\"ok\")\n"
+        );
+
+        assert_eq!(
+            format_code_block(source, 10..15),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            format_code_block("e\u{301}", 1..1),
             Err(FormatError::InvalidSelection)
         );
     }

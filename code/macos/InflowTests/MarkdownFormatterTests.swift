@@ -125,6 +125,58 @@ final class MarkdownFormatterTests: XCTestCase {
         )
     }
 
+    func testCodeBlockPlansSafeFenceAndRemovesCompleteContent() throws {
+        let source = "before\nlet value = ```raw```;\nprint(\"中文\")\nafter\n"
+        let selected = (source as NSString).range(of: "let value = ```raw```;\nprint(\"中文\")")
+        let added = try MarkdownFormatter.plan(
+            source: source,
+            selectedUTF16Range: selected,
+            command: .codeBlock
+        )
+        XCTAssertEqual(
+            added.resultingSource,
+            "before\n````\nlet value = ```raw```;\nprint(\"中文\")\n````\nafter\n"
+        )
+        XCTAssertTrue(try MarkdownRenderer.htmlFragment(for: added.resultingSource).contains(
+            "<pre><code>"
+        ))
+
+        let contentSelection = try XCTUnwrap(
+            MarkdownSourceRange.navigationTarget(
+                forUTF8Range: added.selectionUTF8Range,
+                in: added.resultingSource
+            )
+        )
+        let removed = try MarkdownFormatter.plan(
+            source: added.resultingSource,
+            selectedUTF16Range: contentSelection.revealRange,
+            command: .codeBlock
+        )
+        XCTAssertEqual(removed.resultingSource, source)
+    }
+
+    func testCodeBlockInsertsTemplateAndRejectsPartialExistingFence() throws {
+        let empty = try MarkdownFormatter.plan(
+            source: "",
+            selectedUTF16Range: NSRange(location: 0, length: 0),
+            command: .codeBlock
+        )
+        XCTAssertEqual(empty.resultingSource, "```\n\n```")
+        XCTAssertEqual(empty.selectionUTF8Range, 4..<4)
+
+        XCTAssertThrowsError(
+            try MarkdownFormatter.plan(
+                source: "```swift\nprint(\"ok\")\n```\n",
+                selectedUTF16Range: NSRange(location: 12, length: 5),
+                command: .codeBlock
+            )
+        ) { error in
+            guard case MarkdownFormatError.ambiguousSelection = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
     func testMultilineSelectionFormatsOnlyWhenItProducesValidInlineMarkdown() throws {
         let source = " first\nsecond "
         let plan = try MarkdownFormatter.plan(
@@ -411,6 +463,22 @@ final class MarkdownFormatterTests: XCTestCase {
         XCTAssertEqual(session.textView.string, "one\ntwo\n")
         session.textView.undoManager?.redo()
         XCTAssertEqual(session.textView.string, "1. one\n1. two\n")
+
+        session.textView.string = "let value = `raw`;\n"
+        session.textView.setSelectedRange(
+            NSRange(location: 0, length: (session.textView.string as NSString).length)
+        )
+        let codeBlock = try MarkdownFormatter.plan(
+            source: session.textView.string,
+            selectedUTF16Range: session.textView.selectedRange(),
+            command: .codeBlock
+        )
+        XCTAssertTrue(session.applyMarkdownFormat(codeBlock, actionName: "代码块格式"))
+        XCTAssertEqual(session.textView.string, "```\nlet value = `raw`;\n```\n")
+        session.textView.undoManager?.undo()
+        XCTAssertEqual(session.textView.string, "let value = `raw`;\n")
+        session.textView.undoManager?.redo()
+        XCTAssertEqual(session.textView.string, "```\nlet value = `raw`;\n```\n")
     }
 
     @MainActor
@@ -442,12 +510,16 @@ final class MarkdownFormatterTests: XCTestCase {
 
         editable.apply(.inline(.bold))
         editable.apply(.inlineCode)
+        editable.apply(.codeBlock)
         editable.apply(.heading(.four))
         editable.apply(.blockQuote)
         editable.apply(.list(.task))
         XCTAssertEqual(
             first,
-            [.inline(.bold), .inlineCode, .heading(.four), .blockQuote, .list(.task)]
+            [
+                .inline(.bold), .inlineCode, .codeBlock, .heading(.four), .blockQuote,
+                .list(.task),
+            ]
         )
         XCTAssertTrue(second.isEmpty)
         XCTAssertFalse(readOnly.canFormat)
@@ -498,6 +570,10 @@ final class MarkdownFormatterTests: XCTestCase {
         let inlineCodeItems = items.filter { $0.title == "行内代码" }
         XCTAssertEqual(inlineCodeItems.count, 1)
         XCTAssertEqual(inlineCodeItems.first?.keyEquivalent, "")
+
+        let codeBlockItems = items.filter { $0.title == "代码块" }
+        XCTAssertEqual(codeBlockItems.count, 1)
+        XCTAssertEqual(codeBlockItems.first?.keyEquivalent, "")
     }
 
     @MainActor

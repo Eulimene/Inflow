@@ -197,6 +197,21 @@ InflowMarkdownEditResult inflow_markdown_format_inline_code(
     uintptr_t selection_end
 );
 
+/// Plans a fenced-code-block edit over complete source lines. The backtick
+/// fence is at least three bytes and one byte longer than the longest run in
+/// the selected content. A complete parsed fence or its complete content is
+/// unwrapped; an empty selection receives an editable block template. Partial
+/// existing fences return INFLOW_STATUS_AMBIGUOUS_FORMAT. Selection and
+/// returned ranges use end-exclusive UTF-8 byte offsets aligned to complete
+/// extended graphemes. Returned replacement bytes must be released with
+/// inflow_owned_bytes_free.
+InflowMarkdownEditResult inflow_markdown_format_code_block(
+    const uint8_t *utf8,
+    uintptr_t length,
+    uintptr_t selection_start,
+    uintptr_t selection_end
+);
+
 /// Plans a heading edit over complete source lines without modifying the
 /// source. `heading_level` must be 1...6. Mixed levels are unified; if every
 /// nonblank selected line already has the requested level, heading markers are
