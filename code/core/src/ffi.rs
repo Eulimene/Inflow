@@ -533,6 +533,35 @@ pub unsafe extern "C" fn inflow_markdown_insert_table(
     .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
 }
 
+/// Plans one `CommonMark` horizontal-rule insertion after the current selection.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call. Selection offsets are end-exclusive UTF-8 byte
+/// offsets and must align with extended grapheme boundaries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_markdown_insert_horizontal_rule(
+    utf8: *const u8,
+    length: usize,
+    selection_start: usize,
+    selection_end: usize,
+) -> InflowMarkdownEditResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Ok(source) = std::str::from_utf8(input) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_UTF8);
+        };
+        markdown_edit_result(format::insert_horizontal_rule(
+            source,
+            selection_start..selection_end,
+        ))
+    }))
+    .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
+}
+
 /// Plans one predictable ATX heading edit for complete source lines.
 ///
 /// # Safety
@@ -1203,6 +1232,31 @@ mod tests {
         }
 
         let invalid = unsafe { inflow_markdown_insert_table(ptr::null(), 1, 0, 0) };
+        assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
+        assert!(invalid.replacement.data.is_null());
+    }
+
+    #[test]
+    fn ffi_inserts_horizontal_rule_and_releases_result() {
+        let source = "before";
+        let result = unsafe {
+            inflow_markdown_insert_horizontal_rule(
+                source.as_ptr(),
+                source.len(),
+                source.len(),
+                source.len(),
+            )
+        };
+        assert_eq!(result.status, STATUS_OK);
+        let replacement = unsafe {
+            std::slice::from_raw_parts(result.replacement.data, result.replacement.length)
+        };
+        assert_eq!(std::str::from_utf8(replacement).unwrap(), "\n\n---\n\n");
+        unsafe {
+            inflow_owned_bytes_free(result.replacement.data, result.replacement.length);
+        }
+
+        let invalid = unsafe { inflow_markdown_insert_horizontal_rule(ptr::null(), 1, 0, 0) };
         assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
         assert!(invalid.replacement.data.is_null());
     }

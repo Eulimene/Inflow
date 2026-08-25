@@ -463,6 +463,40 @@ pub fn insert_table(
     })
 }
 
+pub fn insert_horizontal_rule(
+    source: &str,
+    requested_selection: Range<usize>,
+) -> Result<MarkdownEdit, FormatError> {
+    if !is_valid_selection(source, &requested_selection) {
+        return Err(FormatError::InvalidSelection);
+    }
+
+    let insertion_point = requested_selection.end;
+    let leading_newlines = consecutive_newlines_before(source, insertion_point).min(2);
+    let prefix = "\n".repeat(if insertion_point == 0 {
+        0
+    } else {
+        2 - leading_newlines
+    });
+    let trailing_newlines = consecutive_newlines_after(source, insertion_point).min(2);
+    let suffix = "\n".repeat(2 - trailing_newlines);
+    let replacement = format!("{prefix}---{suffix}");
+    let rule_start = insertion_point + prefix.len();
+    let candidate = replacing(source, insertion_point..insertion_point, &replacement);
+    if !horizontal_rule_ranges(&candidate)
+        .iter()
+        .any(|range| range.start == rule_start)
+    {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    Ok(MarkdownEdit {
+        replace_range: insertion_point..insertion_point,
+        selection_range: insertion_point + replacement.len()..insertion_point + replacement.len(),
+        replacement,
+    })
+}
+
 pub fn format_heading(
     source: &str,
     requested_selection: Range<usize>,
@@ -1472,6 +1506,28 @@ fn table_spans(source: &str) -> Vec<TableSpan> {
     spans
 }
 
+fn horizontal_rule_ranges(source: &str) -> Vec<Range<usize>> {
+    Parser::new_ext(source, render::options())
+        .into_offset_iter()
+        .filter_map(|(event, range)| matches!(event, Event::Rule).then_some(range))
+        .collect()
+}
+
+fn consecutive_newlines_before(source: &str, position: usize) -> usize {
+    source.as_bytes()[..position]
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\n')
+        .count()
+}
+
+fn consecutive_newlines_after(source: &str, position: usize) -> usize {
+    source.as_bytes()[position..]
+        .iter()
+        .take_while(|byte| **byte == b'\n')
+        .count()
+}
+
 fn escaped_table_cell(content: &str) -> String {
     content.chars().fold(
         String::with_capacity(content.len()),
@@ -2047,6 +2103,44 @@ mod tests {
         );
         assert_eq!(
             insert_table("e\u{301}", 1..1),
+            Err(FormatError::InvalidSelection)
+        );
+    }
+
+    #[test]
+    fn horizontal_rule_inserts_a_real_block_and_leaves_an_editable_line() {
+        let edit = insert_horizontal_rule("", 0..0).unwrap();
+        assert_eq!(edit.replacement, "---\n\n");
+        assert_eq!(edit.selection_range, 5..5);
+        assert_eq!(horizontal_rule_ranges(&edit.replacement).len(), 1);
+        assert!(render::html_fragment(&edit.replacement).contains("<hr />"));
+
+        let source = "before\nafter";
+        let caret = "before\n".len();
+        let edit = insert_horizontal_rule(source, caret..caret).unwrap();
+        assert_eq!(edit.replacement, "\n---\n\n");
+        let formatted = replacing(source, edit.replace_range, &edit.replacement);
+        assert_eq!(formatted, "before\n\n---\n\nafter");
+        assert_eq!(horizontal_rule_ranges(&formatted).len(), 1);
+    }
+
+    #[test]
+    fn horizontal_rule_preserves_selection_and_rejects_unsafe_contexts() {
+        let source = "before 文字👩‍💻 after";
+        let selected_end = source.find(" after").unwrap();
+        let edit = insert_horizontal_rule(source, "before ".len()..selected_end).unwrap();
+        let formatted = replacing(source, edit.replace_range, &edit.replacement);
+        assert_eq!(formatted, "before 文字👩‍💻\n\n---\n\n after");
+        assert!(formatted.starts_with(&source[..selected_end]));
+
+        let fenced = "```text\ninside\n```\n";
+        let caret = fenced.find("inside").unwrap() + 2;
+        assert_eq!(
+            insert_horizontal_rule(fenced, caret..caret),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            insert_horizontal_rule("e\u{301}", 1..1),
             Err(FormatError::InvalidSelection)
         );
     }

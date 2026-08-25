@@ -244,6 +244,19 @@ InflowMarkdownEditResult inflow_markdown_insert_table(
     uintptr_t selection_end
 );
 
+/// Plans one CommonMark horizontal rule after the current selection without
+/// removing selected source. The edit adds enough surrounding line endings to
+/// keep `---` from becoming a Setext heading, and leaves the caret on an empty
+/// line after the rule. Selection and returned ranges use end-exclusive UTF-8
+/// byte offsets aligned to complete extended graphemes. Returned replacement
+/// bytes must be released with inflow_owned_bytes_free.
+InflowMarkdownEditResult inflow_markdown_insert_horizontal_rule(
+    const uint8_t *utf8,
+    uintptr_t length,
+    uintptr_t selection_start,
+    uintptr_t selection_end
+);
+
 /// Plans a heading edit over complete source lines without modifying the
 /// source. `heading_level` must be 1...6. Mixed levels are unified; if every
 /// nonblank selected line already has the requested level, heading markers are

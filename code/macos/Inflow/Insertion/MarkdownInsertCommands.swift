@@ -5,15 +5,18 @@ final class MarkdownInsertCommandActions {
     let canInsert: Bool
     let insertLink: () -> Void
     let insertTable: () -> Void
+    let insertHorizontalRule: () -> Void
 
     init(
         canInsert: Bool,
         insertLink: @escaping () -> Void,
-        insertTable: @escaping () -> Void
+        insertTable: @escaping () -> Void,
+        insertHorizontalRule: @escaping () -> Void
     ) {
         self.canInsert = canInsert
         self.insertLink = insertLink
         self.insertTable = insertTable
+        self.insertHorizontalRule = insertHorizontalRule
     }
 }
 
@@ -41,6 +44,11 @@ struct MarkdownInsertCommands: Commands {
 
             Button("表格") {
                 actions?.insertTable()
+            }
+            .disabled(actions?.canInsert != true)
+
+            Button("分隔线") {
+                actions?.insertHorizontalRule()
             }
             .disabled(actions?.canInsert != true)
         }

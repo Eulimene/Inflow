@@ -104,6 +104,27 @@ final class MarkdownInsertionTests: XCTestCase {
         }
     }
 
+    func testHorizontalRulePlanPreservesSelectionAndCreatesRealRule() throws {
+        let empty = try MarkdownFormatter.horizontalRulePlan(
+            source: "",
+            selectedUTF16Range: NSRange(location: 0, length: 0)
+        )
+        XCTAssertEqual(empty.resultingSource, "---\n\n")
+        XCTAssertEqual(empty.selectionUTF8Range, 5..<5)
+        XCTAssertTrue(try MarkdownRenderer.htmlFragment(for: empty.resultingSource).contains(
+            "<hr />"
+        ))
+
+        let source = "before 文字👩‍💻 after"
+        let selection = (source as NSString).range(of: "文字👩‍💻")
+        let plan = try MarkdownFormatter.horizontalRulePlan(
+            source: source,
+            selectedUTF16Range: selection
+        )
+        XCTAssertEqual(plan.resultingSource, "before 文字👩‍💻\n\n---\n\n after")
+        XCTAssertTrue(plan.resultingSource.hasPrefix("before 文字👩‍💻"))
+    }
+
     @MainActor
     func testInsertionPlansApplyAsOneUndoUnit() throws {
         let source = "Read docs"
@@ -135,6 +156,19 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertEqual(session.textView.string, "Header")
         session.textView.undoManager?.redo()
         XCTAssertTrue(session.textView.string.hasPrefix("| Header | 标题 2 |"))
+
+        session.textView.string = "Before"
+        session.textView.setSelectedRange(NSRange(location: 6, length: 0))
+        let horizontalRule = try MarkdownFormatter.horizontalRulePlan(
+            source: session.textView.string,
+            selectedUTF16Range: session.textView.selectedRange()
+        )
+        XCTAssertTrue(session.applyMarkdownFormat(horizontalRule, actionName: "插入分隔线"))
+        XCTAssertEqual(session.textView.string, "Before\n\n---\n\n")
+        session.textView.undoManager?.undo()
+        XCTAssertEqual(session.textView.string, "Before")
+        session.textView.undoManager?.redo()
+        XCTAssertEqual(session.textView.string, "Before\n\n---\n\n")
     }
 
     @MainActor
@@ -142,20 +176,25 @@ final class MarkdownInsertionTests: XCTestCase {
         var firstCount = 0
         var secondCount = 0
         var firstTableCount = 0
+        var firstRuleCount = 0
         let first = MarkdownInsertCommandActions(
             canInsert: true,
             insertLink: { firstCount += 1 },
-            insertTable: { firstTableCount += 1 }
+            insertTable: { firstTableCount += 1 },
+            insertHorizontalRule: { firstRuleCount += 1 }
         )
         let second = MarkdownInsertCommandActions(
             canInsert: false,
             insertLink: { secondCount += 1 },
-            insertTable: { secondCount += 1 }
+            insertTable: { secondCount += 1 },
+            insertHorizontalRule: { secondCount += 1 }
         )
         first.insertLink()
         first.insertTable()
+        first.insertHorizontalRule()
         XCTAssertEqual(firstCount, 1)
         XCTAssertEqual(firstTableCount, 1)
+        XCTAssertEqual(firstRuleCount, 1)
         XCTAssertEqual(secondCount, 0)
         XCTAssertFalse(second.canInsert)
 
@@ -175,6 +214,12 @@ final class MarkdownInsertionTests: XCTestCase {
         }
         XCTAssertEqual(tableItems.count, 1)
         XCTAssertEqual(tableItems.first?.keyEquivalent, "")
+
+        let horizontalRuleItems = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu)).filter {
+            $0.title == "分隔线"
+        }
+        XCTAssertEqual(horizontalRuleItems.count, 1)
+        XCTAssertEqual(horizontalRuleItems.first?.keyEquivalent, "")
     }
 
     @MainActor
