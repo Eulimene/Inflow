@@ -173,13 +173,20 @@ final class DocumentRecoveryTests: XCTestCase {
         )
         coordinator.update(record)
 
-        try await Task.sleep(nanoseconds: 60_000_000)
         let store = DocumentRecoveryStore(rootURL: fixture.recoveryRoot)
-        let protected = try await store.load()
+        var protected = try await store.load()
+        for _ in 0..<100 where protected.records != [record] {
+            try await Task.sleep(for: .milliseconds(10))
+            protected = try await store.load()
+        }
         XCTAssertEqual(protected.records, [record])
 
         coordinator.close(record.id)
-        let afterClose = try await store.load()
+        var afterClose = try await store.load()
+        for _ in 0..<100 where !afterClose.records.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+            afterClose = try await store.load()
+        }
         XCTAssertTrue(afterClose.records.isEmpty)
     }
 

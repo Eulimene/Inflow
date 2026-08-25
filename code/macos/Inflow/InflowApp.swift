@@ -48,6 +48,7 @@ struct InflowApp: App {
         .commands {
             DocumentSaveCommands()
             EditorViewModeCommands()
+            PreviewZoomCommands()
             OutlineCommands()
             WritingModeCommands()
             DocumentFindCommands()

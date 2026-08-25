@@ -113,6 +113,7 @@ final class WritingModeTests: XCTestCase {
         XCTAssertTrue(firstFocus)
         XCTAssertTrue(firstTypewriter)
         XCTAssertFalse(secondFocus)
+        XCTAssertFalse(second.focusModeBinding.wrappedValue)
 
         let readOnly = WritingModeCommandActions(
             isFocusModeEnabled: true,

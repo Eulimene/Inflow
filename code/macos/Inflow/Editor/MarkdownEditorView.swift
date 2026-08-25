@@ -250,6 +250,7 @@ struct MarkdownEditorView: View {
         .background(Color(nsColor: .textBackgroundColor))
         .focusedValue(\.outlineVisibility, $isOutlineVisible)
         .focusedSceneValue(\.editorViewModeActions, editorViewModeCommandActions)
+        .focusedSceneValue(\.previewZoomActions, previewZoomCommandActions)
         .focusedSceneValue(\.writingModeActions, writingModeCommandActions)
         .focusedSceneValue(\.documentFindActions, findCommandActions)
         .focusedSceneValue(\.htmlExportActions, htmlExportCommandActions)
@@ -733,6 +734,12 @@ struct MarkdownEditorView: View {
                 isTypewriterModeEnabled = isEnabled
             }
         )
+    }
+
+    private var previewZoomCommandActions: PreviewZoomCommandActions {
+        PreviewZoomCommandActions(zoom: preferences.previewZoom) { zoom in
+            preferences.previewZoom = zoom
+        }
     }
 
     private func applyWritingModes() {
