@@ -122,6 +122,75 @@ enum ImageAssetCollisionResolution: Sendable, Equatable {
     case incrementName
 }
 
+enum ExistingImagePlacement: Sendable, Equatable {
+    case copyToAssets
+    case keepOriginal
+}
+
+struct RetainedImageReference: Sendable, Equatable {
+    let markdownDestination: String
+    let isRelative: Bool
+}
+
+enum RetainedImageReferencePlanner {
+    static func plan(
+        sourceURL: URL,
+        documentURL: URL,
+        sameVolume override: Bool? = nil
+    ) throws -> RetainedImageReference {
+        let source = sourceURL.standardizedFileURL
+        let documentDirectory = documentURL.deletingLastPathComponent().standardizedFileURL
+        let sameVolume = try override ?? urlsShareVolume(source, documentDirectory)
+        if sameVolume {
+            let sourceComponents = source.pathComponents
+            let directoryComponents = documentDirectory.pathComponents
+            var sharedCount = 0
+            while sharedCount < sourceComponents.count,
+                  sharedCount < directoryComponents.count,
+                  sourceComponents[sharedCount] == directoryComponents[sharedCount]
+            {
+                sharedCount += 1
+            }
+            guard sharedCount > 0 else {
+                throw ImageAssetImportError.copyFailed
+            }
+            let parentComponents = Array(
+                repeating: "..",
+                count: directoryComponents.count - sharedCount
+            )
+            let fileComponents = sourceComponents[sharedCount...].map(encodedPathComponent)
+            let relative = (parentComponents + fileComponents).joined(separator: "/")
+            guard !relative.isEmpty else {
+                throw ImageAssetImportError.invalidFilename
+            }
+            return RetainedImageReference(markdownDestination: relative, isRelative: true)
+        }
+
+        return RetainedImageReference(
+            markdownDestination: source.absoluteString,
+            isRelative: false
+        )
+    }
+
+    private static func urlsShareVolume(_ lhs: URL, _ rhs: URL) throws -> Bool {
+        let keys: Set<URLResourceKey> = [.volumeIdentifierKey]
+        let lhsValue = try lhs.resourceValues(forKeys: keys).volumeIdentifier
+        let rhsValue = try rhs.resourceValues(forKeys: keys).volumeIdentifier
+        guard let lhsValue = lhsValue as? AnyHashable,
+              let rhsValue = rhsValue as? AnyHashable
+        else {
+            return false
+        }
+        return lhsValue == rhsValue
+    }
+
+    private static func encodedPathComponent(_ component: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/?#%")
+        return component.addingPercentEncoding(withAllowedCharacters: allowed) ?? component
+    }
+}
+
 struct ImageAssetDestinationSnapshot: Equatable, Sendable {
     private enum State: Equatable, Sendable {
         case missing
@@ -297,6 +366,17 @@ actor ImageAssetWorker {
         return try LocalImageValidator.load(at: url)
     }
 
+    func retainedReference(sourceURL: URL, documentURL: URL) throws -> RetainedImageReference {
+        let accessed = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessed { sourceURL.stopAccessingSecurityScopedResource() }
+        }
+        return try RetainedImageReferencePlanner.plan(
+            sourceURL: sourceURL,
+            documentURL: documentURL
+        )
+    }
+
     func destinationSnapshot(
         documentDirectory: URL,
         originalFilename: String
@@ -426,21 +506,25 @@ actor ImageAssetWorker {
 
 @MainActor
 final class ImageAssetDirectoryAccess: ObservableObject {
-    private var authorizedURL: URL?
-    private var isSecurityScopeActive = false
+    private struct Access {
+        let url: URL
+        let isSecurityScopeActive: Bool
+    }
+
+    private var accesses: [String: Access] = [:]
 
     func authorize(_ url: URL) {
-        if authorizedURL?.standardizedFileURL == url.standardizedFileURL { return }
-        if let authorizedURL, isSecurityScopeActive {
-            authorizedURL.stopAccessingSecurityScopedResource()
-        }
-        isSecurityScopeActive = url.startAccessingSecurityScopedResource()
-        authorizedURL = url
+        let key = url.standardizedFileURL.path
+        guard accesses[key] == nil else { return }
+        accesses[key] = Access(
+            url: url,
+            isSecurityScopeActive: url.startAccessingSecurityScopedResource()
+        )
     }
 
     deinit {
-        if isSecurityScopeActive {
-            authorizedURL?.stopAccessingSecurityScopedResource()
+        for access in accesses.values where access.isSecurityScopeActive {
+            access.url.stopAccessingSecurityScopedResource()
         }
     }
 }
@@ -456,6 +540,40 @@ enum ImageAssetPicker {
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
         return await run(panel, attachedTo: window) == .OK ? panel.url : nil
+    }
+
+    static func choosePlacement(
+        filename: String,
+        attachedTo window: NSWindow?
+    ) async -> ExistingImagePlacement? {
+        let alert = NSAlert()
+        alert.messageText = "如何引用这张图片？"
+        alert.informativeText = "复制会把 \(filename) 放入文档同级 assets；保留原位置不会复制图片，但移动文档或原图后引用可能失效。"
+        alert.addButton(withTitle: "复制到 assets")
+        alert.addButton(withTitle: "保留原位置")
+        alert.addButton(withTitle: "取消")
+        let response = await run(alert, attachedTo: window)
+        switch response {
+        case .alertFirstButtonReturn:
+            return .copyToAssets
+        case .alertSecondButtonReturn:
+            return .keepOriginal
+        default:
+            return nil
+        }
+    }
+
+    static func confirmAbsoluteReference(
+        filename: String,
+        attachedTo window: NSWindow?
+    ) async -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "这张图片无法使用稳定的相对路径"
+        alert.informativeText = "继续会在 Markdown 中写入 \(filename) 的绝对本地地址。移动或分享文档后引用通常会失效，并可能暴露本机文件夹信息。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "保留绝对引用")
+        alert.addButton(withTitle: "取消")
+        return await run(alert, attachedTo: window) == .alertFirstButtonReturn
     }
 
     static func authorizeDocumentDirectory(

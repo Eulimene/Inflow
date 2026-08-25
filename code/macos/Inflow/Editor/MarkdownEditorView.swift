@@ -459,6 +459,47 @@ struct MarkdownEditorView: View {
 
             do {
                 let image = try await worker.loadSource(at: sourceURL)
+                guard let placement = await ImageAssetPicker.choosePlacement(
+                    filename: sourceURL.lastPathComponent,
+                    attachedTo: window
+                ) else {
+                    return
+                }
+                let alternative = sourceURL.deletingPathExtension().lastPathComponent
+
+                if placement == .keepOriginal {
+                    let reference = try await worker.retainedReference(
+                        sourceURL: sourceURL,
+                        documentURL: documentURL
+                    )
+                    if !reference.isRelative {
+                        guard await ImageAssetPicker.confirmAbsoluteReference(
+                            filename: sourceURL.lastPathComponent,
+                            attachedTo: window
+                        ) else {
+                            return
+                        }
+                    }
+                    let plan = try MarkdownFormatter.imagePlan(
+                        source: sourceSnapshot,
+                        selectedUTF16Range: selectedRange,
+                        destination: reference.markdownDestination,
+                        defaultAlternative: alternative.isEmpty ? "图片描述" : alternative
+                    )
+                    viewMode = viewMode.sourceVisible
+                    guard sourceEditorSession.applyMarkdownFormat(
+                        plan,
+                        actionName: "插入图片"
+                    ) else {
+                        markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未引用图片。"
+                        return
+                    }
+                    imageDirectoryAccess.authorize(sourceURL)
+                    await Task.yield()
+                    _ = sourceEditorSession.focusEditor()
+                    return
+                }
+
                 guard let authorizedDirectory = try await ImageAssetPicker.authorizeDocumentDirectory(
                     documentDirectory,
                     attachedTo: window
@@ -493,7 +534,6 @@ struct MarkdownEditorView: View {
                     expectedDestination: destinationSnapshot
                 )
                 do {
-                    let alternative = sourceURL.deletingPathExtension().lastPathComponent
                     let plan = try MarkdownFormatter.imagePlan(
                         source: sourceSnapshot,
                         selectedUTF16Range: selectedRange,

@@ -248,6 +248,76 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: outsideDirectory.path).isEmpty)
     }
 
+    func testRetainedImagePrefersEncodedRelativeReferenceAndFallsBackToFileURL() throws {
+        let documentURL = URL(fileURLWithPath: "/Users/writer/Documents/note.md")
+        let sourceURL = URL(fileURLWithPath: "/Users/writer/Media/图片 #1.png")
+        let relative = try RetainedImageReferencePlanner.plan(
+            sourceURL: sourceURL,
+            documentURL: documentURL,
+            sameVolume: true
+        )
+        XCTAssertEqual(relative.markdownDestination, "../Media/%E5%9B%BE%E7%89%87%20%231.png")
+        XCTAssertTrue(relative.isRelative)
+
+        let absolute = try RetainedImageReferencePlanner.plan(
+            sourceURL: sourceURL,
+            documentURL: documentURL,
+            sameVolume: false
+        )
+        XCTAssertFalse(absolute.isRelative)
+        XCTAssertTrue(absolute.markdownDestination.hasPrefix("file:///"))
+        XCTAssertFalse(absolute.markdownDestination.contains(" "))
+        XCTAssertTrue(absolute.markdownDestination.contains("%23"))
+
+        let plan = try MarkdownFormatter.imagePlan(
+            source: "",
+            selectedUTF16Range: NSRange(location: 0, length: 0),
+            destination: absolute.markdownDestination,
+            defaultAlternative: "图片 #1"
+        )
+        XCTAssertEqual(
+            plan.resultingSource,
+            "![图片 #1](<\(absolute.markdownDestination)>)"
+        )
+    }
+
+    func testRetainedImageRemainsUnmodifiedAndRendersFromRelativeReference() async throws {
+        let root = try temporaryImageDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceURL = root.appendingPathComponent("outside photo.png")
+        let documentDirectory = root.appendingPathComponent("document", isDirectory: true)
+        let documentURL = documentDirectory.appendingPathComponent("note.md")
+        try FileManager.default.createDirectory(at: documentDirectory, withIntermediateDirectories: true)
+        let originalData = try testPNGData()
+        try originalData.write(to: sourceURL)
+
+        let worker = ImageAssetWorker()
+        _ = try await worker.loadSource(at: sourceURL)
+        let reference = try await worker.retainedReference(
+            sourceURL: sourceURL,
+            documentURL: documentURL
+        )
+        XCTAssertEqual(reference.markdownDestination, "../outside%20photo.png")
+        XCTAssertTrue(reference.isRelative)
+        let plan = try MarkdownFormatter.imagePlan(
+            source: "",
+            selectedUTF16Range: NSRange(location: 0, length: 0),
+            destination: reference.markdownDestination,
+            defaultAlternative: "outside photo"
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: documentDirectory.appendingPathComponent("assets").path
+        ))
+        XCTAssertEqual(try Data(contentsOf: sourceURL), originalData)
+        let html = MarkdownRenderer.htmlDocument(
+            for: plan.resultingSource,
+            documentDirectory: documentDirectory
+        )
+        XCTAssertTrue(html.contains("class=\"inflow-local-image\""))
+        XCTAssertTrue(html.contains("src=\"data:image/png;base64,"))
+    }
+
     @MainActor
     func testImageInsertionUndoAndRedoOwnBothMarkdownAndCreatedResource() async throws {
         let root = try temporaryImageDirectory()
