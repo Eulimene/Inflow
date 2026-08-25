@@ -38,6 +38,7 @@
 		A1000000000000000000001D /* MarkdownInsertionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000022 /* MarkdownInsertionTests.swift */; };
 		A1000000000000000000001E /* LocalImageResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000023 /* LocalImageResolver.swift */; };
 		A1000000000000000000001F /* ImageAssetImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000024 /* ImageAssetImporter.swift */; };
+		A10000000000000000000020 /* PDFExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000025 /* PDFExporter.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -87,6 +88,7 @@
 		A20000000000000000000022 /* MarkdownInsertionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownInsertionTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000023 /* LocalImageResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preview/LocalImageResolver.swift; sourceTree = "<group>"; };
 		A20000000000000000000024 /* ImageAssetImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Insertion/ImageAssetImporter.swift; sourceTree = "<group>"; };
+		A20000000000000000000025 /* PDFExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Export/PDFExporter.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -126,6 +128,7 @@
 				A20000000000000000000018 /* EditorViewModeCommands.swift */,
 				A2000000000000000000001A /* HTMLExporter.swift */,
 				A2000000000000000000001B /* HTMLExportCommands.swift */,
+				A20000000000000000000025 /* PDFExporter.swift */,
 				A2000000000000000000001D /* MarkdownFormatter.swift */,
 				A2000000000000000000001E /* MarkdownFormatCommands.swift */,
 				A20000000000000000000020 /* MarkdownInsertCommands.swift */,
@@ -332,6 +335,7 @@
 				A1000000000000000000001B /* MarkdownInsertCommands.swift in Sources */,
 				A1000000000000000000001C /* MarkdownLinkInsertionView.swift in Sources */,
 				A1000000000000000000001F /* ImageAssetImporter.swift in Sources */,
+				A10000000000000000000020 /* PDFExporter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

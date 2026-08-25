@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import PDFKit
 import XCTest
 @testable import Inflow
 
@@ -84,6 +85,47 @@ final class HTMLExporterTests: XCTestCase {
             snapshot: HTMLExportSnapshot(markdown: "```html\nclass=\"image-warning\"\n```")
         )
         XCTAssertNotNil(String(data: data, encoding: .utf8))
+    }
+
+    @MainActor
+    func testPDFExportUsesA4PortraitTwentyMillimeterMarginsAndLatestSnapshot() async throws {
+        XCTAssertEqual(PDFExporter.margin * 25.4 / 72.0, 20, accuracy: 0.01)
+        let html = try HTMLExporter.generate(
+            snapshot: HTMLExportSnapshot(
+                markdown: "# PDF 快照\n\n最新内容 **Bold**\n\n$x_1^2$"
+            )
+        )
+        let data = try await PDFExporter.generate(fromSelfContainedHTML: html)
+        let document = try XCTUnwrap(PDFDocument(data: data))
+        XCTAssertGreaterThan(document.pageCount, 0)
+        let page = try XCTUnwrap(document.page(at: 0))
+        let mediaBox = page.bounds(for: .mediaBox)
+        XCTAssertEqual(mediaBox.width, PDFExporter.paperSize.width, accuracy: 1)
+        XCTAssertEqual(mediaBox.height, PDFExporter.paperSize.height, accuracy: 1)
+        XCTAssertTrue(document.string?.contains("最新内容") == true)
+        let selection = try XCTUnwrap(document.findString("最新内容").first)
+        let textBounds = selection.bounds(for: page)
+        XCTAssertGreaterThanOrEqual(textBounds.minX, PDFExporter.margin - 1)
+        XCTAssertLessThanOrEqual(textBounds.maxX, PDFExporter.paperSize.width - PDFExporter.margin + 1)
+        XCTAssertGreaterThanOrEqual(textBounds.minY, PDFExporter.margin - 1)
+        XCTAssertLessThanOrEqual(textBounds.maxY, PDFExporter.paperSize.height - PDFExporter.margin + 1)
+        XCTAssertFalse(String(data: data, encoding: .utf8)?.contains("file:") == true)
+    }
+
+    @MainActor
+    func testLongPDFPaginatesWithoutChangingPaperSize() async throws {
+        let markdown = (1...180).map { "## Section \($0)\n\nParagraph \($0) with content." }
+            .joined(separator: "\n\n")
+        let html = try HTMLExporter.generate(snapshot: HTMLExportSnapshot(markdown: markdown))
+        let data = try await PDFExporter.generate(fromSelfContainedHTML: html)
+        let document = try XCTUnwrap(PDFDocument(data: data))
+        XCTAssertGreaterThan(document.pageCount, 1)
+        for index in 0..<document.pageCount {
+            let bounds = try XCTUnwrap(document.page(at: index)).bounds(for: .mediaBox)
+            XCTAssertEqual(bounds.width, PDFExporter.paperSize.width, accuracy: 1)
+            XCTAssertEqual(bounds.height, PDFExporter.paperSize.height, accuracy: 1)
+        }
+        XCTAssertTrue(document.string?.contains("Section 180") == true)
     }
 
     func testExportRendersFormulaAsSelfContainedMathML() throws {
@@ -243,6 +285,7 @@ final class HTMLExporterTests: XCTestCase {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
         let items = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu))
         XCTAssertEqual(items.filter { $0.title == "导出 HTML…" }.count, 1)
+        XCTAssertEqual(items.filter { $0.title == "导出 PDF…" }.count, 1)
     }
 
     private func withTemporaryDirectory(_ body: (URL) throws -> Void) throws {

@@ -3,11 +3,15 @@ import SwiftUI
 private enum HTMLExportNotice: Identifiable {
     case success(URL)
     case failure(String)
+    case pdfSuccess(URL)
+    case pdfFailure(String)
 
     var id: String {
         switch self {
         case let .success(url): "success:\(url.path)"
         case let .failure(message): "failure:\(message)"
+        case let .pdfSuccess(url): "pdf-success:\(url.path)"
+        case let .pdfFailure(message): "pdf-failure:\(message)"
         }
     }
 
@@ -25,6 +29,23 @@ private enum HTMLExportNotice: Identifiable {
         case let .failure(message):
             Alert(
                 title: Text("HTML 导出未完成"),
+                message: Text(message),
+                dismissButton: .default(Text("好"))
+            )
+        case let .pdfSuccess(url):
+            Alert(
+                title: Text("PDF 导出完成"),
+                message: Text("已导出到：\n\(url.path)"),
+                primaryButton: .default(Text("在 Finder 中显示")) {
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                },
+                secondaryButton: .default(Text("打开 PDF")) {
+                    NSWorkspace.shared.open(url)
+                }
+            )
+        case let .pdfFailure(message):
+            Alert(
+                title: Text("PDF 导出未完成"),
                 message: Text(message),
                 dismissButton: .default(Text("好"))
             )
@@ -109,6 +130,7 @@ struct MarkdownEditorView: View {
     @State private var pendingReplacementRange: Range<Int>?
     @State private var pendingFindNavigation: [Int] = []
     @State private var isExportingHTML = false
+    @State private var isExportingPDF = false
     @State private var htmlExportWorker = HTMLExportWorker()
     @State private var htmlExportNotice: HTMLExportNotice?
     @State private var markdownFormatErrorMessage: String?
@@ -410,8 +432,10 @@ struct MarkdownEditorView: View {
 
     private var htmlExportCommandActions: HTMLExportCommandActions {
         HTMLExportCommandActions(
-            isExporting: isExportingHTML,
-            start: startHTMLExport
+            isExportingHTML: isExportingHTML,
+            isExportingPDF: isExportingPDF,
+            startHTML: startHTMLExport,
+            startPDF: startPDFExport
         )
     }
 
@@ -821,7 +845,7 @@ struct MarkdownEditorView: View {
     }
 
     private func startHTMLExport() {
-        guard !isExportingHTML else { return }
+        guard !isExportingHTML, !isExportingPDF else { return }
         let snapshot = HTMLExportSnapshot(
             markdown: document.text,
             documentDirectory: fileURL?.deletingLastPathComponent()
@@ -877,6 +901,67 @@ struct MarkdownEditorView: View {
                 htmlExportNotice = .success(targetURL)
             case let .failure(error):
                 htmlExportNotice = .failure(error.localizedDescription)
+            }
+        }
+    }
+
+    private func startPDFExport() {
+        guard !isExportingHTML, !isExportingPDF else { return }
+        let snapshot = HTMLExportSnapshot(
+            markdown: document.text,
+            documentDirectory: fileURL?.deletingLastPathComponent()
+        )
+        let basename = fileURL?.deletingPathExtension().lastPathComponent ?? "未命名文档"
+        let worker = htmlExportWorker
+        isExportingPDF = true
+
+        Task { @MainActor in
+            defer { isExportingPDF = false }
+            let selfContainedHTML: Data
+            switch await worker.generate(snapshot) {
+            case let .success(data):
+                selfContainedHTML = data
+            case let .failure(error):
+                htmlExportNotice = .pdfFailure(error.localizedDescription)
+                return
+            }
+
+            let pdf: Data
+            do {
+                pdf = try await PDFExporter.generate(fromSelfContainedHTML: selfContainedHTML)
+            } catch {
+                htmlExportNotice = .pdfFailure(
+                    (error as? LocalizedError)?.errorDescription
+                        ?? PDFExportError.renderingFailed.localizedDescription
+                )
+                return
+            }
+            guard let targetURL = await PDFExportPanel.chooseDestination(
+                suggestedFilename: "\(basename).pdf"
+            ) else {
+                return
+            }
+
+            let accessed = targetURL.startAccessingSecurityScopedResource()
+            defer {
+                if accessed { targetURL.stopAccessingSecurityScopedResource() }
+            }
+            let targetSnapshot: HTMLExportTargetSnapshot
+            do {
+                targetSnapshot = try HTMLExportTargetSnapshot.capture(targetURL)
+            } catch {
+                htmlExportNotice = .pdfFailure(
+                    (error as? LocalizedError)?.errorDescription
+                        ?? HTMLExportTargetError.cannotInspect.localizedDescription
+                )
+                return
+            }
+
+            switch await worker.write(pdf, to: targetURL, expectedTarget: targetSnapshot) {
+            case .success:
+                htmlExportNotice = .pdfSuccess(targetURL)
+            case let .failure(error):
+                htmlExportNotice = .pdfFailure(error.localizedDescription)
             }
         }
     }

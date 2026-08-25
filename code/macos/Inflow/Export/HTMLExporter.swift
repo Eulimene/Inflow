@@ -23,11 +23,11 @@ enum HTMLExportIssue: UInt64, CaseIterable, Sendable {
     var description: String {
         switch self {
         case .image:
-            "图片（当前版本尚未将资源内联到 HTML）"
+            "图片（核心未能产生可由当前平台安全解析的资源）"
         case .formula:
-            "数学公式（当前版本尚未支持导出渲染）"
+            "数学公式（核心未能产生安全的自包含渲染结果）"
         case .mermaid:
-            "Mermaid 图表（当前版本尚未支持导出渲染）"
+            "Mermaid 图表（核心未能产生安全的自包含渲染结果）"
         case .localLink:
             "相对或本地文件链接（单文件 HTML 无法安全保留）"
         case .unsafeLink:
@@ -49,13 +49,13 @@ enum HTMLExportError: Error, LocalizedError, Sendable {
             let details = issues.map { "• \($0.description)" }.joined(separator: "\n")
             return "导出前检查未通过：\n\(details)\n\n未创建文件。请先移除或改写这些内容后重试。"
         case .outputTooLarge:
-            return "HTML 交付物超过 100 MiB 上限，已在写入前停止。"
+            return "自包含交付快照超过 100 MiB 上限，已在写入前停止。"
         case .invalidUTF8:
             return "导出快照不是有效的 UTF-8 文本，未创建文件。"
         case .unavailableResource:
             return LocalImageExportError.unavailableResource.localizedDescription
         case .coreFailure:
-            return "HTML 导出暂时失败，未创建文件。当前 Markdown 不受影响。"
+            return "交付预检暂时失败，未创建文件。当前 Markdown 不受影响。"
         }
     }
 }
@@ -126,7 +126,7 @@ enum HTMLExportTargetError: Error, Equatable, LocalizedError, Sendable {
         case .cannotInspect:
             "无法确认导出目标的当前状态，未写入文件。"
         case .cannotWrite:
-            "无法完成原子写入，未留下残缺的 HTML 文件。"
+            "无法完成原子写入，未留下残缺的交付文件。"
         }
     }
 }
