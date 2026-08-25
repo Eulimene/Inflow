@@ -2,6 +2,8 @@
 
 use pulldown_cmark::{Event, Options, Parser, html};
 
+use crate::math;
+
 pub fn html_fragment(markdown: &str) -> String {
     let events = Parser::new_ext(markdown, options()).map(sanitize_event);
     let mut output = String::with_capacity(markdown.len());
@@ -13,6 +15,7 @@ pub(crate) fn options() -> Options {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_FOOTNOTES);
+    options.insert(Options::ENABLE_MATH);
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TASKLISTS);
     options
@@ -21,6 +24,8 @@ pub(crate) fn options() -> Options {
 fn sanitize_event(event: Event<'_>) -> Event<'_> {
     match event {
         Event::Html(raw_html) | Event::InlineHtml(raw_html) => Event::Text(raw_html),
+        Event::InlineMath(source) => Event::InlineHtml(math::mathml(&source, false).into()),
+        Event::DisplayMath(source) => Event::InlineHtml(math::mathml(&source, true).into()),
         other => other,
     }
 }
@@ -62,5 +67,17 @@ mod tests {
         assert!(html.contains("<pre><code class=\"language-html\">"));
         assert!(html.contains("&lt;script&gt;bad()&lt;/script&gt;"));
         assert!(!html.contains("<script>bad()"));
+    }
+
+    #[test]
+    fn renders_inline_and_display_math_without_scripts() {
+        let html = html_fragment("Inline $x_1^2$\n\n$$\\frac{a}{b}$$\n");
+
+        assert!(html.contains("<math xmlns=\"http://www.w3.org/1998/Math/MathML\""));
+        assert!(html.contains("display=\"inline\""));
+        assert!(html.contains("display=\"block\""));
+        assert!(html.contains("<msubsup>") || html.contains("<msup>"));
+        assert!(html.contains("<mfrac>"));
+        assert!(!html.contains("<script"));
     }
 }

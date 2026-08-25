@@ -62,6 +62,13 @@ struct TableSpan {
 }
 
 #[derive(Debug)]
+struct MathSpan {
+    full: Range<usize>,
+    content: Range<usize>,
+    display: bool,
+}
+
+#[derive(Debug)]
 struct BlockUnit {
     source_range: Range<usize>,
     content_range: Range<usize>,
@@ -545,6 +552,72 @@ pub fn insert_footnote(
         replace_range,
         replacement,
         selection_range: placeholder_start..placeholder_end,
+    })
+}
+
+pub fn insert_math(
+    source: &str,
+    requested_selection: Range<usize>,
+) -> Result<MarkdownEdit, FormatError> {
+    if !is_valid_selection(source, &requested_selection) {
+        return Err(FormatError::InvalidSelection);
+    }
+    if math_spans(source)
+        .iter()
+        .any(|span| ranges_overlap(&requested_selection, &span.full))
+    {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    let selected = &source[requested_selection.clone()];
+    if selected.contains('$') {
+        return Err(FormatError::AmbiguousSelection);
+    }
+    let display = requested_selection.is_empty() || selected.contains('\n');
+    let content = if requested_selection.is_empty() {
+        "公式内容"
+    } else {
+        selected
+    };
+    let (replacement, content_start, full_start) = if display {
+        let prefix = if requested_selection.start > 0
+            && source.as_bytes()[requested_selection.start - 1] != b'\n'
+        {
+            "\n\n"
+        } else {
+            ""
+        };
+        let suffix = if requested_selection.end < source.len()
+            && source.as_bytes()[requested_selection.end] != b'\n'
+        {
+            "\n\n"
+        } else {
+            ""
+        };
+        let replacement = format!("{prefix}$$\n{content}\n$${suffix}");
+        let content_start = requested_selection.start + prefix.len() + 3;
+        (
+            replacement,
+            content_start,
+            requested_selection.start + prefix.len(),
+        )
+    } else {
+        let replacement = format!("${content}$");
+        let content_start = requested_selection.start + 1;
+        (replacement, content_start, requested_selection.start)
+    };
+    let content_range = content_start..content_start + content.len();
+    let candidate = replacing(source, requested_selection.clone(), &replacement);
+    if !math_spans(&candidate).iter().any(|span| {
+        span.full.start == full_start && span.content == content_range && span.display == display
+    }) {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    Ok(MarkdownEdit {
+        replace_range: requested_selection,
+        replacement,
+        selection_range: content_range,
     })
 }
 
@@ -1590,6 +1663,35 @@ fn footnote_parts(source: &str, identifier: &str) -> (Vec<Range<usize>>, Vec<Ran
     (references, definitions)
 }
 
+fn math_spans(source: &str) -> Vec<MathSpan> {
+    Parser::new_ext(source, render::options())
+        .into_offset_iter()
+        .filter_map(|(event, full)| {
+            let (delimiter_length, display) = match event {
+                Event::InlineMath(_) => (1, false),
+                Event::DisplayMath(_) => (2, true),
+                _ => return None,
+            };
+            let mut content_start = full.start + delimiter_length;
+            let mut content_end = full.end.checked_sub(delimiter_length)?;
+            if display && source.as_bytes().get(content_start) == Some(&b'\n') {
+                content_start += 1;
+            }
+            if display
+                && content_end > content_start
+                && source.as_bytes().get(content_end - 1) == Some(&b'\n')
+            {
+                content_end -= 1;
+            }
+            (content_start <= content_end).then_some(MathSpan {
+                full,
+                content: content_start..content_end,
+                display,
+            })
+        })
+        .collect()
+}
+
 fn consecutive_newlines_before(source: &str, position: usize) -> usize {
     source.as_bytes()[..position]
         .iter()
@@ -2259,6 +2361,51 @@ mod tests {
         );
         assert_eq!(
             insert_footnote("e\u{301}", 1..1),
+            Err(FormatError::InvalidSelection)
+        );
+    }
+
+    #[test]
+    fn math_wraps_single_line_and_inserts_editable_display_template() {
+        let source = "Euler e^{i\\pi}+1=0 end";
+        let start = "Euler ".len();
+        let end = source.find(" end").unwrap();
+        let inline = insert_math(source, start..end).unwrap();
+        assert_eq!(inline.replacement, "$e^{i\\pi}+1=0$");
+        assert_eq!(
+            &inline.replacement[1..inline.replacement.len() - 1],
+            &source[start..end]
+        );
+        let formatted = replacing(source, inline.replace_range, &inline.replacement);
+        assert!(render::html_fragment(&formatted).contains("<math"));
+
+        let display = insert_math("", 0..0).unwrap();
+        assert_eq!(display.replacement, "$$\n公式内容\n$$");
+        assert_eq!(&display.replacement[display.selection_range], "公式内容");
+        assert!(render::html_fragment(&display.replacement).contains("display=\"block\""));
+    }
+
+    #[test]
+    fn math_preserves_multiline_selection_and_rejects_ambiguous_input() {
+        let source = "before a+b\nc+d after";
+        let start = "before ".len();
+        let end = source.find(" after").unwrap();
+        let edit = insert_math(source, start..end).unwrap();
+        assert_eq!(edit.replacement, "\n\n$$\na+b\nc+d\n$$\n\n");
+        let formatted = replacing(source, edit.replace_range, &edit.replacement);
+        assert!(render::html_fragment(&formatted).contains("display=\"block\""));
+        assert_eq!(&formatted[edit.selection_range], "a+b\nc+d");
+
+        assert_eq!(
+            insert_math("already $x$", 9..10),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            insert_math("price $5", 0..8),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            insert_math("e\u{301}", 1..1),
             Err(FormatError::InvalidSelection)
         );
     }

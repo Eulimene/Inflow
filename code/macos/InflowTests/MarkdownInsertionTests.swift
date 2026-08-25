@@ -155,6 +155,35 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertTrue(unique.resultingSource.hasSuffix("[^note-2]: 脚注内容\n"))
     }
 
+    func testMathPlanCreatesInlineAndDisplayMathML() throws {
+        let source = "Euler e^{i\\pi}+1=0 end"
+        let inline = try MarkdownFormatter.mathPlan(
+            source: source,
+            selectedUTF16Range: (source as NSString).range(of: "e^{i\\pi}+1=0")
+        )
+        XCTAssertEqual(inline.resultingSource, "Euler $e^{i\\pi}+1=0$ end")
+        let inlineHTML = try MarkdownRenderer.htmlFragment(for: inline.resultingSource)
+        XCTAssertTrue(inlineHTML.contains("<math"))
+        XCTAssertTrue(inlineHTML.contains("display=\"inline\""))
+        XCTAssertTrue(inlineHTML.contains("<msup>"))
+
+        let display = try MarkdownFormatter.mathPlan(
+            source: "",
+            selectedUTF16Range: NSRange(location: 0, length: 0)
+        )
+        XCTAssertEqual(display.resultingSource, "$$\n公式内容\n$$")
+        let target = try XCTUnwrap(
+            MarkdownSourceRange.navigationTarget(
+                forUTF8Range: display.selectionUTF8Range,
+                in: display.resultingSource
+            )
+        )
+        XCTAssertEqual((display.resultingSource as NSString).substring(with: target.revealRange), "公式内容")
+        XCTAssertTrue(try MarkdownRenderer.htmlFragment(for: display.resultingSource).contains(
+            "display=\"block\""
+        ))
+    }
+
     @MainActor
     func testInsertionPlansApplyAsOneUndoUnit() throws {
         let source = "Read docs"
@@ -212,6 +241,19 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertEqual(session.textView.string, "Anchor")
         session.textView.undoManager?.redo()
         XCTAssertEqual(session.textView.string, "Anchor[^note-1]\n\n[^note-1]: 脚注内容\n")
+
+        session.textView.string = "x^2"
+        session.textView.setSelectedRange(NSRange(location: 0, length: 3))
+        let formula = try MarkdownFormatter.mathPlan(
+            source: session.textView.string,
+            selectedUTF16Range: session.textView.selectedRange()
+        )
+        XCTAssertTrue(session.applyMarkdownFormat(formula, actionName: "插入公式"))
+        XCTAssertEqual(session.textView.string, "$x^2$")
+        session.textView.undoManager?.undo()
+        XCTAssertEqual(session.textView.string, "x^2")
+        session.textView.undoManager?.redo()
+        XCTAssertEqual(session.textView.string, "$x^2$")
     }
 
     @MainActor
@@ -221,28 +263,33 @@ final class MarkdownInsertionTests: XCTestCase {
         var firstTableCount = 0
         var firstRuleCount = 0
         var firstFootnoteCount = 0
+        var firstFormulaCount = 0
         let first = MarkdownInsertCommandActions(
             canInsert: true,
             insertLink: { firstCount += 1 },
             insertTable: { firstTableCount += 1 },
             insertHorizontalRule: { firstRuleCount += 1 },
-            insertFootnote: { firstFootnoteCount += 1 }
+            insertFootnote: { firstFootnoteCount += 1 },
+            insertFormula: { firstFormulaCount += 1 }
         )
         let second = MarkdownInsertCommandActions(
             canInsert: false,
             insertLink: { secondCount += 1 },
             insertTable: { secondCount += 1 },
             insertHorizontalRule: { secondCount += 1 },
-            insertFootnote: { secondCount += 1 }
+            insertFootnote: { secondCount += 1 },
+            insertFormula: { secondCount += 1 }
         )
         first.insertLink()
         first.insertTable()
         first.insertHorizontalRule()
         first.insertFootnote()
+        first.insertFormula()
         XCTAssertEqual(firstCount, 1)
         XCTAssertEqual(firstTableCount, 1)
         XCTAssertEqual(firstRuleCount, 1)
         XCTAssertEqual(firstFootnoteCount, 1)
+        XCTAssertEqual(firstFormulaCount, 1)
         XCTAssertEqual(secondCount, 0)
         XCTAssertFalse(second.canInsert)
 
@@ -274,6 +321,12 @@ final class MarkdownInsertionTests: XCTestCase {
         }
         XCTAssertEqual(footnoteItems.count, 1)
         XCTAssertEqual(footnoteItems.first?.keyEquivalent, "")
+
+        let formulaItems = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu)).filter {
+            $0.title == "公式"
+        }
+        XCTAssertEqual(formulaItems.count, 1)
+        XCTAssertEqual(formulaItems.first?.keyEquivalent, "")
     }
 
     @MainActor

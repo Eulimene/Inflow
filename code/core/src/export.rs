@@ -1,10 +1,11 @@
 //! Self-contained HTML export for immutable Markdown snapshots.
 
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag};
 
 use crate::render;
 
 pub const ISSUE_IMAGE: u64 = 1 << 0;
+#[allow(dead_code)] // Reserved by the stable v1 C ABI for older core binaries.
 pub const ISSUE_FORMULA: u64 = 1 << 1;
 pub const ISSUE_MERMAID: u64 = 1 << 2;
 pub const ISSUE_LOCAL_LINK: u64 = 1 << 3;
@@ -37,11 +38,9 @@ fn html_document_with_limit(markdown: &str, maximum_bytes: usize) -> Result<Vec<
 }
 
 pub fn blocking_issues(markdown: &str) -> u64 {
-    let mut parser_options = render::options();
-    parser_options.insert(Options::ENABLE_MATH);
     let mut issues = 0;
 
-    for event in Parser::new_ext(markdown, parser_options) {
+    for event in Parser::new_ext(markdown, render::options()) {
         match event {
             Event::Start(Tag::Image { .. }) => issues |= ISSUE_IMAGE,
             Event::Start(Tag::Link { dest_url, .. }) => {
@@ -55,7 +54,6 @@ pub fn blocking_issues(markdown: &str) -> u64 {
             {
                 issues |= ISSUE_MERMAID;
             }
-            Event::InlineMath(_) | Event::DisplayMath(_) => issues |= ISSUE_FORMULA,
             _ => {}
         }
     }
@@ -108,6 +106,8 @@ const DOCUMENT_PREFIX: &str = r#"<!doctype html>
     th, td { border: 1px solid #d0d7de; padding: 7px 12px; }
     tr:nth-child(even) { background: #f6f8fa; }
     hr { height: 1px; border: 0; background: #d8dee4; margin: 2em 0; }
+    math { font-family: STIX Two Math, STIXGeneral, serif; }
+    math[display="block"] { display: block; max-width: 100%; overflow-x: auto; margin: 1.2em 0; text-align: center; }
     .task-list-item { list-style: none; } input[type="checkbox"] { margin: 0 .45em 0 -1.35em; }
     @media (prefers-color-scheme: dark) {
       body { color: #e6edf3; background: #0d1117; }
@@ -167,7 +167,6 @@ mod tests {
     fn reports_every_blocking_content_category() {
         let markdown = concat!(
             "![local](image.png)\n\n",
-            "$x + y$\n\n",
             "```mermaid\ngraph TD; A-->B\n```\n\n",
             "[local](../notes.md)\n\n",
             "[unsafe](javascript:alert(1))\n",
@@ -175,12 +174,26 @@ mod tests {
 
         assert_eq!(
             blocking_issues(markdown),
-            ISSUE_IMAGE | ISSUE_FORMULA | ISSUE_MERMAID | ISSUE_LOCAL_LINK | ISSUE_UNSAFE_LINK
+            ISSUE_IMAGE | ISSUE_MERMAID | ISSUE_LOCAL_LINK | ISSUE_UNSAFE_LINK
         );
         assert_eq!(
             html_document(markdown),
             Err(ExportError::UnsupportedContent(blocking_issues(markdown)))
         );
+    }
+
+    #[test]
+    fn exports_inline_and_display_formula_as_self_contained_mathml() {
+        let html = String::from_utf8(
+            html_document("Inline $x_1^2$\n\n$$\\frac{a}{b}$$\n").expect("formula is supported"),
+        )
+        .expect("export is UTF-8");
+
+        assert!(html.contains("<math xmlns=\"http://www.w3.org/1998/Math/MathML\""));
+        assert!(html.contains("<msubsup>"));
+        assert!(html.contains("<mfrac>"));
+        assert!(!html.contains("<script"));
+        assert!(!html.contains("https://"));
     }
 
     #[test]

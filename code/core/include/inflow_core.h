@@ -271,6 +271,20 @@ InflowMarkdownEditResult inflow_markdown_insert_footnote(
     uintptr_t selection_end
 );
 
+/// Plans a formula insertion. A non-empty single-line selection becomes an
+/// inline `$...$` formula; an empty or multiline selection becomes a `$$`
+/// display block whose delimiters occupy their own lines. Existing formula
+/// intersections and selected dollar delimiters are rejected without changing
+/// source. Selection and returned ranges use end-exclusive UTF-8 byte offsets
+/// aligned to complete extended graphemes. Returned replacement bytes must be
+/// released with inflow_owned_bytes_free.
+InflowMarkdownEditResult inflow_markdown_insert_math(
+    const uint8_t *utf8,
+    uintptr_t length,
+    uintptr_t selection_start,
+    uintptr_t selection_end
+);
+
 /// Plans a heading edit over complete source lines without modifying the
 /// source. `heading_level` must be 1...6. Mixed levels are unified; if every
 /// nonblank selected line already has the requested level, heading markers are

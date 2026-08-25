@@ -76,6 +76,8 @@ enum MarkdownRenderer {
             tr:nth-child(even) { background: #f6f8fa; }
             img { max-width: 100%; height: auto; }
             hr { height: 1px; border: 0; background: #d8dee4; margin: 2em 0; }
+            math { font-family: STIX Two Math, STIXGeneral, serif; }
+            math[display="block"] { display: block; max-width: 100%; overflow-x: auto; margin: 1.2em 0; text-align: center; }
             .task-list-item { list-style: none; } input[type="checkbox"] { margin: 0 .45em 0 -1.35em; }
             .preview-error { margin-top: 30vh; text-align: center; color: #9a6700; }
             @media (prefers-color-scheme: dark) {

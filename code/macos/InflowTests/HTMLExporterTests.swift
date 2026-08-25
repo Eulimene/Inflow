@@ -42,10 +42,22 @@ final class HTMLExporterTests: XCTestCase {
             }
             XCTAssertEqual(
                 Set(issues),
-                Set([.image, .formula, .mermaid, .localLink, .unsafeLink])
+                Set([.image, .mermaid, .localLink, .unsafeLink])
             )
             XCTAssertTrue(error.localizedDescription.contains("导出前检查未通过"))
         }
+    }
+
+    func testExportRendersFormulaAsSelfContainedMathML() throws {
+        let data = try HTMLExporter.generate(
+            snapshot: HTMLExportSnapshot(markdown: "Inline $x_1^2$\n\n$$\\frac{a}{b}$$\n")
+        )
+        let html = try XCTUnwrap(String(data: data, encoding: .utf8))
+
+        XCTAssertTrue(html.contains("<math xmlns=\"http://www.w3.org/1998/Math/MathML\""))
+        XCTAssertTrue(html.contains("<msubsup>"))
+        XCTAssertTrue(html.contains("<mfrac>"))
+        XCTAssertFalse(html.contains("<script"))
     }
 
     func testWriterCreatesNewFileWithoutLeavingTemporaryArtifacts() throws {

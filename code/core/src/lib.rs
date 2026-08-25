@@ -7,6 +7,7 @@ mod document;
 mod export;
 mod ffi;
 mod format;
+mod math;
 mod render;
 mod search;
 

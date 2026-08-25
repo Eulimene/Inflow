@@ -280,6 +280,7 @@
 				"$(PROJECT_DIR)/core/src/format.rs",
 				"$(PROJECT_DIR)/core/src/ffi.rs",
 				"$(PROJECT_DIR)/core/src/lib.rs",
+				"$(PROJECT_DIR)/core/src/math.rs",
 				"$(PROJECT_DIR)/core/src/render.rs",
 				"$(PROJECT_DIR)/core/src/search.rs",
 				"$(PROJECT_DIR)/rust-toolchain.toml",
