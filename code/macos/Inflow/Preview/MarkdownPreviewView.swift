@@ -30,7 +30,9 @@ struct MarkdownPreviewView: NSViewRepresentable {
 
         context.coordinator.lastHTML = html
         context.coordinator.lastBaseURL = baseURL
-        webView.loadHTMLString(html, baseURL: baseURL)
+        // All accepted local images have already been validated and converted
+        // to data URLs. Never give WebKit a filesystem origin or read scope.
+        webView.loadHTMLString(html, baseURL: nil)
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -57,7 +59,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
 
             let scheme = navigationAction.request.url?.scheme
             decisionHandler(
-                scheme == nil || scheme == "about" || scheme == "file" || scheme == "data"
+                scheme == nil || scheme == "about" || scheme == "data"
                     ? .allow
                     : .cancel
             )

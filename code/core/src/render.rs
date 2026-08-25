@@ -15,7 +15,26 @@ fn safe_events(markdown: &str) -> Vec<Event<'_>> {
     let mut parser = Parser::new_ext(markdown, options());
     let mut events = Vec::new();
     while let Some(event) = parser.next() {
-        if matches!(
+        if let Event::Start(Tag::Image { dest_url, .. }) = &event {
+            let destination = dest_url.to_string();
+            let mut alternative = String::new();
+            for image_event in parser.by_ref() {
+                match image_event {
+                    Event::End(TagEnd::Image) => break,
+                    Event::Text(text) | Event::Code(text) => alternative.push_str(&text),
+                    Event::SoftBreak | Event::HardBreak => alternative.push(' '),
+                    _ => {}
+                }
+            }
+            events.push(Event::InlineHtml(
+                format!(
+                    "<span class=\"inflow-image-slot\" data-inflow-target=\"{}\" data-inflow-alt=\"{}\"></span>",
+                    hex(destination.as_bytes()),
+                    hex(alternative.trim().as_bytes())
+                )
+                .into(),
+            ));
+        } else if matches!(
             &event,
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(language)))
                 if language
@@ -40,6 +59,16 @@ fn safe_events(markdown: &str) -> Vec<Event<'_>> {
         }
     }
     events
+}
+
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        output.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    output
 }
 
 pub(crate) fn options() -> Options {
@@ -126,5 +155,18 @@ mod tests {
         assert!(fallback.contains("无法呈现这个图表"));
         assert!(fallback.contains("pie"));
         assert!(fallback.contains("<p>Still readable</p>"));
+    }
+
+    #[test]
+    fn renders_images_as_inert_slots_for_the_platform_resolver() {
+        let html = html_fragment(
+            "Local ![封面](assets/cover.png) remote ![外部](https://example.com/a.jpg)",
+        );
+
+        assert_eq!(html.matches("class=\"inflow-image-slot\"").count(), 2);
+        assert!(html.contains("data-inflow-target=\"6173736574732f636f7665722e706e67\""));
+        assert!(html.contains("data-inflow-alt=\"e5b081e99da2\""));
+        assert!(!html.contains("<img"));
+        assert!(!html.contains("src=\"https://"));
     }
 }

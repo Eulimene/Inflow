@@ -184,7 +184,11 @@ struct MarkdownEditorView: View {
             }
         }
         .onAppear {
-            scheduleDerivedContent(for: document.text, delayNanoseconds: 0)
+            scheduleDerivedContent(
+                for: document.text,
+                documentDirectory: fileURL?.deletingLastPathComponent(),
+                delayNanoseconds: 0
+            )
             if !findSession.query.isEmpty {
                 scheduleFindSearch(
                     source: document.text,
@@ -199,7 +203,11 @@ struct MarkdownEditorView: View {
             selectedHeadingID = nil
             sourceSelectionRequest = nil
             analysisState = .updating(previous: analysisState.displayedAnalysis)
-            scheduleDerivedContent(for: markdown, delayNanoseconds: 120_000_000)
+            scheduleDerivedContent(
+                for: markdown,
+                documentDirectory: fileURL?.deletingLastPathComponent(),
+                delayNanoseconds: 120_000_000
+            )
             if findSession.isPresented || !findSession.query.isEmpty {
                 let replacementRange = pendingReplacementRange
                 pendingReplacementRange = nil
@@ -211,6 +219,13 @@ struct MarkdownEditorView: View {
                     delayNanoseconds: replacementRange == nil ? 80_000_000 : 0
                 )
             }
+        }
+        .onChange(of: fileURL) { _, newURL in
+            scheduleDerivedContent(
+                for: document.text,
+                documentDirectory: newURL?.deletingLastPathComponent(),
+                delayNanoseconds: 0
+            )
         }
         .onChange(of: Data(findSession.query.utf8)) { _, _ in
             findSession.clearNotice()
@@ -906,7 +921,11 @@ struct MarkdownEditorView: View {
         }
     }
 
-    private func scheduleDerivedContent(for markdown: String, delayNanoseconds: UInt64) {
+    private func scheduleDerivedContent(
+        for markdown: String,
+        documentDirectory: URL?,
+        delayNanoseconds: UInt64
+    ) {
         derivedContentTask?.cancel()
         derivedContentGeneration &+= 1
         let generation = derivedContentGeneration
@@ -917,7 +936,10 @@ struct MarkdownEditorView: View {
             }
             guard !Task.isCancelled else { return }
 
-            guard let content = await contentDeriver.derive(markdown: markdown) else { return }
+            guard let content = await contentDeriver.derive(
+                markdown: markdown,
+                documentDirectory: documentDirectory
+            ) else { return }
 
             guard !Task.isCancelled, generation == derivedContentGeneration else { return }
             previewHTML = content.html
@@ -1020,9 +1042,12 @@ private enum DocumentAnalysisOutcome: Sendable {
 }
 
 private actor DocumentContentDeriver {
-    func derive(markdown: String) -> DerivedDocumentContent? {
+    func derive(markdown: String, documentDirectory: URL?) -> DerivedDocumentContent? {
         guard !Task.isCancelled else { return nil }
-        let html = MarkdownRenderer.htmlDocument(for: markdown)
+        let html = MarkdownRenderer.htmlDocument(
+            for: markdown,
+            documentDirectory: documentDirectory
+        )
         guard !Task.isCancelled else { return nil }
 
         let analysis: DocumentAnalysisOutcome

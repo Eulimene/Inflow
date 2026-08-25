@@ -42,9 +42,15 @@ enum MarkdownRenderer {
         return html
     }
 
-    static func htmlDocument(for markdown: String) -> String {
+    static func htmlDocument(for markdown: String, documentDirectory: URL? = nil) -> String {
         do {
-            return document(containing: try htmlFragment(for: markdown))
+            let fragment = try htmlFragment(for: markdown)
+            return document(
+                containing: LocalImageResolver.resolveSlots(
+                    in: fragment,
+                    documentDirectory: documentDirectory
+                )
+            )
         } catch {
             let message = (error as? LocalizedError)?.errorDescription
                 ?? MarkdownRenderError.coreFailure.localizedDescription
@@ -59,7 +65,7 @@ enum MarkdownRenderer {
         <head>
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width, initial-scale=1">
-          <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: file:; style-src 'unsafe-inline'; font-src 'none'; media-src 'none'; connect-src 'none'; object-src 'none'; frame-src 'none'">
+          <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src 'none'; media-src 'none'; connect-src 'none'; object-src 'none'; frame-src 'none'">
           <style>
             :root { color-scheme: light dark; font: 17px/1.65 -apple-system, BlinkMacSystemFont, sans-serif; }
             body { box-sizing: border-box; max-width: 760px; margin: 0 auto; padding: 32px 36px 72px; color: #24292f; background: #ffffff; overflow-wrap: break-word; }
@@ -75,6 +81,8 @@ enum MarkdownRenderer {
             th, td { border: 1px solid #d0d7de; padding: 7px 12px; }
             tr:nth-child(even) { background: #f6f8fa; }
             img { max-width: 100%; height: auto; }
+            .image-warning { display: flex; flex-direction: column; gap: .2em; margin: 1em 0; padding: 12px 14px; border: 1px solid #d4a72c; border-radius: 8px; color: #9a6700; }
+            .image-warning span { font-size: .9em; }
             hr { height: 1px; border: 0; background: #d8dee4; margin: 2em 0; }
             math { font-family: STIX Two Math, STIXGeneral, serif; }
             math[display="block"] { display: block; max-width: 100%; overflow-x: auto; margin: 1.2em 0; text-align: center; }
@@ -95,6 +103,7 @@ enum MarkdownRenderer {
               hr { background: #30363d; }
               .mermaid-diagram .node rect { fill: #161b22; stroke: #8b949e; }
               .mermaid-error { color: #d29922; border-color: #9e6a03; }
+              .image-warning { color: #d29922; border-color: #9e6a03; }
             }
           </style>
         </head>
