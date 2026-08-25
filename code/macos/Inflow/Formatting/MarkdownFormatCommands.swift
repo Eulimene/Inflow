@@ -3,10 +3,16 @@ import SwiftUI
 @MainActor
 final class MarkdownFormatCommandActions {
     let canFormat: Bool
+    let canClearFormat: Bool
     let apply: (MarkdownFormatCommand) -> Void
 
-    init(canFormat: Bool, apply: @escaping (MarkdownFormatCommand) -> Void) {
+    init(
+        canFormat: Bool,
+        canClearFormat: Bool,
+        apply: @escaping (MarkdownFormatCommand) -> Void
+    ) {
         self.canFormat = canFormat
+        self.canClearFormat = canClearFormat
         self.apply = apply
     }
 }
@@ -76,6 +82,13 @@ struct MarkdownFormatCommands: Commands {
                 actions?.apply(.codeBlock)
             }
             .disabled(actions?.canFormat != true)
+
+            Divider()
+
+            Button("清除格式标记") {
+                actions?.apply(.clear)
+            }
+            .disabled(actions?.canClearFormat != true)
         }
     }
 }

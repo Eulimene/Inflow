@@ -410,6 +410,53 @@ final class MarkdownFormatterTests: XCTestCase {
     }
 
     @MainActor
+    func testClearFormatAvailabilityPlanAndSingleUndo() throws {
+        let source = "# **标题👩‍💻** and `code`\n"
+        let fullSelection = NSRange(location: 0, length: (source as NSString).length)
+        XCTAssertTrue(
+            MarkdownFormatter.canClearFormat(
+                source: source,
+                selectedUTF16Range: fullSelection
+            )
+        )
+        XCTAssertFalse(
+            MarkdownFormatter.canClearFormat(
+                source: source,
+                selectedUTF16Range: (source as NSString).range(of: "标题👩‍💻")
+            )
+        )
+        XCTAssertFalse(
+            MarkdownFormatter.canClearFormat(
+                source: "plain",
+                selectedUTF16Range: NSRange(location: 0, length: 5)
+            )
+        )
+
+        let plan = try MarkdownFormatter.plan(
+            source: source,
+            selectedUTF16Range: fullSelection,
+            command: .clear
+        )
+        XCTAssertEqual(plan.resultingSource, "标题👩‍💻 and code\n")
+
+        let session = MarkdownSourceEditorSession()
+        session.textView.isEditable = true
+        session.textView.string = source
+        session.textView.setSelectedRange(fullSelection)
+        XCTAssertTrue(session.applyMarkdownFormat(plan, actionName: "清除格式标记"))
+        XCTAssertEqual(session.textView.string, "标题👩‍💻 and code\n")
+        XCTAssertEqual(
+            session.selectedUTF16Range,
+            NSRange(location: 0, length: (session.textView.string as NSString).length)
+        )
+
+        session.textView.undoManager?.undo()
+        XCTAssertEqual(session.textView.string, source)
+        session.textView.undoManager?.redo()
+        XCTAssertEqual(session.textView.string, "标题👩‍💻 and code\n")
+    }
+
+    @MainActor
     func testSessionAppliesFormatAsOneUndoUnitAndRestoresSelection() throws {
         let source = "Hello 世界"
         let session = MarkdownSourceEditorSession()
@@ -505,8 +552,14 @@ final class MarkdownFormatterTests: XCTestCase {
     func testFormatCommandActionsAreSceneScopedAndRespectReadOnlyState() {
         var first: [MarkdownFormatCommand] = []
         var second: [MarkdownFormatCommand] = []
-        let editable = MarkdownFormatCommandActions(canFormat: true) { first.append($0) }
-        let readOnly = MarkdownFormatCommandActions(canFormat: false) { second.append($0) }
+        let editable = MarkdownFormatCommandActions(
+            canFormat: true,
+            canClearFormat: true
+        ) { first.append($0) }
+        let readOnly = MarkdownFormatCommandActions(
+            canFormat: false,
+            canClearFormat: false
+        ) { second.append($0) }
 
         editable.apply(.inline(.bold))
         editable.apply(.inlineCode)
@@ -514,15 +567,18 @@ final class MarkdownFormatterTests: XCTestCase {
         editable.apply(.heading(.four))
         editable.apply(.blockQuote)
         editable.apply(.list(.task))
+        editable.apply(.clear)
         XCTAssertEqual(
             first,
             [
                 .inline(.bold), .inlineCode, .codeBlock, .heading(.four), .blockQuote,
-                .list(.task),
+                .list(.task), .clear,
             ]
         )
         XCTAssertTrue(second.isEmpty)
         XCTAssertFalse(readOnly.canFormat)
+        XCTAssertTrue(editable.canClearFormat)
+        XCTAssertFalse(readOnly.canClearFormat)
     }
 
     @MainActor
@@ -574,6 +630,10 @@ final class MarkdownFormatterTests: XCTestCase {
         let codeBlockItems = items.filter { $0.title == "代码块" }
         XCTAssertEqual(codeBlockItems.count, 1)
         XCTAssertEqual(codeBlockItems.first?.keyEquivalent, "")
+
+        let clearItems = items.filter { $0.title == "清除格式标记" }
+        XCTAssertEqual(clearItems.count, 1)
+        XCTAssertEqual(clearItems.first?.keyEquivalent, "")
     }
 
     @MainActor

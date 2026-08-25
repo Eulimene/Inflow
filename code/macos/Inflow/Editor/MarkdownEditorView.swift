@@ -396,8 +396,13 @@ struct MarkdownEditorView: View {
     }
 
     private var markdownFormatCommandActions: MarkdownFormatCommandActions {
-        MarkdownFormatCommandActions(
+        let canClearFormat = isEditable && MarkdownFormatter.canClearFormat(
+            source: document.text,
+            selectedUTF16Range: sourceEditorSession.selectedUTF16Range
+        )
+        return MarkdownFormatCommandActions(
             canFormat: isEditable,
+            canClearFormat: canClearFormat,
             apply: applyMarkdownFormat
         )
     }

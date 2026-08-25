@@ -83,6 +83,7 @@ enum MarkdownFormatCommand: Equatable, Sendable {
     case heading(MarkdownHeadingLevel)
     case blockQuote
     case list(MarkdownListFormat)
+    case clear
 
     var undoActionName: String {
         switch self {
@@ -92,6 +93,7 @@ enum MarkdownFormatCommand: Equatable, Sendable {
         case .heading: "标题格式"
         case .blockQuote: "引用格式"
         case .list: "列表格式"
+        case .clear: "清除格式标记"
         }
     }
 }
@@ -128,6 +130,33 @@ enum MarkdownFormatError: Error, LocalizedError {
 }
 
 enum MarkdownFormatter {
+    static func canClearFormat(
+        source: String,
+        selectedUTF16Range: NSRange
+    ) -> Bool {
+        guard InflowCoreBridge.isCompatible,
+              selectedUTF16Range.length > 0,
+              let selectedUTF8Range = MarkdownSourceRange.utf8Range(
+                  forUTF16Range: selectedUTF16Range,
+                  in: source
+              )
+        else {
+            return false
+        }
+
+        let sourceUTF8 = Data(source.utf8)
+        let result: InflowMarkdownEditResult = sourceUTF8.withUnsafeBytes { buffer in
+            inflow_markdown_clear_format(
+                buffer.bindMemory(to: UInt8.self).baseAddress,
+                UInt(buffer.count),
+                UInt(selectedUTF8Range.lowerBound),
+                UInt(selectedUTF8Range.upperBound)
+            )
+        }
+        inflow_owned_bytes_free(result.replacement.data, result.replacement.length)
+        return result.status == INFLOW_STATUS_OK
+    }
+
     static func mermaidPlan(
         source: String,
         selectedUTF16Range: NSRange
@@ -388,6 +417,13 @@ enum MarkdownFormatter {
                     UInt(selectedUTF8Range.lowerBound),
                     UInt(selectedUTF8Range.upperBound),
                     format.coreValue
+                )
+            case .clear:
+                inflow_markdown_clear_format(
+                    sourcePointer,
+                    UInt(buffer.count),
+                    UInt(selectedUTF8Range.lowerBound),
+                    UInt(selectedUTF8Range.upperBound)
                 )
             }
         }

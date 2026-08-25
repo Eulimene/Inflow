@@ -160,10 +160,10 @@ InflowEncodeResult inflow_markdown_render_html(
 
 /// Exports an immutable UTF-8 Markdown snapshot as one self-contained HTML
 /// document. The result never references local resources or runtime scripts.
-/// Unsupported images, formulas, Mermaid blocks, local links and unsafe link
-/// schemes are reported through blocking_issues and return no HTML. Successful
-/// output is at most 100 MiB. Returned bytes must be released with
-/// inflow_owned_bytes_free.
+/// Unsupported images, local links and unsafe link schemes are reported
+/// through blocking_issues and return no HTML. Supported formulas and Mermaid
+/// blocks are emitted as self-contained MathML and SVG. Successful output is
+/// at most 100 MiB. Returned bytes must be released with inflow_owned_bytes_free.
 InflowHTMLExportResult inflow_markdown_export_html(
     const uint8_t *utf8,
     uintptr_t length
@@ -206,6 +206,19 @@ InflowMarkdownEditResult inflow_markdown_format_inline_code(
 /// extended graphemes. Returned replacement bytes must be released with
 /// inflow_owned_bytes_free.
 InflowMarkdownEditResult inflow_markdown_format_code_block(
+    const uint8_t *utf8,
+    uintptr_t length,
+    uintptr_t selection_start,
+    uintptr_t selection_end
+);
+
+/// Removes supported Markdown format markers fully contained by one non-empty
+/// selection. Supported markers are emphasis, strong, strikethrough, inline
+/// and fenced code, ATX/Setext headings, block quotes and all list variants.
+/// Links, literal punctuation and code contents remain unchanged. A selection
+/// without an active complete marker returns INFLOW_STATUS_AMBIGUOUS_FORMAT.
+/// Returned replacement bytes must be released with inflow_owned_bytes_free.
+InflowMarkdownEditResult inflow_markdown_clear_format(
     const uint8_t *utf8,
     uintptr_t length,
     uintptr_t selection_start,

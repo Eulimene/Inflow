@@ -98,6 +98,7 @@ enum MarkdownSourceRange {
 final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     let scrollView: NSScrollView
     let textView: WindowAwareTextView
+    @Published private(set) var selectedUTF16Range = NSRange(location: 0, length: 0)
     fileprivate var appliedSelectionGeneration: Int?
     fileprivate var pendingSelectionRequest: SourceSelectionRequest?
     fileprivate var updateBoundText: ((String) -> Void)?
@@ -170,6 +171,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     func focusEditor() -> Bool {
         guard let window = textView.window else { return false }
         return window.makeFirstResponder(textView)
+    }
+
+    fileprivate func updateSelectedRange(_ range: NSRange) {
+        if selectedUTF16Range != range {
+            selectedUTF16Range = range
+        }
     }
 
     @discardableResult
@@ -278,6 +285,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
 
         textView.setSelectedRange(finalSelection.revealRange)
+        updateSelectedRange(finalSelection.revealRange)
         textView.scrollRangeToVisible(finalSelection.revealRange)
         textView.undoManager?.setActionName(actionName)
         return true
@@ -403,6 +411,11 @@ struct MarkdownSourceEditor: NSViewRepresentable {
             }
 
             apply(parent.selectionRequest, to: textView)
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            parent.session.updateSelectedRange(textView.selectedRange())
         }
 
         private func apply(_ request: SourceSelectionRequest?, to textView: NSTextView) {

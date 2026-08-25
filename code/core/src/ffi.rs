@@ -469,6 +469,33 @@ pub unsafe extern "C" fn inflow_markdown_format_code_block(
     .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
 }
 
+/// Plans removal of all supported Markdown format markers fully contained by
+/// one non-empty selection.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call. Selection offsets are end-exclusive UTF-8 byte
+/// offsets and must align with extended grapheme boundaries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_markdown_clear_format(
+    utf8: *const u8,
+    length: usize,
+    selection_start: usize,
+    selection_end: usize,
+) -> InflowMarkdownEditResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Ok(source) = std::str::from_utf8(input) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_UTF8);
+        };
+        markdown_edit_result(format::clear_format(source, selection_start..selection_end))
+    }))
+    .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
+}
+
 /// Plans one predictable inline Markdown link insertion for a UTF-8 snapshot.
 ///
 /// # Safety
@@ -1250,6 +1277,33 @@ mod tests {
         }
 
         let invalid = unsafe { inflow_markdown_format_code_block(ptr::null(), 1, 0, 0) };
+        assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
+        assert!(invalid.replacement.data.is_null());
+    }
+
+    #[test]
+    fn ffi_clears_supported_format_and_reports_plain_selection() {
+        let source = "# **标题**\n";
+        let result =
+            unsafe { inflow_markdown_clear_format(source.as_ptr(), source.len(), 0, source.len()) };
+        assert_eq!(result.status, STATUS_OK);
+        assert_eq!(result.replace_start, 0);
+        assert_eq!(result.replace_end, source.len());
+        let replacement = unsafe {
+            std::slice::from_raw_parts(result.replacement.data, result.replacement.length)
+        };
+        assert_eq!(std::str::from_utf8(replacement).unwrap(), "标题\n");
+        unsafe {
+            inflow_owned_bytes_free(result.replacement.data, result.replacement.length);
+        }
+
+        let plain = "plain";
+        let unavailable =
+            unsafe { inflow_markdown_clear_format(plain.as_ptr(), plain.len(), 0, plain.len()) };
+        assert_eq!(unavailable.status, STATUS_AMBIGUOUS_FORMAT);
+        assert!(unavailable.replacement.data.is_null());
+
+        let invalid = unsafe { inflow_markdown_clear_format(ptr::null(), 1, 0, 0) };
         assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
         assert!(invalid.replacement.data.is_null());
     }

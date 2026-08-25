@@ -116,6 +116,7 @@ struct ListLineOutput {
 #[derive(Debug)]
 struct SemanticListItem {
     source_start: usize,
+    source_end: usize,
     kind: ListFormat,
 }
 
@@ -353,6 +354,137 @@ pub fn format_code_block(
         replacement,
         selection_range: content_start..content_start + without_trailing_line_ending(content),
     })
+}
+
+/// Removes Markdown markers that the editor can create from one explicit
+/// selection. Parsing is intentionally limited to the selected fragment: a
+/// marker must be fully selected and semantically active before it can be
+/// removed. This keeps surrounding source byte-for-byte unchanged and avoids
+/// interpreting fenced or inline-code contents as Markdown after unwrapping.
+pub fn clear_format(
+    source: &str,
+    requested_selection: Range<usize>,
+) -> Result<MarkdownEdit, FormatError> {
+    if !is_valid_selection(source, &requested_selection) {
+        return Err(FormatError::InvalidSelection);
+    }
+    if requested_selection.is_empty() {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    let fragment = &source[requested_selection.clone()];
+    let removals = clearable_marker_ranges(fragment);
+    if removals.is_empty() {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    let mut replacement = String::with_capacity(fragment.len());
+    let mut cursor = 0;
+    for range in removals {
+        replacement.push_str(&fragment[cursor..range.start]);
+        cursor = range.end;
+    }
+    replacement.push_str(&fragment[cursor..]);
+
+    let selection_start = requested_selection.start;
+    let selection_end = selection_start + replacement.len();
+    Ok(MarkdownEdit {
+        replace_range: requested_selection,
+        replacement,
+        selection_range: selection_start..selection_end,
+    })
+}
+
+fn clearable_marker_ranges(fragment: &str) -> Vec<Range<usize>> {
+    let mut removals = Vec::new();
+
+    for format in [
+        InlineFormat::Bold,
+        InlineFormat::Italic,
+        InlineFormat::Strikethrough,
+    ] {
+        for span in format_spans(fragment, format) {
+            removals.push(span.full_range.start..span.content_range.start);
+            removals.push(span.content_range.end..span.full_range.end);
+        }
+    }
+
+    for span in inline_code_spans(fragment) {
+        removals.push(span.full_range.start..span.content_range.start);
+        removals.push(span.content_range.end..span.full_range.end);
+    }
+
+    for span in fenced_code_spans(fragment) {
+        removals.push(span.full.start..span.unwrapped_content.start);
+        removals.push(span.unwrapped_content.end..span.full.end);
+    }
+
+    for heading in analysis::analyze(fragment).headings {
+        if let Some(content) = atx_heading_content_range(fragment, heading.source_range.clone()) {
+            removals.push(heading.source_range.start..content.start);
+            removals.push(content.end..heading.source_range.end);
+        } else if let Some(newline_offset) = fragment[heading.source_range.clone()].find('\n') {
+            // Setext headings keep the first line ending and discard only the
+            // underline line. The parser has already established semantics.
+            let underline_start = heading.source_range.start + newline_offset + 1;
+            let underline_end = line_end_including_ending(fragment, heading.source_range.end);
+            removals.push(underline_start..underline_end);
+        }
+    }
+
+    let quote_spans = block_quote_spans(fragment);
+    for line in physical_line_ranges(fragment, 0..fragment.len()) {
+        let depth = block_quote_depth_at(&quote_spans, line_probe(fragment, line.clone()));
+        let mut remainder = line;
+        for _ in 0..depth {
+            let Some(marker) = block_quote_marker_range(fragment, remainder.clone()) else {
+                break;
+            };
+            removals.push(marker.clone());
+            remainder.start = marker.end;
+        }
+    }
+
+    let semantic_items = semantic_list_items(fragment);
+    for line in physical_line_ranges(fragment, 0..fragment.len()) {
+        let depth = block_quote_depth_at(&quote_spans, line_probe(fragment, line.clone()));
+        let mut list_line = line;
+        for _ in 0..depth {
+            let Some(quote_marker) = block_quote_marker_range(fragment, list_line.clone()) else {
+                break;
+            };
+            list_line.start = quote_marker.end;
+        }
+        let Some(marker) = list_marker(fragment, list_line) else {
+            continue;
+        };
+        if semantic_items.iter().any(|item| {
+            item.source_start <= marker.marker_start
+                && marker.marker_start < item.source_end
+                && item.kind == marker.kind
+        }) {
+            removals.push(marker.marker_start..marker.marker_end);
+        }
+    }
+
+    merge_ranges(removals)
+}
+
+fn merge_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    ranges.retain(|range| range.start < range.end);
+    ranges.sort_unstable_by_key(|range| (range.start, range.end));
+
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        if let Some(previous) = merged.last_mut()
+            && range.start <= previous.end
+        {
+            previous.end = previous.end.max(range.end);
+        } else {
+            merged.push(range);
+        }
+    }
+    merged
 }
 
 pub fn insert_link(
@@ -1156,6 +1288,7 @@ fn semantic_list_items(source: &str) -> Vec<SemanticListItem> {
                 let kind = list_stack.last().copied().unwrap_or(ListFormat::Unordered);
                 items.push(SemanticListItem {
                     source_start: range.start,
+                    source_end: range.end,
                     kind,
                 });
                 item_stack.push(items.len() - 1);
@@ -2710,6 +2843,68 @@ mod tests {
         assert_eq!(
             replacing(source, edit.replace_range, &edit.replacement),
             "- one\ntwo\n"
+        );
+    }
+
+    #[test]
+    fn clear_format_removes_supported_inline_and_block_markers() {
+        let source = "# **Hello** and *world* with ~~old~~ and `code`\n\n> - [x] task\n";
+        let edit = clear_format(source, 0..source.len()).unwrap();
+        assert_eq!(edit.replace_range, 0..source.len());
+        assert_eq!(
+            edit.replacement,
+            "Hello and world with old and code\n\ntask\n"
+        );
+        assert_eq!(edit.selection_range, 0..edit.replacement.len());
+    }
+
+    #[test]
+    fn clear_format_preserves_links_literals_and_unicode() {
+        let source = "[**标签👩‍💻**](https://example.com/a_b) and \\*literal\\*";
+        let edit = clear_format(source, 0..source.len()).unwrap();
+        assert_eq!(
+            edit.replacement,
+            "[标签👩‍💻](https://example.com/a_b) and \\*literal\\*"
+        );
+    }
+
+    #[test]
+    fn clear_format_unwraps_code_without_reinterpreting_its_contents() {
+        let fenced = "```md\n# **code**\n```\n";
+        let edit = clear_format(fenced, 0..fenced.len()).unwrap();
+        assert_eq!(edit.replacement, "# **code**\n");
+
+        let inline = "`**not bold**`";
+        let edit = clear_format(inline, 0..inline.len()).unwrap();
+        assert_eq!(edit.replacement, "**not bold**");
+    }
+
+    #[test]
+    fn clear_format_handles_setext_crlf_and_nested_quotes() {
+        let source = "Title\r\n=====\r\n\r\n> > quoted\r\n";
+        let edit = clear_format(source, 0..source.len()).unwrap();
+        assert_eq!(edit.replacement, "Title\r\n\r\nquoted\r\n");
+    }
+
+    #[test]
+    fn clear_format_requires_complete_markers_and_valid_graphemes() {
+        let source = "before **bold** after";
+        let content_start = source.find("bold").unwrap();
+        assert_eq!(
+            clear_format(source, content_start..content_start + 4),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            clear_format(source, 0.."before ".len()),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            clear_format("e\u{301}", 1..3),
+            Err(FormatError::InvalidSelection)
+        );
+        assert_eq!(
+            clear_format(source, 0..0),
+            Err(FormatError::AmbiguousSelection)
         );
     }
 
