@@ -133,6 +133,27 @@ pub struct InflowDecodeResult {
     pub line_ending: u8,
 }
 
+#[repr(C)]
+pub struct InflowDocumentOpenResult {
+    pub status: i32,
+    pub utf8: InflowOwnedBytes,
+    pub has_utf8_bom: u8,
+    pub line_ending: u8,
+    pub requires_line_ending_choice: u8,
+}
+
+impl InflowDocumentOpenResult {
+    const fn error(status: i32) -> Self {
+        Self {
+            status,
+            utf8: InflowOwnedBytes::empty(),
+            has_utf8_bom: 0,
+            line_ending: LINE_ENDING_LF,
+            requires_line_ending_choice: 0,
+        }
+    }
+}
+
 impl InflowDecodeResult {
     const fn error(status: i32) -> Self {
         Self {
@@ -270,6 +291,43 @@ pub unsafe extern "C" fn inflow_document_decode(
         }
     }))
     .unwrap_or_else(|_| InflowDecodeResult::error(STATUS_PANIC))
+}
+
+/// Opens UTF-8 Markdown for editing, returning readable normalized text for
+/// mixed line endings while requiring a platform choice before writeback.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `bytes` must point to `length` readable bytes for
+/// the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_document_open(
+    bytes: *const u8,
+    length: usize,
+) -> InflowDocumentOpenResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(bytes, length) }) else {
+            return InflowDocumentOpenResult::error(STATUS_INVALID_ARGUMENT);
+        };
+
+        match document::decode_for_open(input) {
+            Ok(opened) => InflowDocumentOpenResult {
+                status: STATUS_OK,
+                utf8: InflowOwnedBytes::from_vec(opened.text.into_bytes()),
+                has_utf8_bom: u8::from(opened.has_utf8_bom),
+                line_ending: match opened.line_ending {
+                    LineEnding::Lf => LINE_ENDING_LF,
+                    LineEnding::CrLf => LINE_ENDING_CRLF,
+                },
+                requires_line_ending_choice: u8::from(opened.requires_line_ending_choice),
+            },
+            Err(DecodeError::InvalidUtf8) => InflowDocumentOpenResult::error(STATUS_INVALID_UTF8),
+            Err(DecodeError::MixedLineEndings) => {
+                InflowDocumentOpenResult::error(STATUS_MIXED_LINE_ENDINGS)
+            }
+        }
+    }))
+    .unwrap_or_else(|_| InflowDocumentOpenResult::error(STATUS_PANIC))
 }
 
 /// Encodes normalized UTF-8 Markdown using the requested file properties.
@@ -1038,10 +1096,35 @@ mod tests {
     }
 
     #[test]
+    fn ffi_opens_mixed_line_endings_without_authorizing_writeback() {
+        let source = b"one\r\ntwo\nthree\rfour";
+        let opened = unsafe { inflow_document_open(source.as_ptr(), source.len()) };
+
+        assert_eq!(opened.status, STATUS_OK);
+        assert_eq!(opened.requires_line_ending_choice, 1);
+        assert_eq!(opened.line_ending, LINE_ENDING_LF);
+        let normalized =
+            unsafe { std::slice::from_raw_parts(opened.utf8.data, opened.utf8.length).to_vec() };
+        unsafe { inflow_owned_bytes_free(opened.utf8.data, opened.utf8.length) };
+        assert_eq!(normalized, b"one\ntwo\nthree\nfour");
+    }
+
+    #[test]
     fn ffi_rejects_null_non_empty_input() {
         let result = unsafe { inflow_document_decode(ptr::null(), 1) };
         assert_eq!(result.status, STATUS_INVALID_ARGUMENT);
         assert!(result.utf8.data.is_null());
+
+        let opened = unsafe { inflow_document_open(ptr::null(), 1) };
+        assert_eq!(opened.status, STATUS_INVALID_ARGUMENT);
+        assert!(opened.utf8.data.is_null());
+        assert_eq!(opened.utf8.length, 0);
+        assert_eq!(opened.requires_line_ending_choice, 0);
+
+        let invalid = unsafe { inflow_document_open([0xFF].as_ptr(), 1) };
+        assert_eq!(invalid.status, STATUS_INVALID_UTF8);
+        assert!(invalid.utf8.data.is_null());
+        assert_eq!(invalid.utf8.length, 0);
     }
 
     #[test]
@@ -1119,6 +1202,8 @@ mod tests {
         assert_eq!(std::mem::size_of::<InflowHeading>(), 40);
         assert_eq!(std::mem::align_of::<InflowHeading>(), 8);
         assert_eq!(std::mem::size_of::<InflowOwnedHeadings>(), 16);
+        assert_eq!(std::mem::size_of::<InflowDocumentOpenResult>(), 32);
+        assert_eq!(std::mem::align_of::<InflowDocumentOpenResult>(), 8);
         assert_eq!(std::mem::size_of::<InflowAnalysisResult>(), 64);
         assert_eq!(std::mem::size_of::<InflowSearchMatch>(), 16);
         assert_eq!(std::mem::align_of::<InflowSearchMatch>(), 8);

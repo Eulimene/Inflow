@@ -15,6 +15,14 @@ pub struct DecodedDocument {
     pub line_ending: LineEnding,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct OpenedDocument {
+    pub text: String,
+    pub has_utf8_bom: bool,
+    pub line_ending: LineEnding,
+    pub requires_line_ending_choice: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DecodeError {
     InvalidUtf8,
@@ -37,6 +45,26 @@ pub fn decode(bytes: &[u8]) -> Result<DecodedDocument, DecodeError> {
         text: normalized,
         has_utf8_bom,
         line_ending,
+    })
+}
+
+pub fn decode_for_open(bytes: &[u8]) -> Result<OpenedDocument, DecodeError> {
+    let (content, has_utf8_bom) = bytes
+        .strip_prefix(UTF8_BOM)
+        .map_or((bytes, false), |content| (content, true));
+    let text = std::str::from_utf8(content).map_err(|_| DecodeError::InvalidUtf8)?;
+
+    let (line_ending, requires_line_ending_choice) = match detect_line_ending(text) {
+        Ok(line_ending) => (line_ending, false),
+        Err(DecodeError::MixedLineEndings) => (LineEnding::Lf, true),
+        Err(error) => return Err(error),
+    };
+
+    Ok(OpenedDocument {
+        text: normalize_line_endings(text),
+        has_utf8_bom,
+        line_ending,
+        requires_line_ending_choice,
     })
 }
 
@@ -82,6 +110,22 @@ fn detect_line_ending(text: &str) -> Result<LineEnding, DecodeError> {
     } else {
         Ok(LineEnding::Lf)
     }
+}
+
+fn normalize_line_endings(text: &str) -> String {
+    let mut normalized = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\r' {
+            if characters.peek() == Some(&'\n') {
+                characters.next();
+            }
+            normalized.push('\n');
+        } else {
+            normalized.push(character);
+        }
+    }
+    normalized
 }
 
 #[cfg(test)]
@@ -137,5 +181,25 @@ mod tests {
     fn rejects_mixed_and_bare_carriage_return_line_endings() {
         assert_eq!(decode(b"one\r\ntwo\n"), Err(DecodeError::MixedLineEndings));
         assert_eq!(decode(b"one\rtwo"), Err(DecodeError::MixedLineEndings));
+    }
+
+    #[test]
+    fn opens_mixed_line_endings_as_normalized_read_only_content() {
+        let source = [UTF8_BOM, "one\r\ntwo\nthree\rfour".as_bytes()].concat();
+        let opened = decode_for_open(&source).expect("mixed UTF-8 remains readable");
+
+        assert_eq!(opened.text, "one\ntwo\nthree\nfour");
+        assert!(opened.has_utf8_bom);
+        assert_eq!(opened.line_ending, LineEnding::Lf);
+        assert!(opened.requires_line_ending_choice);
+    }
+
+    #[test]
+    fn opens_consistent_documents_without_requiring_a_choice() {
+        let opened = decode_for_open(b"one\r\ntwo\r\n").expect("CRLF is supported");
+
+        assert_eq!(opened.text, "one\ntwo\n");
+        assert_eq!(opened.line_ending, LineEnding::CrLf);
+        assert!(!opened.requires_line_ending_choice);
     }
 }

@@ -15,10 +15,22 @@ enum MarkdownLineEnding: UInt8, Equatable, Sendable {
 struct MarkdownFileProperties: Equatable, Sendable {
     var hasUTF8BOM: Bool
     var lineEnding: MarkdownLineEnding
+    var requiresLineEndingChoice: Bool
+
+    init(
+        hasUTF8BOM: Bool,
+        lineEnding: MarkdownLineEnding,
+        requiresLineEndingChoice: Bool = false
+    ) {
+        self.hasUTF8BOM = hasUTF8BOM
+        self.lineEnding = lineEnding
+        self.requiresLineEndingChoice = requiresLineEndingChoice
+    }
 
     static let newDocument = MarkdownFileProperties(
         hasUTF8BOM: false,
-        lineEnding: .lf
+        lineEnding: .lf,
+        requiresLineEndingChoice: false
     )
 }
 
@@ -49,8 +61,8 @@ enum MarkdownCodecError: Error, Equatable, LocalizedError {
 
 enum MarkdownCodec {
     static func decode(_ data: Data) throws -> DecodedMarkdown {
-        let result: InflowDecodeResult = data.withUnsafeBytes { buffer in
-            inflow_document_decode(
+        let result: InflowDocumentOpenResult = data.withUnsafeBytes { buffer in
+            inflow_document_open(
                 buffer.bindMemory(to: UInt8.self).baseAddress,
                 UInt(buffer.count)
             )
@@ -76,7 +88,8 @@ enum MarkdownCodec {
             text: text,
             properties: MarkdownFileProperties(
                 hasUTF8BOM: result.has_utf8_bom != 0,
-                lineEnding: lineEnding
+                lineEnding: lineEnding,
+                requiresLineEndingChoice: result.requires_line_ending_choice != 0
             )
         )
     }
@@ -85,6 +98,9 @@ enum MarkdownCodec {
         _ text: String,
         properties: MarkdownFileProperties
     ) throws -> Data {
+        guard !properties.requiresLineEndingChoice else {
+            throw MarkdownCodecError.mixedLineEndings
+        }
         let utf8 = Data(text.utf8)
         let result: InflowEncodeResult = utf8.withUnsafeBytes { buffer in
             inflow_document_encode(

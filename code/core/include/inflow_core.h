@@ -48,6 +48,14 @@ typedef struct InflowDecodeResult {
     uint8_t line_ending;
 } InflowDecodeResult;
 
+typedef struct InflowDocumentOpenResult {
+    InflowStatus status;
+    InflowOwnedBytes utf8;
+    uint8_t has_utf8_bom;
+    uint8_t line_ending;
+    uint8_t requires_line_ending_choice;
+} InflowDocumentOpenResult;
+
 typedef struct InflowEncodeResult {
     InflowStatus status;
     InflowOwnedBytes bytes;
@@ -115,6 +123,7 @@ typedef struct InflowMarkdownEditResult {
 #if UINTPTR_MAX == UINT64_MAX
 #if defined(__cplusplus)
 static_assert(sizeof(InflowHeading) == 40, "InflowHeading ABI layout changed");
+static_assert(sizeof(InflowDocumentOpenResult) == 32, "InflowDocumentOpenResult ABI layout changed");
 static_assert(sizeof(InflowAnalysisResult) == 64, "InflowAnalysisResult ABI layout changed");
 static_assert(sizeof(InflowSearchMatch) == 16, "InflowSearchMatch ABI layout changed");
 static_assert(sizeof(InflowSearchResult) == 24, "InflowSearchResult ABI layout changed");
@@ -122,6 +131,7 @@ static_assert(sizeof(InflowHTMLExportResult) == 32, "InflowHTMLExportResult ABI 
 static_assert(sizeof(InflowMarkdownEditResult) == 56, "InflowMarkdownEditResult ABI layout changed");
 #else
 _Static_assert(sizeof(InflowHeading) == 40, "InflowHeading ABI layout changed");
+_Static_assert(sizeof(InflowDocumentOpenResult) == 32, "InflowDocumentOpenResult ABI layout changed");
 _Static_assert(sizeof(InflowAnalysisResult) == 64, "InflowAnalysisResult ABI layout changed");
 _Static_assert(sizeof(InflowSearchMatch) == 16, "InflowSearchMatch ABI layout changed");
 _Static_assert(sizeof(InflowSearchResult) == 24, "InflowSearchResult ABI layout changed");
@@ -139,6 +149,13 @@ uint32_t inflow_core_abi_version(void);
 /// The returned bytes belong to Inflow and must be released with
 /// inflow_owned_bytes_free.
 InflowDecodeResult inflow_document_decode(const uint8_t *bytes, uintptr_t length);
+
+/// Opens UTF-8 Markdown and normalizes all in-memory line endings to LF.
+/// Mixed LF/CRLF or bare CR remains readable, but
+/// requires_line_ending_choice is set and the caller must prevent writeback
+/// until the user chooses LF or CRLF. Returned bytes belong to Inflow and must
+/// be released with inflow_owned_bytes_free.
+InflowDocumentOpenResult inflow_document_open(const uint8_t *bytes, uintptr_t length);
 
 /// Encodes normalized UTF-8 Markdown using the requested BOM and line ending.
 /// The returned bytes belong to Inflow and must be released with

@@ -41,6 +41,11 @@ struct MarkdownDocument: FileDocument {
         try MarkdownCodec.encode(text, properties: properties)
     }
 
+    mutating func chooseLineEnding(_ lineEnding: MarkdownLineEnding) {
+        properties.lineEnding = lineEnding
+        properties.requiresLineEndingChoice = false
+    }
+
     func fileWrapper(configuration _: WriteConfiguration) throws -> FileWrapper {
         try FileWrapper(regularFileWithContents: encodedFileData())
     }

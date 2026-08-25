@@ -149,12 +149,21 @@ struct MarkdownEditorView: View {
         nonmutating set { storedStatisticMode = newValue.rawValue }
     }
 
+    private var canEditDocument: Bool {
+        isEditable && !document.properties.requiresLineEndingChoice
+    }
+
     var body: some View {
         VStack(spacing: 0) {
+            if document.properties.requiresLineEndingChoice {
+                lineEndingChoiceBanner
+                Divider()
+            }
+
             if findSession.isPresented {
                 DocumentFindBar(
                     session: findSession,
-                    isEditable: isEditable,
+                    isEditable: canEditDocument,
                     onPrevious: findPrevious,
                     onNext: findNext,
                     onReplaceCurrent: replaceCurrent,
@@ -360,7 +369,7 @@ struct MarkdownEditorView: View {
             text: $document.text,
             selectionRequest: sourceSelectionRequest,
             session: sourceEditorSession,
-            isEditable: isEditable,
+            isEditable: canEditDocument,
             onPasteImage: pasteImage,
             onDropImage: dropImage
         )
@@ -387,12 +396,42 @@ struct MarkdownEditorView: View {
             statisticsMenu
                 .help(statisticsHelp)
             Text("UTF-8\(document.properties.hasUTF8BOM ? " BOM" : "")")
-            Text(document.properties.lineEnding.displayName)
+            Text(
+                document.properties.requiresLineEndingChoice
+                    ? "混合换行（待选择）"
+                    : document.properties.lineEnding.displayName
+            )
         }
         .font(.caption)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 12)
         .frame(height: 28)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var lineEndingChoiceBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("请先选择换行方式")
+                    .font(.headline)
+                Text("该文件同时包含 LF、CRLF 或单独 CR。选择统一方式前保持只读，不会写回原文件。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+            Button("统一为 LF") {
+                document.chooseLineEnding(.lf)
+            }
+            Button("统一为 CRLF") {
+                document.chooseLineEnding(.crlf)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.08))
         .accessibilityElement(children: .contain)
     }
 
@@ -415,7 +454,7 @@ struct MarkdownEditorView: View {
     private var findCommandActions: DocumentFindCommandActions {
         DocumentFindCommandActions(
             hasQuery: !findSession.query.isEmpty,
-            canReplace: isEditable,
+            canReplace: canEditDocument,
             showFind: { presentFind(replacing: false) },
             showReplace: { presentFind(replacing: true) },
             next: findNext,
@@ -440,12 +479,12 @@ struct MarkdownEditorView: View {
     }
 
     private var markdownFormatCommandActions: MarkdownFormatCommandActions {
-        let canClearFormat = isEditable && MarkdownFormatter.canClearFormat(
+        let canClearFormat = canEditDocument && MarkdownFormatter.canClearFormat(
             source: document.text,
             selectedUTF16Range: sourceEditorSession.selectedUTF16Range
         )
         return MarkdownFormatCommandActions(
-            canFormat: isEditable,
+            canFormat: canEditDocument,
             canClearFormat: canClearFormat,
             apply: applyMarkdownFormat
         )
@@ -453,7 +492,7 @@ struct MarkdownEditorView: View {
 
     private var markdownInsertCommandActions: MarkdownInsertCommandActions {
         MarkdownInsertCommandActions(
-            canInsert: isEditable,
+            canInsert: canEditDocument,
             insertLink: presentLinkInsertion,
             insertImage: insertImage,
             insertTable: insertTable,
@@ -473,7 +512,7 @@ struct MarkdownEditorView: View {
     }
 
     private func importExistingImage(from providedSourceURL: URL?) {
-        guard isEditable, !isImportingImage else { return }
+        guard canEditDocument, !isImportingImage else { return }
         guard let documentURL = fileURL else {
             markdownFormatErrorMessage = ImageAssetImportError.unsavedDocument.localizedDescription
             return
@@ -607,7 +646,7 @@ struct MarkdownEditorView: View {
     }
 
     private func pasteImage(_ payload: ClipboardImagePayload) {
-        guard isEditable, !isImportingImage else { return }
+        guard canEditDocument, !isImportingImage else { return }
         guard let documentURL = fileURL else {
             markdownFormatErrorMessage = ImageAssetImportError.unsavedDocument.localizedDescription
             return
@@ -669,7 +708,7 @@ struct MarkdownEditorView: View {
     }
 
     private func insertDiagram() {
-        guard isEditable else { return }
+        guard canEditDocument else { return }
         do {
             let plan = try MarkdownFormatter.mermaidPlan(
                 source: document.text,
@@ -691,7 +730,7 @@ struct MarkdownEditorView: View {
     }
 
     private func insertFormula() {
-        guard isEditable else { return }
+        guard canEditDocument else { return }
         do {
             let plan = try MarkdownFormatter.mathPlan(
                 source: document.text,
@@ -713,7 +752,7 @@ struct MarkdownEditorView: View {
     }
 
     private func insertFootnote() {
-        guard isEditable else { return }
+        guard canEditDocument else { return }
         do {
             let plan = try MarkdownFormatter.footnotePlan(
                 source: document.text,
@@ -735,7 +774,7 @@ struct MarkdownEditorView: View {
     }
 
     private func insertHorizontalRule() {
-        guard isEditable else { return }
+        guard canEditDocument else { return }
         do {
             let plan = try MarkdownFormatter.horizontalRulePlan(
                 source: document.text,
@@ -757,7 +796,7 @@ struct MarkdownEditorView: View {
     }
 
     private func insertTable() {
-        guard isEditable else { return }
+        guard canEditDocument else { return }
         do {
             let plan = try MarkdownFormatter.tablePlan(
                 source: document.text,
@@ -779,7 +818,7 @@ struct MarkdownEditorView: View {
     }
 
     private func presentLinkInsertion() {
-        guard isEditable, linkInsertionRequest == nil else { return }
+        guard canEditDocument, linkInsertionRequest == nil else { return }
         linkInsertionRequest = MarkdownLinkInsertionRequest(
             sourceSnapshot: document.text,
             selectedUTF16Range: sourceEditorSession.textView.selectedRange()
@@ -816,7 +855,7 @@ struct MarkdownEditorView: View {
     }
 
     private func applyMarkdownFormat(_ command: MarkdownFormatCommand) {
-        guard isEditable else { return }
+        guard canEditDocument else { return }
         let source = document.text
 
         do {
@@ -977,7 +1016,7 @@ struct MarkdownEditorView: View {
     }
 
     private func presentFind(replacing: Bool) {
-        guard !replacing || isEditable else { return }
+        guard !replacing || canEditDocument else { return }
         viewMode = viewMode.sourceVisible
         findSession.present(replacing: replacing)
         if !findSession.resultsAreCurrent(for: document.text) {
@@ -1042,7 +1081,7 @@ struct MarkdownEditorView: View {
     }
 
     private func replaceCurrent() {
-        guard isEditable,
+        guard canEditDocument,
               findSession.canReplaceCurrent,
               let match = findSession.currentMatch
         else {
@@ -1089,7 +1128,7 @@ struct MarkdownEditorView: View {
     }
 
     private func previewReplaceAll() {
-        guard isEditable else { return }
+        guard canEditDocument else { return }
         do {
             replaceAllPlan = try findSession.makeReplaceAllPlan(source: document.text)
             if replaceAllPlan == nil {
@@ -1104,7 +1143,7 @@ struct MarkdownEditorView: View {
     }
 
     private func applyReplaceAll(_ plan: ReplaceAllPlan) {
-        guard isEditable,
+        guard canEditDocument,
               UTF8Text.isExactlyEqual(plan.source, document.text),
               UTF8Text.isExactlyEqual(plan.query, findSession.query),
               UTF8Text.isExactlyEqual(plan.replacement, findSession.replacement),
