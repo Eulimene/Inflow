@@ -25,6 +25,10 @@ static const uint8_t INFLOW_INLINE_FORMAT_BOLD = 1;
 static const uint8_t INFLOW_INLINE_FORMAT_ITALIC = 2;
 static const uint8_t INFLOW_INLINE_FORMAT_STRIKETHROUGH = 3;
 
+static const uint8_t INFLOW_LIST_FORMAT_UNORDERED = 1;
+static const uint8_t INFLOW_LIST_FORMAT_ORDERED = 2;
+static const uint8_t INFLOW_LIST_FORMAT_TASK = 3;
+
 typedef uint64_t InflowHTMLExportIssues;
 static const InflowHTMLExportIssues INFLOW_HTML_EXPORT_ISSUE_IMAGE = UINT64_C(1) << 0;
 static const InflowHTMLExportIssues INFLOW_HTML_EXPORT_ISSUE_FORMULA = UINT64_C(1) << 1;
@@ -205,6 +209,23 @@ InflowMarkdownEditResult inflow_markdown_format_block_quote(
     uintptr_t length,
     uintptr_t selection_start,
     uintptr_t selection_end
+);
+
+/// Plans an unordered, ordered or task-list edit over complete source lines.
+/// Mixed/plain lines are normalized to the requested list type; if every
+/// actionable line already has that semantic type, one list marker is removed.
+/// Blank lines and indentation are preserved, ordered source uses stable `1.`
+/// markers, and task completion is retained. Candidate edits must parse as real
+/// Markdown list items, so marker-like text inside code fences is rejected.
+/// Selection and returned ranges use end-exclusive UTF-8 byte offsets aligned
+/// to complete extended graphemes. Returned replacement bytes must be released
+/// with inflow_owned_bytes_free.
+InflowMarkdownEditResult inflow_markdown_format_list(
+    const uint8_t *utf8,
+    uintptr_t length,
+    uintptr_t selection_start,
+    uintptr_t selection_end,
+    uint8_t list_format
 );
 
 /// Extracts heading source ranges and text statistics from UTF-8 Markdown. The

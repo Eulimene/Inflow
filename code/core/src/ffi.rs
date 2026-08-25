@@ -6,7 +6,7 @@ use std::ptr;
 use crate::analysis;
 use crate::document::{self, DecodeError, LineEnding};
 use crate::export::{self, ExportError};
-use crate::format::{self, FormatError, InlineFormat};
+use crate::format::{self, FormatError, InlineFormat, ListFormat};
 use crate::render;
 use crate::search;
 
@@ -25,6 +25,10 @@ pub const LINE_ENDING_CRLF: u8 = 1;
 pub const INLINE_FORMAT_BOLD: u8 = 1;
 pub const INLINE_FORMAT_ITALIC: u8 = 2;
 pub const INLINE_FORMAT_STRIKETHROUGH: u8 = 3;
+
+pub const LIST_FORMAT_UNORDERED: u8 = 1;
+pub const LIST_FORMAT_ORDERED: u8 = 2;
+pub const LIST_FORMAT_TASK: u8 = 3;
 
 #[repr(C)]
 pub struct InflowOwnedBytes {
@@ -462,6 +466,43 @@ pub unsafe extern "C" fn inflow_markdown_format_block_quote(
         markdown_edit_result(format::format_block_quote(
             source,
             selection_start..selection_end,
+        ))
+    }))
+    .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
+}
+
+/// Plans one predictable list edit for complete source lines.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call. Selection offsets are end-exclusive UTF-8 byte
+/// offsets and must align with extended grapheme boundaries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_markdown_format_list(
+    utf8: *const u8,
+    length: usize,
+    selection_start: usize,
+    selection_end: usize,
+    list_format: u8,
+) -> InflowMarkdownEditResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Ok(source) = std::str::from_utf8(input) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_UTF8);
+        };
+        let list_format = match list_format {
+            LIST_FORMAT_UNORDERED => ListFormat::Unordered,
+            LIST_FORMAT_ORDERED => ListFormat::Ordered,
+            LIST_FORMAT_TASK => ListFormat::Task,
+            _ => return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT),
+        };
+        markdown_edit_result(format::format_list(
+            source,
+            selection_start..selection_end,
+            list_format,
         ))
     }))
     .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
@@ -989,5 +1030,42 @@ mod tests {
         let invalid = unsafe { inflow_markdown_format_block_quote(ptr::null(), 1, 0, 0) };
         assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
         assert!(invalid.replacement.data.is_null());
+    }
+
+    #[test]
+    fn ffi_plans_task_list_and_validates_kind() {
+        let source = "done\n待办\n";
+        let result = unsafe {
+            inflow_markdown_format_list(
+                source.as_ptr(),
+                source.len(),
+                0,
+                source.len(),
+                LIST_FORMAT_TASK,
+            )
+        };
+        assert_eq!(result.status, STATUS_OK);
+        assert_eq!(result.replace_start, 0);
+        assert_eq!(result.replace_end, source.len());
+        let replacement = unsafe {
+            std::slice::from_raw_parts(result.replacement.data, result.replacement.length)
+        };
+        assert_eq!(
+            std::str::from_utf8(replacement).unwrap(),
+            "- [ ] done\n- [ ] 待办\n"
+        );
+        unsafe {
+            inflow_owned_bytes_free(result.replacement.data, result.replacement.length);
+        }
+
+        for invalid in [
+            unsafe { inflow_markdown_format_list(ptr::null(), 1, 0, 0, LIST_FORMAT_TASK) },
+            unsafe {
+                inflow_markdown_format_list(source.as_ptr(), source.len(), 0, source.len(), 99)
+            },
+        ] {
+            assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
+            assert!(invalid.replacement.data.is_null());
+        }
     }
 }

@@ -12,6 +12,12 @@ final class MarkdownFormatterTests: XCTestCase {
             MarkdownInlineFormat.strikethrough.coreValue,
             UInt8(INFLOW_INLINE_FORMAT_STRIKETHROUGH)
         )
+        XCTAssertEqual(MarkdownListFormat.ordered.coreValue, UInt8(INFLOW_LIST_FORMAT_ORDERED))
+        XCTAssertEqual(
+            MarkdownListFormat.unordered.coreValue,
+            UInt8(INFLOW_LIST_FORMAT_UNORDERED)
+        )
+        XCTAssertEqual(MarkdownListFormat.task.coreValue, UInt8(INFLOW_LIST_FORMAT_TASK))
     }
 
     func testPlansUnicodeBoldUsingUTF16SelectionAndUTF8CoreRanges() throws {
@@ -236,6 +242,75 @@ final class MarkdownFormatterTests: XCTestCase {
         XCTAssertEqual(shallower.resultingSource, "> inner\n> next\n")
     }
 
+    func testListPlansNormalizeMixedLinesAndRemoveMatchingMarkers() throws {
+        let source = "- one\n2. 二\nthree\n\n"
+        let selected = NSRange(location: 0, length: (source as NSString).length)
+        let normalized = try MarkdownFormatter.plan(
+            source: source,
+            selectedUTF16Range: selected,
+            command: .list(.unordered)
+        )
+        XCTAssertEqual(normalized.resultingSource, "- one\n- 二\n- three\n\n")
+        XCTAssertTrue(try MarkdownRenderer.htmlFragment(for: normalized.resultingSource).contains(
+            "<ul>"
+        ))
+
+        let removed = try MarkdownFormatter.plan(
+            source: normalized.resultingSource,
+            selectedUTF16Range: NSRange(
+                location: 0,
+                length: (normalized.resultingSource as NSString).length
+            ),
+            command: .list(.unordered)
+        )
+        XCTAssertEqual(removed.resultingSource, "one\n二\nthree\n\n")
+    }
+
+    func testTaskListPlanPreservesCheckedStateAndUnicodeCaret() throws {
+        let source = "- [x] 完成\n- todo👩‍💻\n"
+        let normalized = try MarkdownFormatter.plan(
+            source: source,
+            selectedUTF16Range: NSRange(location: 0, length: (source as NSString).length),
+            command: .list(.task)
+        )
+        XCTAssertEqual(normalized.resultingSource, "- [x] 完成\n- [ ] todo👩‍💻\n")
+        XCTAssertTrue(try MarkdownRenderer.htmlFragment(for: normalized.resultingSource).contains(
+            "checkbox"
+        ))
+
+        let plain = "前文\n事项👩‍💻\n"
+        let caret = (plain as NSString).range(of: "👩‍💻").location
+        let planned = try MarkdownFormatter.plan(
+            source: plain,
+            selectedUTF16Range: NSRange(location: caret, length: 0),
+            command: .list(.task)
+        )
+        XCTAssertEqual(planned.resultingSource, "前文\n- [ ] 事项👩‍💻\n")
+        let selection = try XCTUnwrap(
+            MarkdownSourceRange.navigationTarget(
+                forUTF8Range: planned.selectionUTF8Range,
+                in: planned.resultingSource
+            )
+        )
+        XCTAssertEqual(selection.revealRange.location, caret + 6)
+        XCTAssertEqual(selection.revealRange.length, 0)
+    }
+
+    func testListPlanRejectsCodeFencePseudoItem() {
+        let source = "```\n- not a list\n```\n"
+        XCTAssertThrowsError(
+            try MarkdownFormatter.plan(
+                source: source,
+                selectedUTF16Range: (source as NSString).range(of: "not"),
+                command: .list(.unordered)
+            )
+        ) { error in
+            guard case MarkdownFormatError.ambiguousSelection = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
     @MainActor
     func testSessionAppliesFormatAsOneUndoUnitAndRestoresSelection() throws {
         let source = "Hello 世界"
@@ -274,6 +349,22 @@ final class MarkdownFormatterTests: XCTestCase {
         XCTAssertEqual(session.textView.string, "## Title\nBody\n")
         session.textView.undoManager?.undo()
         XCTAssertEqual(session.textView.string, "Title\nBody\n")
+
+        session.textView.string = "one\ntwo\n"
+        session.textView.setSelectedRange(
+            NSRange(location: 0, length: (session.textView.string as NSString).length)
+        )
+        let list = try MarkdownFormatter.plan(
+            source: session.textView.string,
+            selectedUTF16Range: session.textView.selectedRange(),
+            command: .list(.ordered)
+        )
+        XCTAssertTrue(session.applyMarkdownFormat(list, actionName: "列表格式"))
+        XCTAssertEqual(session.textView.string, "1. one\n1. two\n")
+        session.textView.undoManager?.undo()
+        XCTAssertEqual(session.textView.string, "one\ntwo\n")
+        session.textView.undoManager?.redo()
+        XCTAssertEqual(session.textView.string, "1. one\n1. two\n")
     }
 
     @MainActor
@@ -306,7 +397,8 @@ final class MarkdownFormatterTests: XCTestCase {
         editable.apply(.inline(.bold))
         editable.apply(.heading(.four))
         editable.apply(.blockQuote)
-        XCTAssertEqual(first, [.inline(.bold), .heading(.four), .blockQuote])
+        editable.apply(.list(.task))
+        XCTAssertEqual(first, [.inline(.bold), .heading(.four), .blockQuote, .list(.task)])
         XCTAssertTrue(second.isEmpty)
         XCTAssertFalse(readOnly.canFormat)
     }
@@ -345,6 +437,13 @@ final class MarkdownFormatterTests: XCTestCase {
         let quoteItems = items.filter { $0.title == "引用" }
         XCTAssertEqual(quoteItems.count, 1)
         XCTAssertEqual(quoteItems.first?.keyEquivalent, "")
+
+        XCTAssertEqual(items.filter { $0.title == "列表" }.count, 1)
+        for format in MarkdownListFormat.allCases {
+            let matches = items.filter { $0.title == format.label }
+            XCTAssertEqual(matches.count, 1)
+            XCTAssertEqual(matches.first?.keyEquivalent, "")
+        }
     }
 
     @MainActor

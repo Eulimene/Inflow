@@ -14,6 +14,13 @@ pub enum InlineFormat {
     Strikethrough,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ListFormat {
+    Unordered,
+    Ordered,
+    Task,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub struct MarkdownEdit {
     pub replace_range: Range<usize>,
@@ -58,6 +65,30 @@ struct QuoteLineOutput {
     old_probe: usize,
     new_probe: usize,
     removed_marker: Option<Range<usize>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ListMarker {
+    kind: ListFormat,
+    marker_start: usize,
+    marker_end: usize,
+    content_start: usize,
+    checked: bool,
+}
+
+#[derive(Debug)]
+struct ListLineOutput {
+    old_range: Range<usize>,
+    old_content_start: usize,
+    new_content_start: usize,
+    marker_start: usize,
+    actionable: bool,
+}
+
+#[derive(Debug)]
+struct SemanticListItem {
+    source_start: usize,
+    kind: ListFormat,
 }
 
 pub fn format_inline(
@@ -342,6 +373,286 @@ pub fn format_block_quote(
         replacement,
         selection_range,
     })
+}
+
+pub fn format_list(
+    source: &str,
+    requested_selection: Range<usize>,
+    format: ListFormat,
+) -> Result<MarkdownEdit, FormatError> {
+    if !is_valid_selection(source, &requested_selection) {
+        return Err(FormatError::InvalidSelection);
+    }
+
+    let block_range = selected_line_range(source, requested_selection.clone());
+    let lines = physical_line_ranges(source, block_range.clone());
+    let markers: Vec<Option<ListMarker>> = lines
+        .iter()
+        .map(|line| list_marker(source, line.clone()))
+        .collect();
+    let caret = requested_selection.start;
+    let actionable: Vec<bool> = lines
+        .iter()
+        .zip(&markers)
+        .map(|(line, marker)| {
+            marker.is_some()
+                || line_has_content(source, line.clone())
+                || (requested_selection.is_empty() && line.start <= caret && caret <= line.end)
+        })
+        .collect();
+    if !actionable.iter().any(|value| *value) {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    let original_items = semantic_list_items(source);
+    let remove = markers
+        .iter()
+        .zip(&actionable)
+        .filter(|(_, actionable)| **actionable)
+        .all(|(marker, _)| marker.is_some_and(|marker| marker.kind == format));
+    if remove {
+        for marker in markers.iter().flatten() {
+            if !original_items
+                .iter()
+                .any(|item| item.source_start == marker.marker_start && item.kind == format)
+            {
+                return Err(FormatError::AmbiguousSelection);
+            }
+        }
+    }
+
+    let (replacement, outputs) = build_list_replacement(
+        source,
+        block_range.len(),
+        &lines,
+        &markers,
+        &actionable,
+        format,
+        remove,
+    )?;
+
+    let candidate = replacing(source, block_range.clone(), &replacement);
+    let candidate_items = semantic_list_items(&candidate);
+    for output in outputs.iter().filter(|output| output.actionable) {
+        let expected_start = block_range.start + output.marker_start;
+        let item = candidate_items
+            .iter()
+            .find(|item| item.source_start == expected_start);
+        if remove {
+            if item.is_some_and(|item| item.kind == format) {
+                return Err(FormatError::AmbiguousSelection);
+            }
+        } else if item.is_none_or(|item| item.kind != format) {
+            return Err(FormatError::AmbiguousSelection);
+        }
+    }
+
+    let selection_range = if requested_selection.is_empty() {
+        let output = outputs
+            .iter()
+            .find(|output| output.old_range.start <= caret && caret <= output.old_range.end)
+            .ok_or(FormatError::InvalidSelection)?;
+        let old_content_end = trailing_line_ending_start(source, output.old_range.clone());
+        let content_offset = caret
+            .saturating_sub(output.old_content_start)
+            .min(old_content_end.saturating_sub(output.old_content_start));
+        let new_caret = block_range.start + output.new_content_start + content_offset;
+        new_caret..new_caret
+    } else {
+        block_range.start..block_range.start + without_trailing_line_ending(&replacement)
+    };
+
+    Ok(MarkdownEdit {
+        replace_range: block_range,
+        replacement,
+        selection_range,
+    })
+}
+
+fn build_list_replacement(
+    source: &str,
+    source_length: usize,
+    lines: &[Range<usize>],
+    markers: &[Option<ListMarker>],
+    actionable: &[bool],
+    format: ListFormat,
+    remove: bool,
+) -> Result<(String, Vec<ListLineOutput>), FormatError> {
+    let mut replacement = String::with_capacity(source_length + lines.len() * 6);
+    let mut outputs = Vec::with_capacity(lines.len());
+    for ((line, marker), actionable) in lines.iter().zip(markers).zip(actionable.iter().copied()) {
+        let new_line_start = replacement.len();
+        let indentation_end = leading_indentation_end(source, line.clone());
+        let old_content_start = marker.map_or(indentation_end, |value| value.content_start);
+        let marker_start = marker.map_or(indentation_end, |value| value.marker_start);
+        let new_content_start;
+
+        if !actionable {
+            replacement.push_str(&source[line.clone()]);
+            new_content_start = new_line_start + old_content_start - line.start;
+        } else if remove {
+            let marker = marker.ok_or(FormatError::AmbiguousSelection)?;
+            replacement.push_str(&source[line.start..marker.marker_start]);
+            new_content_start = replacement.len();
+            replacement.push_str(&source[marker.marker_end..line.end]);
+        } else {
+            replacement.push_str(&source[line.start..marker_start]);
+            let marker_text = match format {
+                ListFormat::Unordered => "- ".to_owned(),
+                ListFormat::Ordered => "1. ".to_owned(),
+                ListFormat::Task => {
+                    if marker.is_some_and(|value| value.kind == ListFormat::Task && value.checked) {
+                        "- [x] ".to_owned()
+                    } else {
+                        "- [ ] ".to_owned()
+                    }
+                }
+            };
+            replacement.push_str(&marker_text);
+            new_content_start = replacement.len();
+            replacement.push_str(&source[old_content_start..line.end]);
+        }
+
+        outputs.push(ListLineOutput {
+            old_range: line.clone(),
+            old_content_start,
+            new_content_start,
+            marker_start: new_line_start + marker_start - line.start,
+            actionable,
+        });
+    }
+    Ok((replacement, outputs))
+}
+
+fn selected_line_range(source: &str, selection: Range<usize>) -> Range<usize> {
+    let start = line_start(source, selection.start);
+    let end_anchor = if !selection.is_empty()
+        && source.as_bytes().get(selection.end.saturating_sub(1)) == Some(&b'\n')
+    {
+        selection.end - 1
+    } else {
+        selection.end
+    };
+    start..line_end_including_ending(source, end_anchor)
+}
+
+fn leading_indentation_end(source: &str, line: Range<usize>) -> usize {
+    let content_end = trailing_line_ending_start(source, line.clone());
+    let bytes = source.as_bytes();
+    let mut cursor = line.start;
+    while cursor < content_end && matches!(bytes[cursor], b' ' | b'\t') {
+        cursor += 1;
+    }
+    cursor
+}
+
+fn line_has_content(source: &str, line: Range<usize>) -> bool {
+    leading_indentation_end(source, line.clone()) < trailing_line_ending_start(source, line)
+}
+
+fn list_marker(source: &str, line: Range<usize>) -> Option<ListMarker> {
+    let bytes = source.as_bytes();
+    let content_end = trailing_line_ending_start(source, line.clone());
+    let marker_start = leading_indentation_end(source, line);
+    if marker_start >= content_end {
+        return None;
+    }
+
+    if matches!(bytes[marker_start], b'-' | b'+' | b'*') {
+        let mut cursor = marker_start + 1;
+        if cursor < content_end && !matches!(bytes[cursor], b' ' | b'\t') {
+            return None;
+        }
+        while cursor < content_end && matches!(bytes[cursor], b' ' | b'\t') {
+            cursor += 1;
+        }
+        let checkbox_start = cursor;
+        if checkbox_start + 3 <= content_end
+            && bytes[checkbox_start] == b'['
+            && matches!(bytes[checkbox_start + 1], b' ' | b'x' | b'X')
+            && bytes[checkbox_start + 2] == b']'
+            && (checkbox_start + 3 == content_end
+                || matches!(bytes[checkbox_start + 3], b' ' | b'\t'))
+        {
+            cursor = checkbox_start + 3;
+            while cursor < content_end && matches!(bytes[cursor], b' ' | b'\t') {
+                cursor += 1;
+            }
+            return Some(ListMarker {
+                kind: ListFormat::Task,
+                marker_start,
+                marker_end: cursor,
+                content_start: cursor,
+                checked: matches!(bytes[checkbox_start + 1], b'x' | b'X'),
+            });
+        }
+        return Some(ListMarker {
+            kind: ListFormat::Unordered,
+            marker_start,
+            marker_end: cursor,
+            content_start: cursor,
+            checked: false,
+        });
+    }
+
+    let mut cursor = marker_start;
+    while cursor < content_end && bytes[cursor].is_ascii_digit() && cursor - marker_start < 9 {
+        cursor += 1;
+    }
+    if cursor == marker_start || cursor >= content_end || !matches!(bytes[cursor], b'.' | b')') {
+        return None;
+    }
+    cursor += 1;
+    if cursor < content_end && !matches!(bytes[cursor], b' ' | b'\t') {
+        return None;
+    }
+    while cursor < content_end && matches!(bytes[cursor], b' ' | b'\t') {
+        cursor += 1;
+    }
+    Some(ListMarker {
+        kind: ListFormat::Ordered,
+        marker_start,
+        marker_end: cursor,
+        content_start: cursor,
+        checked: false,
+    })
+}
+
+fn semantic_list_items(source: &str) -> Vec<SemanticListItem> {
+    let mut list_stack: Vec<ListFormat> = Vec::new();
+    let mut item_stack: Vec<usize> = Vec::new();
+    let mut items = Vec::new();
+
+    for (event, range) in Parser::new_ext(source, render::options()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::List(start)) => list_stack.push(if start.is_some() {
+                ListFormat::Ordered
+            } else {
+                ListFormat::Unordered
+            }),
+            Event::Start(Tag::Item) => {
+                let kind = list_stack.last().copied().unwrap_or(ListFormat::Unordered);
+                items.push(SemanticListItem {
+                    source_start: range.start,
+                    kind,
+                });
+                item_stack.push(items.len() - 1);
+            }
+            Event::TaskListMarker(_) => {
+                if let Some(index) = item_stack.last().copied() {
+                    items[index].kind = ListFormat::Task;
+                }
+            }
+            Event::End(TagEnd::Item) => {
+                item_stack.pop();
+            }
+            Event::End(TagEnd::List(_)) => {
+                list_stack.pop();
+            }
+            _ => {}
+        }
+    }
+    items
 }
 
 fn heading_aware_line_range(
@@ -1074,6 +1385,99 @@ mod tests {
         assert_eq!(
             format_inline(source, 0..2, InlineFormat::Bold),
             Err(FormatError::InvalidSelection)
+        );
+    }
+
+    #[test]
+    fn list_inserts_editable_templates_and_preserves_unicode_caret() {
+        for (format, expected, caret) in [
+            (ListFormat::Unordered, "- ", 2),
+            (ListFormat::Ordered, "1. ", 3),
+            (ListFormat::Task, "- [ ] ", 6),
+        ] {
+            assert_eq!(
+                format_list("", 0..0, format),
+                Ok(MarkdownEdit {
+                    replace_range: 0..0,
+                    replacement: expected.to_owned(),
+                    selection_range: caret..caret,
+                })
+            );
+        }
+
+        let source = "Intro\n事项👩‍💻\nTail\n";
+        let line_start = "Intro\n".len();
+        let caret = line_start + "事项".len();
+        let edit = format_list(source, caret..caret, ListFormat::Unordered).unwrap();
+        assert_eq!(edit.replacement, "- 事项👩‍💻\n");
+        assert_eq!(edit.selection_range, caret + 2..caret + 2);
+    }
+
+    #[test]
+    fn list_unifies_mixed_lines_and_removes_matching_markers() {
+        let source = "- one\n2. two\nthree\n\n";
+        let edit = format_list(source, 0..source.len(), ListFormat::Unordered).unwrap();
+        assert_eq!(edit.replacement, "- one\n- two\n- three\n\n");
+        assert_eq!(edit.selection_range, 0..edit.replacement.len() - 1);
+
+        let formatted = edit.replacement;
+        let removed = format_list(&formatted, 0..formatted.len(), ListFormat::Unordered).unwrap();
+        assert_eq!(removed.replacement, "one\ntwo\nthree\n\n");
+    }
+
+    #[test]
+    fn ordered_list_uses_stable_markers_and_preserves_nested_structure() {
+        let source = "first\n   child\nsecond\n   other\n";
+        let edit = format_list(source, 0..source.len(), ListFormat::Ordered).unwrap();
+        assert_eq!(
+            edit.replacement,
+            "1. first\n   1. child\n1. second\n   1. other\n"
+        );
+        let html = render::html_fragment(&edit.replacement);
+        assert!(html.contains("<ol>"));
+        assert!(html.contains("<li>first"));
+    }
+
+    #[test]
+    fn task_list_preserves_checked_items_and_normalizes_other_markers() {
+        let source = "- [x] done\n- todo\n3. later\n";
+        let edit = format_list(source, 0..source.len(), ListFormat::Task).unwrap();
+        assert_eq!(edit.replacement, "- [x] done\n- [ ] todo\n- [ ] later\n");
+        let html = render::html_fragment(&edit.replacement);
+        assert!(html.contains("type=\"checkbox\" checked=\"\""));
+        assert!(html.contains("type=\"checkbox\""));
+
+        let removed = format_list(
+            &edit.replacement,
+            0..edit.replacement.len(),
+            ListFormat::Task,
+        )
+        .unwrap();
+        assert_eq!(removed.replacement, "done\ntodo\nlater\n");
+    }
+
+    #[test]
+    fn list_rejects_code_fence_markers_and_invalid_grapheme_boundaries() {
+        let fenced = "```\n- not an item\n```\n";
+        assert_eq!(
+            format_list(fenced, 6..6, ListFormat::Unordered),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            format_list("e\u{301}", 1..1, ListFormat::Task),
+            Err(FormatError::InvalidSelection)
+        );
+    }
+
+    #[test]
+    fn list_selection_ending_at_newline_leaves_the_next_line_untouched() {
+        let source = "one\ntwo\n";
+        let edit = format_list(source, 0..4, ListFormat::Unordered).unwrap();
+        assert_eq!(edit.replace_range, 0..4);
+        assert_eq!(edit.replacement, "- one\n");
+        assert_eq!(
+            replacing(source, edit.replace_range, &edit.replacement),
+            "- one\ntwo\n"
         );
     }
 

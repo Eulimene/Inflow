@@ -57,6 +57,15 @@ struct MarkdownFormatCommands: Commands {
                 actions?.apply(.blockQuote)
             }
             .disabled(actions?.canFormat != true)
+
+            Menu("列表") {
+                ForEach(MarkdownListFormat.allCases) { format in
+                    Button(format.label) {
+                        actions?.apply(.list(format))
+                    }
+                    .disabled(actions?.canFormat != true)
+                }
+            }
         }
     }
 }

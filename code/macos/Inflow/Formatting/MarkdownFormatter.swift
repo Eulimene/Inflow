@@ -52,16 +52,42 @@ enum MarkdownHeadingLevel: UInt8, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum MarkdownListFormat: UInt8, CaseIterable, Identifiable, Sendable {
+    case ordered = 2
+    case unordered = 1
+    case task = 3
+
+    var id: UInt8 { rawValue }
+
+    var label: String {
+        switch self {
+        case .ordered: "有序"
+        case .unordered: "无序"
+        case .task: "任务"
+        }
+    }
+
+    var coreValue: UInt8 {
+        switch self {
+        case .ordered: UInt8(INFLOW_LIST_FORMAT_ORDERED)
+        case .unordered: UInt8(INFLOW_LIST_FORMAT_UNORDERED)
+        case .task: UInt8(INFLOW_LIST_FORMAT_TASK)
+        }
+    }
+}
+
 enum MarkdownFormatCommand: Equatable, Sendable {
     case inline(MarkdownInlineFormat)
     case heading(MarkdownHeadingLevel)
     case blockQuote
+    case list(MarkdownListFormat)
 
     var undoActionName: String {
         switch self {
         case let .inline(format): format.undoActionName
         case .heading: "标题格式"
         case .blockQuote: "引用格式"
+        case .list: "列表格式"
         }
     }
 }
@@ -160,6 +186,14 @@ enum MarkdownFormatter {
                     UInt(buffer.count),
                     UInt(selectedUTF8Range.lowerBound),
                     UInt(selectedUTF8Range.upperBound)
+                )
+            case let .list(format):
+                inflow_markdown_format_list(
+                    sourcePointer,
+                    UInt(buffer.count),
+                    UInt(selectedUTF8Range.lowerBound),
+                    UInt(selectedUTF8Range.upperBound),
+                    format.coreValue
                 )
             }
         }
