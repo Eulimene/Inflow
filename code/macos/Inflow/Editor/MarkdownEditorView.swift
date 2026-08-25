@@ -338,7 +338,8 @@ struct MarkdownEditorView: View {
             text: $document.text,
             selectionRequest: sourceSelectionRequest,
             session: sourceEditorSession,
-            isEditable: isEditable
+            isEditable: isEditable,
+            onPasteImage: pasteImage
         )
     }
 
@@ -551,6 +552,68 @@ struct MarkdownEditorView: View {
                     ) else {
                         try await Task.detached { try asset.rollback() }.value
                         markdownFormatErrorMessage = "正文、选区或输入法状态已变化，已回滚复制的图片。"
+                        return
+                    }
+                    await Task.yield()
+                    _ = sourceEditorSession.focusEditor()
+                } catch {
+                    try? await Task.detached { try asset.rollback() }.value
+                    throw error
+                }
+            } catch {
+                markdownFormatErrorMessage = (error as? LocalizedError)?.errorDescription
+                    ?? ImageAssetImportError.copyFailed.localizedDescription
+            }
+        }
+    }
+
+    private func pasteImage(_ payload: ClipboardImagePayload) {
+        guard isEditable, !isImportingImage else { return }
+        guard let documentURL = fileURL else {
+            markdownFormatErrorMessage = ImageAssetImportError.unsavedDocument.localizedDescription
+            return
+        }
+        let sourceSnapshot = document.text
+        let selectedRange = sourceEditorSession.textView.selectedRange()
+        let documentDirectory = documentURL.deletingLastPathComponent()
+        let window = sourceEditorSession.textView.window ?? NSApp.keyWindow
+        let worker = imageAssetWorker
+        isImportingImage = true
+
+        Task { @MainActor in
+            defer { isImportingImage = false }
+            do {
+                let image = try await worker.prepareClipboardImage(payload)
+                guard let authorizedDirectory = try await ImageAssetPicker.authorizeDocumentDirectory(
+                    documentDirectory,
+                    attachedTo: window
+                ) else {
+                    return
+                }
+                imageDirectoryAccess.authorize(authorizedDirectory)
+                let asset = try await worker.importClipboardImage(
+                    image,
+                    documentDirectory: authorizedDirectory
+                )
+                do {
+                    let alternative = asset.destinationURL.deletingPathExtension().lastPathComponent
+                    let plan = try MarkdownFormatter.imagePlan(
+                        source: sourceSnapshot,
+                        selectedUTF16Range: selectedRange,
+                        destination: asset.relativeMarkdownPath,
+                        defaultAlternative: alternative
+                    )
+                    viewMode = viewMode.sourceVisible
+                    guard sourceEditorSession.applyMarkdownImage(
+                        plan,
+                        asset: asset,
+                        actionName: "粘贴图片",
+                        onResourceError: { message in
+                            markdownFormatErrorMessage = message
+                        }
+                    ) else {
+                        try await Task.detached { try asset.rollback() }.value
+                        markdownFormatErrorMessage = "正文、选区或输入法状态已变化，已回滚粘贴的图片。"
                         return
                     }
                     await Task.yield()

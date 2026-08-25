@@ -61,9 +61,11 @@ enum LocalImageValidator {
         } catch {
             throw LocalImageValidationError.notRegularOrUnreadable
         }
-        guard data.count <= maximumBytes else {
-            throw LocalImageValidationError.tooLarge
-        }
+        return try validate(data: data, fileExtension: url.pathExtension)
+    }
+
+    static func validate(data: Data, fileExtension: String) throws -> ValidatedLocalImage {
+        guard data.count <= maximumBytes else { throw LocalImageValidationError.tooLarge }
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               CGImageSourceGetCount(source) == 1,
               let typeIdentifier = CGImageSourceGetType(source) as String?,
@@ -94,7 +96,7 @@ enum LocalImageValidator {
         } else {
             throw LocalImageValidationError.unsafeOrUnsupported
         }
-        guard expectedExtensions.contains(url.pathExtension.lowercased()) else {
+        guard expectedExtensions.contains(fileExtension.lowercased()) else {
             throw LocalImageValidationError.extensionMismatch
         }
         return ValidatedLocalImage(data: data, mimeType: mimeType)
@@ -116,10 +118,95 @@ enum LocalImageValidator {
     }
 }
 
+enum ClipboardImageKind: String, Sendable, Equatable {
+    case png
+    case jpeg
+    case tiff
+
+    var pasteboardType: NSPasteboard.PasteboardType {
+        switch self {
+        case .png: NSPasteboard.PasteboardType(UTType.png.identifier)
+        case .jpeg: NSPasteboard.PasteboardType(UTType.jpeg.identifier)
+        case .tiff: .tiff
+        }
+    }
+}
+
+struct ClipboardImagePayload: Sendable, Equatable {
+    let data: Data
+    let kind: ClipboardImageKind
+
+    @MainActor
+    static func read(from pasteboard: NSPasteboard) -> Self? {
+        for kind in [ClipboardImageKind.png, .jpeg, .tiff] {
+            if let data = pasteboard.data(forType: kind.pasteboardType) {
+                return Self(data: data, kind: kind)
+            }
+        }
+        return nil
+    }
+}
+
+enum ClipboardImageProcessor {
+    static func validateAndNormalize(_ payload: ClipboardImagePayload) throws -> ValidatedLocalImage {
+        switch payload.kind {
+        case .png:
+            try LocalImageValidator.validate(data: payload.data, fileExtension: "png")
+        case .jpeg:
+            try LocalImageValidator.validate(data: payload.data, fileExtension: "jpg")
+        case .tiff:
+            try convertTIFFToPNG(payload.data)
+        }
+    }
+
+    private static func convertTIFFToPNG(_ data: Data) throws -> ValidatedLocalImage {
+        guard data.count <= LocalImageValidator.maximumBytes,
+              let source = CGImageSourceCreateWithData(data as CFData, [
+                  kCGImageSourceShouldCache: false,
+              ] as CFDictionary),
+              CGImageSourceGetCount(source) == 1,
+              let typeIdentifier = CGImageSourceGetType(source) as String?,
+              UTType(typeIdentifier)?.conforms(to: .tiff) == true,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              width > 0,
+              height > 0,
+              width <= 32_768,
+              height <= 32_768,
+              case let (pixelCount, overflow) = width.multipliedReportingOverflow(by: height),
+              !overflow,
+              pixelCount <= 100_000_000,
+              let image = CGImageSourceCreateImageAtIndex(source, 0, [
+                  kCGImageSourceShouldCacheImmediately: false,
+              ] as CFDictionary)
+        else {
+            throw LocalImageValidationError.unsafeOrUnsupported
+        }
+
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output,
+            UTType.png.identifier as CFString,
+            1,
+            nil
+        ) else {
+            throw LocalImageValidationError.unsafeOrUnsupported
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw LocalImageValidationError.unsafeOrUnsupported
+        }
+        return try LocalImageValidator.validate(data: output as Data, fileExtension: "png")
+    }
+}
+
 enum ImageAssetCollisionResolution: Sendable, Equatable {
     case failIfExists
     case replace
     case incrementName
+    case numberedSequence
 }
 
 enum ExistingImagePlacement: Sendable, Equatable {
@@ -377,6 +464,23 @@ actor ImageAssetWorker {
         )
     }
 
+    func prepareClipboardImage(_ payload: ClipboardImagePayload) throws -> ValidatedLocalImage {
+        try ClipboardImageProcessor.validateAndNormalize(payload)
+    }
+
+    func importClipboardImage(
+        _ image: ValidatedLocalImage,
+        documentDirectory: URL
+    ) throws -> ImportedImageAsset {
+        try importAsset(
+            image: image,
+            originalFilename: image.mimeType == "image/jpeg" ? "image.jpg" : "image.png",
+            documentDirectory: documentDirectory,
+            collisionResolution: .numberedSequence,
+            expectedDestination: nil
+        )
+    }
+
     func destinationSnapshot(
         documentDirectory: URL,
         originalFilename: String
@@ -393,7 +497,7 @@ actor ImageAssetWorker {
         originalFilename: String,
         documentDirectory: URL,
         collisionResolution: ImageAssetCollisionResolution,
-        expectedDestination: ImageAssetDestinationSnapshot
+        expectedDestination: ImageAssetDestinationSnapshot?
     ) throws -> ImportedImageAsset {
         guard !originalFilename.isEmpty,
               !originalFilename.unicodeScalars.contains(where: {
@@ -421,8 +525,9 @@ actor ImageAssetWorker {
                 originalFilename: originalFilename,
                 collisionResolution: collisionResolution
             )
-            if collisionResolution != .incrementName {
-                guard try ImageAssetDestinationSnapshot.capture(destinationURL) == expectedDestination,
+            if collisionResolution == .failIfExists || collisionResolution == .replace {
+                guard let expectedDestination,
+                      try ImageAssetDestinationSnapshot.capture(destinationURL) == expectedDestination,
                       expectedDestination.exists == (collisionResolution == .replace)
                 else {
                     throw ImageAssetImportError.destinationChanged
@@ -430,7 +535,7 @@ actor ImageAssetWorker {
             }
             let previousData: Data?
             if fileManager.fileExists(atPath: destinationURL.path) {
-                guard collisionResolution != .failIfExists else {
+                guard collisionResolution == .replace else {
                     throw ImageAssetImportError.destinationChanged
                 }
                 let values = try destinationURL.resourceValues(forKeys: [
@@ -471,11 +576,24 @@ actor ImageAssetWorker {
         collisionResolution: ImageAssetCollisionResolution
     ) throws -> URL {
         let original = assetsDirectory.appendingPathComponent(originalFilename)
+        if collisionResolution == .numberedSequence {
+            let name = original.deletingPathExtension().lastPathComponent
+            let pathExtension = original.pathExtension
+            for suffix in 1...10_000 {
+                let number = String(format: "%03d", suffix)
+                let filename = pathExtension.isEmpty
+                    ? "\(name)-\(number)"
+                    : "\(name)-\(number).\(pathExtension)"
+                let candidate = assetsDirectory.appendingPathComponent(filename)
+                if !FileManager.default.fileExists(atPath: candidate.path) {
+                    return candidate
+                }
+            }
+            throw ImageAssetImportError.copyFailed
+        }
         guard collisionResolution == .incrementName,
               FileManager.default.fileExists(atPath: original.path)
-        else {
-            return original
-        }
+        else { return original }
         let name = original.deletingPathExtension().lastPathComponent
         let pathExtension = original.pathExtension
         for suffix in 2...10_000 {
@@ -533,7 +651,7 @@ final class ImageAssetDirectoryAccess: ObservableObject {
 enum ImageAssetPicker {
     static func chooseSource(attachedTo window: NSWindow?) async -> URL? {
         let panel = NSOpenPanel()
-        panel.title = "选择要复制的图片"
+        panel.title = "选择图片"
         panel.prompt = "选择图片"
         panel.allowedContentTypes = [.png, .jpeg]
         panel.allowsMultipleSelection = false

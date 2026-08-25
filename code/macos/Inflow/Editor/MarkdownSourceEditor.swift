@@ -401,6 +401,7 @@ final class WindowAwareTextView: NSTextView {
     private let persistentUndoManager = UndoManager()
     var didAttachToWindow: (() -> Void)?
     var textDidChangeHandler: ((String) -> Void)?
+    var pasteImageHandler: ((ClipboardImagePayload) -> Void)?
 
     override var undoManager: UndoManager? {
         persistentUndoManager
@@ -416,6 +417,23 @@ final class WindowAwareTextView: NSTextView {
     override func didChangeText() {
         super.didChangeText()
         textDidChangeHandler?(string)
+    }
+
+    @discardableResult
+    func consumeImagePaste(from pasteboard: NSPasteboard) -> Bool {
+        guard isEditable,
+              let pasteImageHandler,
+              let payload = ClipboardImagePayload.read(from: pasteboard)
+        else {
+            return false
+        }
+        pasteImageHandler(payload)
+        return true
+    }
+
+    override func paste(_ sender: Any?) {
+        if consumeImagePaste(from: .general) { return }
+        super.paste(sender)
     }
 
     /// AppKit's standard Edit menu dispatches these actions through the first
@@ -446,17 +464,20 @@ struct MarkdownSourceEditor: NSViewRepresentable {
     let selectionRequest: SourceSelectionRequest?
     let session: MarkdownSourceEditorSession
     let isEditable: Bool
+    let onPasteImage: ((ClipboardImagePayload) -> Void)?
 
     init(
         text: Binding<String>,
         selectionRequest: SourceSelectionRequest?,
         session: MarkdownSourceEditorSession,
-        isEditable: Bool = true
+        isEditable: Bool = true,
+        onPasteImage: ((ClipboardImagePayload) -> Void)? = nil
     ) {
         _text = text
         self.selectionRequest = selectionRequest
         self.session = session
         self.isEditable = isEditable
+        self.onPasteImage = onPasteImage
     }
 
     func makeCoordinator() -> Coordinator {
@@ -478,6 +499,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
         if textView.delegate === coordinator {
             textView.delegate = nil
             textView.didAttachToWindow = nil
+            textView.pasteImageHandler = nil
         }
     }
 
@@ -500,6 +522,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
             textView.delegate = self
             textView.isEditable = parent.isEditable
             textView.isSelectable = true
+            textView.pasteImageHandler = parent.onPasteImage
             textView.didAttachToWindow = { [weak self, weak textView] in
                 guard let self, let textView else { return }
                 self.applyPendingSelection(to: textView)

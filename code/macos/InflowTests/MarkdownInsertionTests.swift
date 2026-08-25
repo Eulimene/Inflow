@@ -319,6 +319,88 @@ final class MarkdownInsertionTests: XCTestCase {
     }
 
     @MainActor
+    func testSourceEditorConsumesOnlyEditableImagePasteboardPayloads() throws {
+        let imagePasteboard = NSPasteboard(
+            name: NSPasteboard.Name("inflow.tests.image.\(UUID().uuidString)")
+        )
+        imagePasteboard.clearContents()
+        imagePasteboard.declareTypes([ClipboardImageKind.png.pasteboardType], owner: nil)
+        XCTAssertTrue(imagePasteboard.setData(
+            try testPNGData(),
+            forType: ClipboardImageKind.png.pasteboardType
+        ))
+
+        let textView = WindowAwareTextView()
+        textView.isEditable = true
+        var received: ClipboardImagePayload?
+        textView.pasteImageHandler = { received = $0 }
+        XCTAssertTrue(textView.consumeImagePaste(from: imagePasteboard))
+        XCTAssertEqual(received?.kind, .png)
+        XCTAssertEqual(received?.data, try testPNGData())
+
+        let textPasteboard = NSPasteboard(
+            name: NSPasteboard.Name("inflow.tests.text.\(UUID().uuidString)")
+        )
+        textPasteboard.clearContents()
+        textPasteboard.setString("plain text", forType: .string)
+        XCTAssertFalse(textView.consumeImagePaste(from: textPasteboard))
+
+        textView.isEditable = false
+        XCTAssertFalse(textView.consumeImagePaste(from: imagePasteboard))
+    }
+
+    func testClipboardImagesAreValidatedAndTIFFIsNormalizedToPNG() async throws {
+        let worker = ImageAssetWorker()
+        let png = try testPNGData()
+        let validatedPNG = try await worker.prepareClipboardImage(
+            ClipboardImagePayload(data: png, kind: .png)
+        )
+        XCTAssertEqual(validatedPNG.mimeType, "image/png")
+        XCTAssertEqual(validatedPNG.data, png)
+
+        let image = try XCTUnwrap(NSImage(data: png))
+        let tiff = try XCTUnwrap(image.tiffRepresentation)
+        let normalized = try await worker.prepareClipboardImage(
+            ClipboardImagePayload(data: tiff, kind: .tiff)
+        )
+        XCTAssertEqual(normalized.mimeType, "image/png")
+        XCTAssertNotNil(NSImage(data: normalized.data))
+        await XCTAssertThrowsErrorAsync {
+            _ = try await worker.prepareClipboardImage(
+                ClipboardImagePayload(data: Data("not an image".utf8), kind: .png)
+            )
+        }
+    }
+
+    func testClipboardImagesUseNumberedNamesWithoutOverwriting() async throws {
+        let root = try temporaryImageDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let documentDirectory = root.appendingPathComponent("document", isDirectory: true)
+        try FileManager.default.createDirectory(at: documentDirectory, withIntermediateDirectories: true)
+        let worker = ImageAssetWorker()
+        let image = try await worker.prepareClipboardImage(
+            ClipboardImagePayload(data: try testPNGData(), kind: .png)
+        )
+
+        let first = try await worker.importClipboardImage(
+            image,
+            documentDirectory: documentDirectory
+        )
+        let second = try await worker.importClipboardImage(
+            image,
+            documentDirectory: documentDirectory
+        )
+        XCTAssertEqual(first.relativeMarkdownPath, "assets/image-001.png")
+        XCTAssertEqual(second.relativeMarkdownPath, "assets/image-002.png")
+        XCTAssertEqual(try Data(contentsOf: first.destinationURL), image.data)
+        XCTAssertEqual(try Data(contentsOf: second.destinationURL), image.data)
+
+        try second.rollback()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.destinationURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.destinationURL.path))
+    }
+
+    @MainActor
     func testImageInsertionUndoAndRedoOwnBothMarkdownAndCreatedResource() async throws {
         let root = try temporaryImageDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
