@@ -242,6 +242,24 @@ InflowMarkdownEditResult inflow_markdown_insert_link(
     uintptr_t destination_length
 );
 
+/// Plans one standard Markdown image insertion. Plain selected source becomes
+/// escaped alternative text; an empty selection uses and selects the supplied
+/// default alternative. Existing link/image intersections, multiline labels,
+/// empty alternatives and unsafe destinations are rejected without mutation.
+/// All strings are UTF-8. Selection and returned ranges use end-exclusive UTF-8
+/// byte offsets aligned to complete extended graphemes. Returned replacement
+/// bytes must be released with inflow_owned_bytes_free.
+InflowMarkdownEditResult inflow_markdown_insert_image(
+    const uint8_t *utf8,
+    uintptr_t length,
+    uintptr_t selection_start,
+    uintptr_t selection_end,
+    const uint8_t *destination_utf8,
+    uintptr_t destination_length,
+    const uint8_t *alternative_utf8,
+    uintptr_t alternative_length
+);
+
 /// Plans a 3-column by 3-row Markdown table insertion (one header and two data
 /// rows). Selected source is escaped into the first header; an empty selection
 /// receives a default header, which remains selected for immediate editing.

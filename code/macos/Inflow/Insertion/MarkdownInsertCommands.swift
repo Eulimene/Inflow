@@ -4,6 +4,7 @@ import SwiftUI
 final class MarkdownInsertCommandActions {
     let canInsert: Bool
     let insertLink: () -> Void
+    let insertImage: () -> Void
     let insertTable: () -> Void
     let insertHorizontalRule: () -> Void
     let insertFootnote: () -> Void
@@ -13,6 +14,7 @@ final class MarkdownInsertCommandActions {
     init(
         canInsert: Bool,
         insertLink: @escaping () -> Void,
+        insertImage: @escaping () -> Void,
         insertTable: @escaping () -> Void,
         insertHorizontalRule: @escaping () -> Void,
         insertFootnote: @escaping () -> Void,
@@ -21,6 +23,7 @@ final class MarkdownInsertCommandActions {
     ) {
         self.canInsert = canInsert
         self.insertLink = insertLink
+        self.insertImage = insertImage
         self.insertTable = insertTable
         self.insertHorizontalRule = insertHorizontalRule
         self.insertFootnote = insertFootnote
@@ -49,6 +52,11 @@ struct MarkdownInsertCommands: Commands {
                 actions?.insertLink()
             }
             .keyboardShortcut("k", modifiers: .command)
+            .disabled(actions?.canInsert != true)
+
+            Button("图片…") {
+                actions?.insertImage()
+            }
             .disabled(actions?.canInsert != true)
 
             Button("表格") {

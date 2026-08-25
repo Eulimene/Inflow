@@ -534,6 +534,53 @@ pub unsafe extern "C" fn inflow_markdown_insert_link(
     .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
 }
 
+/// Plans one standard Markdown image insertion for a UTF-8 snapshot.
+///
+/// # Safety
+///
+/// Non-zero source, destination and alternative lengths require pointers to
+/// that many readable bytes for the duration of this call. Selection offsets
+/// are end-exclusive UTF-8 byte offsets aligned with grapheme boundaries.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_markdown_insert_image(
+    utf8: *const u8,
+    length: usize,
+    selection_start: usize,
+    selection_end: usize,
+    destination_utf8: *const u8,
+    destination_length: usize,
+    alternative_utf8: *const u8,
+    alternative_length: usize,
+) -> InflowMarkdownEditResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Some(destination) = (unsafe { borrowed_bytes(destination_utf8, destination_length) })
+        else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Some(alternative) = (unsafe { borrowed_bytes(alternative_utf8, alternative_length) })
+        else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let (Ok(source), Ok(destination), Ok(alternative)) = (
+            std::str::from_utf8(input),
+            std::str::from_utf8(destination),
+            std::str::from_utf8(alternative),
+        ) else {
+            return InflowMarkdownEditResult::error(STATUS_INVALID_UTF8);
+        };
+        markdown_edit_result(format::insert_image(
+            source,
+            selection_start..selection_end,
+            destination,
+            alternative,
+        ))
+    }))
+    .unwrap_or_else(|_| InflowMarkdownEditResult::error(STATUS_PANIC))
+}
+
 /// Plans one three-column, three-row Markdown table insertion.
 ///
 /// # Safety
@@ -1348,6 +1395,79 @@ mod tests {
             },
             unsafe {
                 inflow_markdown_insert_link(source.as_ptr(), source.len(), 0, 0, ptr::null(), 1)
+            },
+        ] {
+            assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
+            assert!(invalid.replacement.data.is_null());
+        }
+    }
+
+    #[test]
+    fn ffi_inserts_image_and_releases_result() {
+        let source = "Before 图片";
+        let destination = "assets/photo.png";
+        let alternative = "photo";
+        let start = "Before ".len();
+        let result = unsafe {
+            inflow_markdown_insert_image(
+                source.as_ptr(),
+                source.len(),
+                start,
+                source.len(),
+                destination.as_ptr(),
+                destination.len(),
+                alternative.as_ptr(),
+                alternative.len(),
+            )
+        };
+        assert_eq!(result.status, STATUS_OK);
+        let replacement = unsafe {
+            std::slice::from_raw_parts(result.replacement.data, result.replacement.length)
+        };
+        assert_eq!(
+            std::str::from_utf8(replacement).unwrap(),
+            "![图片](<assets/photo.png>)"
+        );
+        unsafe {
+            inflow_owned_bytes_free(result.replacement.data, result.replacement.length);
+        }
+
+        for invalid in [
+            unsafe {
+                inflow_markdown_insert_image(
+                    ptr::null(),
+                    1,
+                    0,
+                    0,
+                    destination.as_ptr(),
+                    destination.len(),
+                    alternative.as_ptr(),
+                    alternative.len(),
+                )
+            },
+            unsafe {
+                inflow_markdown_insert_image(
+                    source.as_ptr(),
+                    source.len(),
+                    0,
+                    0,
+                    ptr::null(),
+                    1,
+                    alternative.as_ptr(),
+                    alternative.len(),
+                )
+            },
+            unsafe {
+                inflow_markdown_insert_image(
+                    source.as_ptr(),
+                    source.len(),
+                    0,
+                    0,
+                    destination.as_ptr(),
+                    destination.len(),
+                    ptr::null(),
+                    1,
+                )
             },
         ] {
             assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);

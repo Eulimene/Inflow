@@ -330,6 +330,63 @@ enum MarkdownFormatter {
         }
     }
 
+    static func imagePlan(
+        source: String,
+        selectedUTF16Range: NSRange,
+        destination: String,
+        defaultAlternative: String
+    ) throws -> MarkdownFormatPlan {
+        guard InflowCoreBridge.isCompatible else {
+            throw MarkdownFormatError.coreFailure
+        }
+        let destination = destination.trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultAlternative = defaultAlternative.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !destination.isEmpty,
+              !defaultAlternative.isEmpty,
+              !destination.unicodeScalars.contains(where: {
+                  $0.value < 0x20
+                      || $0.value == 0x7F
+                      || $0 == "<"
+                      || $0 == ">"
+                      || $0 == "\\"
+              }),
+              !defaultAlternative.unicodeScalars.contains(where: {
+                  $0.value < 0x20 || $0.value == 0x7F
+              }),
+              let selectedUTF8Range = MarkdownSourceRange.utf8Range(
+                  forUTF16Range: selectedUTF16Range,
+                  in: source
+              )
+        else {
+            throw MarkdownFormatError.invalidDestination
+        }
+
+        let sourceUTF8 = Data(source.utf8)
+        let destinationUTF8 = Data(destination.utf8)
+        let alternativeUTF8 = Data(defaultAlternative.utf8)
+        let result: InflowMarkdownEditResult = sourceUTF8.withUnsafeBytes { sourceBuffer in
+            destinationUTF8.withUnsafeBytes { destinationBuffer in
+                alternativeUTF8.withUnsafeBytes { alternativeBuffer in
+                    inflow_markdown_insert_image(
+                        sourceBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        UInt(sourceBuffer.count),
+                        UInt(selectedUTF8Range.lowerBound),
+                        UInt(selectedUTF8Range.upperBound),
+                        destinationBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        UInt(destinationBuffer.count),
+                        alternativeBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        UInt(alternativeBuffer.count)
+                    )
+                }
+            }
+        }
+        do {
+            return try decodePlan(result: result, source: source, sourceUTF8: sourceUTF8)
+        } catch MarkdownFormatError.invalidSelection {
+            throw MarkdownFormatError.invalidDestination
+        }
+    }
+
     static func plan(
         source: String,
         selectedUTF16Range: NSRange,

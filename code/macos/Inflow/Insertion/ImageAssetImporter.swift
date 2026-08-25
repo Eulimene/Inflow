@@ -1,0 +1,517 @@
+import AppKit
+import Darwin
+import Foundation
+import ImageIO
+import UniformTypeIdentifiers
+
+struct ValidatedLocalImage: Sendable {
+    let data: Data
+    let mimeType: String
+}
+
+enum LocalImageValidationError: Error, LocalizedError, Equatable {
+    case notRegularOrUnreadable
+    case tooLarge
+    case unsafeOrUnsupported
+    case extensionMismatch
+
+    var errorDescription: String? {
+        switch self {
+        case .notRegularOrUnreadable:
+            "图片不存在、不可读，或不是普通文件。"
+        case .tooLarge:
+            "图片超过 100 MiB，未读取或复制。"
+        case .unsafeOrUnsupported:
+            "只支持安全尺寸、单帧的静态 PNG 或 JPEG。"
+        case .extensionMismatch:
+            "图片内容与文件扩展名不一致。"
+        }
+    }
+}
+
+enum LocalImageValidator {
+    static let maximumBytes = 100 * 1_024 * 1_024
+
+    static func load(at url: URL) throws -> ValidatedLocalImage {
+        let values: URLResourceValues
+        do {
+            values = try url.resourceValues(forKeys: [
+                .isRegularFileKey,
+                .isSymbolicLinkKey,
+                .fileSizeKey,
+            ])
+        } catch {
+            throw LocalImageValidationError.notRegularOrUnreadable
+        }
+        guard values.isRegularFile == true,
+              values.isSymbolicLink != true,
+              let size = values.fileSize,
+              size >= 0,
+              size <= maximumBytes
+        else {
+            if let size = values.fileSize, size > maximumBytes {
+                throw LocalImageValidationError.tooLarge
+            }
+            throw LocalImageValidationError.notRegularOrUnreadable
+        }
+
+        let data: Data
+        do {
+            data = try boundedData(at: url)
+        } catch {
+            throw LocalImageValidationError.notRegularOrUnreadable
+        }
+        guard data.count <= maximumBytes else {
+            throw LocalImageValidationError.tooLarge
+        }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceGetCount(source) == 1,
+              let typeIdentifier = CGImageSourceGetType(source) as String?,
+              let type = UTType(typeIdentifier),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              width > 0,
+              height > 0,
+              width <= 32_768,
+              height <= 32_768,
+              case let (pixelCount, overflow) = width.multipliedReportingOverflow(by: height),
+              !overflow,
+              pixelCount <= 100_000_000
+        else {
+            throw LocalImageValidationError.unsafeOrUnsupported
+        }
+
+        let mimeType: String
+        let expectedExtensions: Set<String>
+        if type.conforms(to: .png) {
+            mimeType = "image/png"
+            expectedExtensions = ["png"]
+        } else if type.conforms(to: .jpeg) {
+            mimeType = "image/jpeg"
+            expectedExtensions = ["jpg", "jpeg"]
+        } else {
+            throw LocalImageValidationError.unsafeOrUnsupported
+        }
+        guard expectedExtensions.contains(url.pathExtension.lowercased()) else {
+            throw LocalImageValidationError.extensionMismatch
+        }
+        return ValidatedLocalImage(data: data, mimeType: mimeType)
+    }
+
+    private static func boundedData(at url: URL) throws -> Data {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+
+        var data = Data()
+        data.reserveCapacity(min(maximumBytes, 1_024 * 1_024))
+        while data.count <= maximumBytes {
+            let remaining = maximumBytes + 1 - data.count
+            let chunk = try handle.read(upToCount: min(remaining, 1_024 * 1_024))
+            guard let chunk, !chunk.isEmpty else { break }
+            data.append(chunk)
+        }
+        return data
+    }
+}
+
+enum ImageAssetCollisionResolution: Sendable, Equatable {
+    case failIfExists
+    case replace
+    case incrementName
+}
+
+struct ImageAssetDestinationSnapshot: Equatable, Sendable {
+    private enum State: Equatable, Sendable {
+        case missing
+        case existing(
+            device: UInt64,
+            inode: UInt64,
+            generation: UInt32,
+            changeSeconds: Int64,
+            changeNanoseconds: Int64,
+            size: Int64,
+            modificationSeconds: Int64,
+            modificationNanoseconds: Int64,
+            contentHash: UInt64
+        )
+    }
+
+    private let state: State
+
+    var exists: Bool {
+        if case .existing = state { true } else { false }
+    }
+
+    static func capture(_ url: URL, fileManager: FileManager = .default) throws -> Self {
+        var metadata = stat()
+        errno = 0
+        let status: Int32 = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return lstat(path, &metadata)
+        }
+        guard status == 0 else {
+            if errno == ENOENT || !fileManager.fileExists(atPath: url.path) {
+                return Self(state: .missing)
+            }
+            throw ImageAssetImportError.destinationChanged
+        }
+        guard metadata.st_mode & S_IFMT == S_IFREG else {
+            throw ImageAssetImportError.destinationChanged
+        }
+
+        return Self(
+            state: .existing(
+                device: UInt64(metadata.st_dev),
+                inode: metadata.st_ino,
+                generation: metadata.st_gen,
+                changeSeconds: Int64(metadata.st_ctimespec.tv_sec),
+                changeNanoseconds: Int64(metadata.st_ctimespec.tv_nsec),
+                size: metadata.st_size,
+                modificationSeconds: Int64(metadata.st_mtimespec.tv_sec),
+                modificationNanoseconds: Int64(metadata.st_mtimespec.tv_nsec),
+                contentHash: try contentHash(of: url)
+            )
+        )
+    }
+
+    private static func contentHash(of url: URL) throws -> UInt64 {
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forReadingFrom: url)
+        } catch {
+            throw ImageAssetImportError.destinationChanged
+        }
+        defer { try? handle.close() }
+
+        var hash = UInt64(0xcbf29ce484222325)
+        do {
+            while let chunk = try handle.read(upToCount: 1_048_576), !chunk.isEmpty {
+                for byte in chunk {
+                    hash ^= UInt64(byte)
+                    hash &*= 0x100000001b3
+                }
+            }
+        } catch {
+            throw ImageAssetImportError.destinationChanged
+        }
+        return hash
+    }
+}
+
+struct ImportedImageAsset: Sendable {
+    let destinationURL: URL
+    let relativeMarkdownPath: String
+    let importedData: Data
+    let previousData: Data?
+    let createdAssetsDirectory: Bool
+
+    func rollback() throws {
+        try restoreBeforeUndo()
+    }
+
+    func restoreBeforeUndo() throws {
+        let snapshot = try ImageAssetDestinationSnapshot.capture(destinationURL)
+        guard snapshot.exists else {
+            throw ImageAssetImportError.destinationChanged
+        }
+        let current = try Data(contentsOf: destinationURL, options: .mappedIfSafe)
+        guard current == importedData else {
+            throw ImageAssetImportError.destinationChanged
+        }
+        try restore(previousData)
+        try removeEmptyCreatedDirectory()
+    }
+
+    func restoreAfterRedo() throws {
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            let snapshot = try ImageAssetDestinationSnapshot.capture(destinationURL)
+            guard snapshot.exists else {
+                throw ImageAssetImportError.destinationChanged
+            }
+            let current = try Data(contentsOf: destinationURL, options: .mappedIfSafe)
+            guard current == previousData else {
+                throw ImageAssetImportError.destinationChanged
+            }
+        } else if previousData != nil {
+            throw ImageAssetImportError.destinationChanged
+        }
+        try FileManager.default.createDirectory(
+            at: destinationURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try importedData.write(to: destinationURL, options: .atomic)
+    }
+
+    private func restore(_ data: Data?) throws {
+        if let data {
+            try data.write(to: destinationURL, options: .atomic)
+        } else if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+    }
+
+    private func removeEmptyCreatedDirectory() throws {
+        guard createdAssetsDirectory else { return }
+        let directory = destinationURL.deletingLastPathComponent()
+        let contents = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        )
+        if contents.isEmpty {
+            try FileManager.default.removeItem(at: directory)
+        }
+    }
+}
+
+enum ImageAssetImportError: Error, LocalizedError, Equatable {
+    case unsavedDocument
+    case invalidFilename
+    case unauthorizedDirectory
+    case destinationChanged
+    case copyFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .unsavedDocument:
+            "请先保存 Markdown 文档，再插入需要复制的图片。"
+        case .invalidFilename:
+            "图片文件名包含控制字符，无法创建安全的相对引用。"
+        case .unauthorizedDirectory:
+            "请选择当前 Markdown 文档所在的文件夹，以授权创建 assets。"
+        case .destinationChanged:
+            "目标图片已被其他操作修改。为避免覆盖，资源变更已停止。"
+        case .copyFailed:
+            "图片复制失败，Markdown 正文未被修改。"
+        }
+    }
+}
+
+actor ImageAssetWorker {
+    func loadSource(at url: URL) throws -> ValidatedLocalImage {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessed { url.stopAccessingSecurityScopedResource() }
+        }
+        return try LocalImageValidator.load(at: url)
+    }
+
+    func destinationSnapshot(
+        documentDirectory: URL,
+        originalFilename: String
+    ) throws -> ImageAssetDestinationSnapshot {
+        try ImageAssetDestinationSnapshot.capture(
+            documentDirectory
+                .appendingPathComponent("assets", isDirectory: true)
+                .appendingPathComponent(originalFilename, isDirectory: false)
+        )
+    }
+
+    func importAsset(
+        image: ValidatedLocalImage,
+        originalFilename: String,
+        documentDirectory: URL,
+        collisionResolution: ImageAssetCollisionResolution,
+        expectedDestination: ImageAssetDestinationSnapshot
+    ) throws -> ImportedImageAsset {
+        guard !originalFilename.isEmpty,
+              !originalFilename.unicodeScalars.contains(where: {
+                  $0.value < 0x20 || $0.value == 0x7F
+              })
+        else {
+            throw ImageAssetImportError.invalidFilename
+        }
+        let fileManager = FileManager.default
+        let assetsDirectory = documentDirectory.appendingPathComponent("assets", isDirectory: true)
+        let directoryExisted = fileManager.fileExists(atPath: assetsDirectory.path)
+        do {
+            try fileManager.createDirectory(at: assetsDirectory, withIntermediateDirectories: true)
+            let directoryValues = try assetsDirectory.resourceValues(forKeys: [
+                .isDirectoryKey,
+                .isSymbolicLinkKey,
+            ])
+            guard directoryValues.isDirectory == true,
+                  directoryValues.isSymbolicLink != true
+            else {
+                throw ImageAssetImportError.destinationChanged
+            }
+            let destinationURL = try resolvedDestination(
+                assetsDirectory: assetsDirectory,
+                originalFilename: originalFilename,
+                collisionResolution: collisionResolution
+            )
+            if collisionResolution != .incrementName {
+                guard try ImageAssetDestinationSnapshot.capture(destinationURL) == expectedDestination,
+                      expectedDestination.exists == (collisionResolution == .replace)
+                else {
+                    throw ImageAssetImportError.destinationChanged
+                }
+            }
+            let previousData: Data?
+            if fileManager.fileExists(atPath: destinationURL.path) {
+                guard collisionResolution != .failIfExists else {
+                    throw ImageAssetImportError.destinationChanged
+                }
+                let values = try destinationURL.resourceValues(forKeys: [
+                    .isRegularFileKey,
+                    .isSymbolicLinkKey,
+                ])
+                guard values.isRegularFile == true, values.isSymbolicLink != true else {
+                    throw ImageAssetImportError.destinationChanged
+                }
+                previousData = try Data(contentsOf: destinationURL, options: .mappedIfSafe)
+                try image.data.write(to: destinationURL, options: .atomic)
+            } else {
+                previousData = nil
+                try image.data.write(to: destinationURL, options: .withoutOverwriting)
+            }
+            let encodedFilename = destinationURL.lastPathComponent.addingPercentEncoding(
+                withAllowedCharacters: .urlPathAllowed
+            ) ?? destinationURL.lastPathComponent
+            return ImportedImageAsset(
+                destinationURL: destinationURL,
+                relativeMarkdownPath: "assets/\(encodedFilename)",
+                importedData: image.data,
+                previousData: previousData,
+                createdAssetsDirectory: !directoryExisted
+            )
+        } catch let error as ImageAssetImportError {
+            removeDirectoryIfNewAndEmpty(assetsDirectory, existed: directoryExisted)
+            throw error
+        } catch {
+            removeDirectoryIfNewAndEmpty(assetsDirectory, existed: directoryExisted)
+            throw ImageAssetImportError.copyFailed
+        }
+    }
+
+    private func resolvedDestination(
+        assetsDirectory: URL,
+        originalFilename: String,
+        collisionResolution: ImageAssetCollisionResolution
+    ) throws -> URL {
+        let original = assetsDirectory.appendingPathComponent(originalFilename)
+        guard collisionResolution == .incrementName,
+              FileManager.default.fileExists(atPath: original.path)
+        else {
+            return original
+        }
+        let name = original.deletingPathExtension().lastPathComponent
+        let pathExtension = original.pathExtension
+        for suffix in 2...10_000 {
+            let filename = pathExtension.isEmpty
+                ? "\(name)-\(suffix)"
+                : "\(name)-\(suffix).\(pathExtension)"
+            let candidate = assetsDirectory.appendingPathComponent(filename)
+            if !FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        throw ImageAssetImportError.copyFailed
+    }
+
+    private func removeDirectoryIfNewAndEmpty(_ directory: URL, existed: Bool) {
+        guard !existed,
+              let contents = try? FileManager.default.contentsOfDirectory(
+                  at: directory,
+                  includingPropertiesForKeys: nil
+              ),
+              contents.isEmpty
+        else {
+            return
+        }
+        try? FileManager.default.removeItem(at: directory)
+    }
+}
+
+@MainActor
+final class ImageAssetDirectoryAccess: ObservableObject {
+    private var authorizedURL: URL?
+    private var isSecurityScopeActive = false
+
+    func authorize(_ url: URL) {
+        if authorizedURL?.standardizedFileURL == url.standardizedFileURL { return }
+        if let authorizedURL, isSecurityScopeActive {
+            authorizedURL.stopAccessingSecurityScopedResource()
+        }
+        isSecurityScopeActive = url.startAccessingSecurityScopedResource()
+        authorizedURL = url
+    }
+
+    deinit {
+        if isSecurityScopeActive {
+            authorizedURL?.stopAccessingSecurityScopedResource()
+        }
+    }
+}
+
+@MainActor
+enum ImageAssetPicker {
+    static func chooseSource(attachedTo window: NSWindow?) async -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = "选择要复制的图片"
+        panel.prompt = "选择图片"
+        panel.allowedContentTypes = [.png, .jpeg]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        return await run(panel, attachedTo: window) == .OK ? panel.url : nil
+    }
+
+    static func authorizeDocumentDirectory(
+        _ documentDirectory: URL,
+        attachedTo window: NSWindow?
+    ) async throws -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = "授权 assets 文件夹"
+        panel.message = "请选择当前 Markdown 文档所在的文件夹。Inflow 只会在其中创建或更新 assets。"
+        panel.prompt = "授权此文件夹"
+        panel.directoryURL = documentDirectory
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = false
+        guard await run(panel, attachedTo: window) == .OK, let selected = panel.url else {
+            return nil
+        }
+        guard selected.standardizedFileURL == documentDirectory.standardizedFileURL else {
+            throw ImageAssetImportError.unauthorizedDirectory
+        }
+        return selected
+    }
+
+    static func resolveCollision(
+        filename: String,
+        attachedTo window: NSWindow?
+    ) async -> ImageAssetCollisionResolution? {
+        let alert = NSAlert()
+        alert.messageText = "assets 中已存在同名图片"
+        alert.informativeText = "\(filename) 已存在。请明确选择覆盖，或保留原文件并使用递增名称。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "保留并递增名称")
+        alert.addButton(withTitle: "覆盖")
+        alert.addButton(withTitle: "取消")
+        let response = await run(alert, attachedTo: window)
+        switch response {
+        case .alertFirstButtonReturn:
+            return ImageAssetCollisionResolution.incrementName
+        case .alertSecondButtonReturn:
+            return ImageAssetCollisionResolution.replace
+        default:
+            return nil
+        }
+    }
+
+    private static func run(_ panel: NSOpenPanel, attachedTo window: NSWindow?) async -> NSApplication.ModalResponse {
+        guard let window else { return panel.runModal() }
+        return await withCheckedContinuation { continuation in
+            panel.beginSheetModal(for: window) { continuation.resume(returning: $0) }
+        }
+    }
+
+    private static func run(_ alert: NSAlert, attachedTo window: NSWindow?) async -> NSApplication.ModalResponse {
+        guard let window else { return alert.runModal() }
+        return await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: window) { continuation.resume(returning: $0) }
+        }
+    }
+}

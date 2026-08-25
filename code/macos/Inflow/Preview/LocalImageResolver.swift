@@ -1,9 +1,6 @@
 import Foundation
-import ImageIO
-import UniformTypeIdentifiers
 
 enum LocalImageResolver {
-    private static let maximumPreviewBytes = 100 * 1_024 * 1_024
     private static let slotExpression = try! NSRegularExpression(
         pattern: #"<span class="inflow-image-slot" data-inflow-target="([0-9a-f]*)" data-inflow-alt="([0-9a-f]*)"></span>"#
     )
@@ -89,31 +86,24 @@ enum LocalImageResolver {
             }
         }
 
-        let data: Data
+        let image: ValidatedLocalImage
         do {
-            let values = try url.resourceValues(forKeys: [
-                .isRegularFileKey,
-                .fileSizeKey,
-            ])
-            guard values.isRegularFile == true else {
-                return warning(
-                    title: "找不到资源",
-                    detail: "\(safeDisplayTarget(target)) 不是可读取的普通文件。"
-                )
-            }
-            guard let size = values.fileSize, size >= 0, size <= maximumPreviewBytes else {
-                return warning(
-                    title: "图片过大，未载入预览",
-                    detail: "\(safeDisplayTarget(target)) 超过 100 MiB。引用仍保留。"
-                )
-            }
-            data = try boundedData(at: url)
-            guard data.count <= maximumPreviewBytes else {
-                return warning(
-                    title: "图片过大，未载入预览",
-                    detail: "\(safeDisplayTarget(target)) 在读取时超过 100 MiB。引用仍保留。"
-                )
-            }
+            image = try LocalImageValidator.load(at: url)
+        } catch LocalImageValidationError.tooLarge {
+            return warning(
+                title: "图片过大，未载入预览",
+                detail: "\(safeDisplayTarget(target)) 超过 100 MiB。引用仍保留。"
+            )
+        } catch LocalImageValidationError.extensionMismatch {
+            return warning(
+                title: "图片类型与扩展名不一致",
+                detail: "为安全起见，未预览 \(safeDisplayTarget(target))。"
+            )
+        } catch LocalImageValidationError.unsafeOrUnsupported {
+            return warning(
+                title: "不支持这个图片",
+                detail: "\(safeDisplayTarget(target)) 不是安全尺寸的静态 PNG 或 JPEG。"
+            )
         } catch {
             return warning(
                 title: "找不到资源",
@@ -121,67 +111,8 @@ enum LocalImageResolver {
             )
         }
 
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              CGImageSourceGetCount(source) == 1,
-              let typeIdentifier = CGImageSourceGetType(source) as String?,
-              let type = UTType(typeIdentifier),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
-                as? [CFString: Any],
-              let width = properties[kCGImagePropertyPixelWidth] as? Int,
-              let height = properties[kCGImagePropertyPixelHeight] as? Int,
-              width > 0,
-              height > 0,
-              width <= 32_768,
-              height <= 32_768,
-              case let (pixelCount, overflow) = width.multipliedReportingOverflow(by: height),
-              !overflow,
-              pixelCount <= 100_000_000
-        else {
-            return warning(
-                title: "不支持这个图片",
-                detail: "\(safeDisplayTarget(target)) 不是安全尺寸的静态 PNG 或 JPEG。"
-            )
-        }
-
-        let mimeType: String
-        let expectedExtensions: Set<String>
-        if type.conforms(to: .png) {
-            mimeType = "image/png"
-            expectedExtensions = ["png"]
-        } else if type.conforms(to: .jpeg) {
-            mimeType = "image/jpeg"
-            expectedExtensions = ["jpg", "jpeg"]
-        } else {
-            return warning(
-                title: "不支持这个图片",
-                detail: "\(safeDisplayTarget(target)) 不是静态 PNG 或 JPEG。"
-            )
-        }
-
-        guard expectedExtensions.contains(url.pathExtension.lowercased()) else {
-            return warning(
-                title: "图片类型与扩展名不一致",
-                detail: "为安全起见，未预览 \(safeDisplayTarget(target))。"
-            )
-        }
-
         let label = alternative.isEmpty ? url.deletingPathExtension().lastPathComponent : alternative
-        return "<img class=\"inflow-local-image\" src=\"data:\(mimeType);base64,\(data.base64EncodedString())\" alt=\"\(escapeAttribute(label))\">"
-    }
-
-    private static func boundedData(at url: URL) throws -> Data {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-
-        var data = Data()
-        data.reserveCapacity(min(maximumPreviewBytes, 1_024 * 1_024))
-        while data.count <= maximumPreviewBytes {
-            let remaining = maximumPreviewBytes + 1 - data.count
-            let chunk = try handle.read(upToCount: min(remaining, 1_024 * 1_024))
-            guard let chunk, !chunk.isEmpty else { break }
-            data.append(chunk)
-        }
-        return data
+        return "<img class=\"inflow-local-image\" src=\"data:\(image.mimeType);base64,\(image.data.base64EncodedString())\" alt=\"\(escapeAttribute(label))\">"
     }
 
     private static func warning(title: String, detail: String) -> String {

@@ -55,6 +55,12 @@ struct LinkSpan {
 }
 
 #[derive(Debug)]
+struct ImageSpan {
+    full: Range<usize>,
+    alternative: Range<usize>,
+}
+
+#[derive(Debug)]
 struct TableSpan {
     full: Range<usize>,
     columns: usize,
@@ -541,6 +547,64 @@ pub fn insert_link(
         replace_range,
         replacement,
         selection_range: label_range,
+    })
+}
+
+pub fn insert_image(
+    source: &str,
+    requested_selection: Range<usize>,
+    destination: &str,
+    default_alternative: &str,
+) -> Result<MarkdownEdit, FormatError> {
+    if !is_valid_selection(source, &requested_selection) {
+        return Err(FormatError::InvalidSelection);
+    }
+    let destination = destination.trim();
+    let default_alternative = default_alternative.trim();
+    if !is_valid_destination(destination)
+        || default_alternative.is_empty()
+        || default_alternative.chars().any(char::is_control)
+    {
+        return Err(FormatError::InvalidSelection);
+    }
+    if link_spans(source)
+        .iter()
+        .any(|span| ranges_overlap(&requested_selection, &span.full))
+        || image_spans(source)
+            .iter()
+            .any(|span| ranges_overlap(&requested_selection, &span.full))
+    {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    let raw_alternative = if requested_selection.is_empty() {
+        default_alternative
+    } else {
+        &source[requested_selection.clone()]
+    };
+    if raw_alternative
+        .chars()
+        .any(|character| matches!(character, '\n' | '\r'))
+    {
+        return Err(FormatError::AmbiguousSelection);
+    }
+    let alternative = escaped_link_label(raw_alternative);
+    let replacement = format!("![{alternative}](<{destination}>)");
+    let alternative_range =
+        requested_selection.start + 2..requested_selection.start + 2 + alternative.len();
+    let full_range = requested_selection.start..requested_selection.start + replacement.len();
+    let candidate = replacing(source, requested_selection.clone(), &replacement);
+    if !image_spans(&candidate)
+        .iter()
+        .any(|span| span.full == full_range && span.alternative == alternative_range)
+    {
+        return Err(FormatError::AmbiguousSelection);
+    }
+
+    Ok(MarkdownEdit {
+        replace_range: requested_selection,
+        replacement,
+        selection_range: alternative_range,
     })
 }
 
@@ -1784,6 +1848,64 @@ fn link_spans(source: &str) -> Vec<LinkSpan> {
     spans
 }
 
+fn image_spans(source: &str) -> Vec<ImageSpan> {
+    #[derive(Debug)]
+    struct OpenImage {
+        full: Range<usize>,
+        alternative_start: Option<usize>,
+        alternative_end: Option<usize>,
+    }
+
+    let mut stack: Vec<OpenImage> = Vec::new();
+    let mut spans = Vec::new();
+    for (event, range) in Parser::new_ext(source, render::options()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Image { .. }) => stack.push(OpenImage {
+                full: range,
+                alternative_start: None,
+                alternative_end: None,
+            }),
+            Event::End(TagEnd::Image) => {
+                let Some(image) = stack.pop() else { continue };
+                let empty_alternative = image.full.start.saturating_add(2);
+                let alternative_start = image.alternative_start.unwrap_or(empty_alternative);
+                let alternative_end = image.alternative_end.unwrap_or(alternative_start);
+                if image.full.start <= alternative_start
+                    && alternative_start <= alternative_end
+                    && alternative_end <= image.full.end
+                {
+                    spans.push(ImageSpan {
+                        full: image.full,
+                        alternative: alternative_start..alternative_end,
+                    });
+                }
+            }
+            _ => {
+                if let Some(image) = stack.last_mut() {
+                    image.alternative_start = Some(
+                        image
+                            .alternative_start
+                            .map_or(range.start, |start| start.min(range.start)),
+                    );
+                    image.alternative_end = Some(
+                        image
+                            .alternative_end
+                            .map_or(range.end, |end| end.max(range.end)),
+                    );
+                }
+            }
+        }
+    }
+    spans
+}
+
+fn is_valid_destination(destination: &str) -> bool {
+    !destination.is_empty()
+        && !destination
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '<' | '>' | '\\'))
+}
+
 fn escaped_link_label(label: &str) -> String {
     label.chars().fold(
         String::with_capacity(label.len()),
@@ -2454,6 +2576,49 @@ mod tests {
         );
         assert_eq!(
             insert_link("e\u{301}", 1..1, "https://example.com"),
+            Err(FormatError::InvalidSelection)
+        );
+    }
+
+    #[test]
+    fn image_wraps_unicode_selection_and_uses_editable_default_alternative() {
+        let source = "Before 文档\u{1f469}\u{200d}\u{1f4bb} after";
+        let start = "Before ".len();
+        let end = source.len() - " after".len();
+        let edit = insert_image(source, start..end, "assets/cover image.png", "cover").unwrap();
+        assert_eq!(
+            edit.replacement,
+            "![文档\u{1f469}\u{200d}\u{1f4bb}](<assets/cover image.png>)"
+        );
+        assert_eq!(edit.selection_range, start + 2..end + 2);
+        let formatted = replacing(source, edit.replace_range, &edit.replacement);
+        assert!(render::html_fragment(&formatted).contains("class=\"inflow-image-slot\""));
+
+        let empty = insert_image("", 0..0, "assets/photo.jpg", "photo").unwrap();
+        assert_eq!(empty.replacement, "![photo](<assets/photo.jpg>)");
+        assert_eq!(empty.selection_range, 2..7);
+    }
+
+    #[test]
+    fn image_rejects_unsafe_or_ambiguous_input() {
+        assert_eq!(
+            insert_image("text", 0..4, "../unsafe\\image.png", "image"),
+            Err(FormatError::InvalidSelection)
+        );
+        assert_eq!(
+            insert_image("text", 0..4, "assets/image.png", ""),
+            Err(FormatError::InvalidSelection)
+        );
+        assert_eq!(
+            insert_image("line one\nline two", 0..17, "assets/image.png", "image"),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            insert_image("![old](<assets/old.png>)", 3..5, "assets/new.png", "new"),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            insert_image("e\u{301}", 1..1, "assets/image.png", "image"),
             Err(FormatError::InvalidSelection)
         );
     }

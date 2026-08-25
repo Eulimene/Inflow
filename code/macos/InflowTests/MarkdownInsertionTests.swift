@@ -58,6 +58,292 @@ final class MarkdownInsertionTests: XCTestCase {
         }
     }
 
+    func testImagePlanCreatesStandardMarkdownAndEditableAlternative() throws {
+        let source = "Before 图片👩‍💻 after"
+        let selection = (source as NSString).range(of: "图片👩‍💻")
+        let selected = try MarkdownFormatter.imagePlan(
+            source: source,
+            selectedUTF16Range: selection,
+            destination: "assets/cover%20image.png",
+            defaultAlternative: "cover image"
+        )
+        XCTAssertEqual(
+            selected.resultingSource,
+            "Before ![图片👩‍💻](<assets/cover%20image.png>) after"
+        )
+        XCTAssertTrue(try MarkdownRenderer.htmlFragment(for: selected.resultingSource).contains(
+            "class=\"inflow-image-slot\""
+        ))
+
+        let empty = try MarkdownFormatter.imagePlan(
+            source: "",
+            selectedUTF16Range: NSRange(location: 0, length: 0),
+            destination: "assets/photo.jpg",
+            defaultAlternative: "photo"
+        )
+        XCTAssertEqual(empty.resultingSource, "![photo](<assets/photo.jpg>)")
+        let target = try XCTUnwrap(
+            MarkdownSourceRange.navigationTarget(
+                forUTF8Range: empty.selectionUTF8Range,
+                in: empty.resultingSource
+            )
+        )
+        XCTAssertEqual((empty.resultingSource as NSString).substring(with: target.revealRange), "photo")
+    }
+
+    func testImagePlanRejectsPartialExistingImageAndUnsafeDestination() {
+        let existing = "![old](<assets/old.png>)"
+        XCTAssertThrowsError(
+            try MarkdownFormatter.imagePlan(
+                source: existing,
+                selectedUTF16Range: (existing as NSString).range(of: "old"),
+                destination: "assets/new.png",
+                defaultAlternative: "new"
+            )
+        )
+        XCTAssertThrowsError(
+            try MarkdownFormatter.imagePlan(
+                source: "",
+                selectedUTF16Range: NSRange(location: 0, length: 0),
+                destination: "assets/<unsafe>.png",
+                defaultAlternative: "image"
+            )
+        )
+    }
+
+    func testImageWorkerCopiesValidatedAssetAndIncrementsCollision() async throws {
+        let root = try temporaryImageDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceURL = root.appendingPathComponent("cover image.png")
+        let documentDirectory = root.appendingPathComponent("document", isDirectory: true)
+        try FileManager.default.createDirectory(at: documentDirectory, withIntermediateDirectories: true)
+        try testPNGData().write(to: sourceURL)
+
+        let worker = ImageAssetWorker()
+        let image = try await worker.loadSource(at: sourceURL)
+        let missingDestination = try await worker.destinationSnapshot(
+            documentDirectory: documentDirectory,
+            originalFilename: sourceURL.lastPathComponent
+        )
+        let first = try await worker.importAsset(
+            image: image,
+            originalFilename: sourceURL.lastPathComponent,
+            documentDirectory: documentDirectory,
+            collisionResolution: .failIfExists,
+            expectedDestination: missingDestination
+        )
+        XCTAssertEqual(first.relativeMarkdownPath, "assets/cover%20image.png")
+        XCTAssertEqual(try Data(contentsOf: first.destinationURL), image.data)
+
+        await XCTAssertThrowsErrorAsync {
+            let existingDestination = try await worker.destinationSnapshot(
+                documentDirectory: documentDirectory,
+                originalFilename: sourceURL.lastPathComponent
+            )
+            _ = try await worker.importAsset(
+                image: image,
+                originalFilename: sourceURL.lastPathComponent,
+                documentDirectory: documentDirectory,
+                collisionResolution: .failIfExists,
+                expectedDestination: existingDestination
+            )
+        }
+
+        let second = try await worker.importAsset(
+            image: image,
+            originalFilename: sourceURL.lastPathComponent,
+            documentDirectory: documentDirectory,
+            collisionResolution: .incrementName,
+            expectedDestination: try await worker.destinationSnapshot(
+                documentDirectory: documentDirectory,
+                originalFilename: sourceURL.lastPathComponent
+            )
+        )
+        XCTAssertEqual(second.relativeMarkdownPath, "assets/cover%20image-2.png")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.destinationURL.path))
+        try second.rollback()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.destinationURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.destinationURL.path))
+
+        let previous = Data("previous asset".utf8)
+        try previous.write(to: first.destinationURL, options: .atomic)
+        let replaceDestination = try await worker.destinationSnapshot(
+            documentDirectory: documentDirectory,
+            originalFilename: sourceURL.lastPathComponent
+        )
+        let replaced = try await worker.importAsset(
+            image: image,
+            originalFilename: sourceURL.lastPathComponent,
+            documentDirectory: documentDirectory,
+            collisionResolution: .replace,
+            expectedDestination: replaceDestination
+        )
+        XCTAssertEqual(replaced.previousData, previous)
+        XCTAssertEqual(try Data(contentsOf: replaced.destinationURL), image.data)
+        try replaced.rollback()
+        XCTAssertEqual(try Data(contentsOf: replaced.destinationURL), previous)
+    }
+
+    func testImageWorkerRefusesReplaceWhenDestinationChangesAfterConfirmation() async throws {
+        let root = try temporaryImageDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceURL = root.appendingPathComponent("photo.png")
+        let documentDirectory = root.appendingPathComponent("document", isDirectory: true)
+        let assetsDirectory = documentDirectory.appendingPathComponent("assets", isDirectory: true)
+        try FileManager.default.createDirectory(at: assetsDirectory, withIntermediateDirectories: true)
+        try testPNGData().write(to: sourceURL)
+        let destinationURL = assetsDirectory.appendingPathComponent(sourceURL.lastPathComponent)
+        try Data("confirmed bytes".utf8).write(to: destinationURL)
+
+        let worker = ImageAssetWorker()
+        let image = try await worker.loadSource(at: sourceURL)
+        let confirmedDestination = try await worker.destinationSnapshot(
+            documentDirectory: documentDirectory,
+            originalFilename: sourceURL.lastPathComponent
+        )
+        let externalChange = Data("external change after confirmation".utf8)
+        try externalChange.write(to: destinationURL, options: .atomic)
+
+        await XCTAssertThrowsErrorAsync {
+            _ = try await worker.importAsset(
+                image: image,
+                originalFilename: sourceURL.lastPathComponent,
+                documentDirectory: documentDirectory,
+                collisionResolution: .replace,
+                expectedDestination: confirmedDestination
+            )
+        }
+        XCTAssertEqual(try Data(contentsOf: destinationURL), externalChange)
+    }
+
+    func testImageWorkerRefusesSymbolicAssetsDirectory() async throws {
+        let root = try temporaryImageDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceURL = root.appendingPathComponent("photo.png")
+        let documentDirectory = root.appendingPathComponent("document", isDirectory: true)
+        let outsideDirectory = root.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: documentDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outsideDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: documentDirectory.appendingPathComponent("assets", isDirectory: true),
+            withDestinationURL: outsideDirectory
+        )
+        try testPNGData().write(to: sourceURL)
+
+        let worker = ImageAssetWorker()
+        let image = try await worker.loadSource(at: sourceURL)
+        let snapshot = try await worker.destinationSnapshot(
+            documentDirectory: documentDirectory,
+            originalFilename: sourceURL.lastPathComponent
+        )
+        await XCTAssertThrowsErrorAsync {
+            _ = try await worker.importAsset(
+                image: image,
+                originalFilename: sourceURL.lastPathComponent,
+                documentDirectory: documentDirectory,
+                collisionResolution: .failIfExists,
+                expectedDestination: snapshot
+            )
+        }
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: outsideDirectory.path).isEmpty)
+    }
+
+    @MainActor
+    func testImageInsertionUndoAndRedoOwnBothMarkdownAndCreatedResource() async throws {
+        let root = try temporaryImageDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceURL = root.appendingPathComponent("photo.png")
+        let documentDirectory = root.appendingPathComponent("document", isDirectory: true)
+        try FileManager.default.createDirectory(at: documentDirectory, withIntermediateDirectories: true)
+        try testPNGData().write(to: sourceURL)
+
+        let worker = ImageAssetWorker()
+        let image = try await worker.loadSource(at: sourceURL)
+        let asset = try await worker.importAsset(
+            image: image,
+            originalFilename: sourceURL.lastPathComponent,
+            documentDirectory: documentDirectory,
+            collisionResolution: .failIfExists,
+            expectedDestination: try await worker.destinationSnapshot(
+                documentDirectory: documentDirectory,
+                originalFilename: sourceURL.lastPathComponent
+            )
+        )
+        let session = MarkdownSourceEditorSession()
+        session.textView.isEditable = true
+        session.textView.string = "Before "
+        session.textView.setSelectedRange(NSRange(location: 7, length: 0))
+        let plan = try MarkdownFormatter.imagePlan(
+            source: session.textView.string,
+            selectedUTF16Range: session.textView.selectedRange(),
+            destination: asset.relativeMarkdownPath,
+            defaultAlternative: "photo"
+        )
+        var resourceError: String?
+        XCTAssertTrue(session.applyMarkdownImage(
+            plan,
+            asset: asset,
+            actionName: "插入图片",
+            onResourceError: { resourceError = $0 }
+        ))
+        XCTAssertEqual(session.textView.string, "Before ![photo](<assets/photo.png>)")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: asset.destinationURL.path))
+
+        session.textView.undoManager?.undo()
+        XCTAssertEqual(session.textView.string, "Before ")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: asset.destinationURL.path))
+        XCTAssertNil(resourceError)
+
+        session.textView.undoManager?.redo()
+        XCTAssertEqual(session.textView.string, "Before ![photo](<assets/photo.png>)")
+        XCTAssertEqual(try Data(contentsOf: asset.destinationURL), image.data)
+        XCTAssertNil(resourceError)
+    }
+
+    @MainActor
+    func testImageUndoNeverOverwritesExternallyChangedResource() async throws {
+        let root = try temporaryImageDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceURL = root.appendingPathComponent("photo.png")
+        let documentDirectory = root.appendingPathComponent("document", isDirectory: true)
+        try FileManager.default.createDirectory(at: documentDirectory, withIntermediateDirectories: true)
+        try testPNGData().write(to: sourceURL)
+
+        let worker = ImageAssetWorker()
+        let image = try await worker.loadSource(at: sourceURL)
+        let asset = try await worker.importAsset(
+            image: image,
+            originalFilename: sourceURL.lastPathComponent,
+            documentDirectory: documentDirectory,
+            collisionResolution: .failIfExists,
+            expectedDestination: try await worker.destinationSnapshot(
+                documentDirectory: documentDirectory,
+                originalFilename: sourceURL.lastPathComponent
+            )
+        )
+        let session = MarkdownSourceEditorSession()
+        session.textView.isEditable = true
+        let plan = try MarkdownFormatter.imagePlan(
+            source: "",
+            selectedUTF16Range: NSRange(location: 0, length: 0),
+            destination: asset.relativeMarkdownPath,
+            defaultAlternative: "photo"
+        )
+        var resourceError: String?
+        XCTAssertTrue(session.applyMarkdownImage(
+            plan,
+            asset: asset,
+            actionName: "插入图片",
+            onResourceError: { resourceError = $0 }
+        ))
+
+        let externalChange = Data("external change".utf8)
+        try externalChange.write(to: asset.destinationURL, options: .atomic)
+        session.textView.undoManager?.undo()
+        XCTAssertEqual(try Data(contentsOf: asset.destinationURL), externalChange)
+        XCTAssertNotNil(resourceError)
+    }
+
     func testTablePlanCreatesThreeByThreeTemplateAndEscapesSelection() throws {
         let empty = try MarkdownFormatter.tablePlan(
             source: "",
@@ -297,6 +583,7 @@ final class MarkdownInsertionTests: XCTestCase {
     @MainActor
     func testInsertActionsAreSceneScopedAndMenuHasCommandK() throws {
         var firstCount = 0
+        var firstImageCount = 0
         var secondCount = 0
         var firstTableCount = 0
         var firstRuleCount = 0
@@ -306,6 +593,7 @@ final class MarkdownInsertionTests: XCTestCase {
         let first = MarkdownInsertCommandActions(
             canInsert: true,
             insertLink: { firstCount += 1 },
+            insertImage: { firstImageCount += 1 },
             insertTable: { firstTableCount += 1 },
             insertHorizontalRule: { firstRuleCount += 1 },
             insertFootnote: { firstFootnoteCount += 1 },
@@ -315,6 +603,7 @@ final class MarkdownInsertionTests: XCTestCase {
         let second = MarkdownInsertCommandActions(
             canInsert: false,
             insertLink: { secondCount += 1 },
+            insertImage: { secondCount += 1 },
             insertTable: { secondCount += 1 },
             insertHorizontalRule: { secondCount += 1 },
             insertFootnote: { secondCount += 1 },
@@ -322,12 +611,14 @@ final class MarkdownInsertionTests: XCTestCase {
             insertDiagram: { secondCount += 1 }
         )
         first.insertLink()
+        first.insertImage()
         first.insertTable()
         first.insertHorizontalRule()
         first.insertFootnote()
         first.insertFormula()
         first.insertDiagram()
         XCTAssertEqual(firstCount, 1)
+        XCTAssertEqual(firstImageCount, 1)
         XCTAssertEqual(firstTableCount, 1)
         XCTAssertEqual(firstRuleCount, 1)
         XCTAssertEqual(firstFootnoteCount, 1)
@@ -346,6 +637,12 @@ final class MarkdownInsertionTests: XCTestCase {
             matches.first?.keyEquivalentModifierMask.intersection([.command, .option, .shift]),
             .command
         )
+
+        let imageItems = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu)).filter {
+            $0.title == "图片…"
+        }
+        XCTAssertEqual(imageItems.count, 1)
+        XCTAssertEqual(imageItems.first?.keyEquivalent, "")
 
         let tableItems = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu)).filter {
             $0.title == "表格"
@@ -408,6 +705,51 @@ final class MarkdownInsertionTests: XCTestCase {
     private func allMenuItems(in menu: NSMenu) -> [NSMenuItem] {
         menu.items.flatMap { item in
             [item] + (item.submenu.map(allMenuItems) ?? [])
+        }
+    }
+
+    private func temporaryImageDirectory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "inflow-image-import-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func testPNGData() throws -> Data {
+        let representation = try XCTUnwrap(
+            NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: 1,
+                pixelsHigh: 1,
+                bitsPerSample: 8,
+                samplesPerPixel: 4,
+                hasAlpha: true,
+                isPlanar: false,
+                colorSpaceName: .deviceRGB,
+                bytesPerRow: 4,
+                bitsPerPixel: 32
+            )
+        )
+        let pixels = try XCTUnwrap(representation.bitmapData)
+        pixels[0] = 32
+        pixels[1] = 96
+        pixels[2] = 220
+        pixels[3] = 255
+        return try XCTUnwrap(representation.representation(using: .png, properties: [:]))
+    }
+
+    private func XCTAssertThrowsErrorAsync(
+        _ expression: () async throws -> Void,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        do {
+            try await expression()
+            XCTFail("Expected expression to throw", file: file, line: line)
+        } catch {
+            // Expected.
         }
     }
 }

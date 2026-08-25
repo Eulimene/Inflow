@@ -113,6 +113,9 @@ struct MarkdownEditorView: View {
     @State private var htmlExportNotice: HTMLExportNotice?
     @State private var markdownFormatErrorMessage: String?
     @State private var linkInsertionRequest: MarkdownLinkInsertionRequest?
+    @State private var isImportingImage = false
+    @State private var imageAssetWorker = ImageAssetWorker()
+    @StateObject private var imageDirectoryAccess = ImageAssetDirectoryAccess()
 
     private var viewMode: EditorViewMode {
         get { EditorViewMode.resolve(storedValue: storedViewMode) }
@@ -426,12 +429,101 @@ struct MarkdownEditorView: View {
         MarkdownInsertCommandActions(
             canInsert: isEditable,
             insertLink: presentLinkInsertion,
+            insertImage: insertImage,
             insertTable: insertTable,
             insertHorizontalRule: insertHorizontalRule,
             insertFootnote: insertFootnote,
             insertFormula: insertFormula,
             insertDiagram: insertDiagram
         )
+    }
+
+    private func insertImage() {
+        guard isEditable, !isImportingImage else { return }
+        guard let documentURL = fileURL else {
+            markdownFormatErrorMessage = ImageAssetImportError.unsavedDocument.localizedDescription
+            return
+        }
+        let sourceSnapshot = document.text
+        let selectedRange = sourceEditorSession.textView.selectedRange()
+        let documentDirectory = documentURL.deletingLastPathComponent()
+        let window = sourceEditorSession.textView.window ?? NSApp.keyWindow
+        let worker = imageAssetWorker
+        isImportingImage = true
+
+        Task { @MainActor in
+            defer { isImportingImage = false }
+            guard let sourceURL = await ImageAssetPicker.chooseSource(attachedTo: window) else {
+                return
+            }
+
+            do {
+                let image = try await worker.loadSource(at: sourceURL)
+                guard let authorizedDirectory = try await ImageAssetPicker.authorizeDocumentDirectory(
+                    documentDirectory,
+                    attachedTo: window
+                ) else {
+                    return
+                }
+                imageDirectoryAccess.authorize(authorizedDirectory)
+
+                let filename = sourceURL.lastPathComponent
+                let destinationSnapshot = try await worker.destinationSnapshot(
+                    documentDirectory: authorizedDirectory,
+                    originalFilename: filename
+                )
+                let resolution: ImageAssetCollisionResolution
+                if destinationSnapshot.exists {
+                    guard let choice = await ImageAssetPicker.resolveCollision(
+                        filename: filename,
+                        attachedTo: window
+                    ) else {
+                        return
+                    }
+                    resolution = choice
+                } else {
+                    resolution = .failIfExists
+                }
+
+                let asset = try await worker.importAsset(
+                    image: image,
+                    originalFilename: filename,
+                    documentDirectory: authorizedDirectory,
+                    collisionResolution: resolution,
+                    expectedDestination: destinationSnapshot
+                )
+                do {
+                    let alternative = sourceURL.deletingPathExtension().lastPathComponent
+                    let plan = try MarkdownFormatter.imagePlan(
+                        source: sourceSnapshot,
+                        selectedUTF16Range: selectedRange,
+                        destination: asset.relativeMarkdownPath,
+                        defaultAlternative: alternative.isEmpty ? "图片描述" : alternative
+                    )
+                    viewMode = viewMode.sourceVisible
+                    guard sourceEditorSession.applyMarkdownImage(
+                        plan,
+                        asset: asset,
+                        actionName: "插入图片",
+                        onResourceError: { message in
+                            markdownFormatErrorMessage = message
+                        }
+                    ) else {
+                        try await Task.detached { try asset.rollback() }.value
+                        markdownFormatErrorMessage = "正文、选区或输入法状态已变化，已回滚复制的图片。"
+                        return
+                    }
+                    await Task.yield()
+                    _ = sourceEditorSession.focusEditor()
+                } catch {
+                    try? await Task.detached { try asset.rollback() }.value
+                    throw error
+                }
+            } catch {
+                markdownFormatErrorMessage = (error as? LocalizedError)?.errorDescription
+                    ?? ImageAssetImportError.copyFailed.localizedDescription
+            }
+        }
     }
 
     private func insertDiagram() {

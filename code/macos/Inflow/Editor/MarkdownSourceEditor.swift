@@ -290,6 +290,110 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.undoManager?.setActionName(actionName)
         return true
     }
+
+    @discardableResult
+    func applyMarkdownImage(
+        _ plan: MarkdownFormatPlan,
+        asset: ImportedImageAsset,
+        actionName: String,
+        onResourceError: @escaping @MainActor (String) -> Void
+    ) -> Bool {
+        guard textView.isEditable,
+              !textView.hasMarkedText(),
+              UTF8Text.isExactlyEqual(textView.string, plan.sourceSnapshot),
+              let replacementTarget = MarkdownSourceRange.navigationTarget(
+                  forUTF8Range: plan.replaceUTF8Range,
+                  in: plan.sourceSnapshot
+              ),
+              let finalSelection = MarkdownSourceRange.navigationTarget(
+                  forUTF8Range: plan.selectionUTF8Range,
+                  in: plan.resultingSource
+              ),
+              let undoManager = textView.undoManager
+        else {
+            return false
+        }
+
+        undoManager.beginUndoGrouping()
+        textView.insertText(
+            plan.replacement,
+            replacementRange: replacementTarget.revealRange
+        )
+        guard UTF8Text.isExactlyEqual(textView.string, plan.resultingSource) else {
+            undoManager.endUndoGrouping()
+            undoManager.undo()
+            return false
+        }
+
+        registerImageAssetUndo(
+            asset,
+            on: undoManager,
+            onResourceError: onResourceError
+        )
+        undoManager.setActionName(actionName)
+        undoManager.endUndoGrouping()
+
+        textView.setSelectedRange(finalSelection.revealRange)
+        updateSelectedRange(finalSelection.revealRange)
+        textView.scrollRangeToVisible(finalSelection.revealRange)
+        return true
+    }
+
+    private func registerImageAssetUndo(
+        _ asset: ImportedImageAsset,
+        on undoManager: UndoManager,
+        onResourceError: @escaping @MainActor (String) -> Void
+    ) {
+        undoManager.registerUndo(withTarget: self) { target in
+            target.undoImageAsset(
+                asset,
+                using: undoManager,
+                onResourceError: onResourceError
+            )
+        }
+    }
+
+    private func undoImageAsset(
+        _ asset: ImportedImageAsset,
+        using undoManager: UndoManager,
+        onResourceError: @escaping @MainActor (String) -> Void
+    ) {
+        do {
+            try asset.restoreBeforeUndo()
+            undoManager.registerUndo(withTarget: self) { target in
+                target.redoImageAsset(
+                    asset,
+                    using: undoManager,
+                    onResourceError: onResourceError
+                )
+            }
+        } catch {
+            onResourceError(
+                (error as? LocalizedError)?.errorDescription ?? "无法撤销图片资源变更。"
+            )
+        }
+    }
+
+    private func redoImageAsset(
+        _ asset: ImportedImageAsset,
+        using undoManager: UndoManager,
+        onResourceError: @escaping @MainActor (String) -> Void
+    ) {
+        do {
+            try asset.restoreAfterRedo()
+            undoManager.registerUndo(withTarget: self) { target in
+                target.undoImageAsset(
+                    asset,
+                    using: undoManager,
+                    onResourceError: onResourceError
+                )
+            }
+        } catch {
+            onResourceError(
+                (error as? LocalizedError)?.errorDescription ?? "无法重做图片资源变更。"
+            )
+        }
+    }
 }
 
 @MainActor
