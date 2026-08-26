@@ -928,6 +928,7 @@ struct MarkdownEditorView: View {
     private var documentSaveCommandActions: DocumentSaveCommandActions {
         DocumentSaveCommandActions(
             isBusy: isSavingDocument || isRelocatingDocument || relocationRequest != nil,
+            canSave: canEditDocument,
             save: saveCurrentDocument,
             saveAs: { beginDocumentRelocation(.saveAs) },
             saveCopy: { beginDocumentRelocation(.saveCopy) },

@@ -344,6 +344,12 @@ final class HTMLExporterTests: XCTestCase {
     func testFileMenuHasOneHTMLExportCommand() throws {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
         let items = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu))
+        let exportMenus = items.filter { $0.title == "导出…" }
+        XCTAssertEqual(exportMenus.count, 1)
+        XCTAssertEqual(
+            try XCTUnwrap(exportMenus.first?.submenu).items.map(\.title),
+            ["导出 HTML…", "导出 PDF…"]
+        )
         XCTAssertEqual(items.filter { $0.title == "导出 HTML…" }.count, 1)
         XCTAssertEqual(items.filter { $0.title == "导出 PDF…" }.count, 1)
     }

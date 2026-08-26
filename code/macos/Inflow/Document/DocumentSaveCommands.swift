@@ -31,6 +31,7 @@ enum DocumentRelocationOperation: String, Sendable {
 @MainActor
 final class DocumentSaveCommandActions {
     let isBusy: Bool
+    let canSave: Bool
     let save: () -> Void
     let saveAs: () -> Void
     let saveCopy: () -> Void
@@ -38,12 +39,14 @@ final class DocumentSaveCommandActions {
 
     init(
         isBusy: Bool,
+        canSave: Bool = true,
         save: @escaping () -> Void,
         saveAs: @escaping () -> Void,
         saveCopy: @escaping () -> Void,
         showInFinder: (() -> Void)?
     ) {
         self.isBusy = isBusy
+        self.canSave = canSave
         self.save = save
         self.saveAs = saveAs
         self.saveCopy = saveCopy
@@ -69,7 +72,9 @@ struct DocumentSaveCommands: Commands {
         CommandGroup(replacing: .saveItem) {
             Button("保存") { actions?.save() }
                 .keyboardShortcut("s", modifiers: .command)
-                .disabled(actions == nil || actions?.isBusy == true)
+                .disabled(
+                    actions == nil || actions?.isBusy == true || actions?.canSave != true
+                )
 
             Button("另存为…") { actions?.saveAs() }
                 .keyboardShortcut("s", modifiers: [.command, .shift])

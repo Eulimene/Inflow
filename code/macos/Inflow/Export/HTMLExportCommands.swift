@@ -37,23 +37,26 @@ struct HTMLExportCommands: Commands {
     var body: some Commands {
         CommandGroup(after: .saveItem) {
             Divider()
-            Button("导出 HTML…") {
-                actions?.startHTML()
-            }
-            .disabled(
-                actions == nil
-                    || actions?.isExportingHTML == true
-                    || actions?.isExportingPDF == true
-            )
+            Menu("导出…") {
+                Button("导出 HTML…") {
+                    actions?.startHTML()
+                }
+                .disabled(
+                    actions == nil
+                        || actions?.isExportingHTML == true
+                        || actions?.isExportingPDF == true
+                )
 
-            Button("导出 PDF…") {
-                actions?.startPDF()
+                Button("导出 PDF…") {
+                    actions?.startPDF()
+                }
+                .disabled(
+                    actions == nil
+                        || actions?.isExportingHTML == true
+                        || actions?.isExportingPDF == true
+                )
             }
-            .disabled(
-                actions == nil
-                    || actions?.isExportingHTML == true
-                    || actions?.isExportingPDF == true
-            )
+            .disabled(actions == nil)
         }
     }
 }

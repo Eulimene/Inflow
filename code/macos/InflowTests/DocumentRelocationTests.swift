@@ -341,6 +341,7 @@ final class DocumentRelocationTests: XCTestCase {
         var secondEvents: [String] = []
         let first = DocumentSaveCommandActions(
             isBusy: false,
+            canSave: false,
             save: { firstEvents.append("save") },
             saveAs: { firstEvents.append("saveAs") },
             saveCopy: { firstEvents.append("copy") },
@@ -362,7 +363,9 @@ final class DocumentRelocationTests: XCTestCase {
         XCTAssertEqual(firstEvents, ["save", "saveAs", "copy"])
         XCTAssertEqual(secondEvents, ["finder"])
         XCTAssertFalse(first.isBusy)
+        XCTAssertFalse(first.canSave)
         XCTAssertTrue(second.isBusy)
+        XCTAssertTrue(second.canSave)
     }
 
     private func withTemporaryDirectory(_ body: (URL) throws -> Void) throws {
