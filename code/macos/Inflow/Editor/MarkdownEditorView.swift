@@ -145,6 +145,8 @@ struct MarkdownEditorView: View {
         EditorStatisticMode.words.rawValue
     @SceneStorage("isFocusModeEnabled") private var isFocusModeEnabled = false
     @SceneStorage("isTypewriterModeEnabled") private var isTypewriterModeEnabled = false
+    @SceneStorage("editorSplitFraction") private var editorSplitFraction =
+        EditorSplitLayout.defaultFraction
     @State private var previewHTML = MarkdownRenderer.htmlDocument(for: "")
     @State private var analysisState = DocumentAnalysisState.updating(previous: .empty)
     @State private var derivedContentGeneration = 0
@@ -636,9 +638,10 @@ struct MarkdownEditorView: View {
         case .source:
             sourceEditor
         case .split:
-            HSplitView {
+            PersistentHorizontalSplitView(fraction: $editorSplitFraction) {
                 sourceEditor
                     .frame(minWidth: 320)
+            } trailing: {
                 preview
                     .frame(minWidth: 320)
             }

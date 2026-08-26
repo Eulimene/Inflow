@@ -10,6 +10,74 @@ final class EditorViewModeCommandsTests: XCTestCase {
         XCTAssertEqual(EditorViewMode.resolve(storedValue: "removed-mode"), .split)
     }
 
+    func testSplitFractionDefaultsAndClampsToLaunchRange() {
+        XCTAssertEqual(EditorSplitLayout.defaultFraction, 0.5)
+        XCTAssertEqual(EditorSplitLayout.normalized(0.1), 0.25)
+        XCTAssertEqual(EditorSplitLayout.normalized(0.6), 0.6)
+        XCTAssertEqual(EditorSplitLayout.normalized(0.9), 0.75)
+        XCTAssertEqual(EditorSplitLayout.normalized(.nan), 0.5)
+
+        XCTAssertEqual(
+            EditorSplitLayout.position(for: 0.5, totalWidth: 802, dividerThickness: 2),
+            400
+        )
+        XCTAssertEqual(
+            EditorSplitLayout.fraction(for: 200, totalWidth: 802, dividerThickness: 2),
+            0.25
+        )
+    }
+
+    @MainActor
+    func testHostedSplitRestoresFractionAndConstrainsDivider() throws {
+        var storedFraction = 0.6
+        let root = PersistentHorizontalSplitView(
+            fraction: Binding(
+                get: { storedFraction },
+                set: { storedFraction = $0 }
+            )
+        ) {
+            Text("Source")
+        } trailing: {
+            Text("Preview")
+        }
+        let hostingView = NSHostingView(rootView: root)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1_002, height: 500),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.close() }
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+
+        let splitView = try XCTUnwrap(
+            descendants(of: hostingView).compactMap { $0 as? NSSplitView }.first
+        )
+        let availableWidth = splitView.bounds.width - splitView.dividerThickness
+        XCTAssertEqual(splitView.subviews[0].frame.width / availableWidth, 0.6, accuracy: 0.01)
+
+        splitView.setPosition(0, ofDividerAt: 0)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        XCTAssertEqual(splitView.subviews[0].frame.width / availableWidth, 0.25, accuracy: 0.01)
+        XCTAssertEqual(storedFraction, 0.25, accuracy: 0.01)
+
+        splitView.setPosition(splitView.bounds.width, ofDividerAt: 0)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        XCTAssertEqual(splitView.subviews[0].frame.width / availableWidth, 0.75, accuracy: 0.01)
+        XCTAssertEqual(storedFraction, 0.75, accuracy: 0.01)
+
+        window.setContentSize(NSSize(width: 1_202, height: 500))
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        let resizedAvailableWidth = splitView.bounds.width - splitView.dividerThickness
+        XCTAssertEqual(
+            splitView.subviews[0].frame.width / resizedAvailableWidth,
+            0.75,
+            accuracy: 0.01
+        )
+    }
+
     func testNewSceneUsesLastActiveModeWhileRestoredSceneKeepsItsOwnMode() {
         XCTAssertEqual(
             EditorViewMode.initialMode(storedValue: "", lastActiveMode: .preview),
@@ -88,5 +156,10 @@ final class EditorViewModeCommandsTests: XCTestCase {
         menu.items.flatMap { item in
             [item] + (item.submenu.map(allMenuItems) ?? [])
         }
+    }
+
+    @MainActor
+    private func descendants(of view: NSView) -> [NSView] {
+        view.subviews.flatMap { [$0] + descendants(of: $0) }
     }
 }
