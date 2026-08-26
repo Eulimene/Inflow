@@ -68,6 +68,33 @@ final class MarkdownCodecTests: XCTestCase {
         XCTAssertEqual(try document.encodedFileData(), Data("one\ntwo\nthree\nfour".utf8))
     }
 
+    func testMixedLineEndingPromptUsesFrozenSafeExitCopy() {
+        XCTAssertEqual(MixedLineEndingPrompt.title, "选择这份文档的换行方式")
+        XCTAssertEqual(
+            MixedLineEndingPrompt.message,
+            "检测到 LF 和 CRLF 混合。作出选择前，文档保持只读且不会自动保存。"
+        )
+        XCTAssertEqual(MixedLineEndingPrompt.useLFTitle, "使用 LF")
+        XCTAssertEqual(MixedLineEndingPrompt.useCRLFTitle, "使用 CRLF")
+        XCTAssertEqual(MixedLineEndingPrompt.closeTitle, "关闭文档")
+    }
+
+    @MainActor
+    func testMixedLineEndingSafeExitClosesWithoutChoosingAFormat() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(window.isVisible)
+
+        MixedLineEndingPrompt.closeDocumentWindow(window)
+
+        XCTAssertFalse(window.isVisible)
+    }
+
     @MainActor
     func testMixedLineEndingGateKeepsMountedSourceEditorReadOnlyUntilChoice() throws {
         let model = MarkdownDocumentHarness(

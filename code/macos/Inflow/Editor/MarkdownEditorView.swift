@@ -133,6 +133,19 @@ enum EmptyMarkdownGuidance {
     }
 }
 
+enum MixedLineEndingPrompt {
+    static let title = "选择这份文档的换行方式"
+    static let message = "检测到 LF 和 CRLF 混合。作出选择前，文档保持只读且不会自动保存。"
+    static let useLFTitle = "使用 LF"
+    static let useCRLFTitle = "使用 CRLF"
+    static let closeTitle = "关闭文档"
+
+    @MainActor
+    static func closeDocumentWindow(_ window: NSWindow?) {
+        window?.performClose(nil)
+    }
+}
+
 private struct EmptyMarkdownPreviewView: View {
     let onStartWriting: () -> Void
     let onOpenDocument: () -> Void
@@ -811,18 +824,23 @@ struct MarkdownEditorView: View {
                 .foregroundStyle(.orange)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text("请先选择换行方式")
+                Text(MixedLineEndingPrompt.title)
                     .font(.headline)
-                Text("该文件同时包含 LF、CRLF 或单独 CR。选择统一方式前保持只读，不会写回原文件。")
+                Text(MixedLineEndingPrompt.message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 12)
-            Button("统一为 LF") {
+            Button(MixedLineEndingPrompt.useLFTitle) {
                 document.chooseLineEnding(.lf)
             }
-            Button("统一为 CRLF") {
+            Button(MixedLineEndingPrompt.useCRLFTitle) {
                 document.chooseLineEnding(.crlf)
+            }
+            Button(MixedLineEndingPrompt.closeTitle) {
+                MixedLineEndingPrompt.closeDocumentWindow(
+                    sourceEditorSession.textView.window ?? NSApp.keyWindow
+                )
             }
         }
         .padding(.horizontal, 12)
