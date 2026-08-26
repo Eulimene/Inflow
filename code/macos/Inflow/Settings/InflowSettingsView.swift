@@ -64,6 +64,24 @@ struct InflowSettingsView: View {
                 )
             }
 
+            Section("自动保存") {
+                Toggle("自动保存可写文档", isOn: $preferences.autosaveEnabled)
+                Picker("编辑后延迟", selection: $preferences.autosaveDelay) {
+                    ForEach(AutosaveDelay.allCases) { delay in
+                        Text(delay.label).tag(delay)
+                    }
+                }
+                .disabled(!preferences.autosaveEnabled)
+
+                Text(
+                    preferences.autosaveEnabled
+                        ? "延迟从最近一次编辑开始计算；外部冲突或只读状态仍会暂停写回。"
+                        : "可随时使用 ⌘S 手动保存；异常恢复保护仍会独立运行。"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
             Section("最近文档") {
                 if recentDocuments.entries.isEmpty {
                     Text("暂无最近文档")

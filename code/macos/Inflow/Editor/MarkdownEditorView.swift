@@ -310,6 +310,9 @@ struct MarkdownEditorView: View {
     private var documentObservationLayer: some View {
         editorSurface
         .onAppear {
+            // SwiftUI creates its document controller while the app is launching.
+            // Apply the host policy only after this document scene is attached.
+            preferences.applyAutosavePolicy()
             registerDocumentNavigation(url: fileURL)
             if let fileURL {
                 recentDocuments?.note(fileURL)

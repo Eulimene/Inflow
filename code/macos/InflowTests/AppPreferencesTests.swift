@@ -7,6 +7,7 @@ final class AppPreferencesTests: XCTestCase {
     func testDefaultsMatchLaunchContract() {
         withDefaults { defaults in
             let preferences = AppPreferences(defaults: defaults)
+            preferences.applyAutosavePolicy()
 
             XCTAssertEqual(preferences.editorFontSize, 15)
             XCTAssertEqual(preferences.editorLineHeight, 1.6)
@@ -27,6 +28,9 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.lastActiveEditorViewMode, .split)
             XCTAssertEqual(preferences.recentDocumentCapacity, 20)
             XCTAssertEqual(preferences.markdownOpenBehavior, .newWindow)
+            XCTAssertTrue(preferences.autosaveEnabled)
+            XCTAssertEqual(preferences.autosaveDelay, .oneSecond)
+            XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 1)
         }
     }
 
@@ -52,8 +56,11 @@ final class AppPreferencesTests: XCTestCase {
             first.recordActiveEditorViewMode(.preview)
             first.recentDocumentCapacity = 42
             first.markdownOpenBehavior = .reuseBlankWindow
+            first.autosaveEnabled = false
+            first.autosaveDelay = .fiveSeconds
 
             let second = AppPreferences(defaults: defaults)
+            second.applyAutosavePolicy()
             XCTAssertEqual(second.editorFontSize, 24)
             XCTAssertEqual(second.editorLineHeight, 1.9)
             XCTAssertFalse(second.syntaxHighlightingEnabled)
@@ -73,6 +80,9 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(second.lastActiveEditorViewMode, .preview)
             XCTAssertEqual(second.recentDocumentCapacity, 42)
             XCTAssertEqual(second.markdownOpenBehavior, .reuseBlankWindow)
+            XCTAssertFalse(second.autosaveEnabled)
+            XCTAssertEqual(second.autosaveDelay, .fiveSeconds)
+            XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
 
             second.editorFontSize = 100
             second.editorLineHeight = -4
@@ -96,6 +106,7 @@ final class AppPreferencesTests: XCTestCase {
             defaults.set("retired-view", forKey: "preferences.window.lastActiveEditorViewMode")
             defaults.set(-40, forKey: RecentDocumentPolicy.capacityKey)
             defaults.set("retired-open", forKey: RecentDocumentPolicy.openBehaviorKey)
+            defaults.set("retired-delay", forKey: "preferences.documents.autosaveDelay")
             defaults.set("keep-me", forKey: "unrelated.document-state")
 
             let preferences = AppPreferences(defaults: defaults)
@@ -106,6 +117,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.lastActiveEditorViewMode, .split)
             XCTAssertEqual(preferences.recentDocumentCapacity, 5)
             XCTAssertEqual(preferences.markdownOpenBehavior, .newWindow)
+            XCTAssertEqual(preferences.autosaveDelay, .oneSecond)
             XCTAssertEqual(defaults.string(forKey: "unrelated.document-state"), "keep-me")
         }
     }
@@ -128,6 +140,8 @@ final class AppPreferencesTests: XCTestCase {
             preferences.recordActiveEditorViewMode(.source)
             preferences.recentDocumentCapacity = 31
             preferences.markdownOpenBehavior = .reuseBlankWindow
+            preferences.autosaveEnabled = false
+            preferences.autosaveDelay = .twoSeconds
 
             preferences.resetWritingAndPreview()
 
@@ -145,7 +159,26 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.lastActiveEditorViewMode, .source)
             XCTAssertEqual(preferences.recentDocumentCapacity, 31)
             XCTAssertEqual(preferences.markdownOpenBehavior, .reuseBlankWindow)
+            XCTAssertFalse(preferences.autosaveEnabled)
+            XCTAssertEqual(preferences.autosaveDelay, .twoSeconds)
+            XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
             XCTAssertEqual(defaults.string(forKey: "document.recovery.record"), "recovery-sentinel")
+        }
+    }
+
+    func testAutosavePolicySupportsEveryContractDelayAndKeepsManualSaveAvailable() {
+        withDefaults { defaults in
+            let preferences = AppPreferences(defaults: defaults)
+
+            for delay in AutosaveDelay.allCases {
+                preferences.autosaveDelay = delay
+                preferences.autosaveEnabled = true
+                XCTAssertEqual(NSDocumentController.shared.autosavingDelay, delay.seconds)
+            }
+
+            preferences.autosaveEnabled = false
+            XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
+            XCTAssertTrue(NSDocument.instancesRespond(to: #selector(NSDocument.save(_:))))
         }
     }
 
@@ -280,8 +313,12 @@ final class AppPreferencesTests: XCTestCase {
     private func withDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
         let suiteName = "Inflow.AppPreferencesTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
+        let originalAutosavingDelay = NSDocumentController.shared.autosavingDelay
         defaults.removePersistentDomain(forName: suiteName)
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer {
+            NSDocumentController.shared.autosavingDelay = originalAutosavingDelay
+            defaults.removePersistentDomain(forName: suiteName)
+        }
         try body(defaults)
     }
 }

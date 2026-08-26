@@ -66,6 +66,33 @@ enum PreviewTheme: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum AutosaveDelay: String, CaseIterable, Identifiable, Sendable {
+    case halfSecond = "0.5"
+    case oneSecond = "1"
+    case twoSeconds = "2"
+    case fiveSeconds = "5"
+
+    var id: Self { self }
+
+    var seconds: TimeInterval {
+        switch self {
+        case .halfSecond: 0.5
+        case .oneSecond: 1
+        case .twoSeconds: 2
+        case .fiveSeconds: 5
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .halfSecond: "0.5 秒"
+        case .oneSecond: "1 秒"
+        case .twoSeconds: "2 秒"
+        case .fiveSeconds: "5 秒"
+        }
+    }
+}
+
 enum AccessibilityPreference: String, CaseIterable, Identifiable, Sendable {
     case followSystem
     case enabled
@@ -170,6 +197,8 @@ final class AppPreferences: ObservableObject {
         static let increasedContrast = "preferences.accessibility.increasedContrast"
         static let reduceMotion = "preferences.accessibility.reduceMotion"
         static let lastActiveEditorViewMode = "preferences.window.lastActiveEditorViewMode"
+        static let autosaveEnabled = "preferences.documents.autosaveEnabled"
+        static let autosaveDelay = "preferences.documents.autosaveDelay"
     }
 
     private let defaults: UserDefaults
@@ -292,6 +321,20 @@ final class AppPreferences: ObservableObject {
         }
     }
 
+    @Published var autosaveEnabled: Bool {
+        didSet {
+            defaults.set(autosaveEnabled, forKey: Key.autosaveEnabled)
+            applyAutosavePolicy()
+        }
+    }
+
+    @Published var autosaveDelay: AutosaveDelay {
+        didSet {
+            defaults.set(autosaveDelay.rawValue, forKey: Key.autosaveDelay)
+            applyAutosavePolicy()
+        }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         editorFontSize = Self.number(
@@ -390,6 +433,17 @@ final class AppPreferences: ObservableObject {
         )
         recentDocumentCapacity = RecentDocumentPolicy.capacity(in: defaults)
         markdownOpenBehavior = RecentDocumentPolicy.openBehavior(in: defaults)
+        autosaveEnabled = Self.bool(
+            forKey: Key.autosaveEnabled,
+            in: defaults,
+            defaultValue: true
+        )
+        autosaveDelay = Self.enumeration(
+            AutosaveDelay.self,
+            forKey: Key.autosaveDelay,
+            in: defaults,
+            defaultValue: .oneSecond
+        )
 
         persistCurrentValues()
         accessibilityObserver = NSWorkspace.shared.notificationCenter
@@ -433,6 +487,10 @@ final class AppPreferences: ObservableObject {
         lastActiveEditorViewMode = mode
     }
 
+    func applyAutosavePolicy(to documentController: NSDocumentController = .shared) {
+        documentController.autosavingDelay = autosaveEnabled ? autosaveDelay.seconds : 0
+    }
+
     func resetWritingAndPreview() {
         editorFontSize = SourceEditorAppearance.default.fontSize
         editorLineHeight = SourceEditorAppearance.default.lineHeight
@@ -472,6 +530,8 @@ final class AppPreferences: ObservableObject {
         defaults.set(lastActiveEditorViewMode.rawValue, forKey: Key.lastActiveEditorViewMode)
         defaults.set(recentDocumentCapacity, forKey: RecentDocumentPolicy.capacityKey)
         defaults.set(markdownOpenBehavior.rawValue, forKey: RecentDocumentPolicy.openBehaviorKey)
+        defaults.set(autosaveEnabled, forKey: Key.autosaveEnabled)
+        defaults.set(autosaveDelay.rawValue, forKey: Key.autosaveDelay)
     }
 
     private static func clamped(_ value: Double, range: ClosedRange<Double>) -> Double {
