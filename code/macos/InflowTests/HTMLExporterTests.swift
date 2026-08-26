@@ -43,10 +43,27 @@ final class HTMLExporterTests: XCTestCase {
             }
             XCTAssertEqual(
                 Set(issues),
-                Set([.localLink, .unsafeLink])
+                Set([.image, .localLink, .unsafeLink])
             )
             XCTAssertTrue(error.localizedDescription.contains("导出前检查未通过"))
         }
+    }
+
+    func testPreparationReportsWarningsAndProducesSafeDegradedHTML() throws {
+        let preparation = try HTMLExporter.prepare(
+            snapshot: HTMLExportSnapshot(
+                markdown: "[local](/Users/person/Secret.md) [unsafe](javascript:alert(1))"
+            )
+        )
+        let html = try XCTUnwrap(String(data: preparation.data, encoding: .utf8))
+
+        XCTAssertEqual(Set(preparation.warnings), Set([.localLink, .unsafeLink]))
+        XCTAssertEqual(html.components(separatedBy: "inflow-disabled-link").count - 1, 2)
+        XCTAssertTrue(html.contains("local</span>"))
+        XCTAssertTrue(html.contains("unsafe</span>"))
+        XCTAssertFalse(html.contains("/Users/person"))
+        XCTAssertFalse(html.contains("javascript:"))
+        XCTAssertTrue(preparation.warningMessage.contains("明确继续"))
     }
 
     func testExportInlinesValidatedLocalImageWithoutFilePath() throws {
@@ -68,16 +85,33 @@ final class HTMLExporterTests: XCTestCase {
         }
     }
 
-    func testExportRejectsMissingOrUnavailableImageBeforeWriting() {
+    func testStrictExportRejectsMissingOrUnavailableImageBeforeWriting() {
         let snapshot = HTMLExportSnapshot(
             markdown: "![missing](assets/missing.png)",
             documentDirectory: FileManager.default.temporaryDirectory
         )
         XCTAssertThrowsError(try HTMLExporter.generate(snapshot: snapshot)) { error in
-            guard case HTMLExportError.unavailableResource = error else {
+            guard case let HTMLExportError.unsupportedContent(issues) = error else {
                 return XCTFail("Unexpected error: \(error)")
             }
+            XCTAssertEqual(issues, [.image])
         }
+    }
+
+    func testPreparationKeepsMissingImageAsExplicitPlaceholder() throws {
+        let preparation = try HTMLExporter.prepare(
+            snapshot: HTMLExportSnapshot(
+                markdown: "![missing](assets/private-name.png)",
+                documentDirectory: FileManager.default.temporaryDirectory
+            )
+        )
+        let html = try XCTUnwrap(String(data: preparation.data, encoding: .utf8))
+
+        XCTAssertEqual(preparation.warnings, [.image])
+        XCTAssertTrue(html.contains("找不到资源"))
+        XCTAssertTrue(html.contains("private-name.png"))
+        XCTAssertFalse(html.contains("file:"))
+        XCTAssertFalse(html.contains(FileManager.default.temporaryDirectory.path))
     }
 
     func testExportDoesNotMistakeCodeTextForImageFailureMarkup() throws {

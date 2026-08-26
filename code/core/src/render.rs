@@ -28,17 +28,45 @@ pub fn html_fragment_with_configuration(
     markdown: &str,
     configuration: RenderConfiguration,
 ) -> String {
-    let events = safe_events(markdown, configuration);
+    let events = safe_events(markdown, configuration, false);
     let mut output = String::with_capacity(markdown.len());
     html::push_html(&mut output, events.into_iter());
     output
 }
 
-fn safe_events(markdown: &str, configuration: RenderConfiguration) -> Vec<Event<'_>> {
+/// Renders a delivery-safe fragment. Links which cannot be carried safely in a
+/// self-contained file remain readable but are deliberately not clickable.
+pub(crate) fn html_fragment_for_delivery(
+    markdown: &str,
+    configuration: RenderConfiguration,
+) -> String {
+    let events = safe_events(markdown, configuration, true);
+    let mut output = String::with_capacity(markdown.len());
+    html::push_html(&mut output, events.into_iter());
+    output
+}
+
+fn safe_events(
+    markdown: &str,
+    configuration: RenderConfiguration,
+    neutralize_delivery_links: bool,
+) -> Vec<Event<'_>> {
     let mut parser = Parser::new_ext(markdown, options_with_configuration(configuration));
     let mut events = Vec::new();
+    let mut neutralized_link_depth = 0_u32;
     while let Some(event) = parser.next() {
-        if let Event::Start(Tag::Image { dest_url, .. }) = &event {
+        if neutralize_delivery_links
+            && matches!(&event, Event::Start(Tag::Link { dest_url, .. }) if !is_portable_link(dest_url))
+        {
+            neutralized_link_depth += 1;
+            events.push(Event::InlineHtml(
+                "<span class=\"inflow-disabled-link\" role=\"note\" aria-label=\"该链接在导出时已停用\">"
+                    .into(),
+            ));
+        } else if neutralized_link_depth > 0 && matches!(event, Event::End(TagEnd::Link)) {
+            neutralized_link_depth -= 1;
+            events.push(Event::InlineHtml("</span>".into()));
+        } else if let Event::Start(Tag::Image { dest_url, .. }) = &event {
             let destination = dest_url.to_string();
             let mut alternative = String::new();
             for image_event in parser.by_ref() {
@@ -101,6 +129,25 @@ fn safe_events(markdown: &str, configuration: RenderConfiguration) -> Vec<Event<
         }
     }
     events
+}
+
+pub(crate) fn is_portable_link(destination: &str) -> bool {
+    let destination = destination.trim_matches(char::is_whitespace);
+    if destination.is_empty() || destination.starts_with('#') {
+        return true;
+    }
+
+    let scheme_end = destination.find(':');
+    let path_marker = destination
+        .find(['/', '?', '#'])
+        .unwrap_or(destination.len());
+    let Some(scheme_end) = scheme_end.filter(|position| *position < path_marker) else {
+        return false;
+    };
+    matches!(
+        destination[..scheme_end].to_ascii_lowercase().as_str(),
+        "http" | "https" | "mailto"
+    )
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -284,5 +331,20 @@ mod tests {
         assert!(html.contains("data-inflow-alt=\"e5b081e99da2\""));
         assert!(!html.contains("<img"));
         assert!(!html.contains("src=\"https://"));
+    }
+
+    #[test]
+    fn delivery_neutralizes_local_and_unsafe_links_without_leaking_targets() {
+        let html = html_fragment_for_delivery(
+            "[local](/Users/person/Private.md) [unsafe](javascript:alert(1)) [web](https://example.com)",
+            RenderConfiguration::default(),
+        );
+
+        assert_eq!(html.matches("class=\"inflow-disabled-link\"").count(), 2);
+        assert!(html.contains(">local</span>"));
+        assert!(html.contains(">unsafe</span>"));
+        assert!(html.contains("href=\"https://example.com\""));
+        assert!(!html.contains("/Users/person"));
+        assert!(!html.contains("javascript:"));
     }
 }

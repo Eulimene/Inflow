@@ -1,6 +1,11 @@
 import Foundation
 
 enum LocalImageResolver {
+    struct ExportResolution: Sendable {
+        let html: String
+        let hasWarnings: Bool
+    }
+
     private static let slotExpression = try! NSRegularExpression(
         pattern: #"<span class="inflow-image-slot" data-inflow-target="([0-9a-f]*)" data-inflow-alt="([0-9a-f]*)"></span>"#
     )
@@ -55,6 +60,14 @@ enum LocalImageResolver {
             throw LocalImageExportError.unavailableResource
         }
         return result.html
+    }
+
+    static func resolveSlotsForPreparedExport(
+        in fragment: String,
+        documentDirectory: URL?
+    ) -> ExportResolution {
+        let result = resolution(in: fragment, documentDirectory: documentDirectory)
+        return ExportResolution(html: result.html, hasWarnings: result.hasFailure)
     }
 
     private static func resolvedImage(

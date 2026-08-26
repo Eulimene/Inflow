@@ -21,6 +21,12 @@ pub enum ExportError {
     OutputTooLarge,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct PreparedHtml {
+    pub bytes: Vec<u8>,
+    pub warnings: u64,
+}
+
 #[allow(dead_code)] // Preserves the default-policy core entry point for future hosts.
 pub fn html_document(markdown: &str) -> Result<Vec<u8>, ExportError> {
     html_document_with_configuration(markdown, render::RenderConfiguration::default())
@@ -31,6 +37,13 @@ pub fn html_document_with_configuration(
     configuration: render::RenderConfiguration,
 ) -> Result<Vec<u8>, ExportError> {
     html_document_with_limit(markdown, configuration, MAX_HTML_BYTES)
+}
+
+pub fn prepare_html_document_with_configuration(
+    markdown: &str,
+    configuration: render::RenderConfiguration,
+) -> Result<PreparedHtml, ExportError> {
+    prepare_html_document_with_limit(markdown, configuration, MAX_HTML_BYTES)
 }
 
 fn html_document_with_limit(
@@ -49,6 +62,23 @@ fn html_document_with_limit(
         return Err(ExportError::OutputTooLarge);
     }
     Ok(document.into_bytes())
+}
+
+fn prepare_html_document_with_limit(
+    markdown: &str,
+    configuration: render::RenderConfiguration,
+    maximum_bytes: usize,
+) -> Result<PreparedHtml, ExportError> {
+    let warnings = blocking_issues(markdown);
+    let fragment = render::html_fragment_for_delivery(markdown, configuration);
+    let document = format!("{DOCUMENT_PREFIX}{fragment}{DOCUMENT_SUFFIX}");
+    if document.len() > maximum_bytes {
+        return Err(ExportError::OutputTooLarge);
+    }
+    Ok(PreparedHtml {
+        bytes: document.into_bytes(),
+        warnings,
+    })
 }
 
 pub fn blocking_issues(markdown: &str) -> u64 {
@@ -291,6 +321,21 @@ mod tests {
         assert!(
             html_document_with_limit("", render::RenderConfiguration::default(), minimum).is_ok()
         );
+    }
+
+    #[test]
+    fn prepares_safe_degraded_delivery_for_reviewable_link_warnings() {
+        let prepared = prepare_html_document_with_configuration(
+            "[notes](../notes.md) [run](javascript:alert(1))",
+            render::RenderConfiguration::default(),
+        )
+        .expect("reviewable warnings still produce a safe candidate");
+        let html = String::from_utf8(prepared.bytes).unwrap();
+
+        assert_eq!(prepared.warnings, ISSUE_LOCAL_LINK | ISSUE_UNSAFE_LINK);
+        assert_eq!(html.matches("inflow-disabled-link").count(), 2);
+        assert!(!html.contains("../notes.md"));
+        assert!(!html.contains("javascript:"));
     }
 
     #[test]

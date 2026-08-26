@@ -273,6 +273,16 @@ InflowHTMLExportResult inflow_markdown_export_html_with_options(
     InflowRenderOptions options
 );
 
+/// Produces a safe candidate even when reviewable links must be disabled.
+/// On success, blocking_issues contains the warnings the host must present
+/// before the user explicitly continues. The returned HTML never carries the
+/// corresponding local path or unsupported URL.
+InflowHTMLExportResult inflow_markdown_prepare_html_with_options(
+    const uint8_t *utf8,
+    uintptr_t length,
+    InflowRenderOptions options
+);
+
 /// Plans a single inline Markdown edit without modifying the source. Selection
 /// and returned ranges use end-exclusive UTF-8 byte offsets aligned to complete
 /// extended graphemes. A complete wrapper is removed; plain selected content

@@ -54,6 +54,18 @@ private enum HTMLExportNotice: Identifiable {
     }
 }
 
+private struct PendingExportConfirmation: Identifiable {
+    enum Format {
+        case html
+        case pdf
+    }
+
+    let id = UUID()
+    let format: Format
+    let preparation: HTMLExportPreparation
+    let suggestedFilename: String
+}
+
 enum EditorViewMode: String, CaseIterable, Identifiable {
     case source
     case split
@@ -209,6 +221,7 @@ struct MarkdownEditorView: View {
     @State private var isExportingPDF = false
     @State private var htmlExportWorker = HTMLExportWorker()
     @State private var htmlExportNotice: HTMLExportNotice?
+    @State private var pendingExportConfirmation: PendingExportConfirmation?
     @State private var markdownFormatErrorMessage: String?
     @State private var linkInsertionRequest: MarkdownLinkInsertionRequest?
     @State private var isImportingImage = false
@@ -622,6 +635,16 @@ struct MarkdownEditorView: View {
         }
         .alert(item: $htmlExportNotice) { notice in
             notice.alert
+        }
+        .alert(item: $pendingExportConfirmation) { pending in
+            Alert(
+                title: Text("导出前发现可处理的问题"),
+                message: Text(pending.preparation.warningMessage),
+                primaryButton: .default(Text("明确继续")) {
+                    continuePreparedExport(pending)
+                },
+                secondaryButton: .cancel(Text("返回修正"))
+            )
         }
         .alert(item: $fileSafetyNotice) { notice in
             notice.alert
@@ -1832,52 +1855,27 @@ struct MarkdownEditorView: View {
         isExportingHTML = true
 
         Task { @MainActor in
-            defer { isExportingHTML = false }
-
-            let generation = await worker.generate(snapshot)
-            let html: Data
-            switch generation {
-            case let .success(data):
-                html = data
+            let preparation: HTMLExportPreparation
+            switch await worker.prepare(snapshot) {
+            case let .success(value):
+                preparation = value
             case let .failure(error):
+                isExportingHTML = false
                 htmlExportNotice = .failure(error.localizedDescription)
                 return
             }
 
-            guard let targetURL = await HTMLExportPanel.chooseDestination(
-                suggestedFilename: suggestedFilename
-            ) else {
-                return
-            }
-
-            let accessed = targetURL.startAccessingSecurityScopedResource()
-            defer {
-                if accessed {
-                    targetURL.stopAccessingSecurityScopedResource()
-                }
-            }
-
-            let targetSnapshot: HTMLExportTargetSnapshot
-            do {
-                targetSnapshot = try HTMLExportTargetSnapshot.capture(targetURL)
-            } catch {
-                htmlExportNotice = .failure(
-                    (error as? LocalizedError)?.errorDescription
-                        ?? HTMLExportTargetError.cannotInspect.localizedDescription
+            guard preparation.warnings.isEmpty else {
+                isExportingHTML = false
+                pendingExportConfirmation = PendingExportConfirmation(
+                    format: .html,
+                    preparation: preparation,
+                    suggestedFilename: suggestedFilename
                 )
                 return
             }
-
-            switch await worker.write(
-                html,
-                to: targetURL,
-                expectedTarget: targetSnapshot
-            ) {
-            case .success:
-                htmlExportNotice = .success(targetURL)
-            case let .failure(error):
-                htmlExportNotice = .failure(error.localizedDescription)
-            }
+            isExportingHTML = false
+            continuePreparedHTMLExport(preparation, suggestedFilename: suggestedFilename)
         }
     }
 
@@ -1894,19 +1892,94 @@ struct MarkdownEditorView: View {
         isExportingPDF = true
 
         Task { @MainActor in
-            defer { isExportingPDF = false }
-            let selfContainedHTML: Data
-            switch await worker.generate(snapshot) {
-            case let .success(data):
-                selfContainedHTML = data
+            let preparation: HTMLExportPreparation
+            switch await worker.prepare(snapshot) {
+            case let .success(value):
+                preparation = value
             case let .failure(error):
+                isExportingPDF = false
                 htmlExportNotice = .pdfFailure(error.localizedDescription)
                 return
             }
 
+            let suggestedFilename = "\(basename).pdf"
+            guard preparation.warnings.isEmpty else {
+                isExportingPDF = false
+                pendingExportConfirmation = PendingExportConfirmation(
+                    format: .pdf,
+                    preparation: preparation,
+                    suggestedFilename: suggestedFilename
+                )
+                return
+            }
+            isExportingPDF = false
+            continuePreparedPDFExport(preparation, suggestedFilename: suggestedFilename)
+        }
+    }
+
+    private func continuePreparedExport(_ pending: PendingExportConfirmation) {
+        switch pending.format {
+        case .html:
+            continuePreparedHTMLExport(
+                pending.preparation,
+                suggestedFilename: pending.suggestedFilename
+            )
+        case .pdf:
+            continuePreparedPDFExport(
+                pending.preparation,
+                suggestedFilename: pending.suggestedFilename
+            )
+        }
+    }
+
+    private func continuePreparedHTMLExport(
+        _ preparation: HTMLExportPreparation,
+        suggestedFilename: String
+    ) {
+        guard !isExportingHTML, !isExportingPDF else { return }
+        let worker = htmlExportWorker
+        isExportingHTML = true
+        Task { @MainActor in
+            defer { isExportingHTML = false }
+            guard let targetURL = await HTMLExportPanel.chooseDestination(
+                suggestedFilename: suggestedFilename
+            ) else { return }
+
+            let accessed = targetURL.startAccessingSecurityScopedResource()
+            defer { if accessed { targetURL.stopAccessingSecurityScopedResource() } }
+            let targetSnapshot: HTMLExportTargetSnapshot
+            do {
+                targetSnapshot = try HTMLExportTargetSnapshot.capture(targetURL)
+            } catch {
+                htmlExportNotice = .failure(
+                    (error as? LocalizedError)?.errorDescription
+                        ?? HTMLExportTargetError.cannotInspect.localizedDescription
+                )
+                return
+            }
+            switch await worker.write(
+                preparation.data,
+                to: targetURL,
+                expectedTarget: targetSnapshot
+            ) {
+            case .success: htmlExportNotice = .success(targetURL)
+            case let .failure(error): htmlExportNotice = .failure(error.localizedDescription)
+            }
+        }
+    }
+
+    private func continuePreparedPDFExport(
+        _ preparation: HTMLExportPreparation,
+        suggestedFilename: String
+    ) {
+        guard !isExportingHTML, !isExportingPDF else { return }
+        let worker = htmlExportWorker
+        isExportingPDF = true
+        Task { @MainActor in
+            defer { isExportingPDF = false }
             let pdf: Data
             do {
-                pdf = try await PDFExporter.generate(fromSelfContainedHTML: selfContainedHTML)
+                pdf = try await PDFExporter.generate(fromSelfContainedHTML: preparation.data)
             } catch {
                 htmlExportNotice = .pdfFailure(
                     (error as? LocalizedError)?.errorDescription
@@ -1915,10 +1988,8 @@ struct MarkdownEditorView: View {
                 return
             }
             guard let targetURL = await PDFExportPanel.chooseDestination(
-                suggestedFilename: "\(basename).pdf"
-            ) else {
-                return
-            }
+                suggestedFilename: suggestedFilename
+            ) else { return }
 
             let accessed = targetURL.startAccessingSecurityScopedResource()
             defer {

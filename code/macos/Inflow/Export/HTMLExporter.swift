@@ -29,16 +29,26 @@ enum HTMLExportIssue: UInt64, CaseIterable, Sendable {
     var description: String {
         switch self {
         case .image:
-            "图片（核心未能产生可由当前平台安全解析的资源）"
+            "缺失、未授权或不受支持的图片（交付物将显示安全占位）"
         case .formula:
             "数学公式（核心未能产生安全的自包含渲染结果）"
         case .mermaid:
             "Mermaid 图表（核心未能产生安全的自包含渲染结果）"
         case .localLink:
-            "相对或本地文件链接（单文件 HTML 无法安全保留）"
+            "相对或本地文件链接（交付物中将保留文字并停用点击）"
         case .unsafeLink:
-            "不安全或不受支持的链接协议"
+            "不安全或不受支持的链接协议（交付物中将保留文字并停用点击）"
         }
+    }
+}
+
+struct HTMLExportPreparation: Sendable {
+    let data: Data
+    let warnings: [HTMLExportIssue]
+
+    var warningMessage: String {
+        let details = warnings.map { "• \($0.description)" }.joined(separator: "\n")
+        return "\(details)\n\n返回 Markdown 可修正引用；明确继续后，缺失图片会保留可读占位，本地或异常链接会显示为不可点击的文字。"
     }
 }
 
@@ -68,8 +78,16 @@ enum HTMLExportError: Error, LocalizedError, Sendable {
 
 enum HTMLExporter {
     static func generate(snapshot: HTMLExportSnapshot) throws -> Data {
+        let preparation = try prepare(snapshot: snapshot)
+        guard preparation.warnings.isEmpty else {
+            throw HTMLExportError.unsupportedContent(preparation.warnings)
+        }
+        return preparation.data
+    }
+
+    static func prepare(snapshot: HTMLExportSnapshot) throws -> HTMLExportPreparation {
         let result: InflowHTMLExportResult = snapshot.utf8.withUnsafeBytes { buffer in
-            inflow_markdown_export_html_with_options(
+            inflow_markdown_prepare_html_with_options(
                 buffer.bindMemory(to: UInt8.self).baseAddress,
                 UInt(buffer.count),
                 snapshot.appearance.coreRenderOptions
@@ -83,18 +101,22 @@ enum HTMLExporter {
                 guard let coreHTML = String(data: coreData, encoding: .utf8) else {
                     throw HTMLExportError.coreFailure
                 }
-                let resolved = try LocalImageResolver.resolveSlotsForExport(
+                let resolved = LocalImageResolver.resolveSlotsForPreparedExport(
                     in: coreHTML,
                     documentDirectory: snapshot.documentDirectory
                 )
-                let themed = PreviewAppearanceCSS.applying(snapshot.appearance, to: resolved)
+                let themed = PreviewAppearanceCSS.applying(snapshot.appearance, to: resolved.html)
                 let output = Data(themed.utf8)
                 guard output.count <= LocalImageValidator.maximumBytes else {
                     throw HTMLExportError.outputTooLarge
                 }
-                return output
-            } catch is LocalImageExportError {
-                throw HTMLExportError.unavailableResource
+                var warnings = HTMLExportIssue.allCases.filter {
+                    result.blocking_issues & $0.rawValue != 0
+                }
+                if resolved.hasWarnings, !warnings.contains(.image) {
+                    warnings.insert(.image, at: 0)
+                }
+                return HTMLExportPreparation(data: output, warnings: warnings)
             } catch let error as HTMLExportError {
                 throw error
             } catch {
@@ -302,6 +324,16 @@ enum HTMLExportFileWriter {
 }
 
 actor HTMLExportWorker {
+    func prepare(_ snapshot: HTMLExportSnapshot) -> Result<HTMLExportPreparation, HTMLExportError> {
+        do {
+            return .success(try HTMLExporter.prepare(snapshot: snapshot))
+        } catch let error as HTMLExportError {
+            return .failure(error)
+        } catch {
+            return .failure(.coreFailure)
+        }
+    }
+
     func generate(_ snapshot: HTMLExportSnapshot) -> Result<Data, HTMLExportError> {
         do {
             return .success(try HTMLExporter.generate(snapshot: snapshot))

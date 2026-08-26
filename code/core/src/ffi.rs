@@ -590,6 +590,49 @@ pub unsafe extern "C" fn inflow_markdown_export_html_with_options(
     .unwrap_or_else(|_| InflowHTMLExportResult::error(STATUS_PANIC, 0))
 }
 
+/// Prepares a safe self-contained HTML candidate and reports reviewable
+/// delivery warnings. Local and unsupported links are rendered as inert text.
+/// A successful result may therefore have a non-zero `blocking_issues` field;
+/// the host must ask the user whether to return to the source or continue.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_markdown_prepare_html_with_options(
+    utf8: *const u8,
+    length: usize,
+    options: u32,
+) -> InflowHTMLExportResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(configuration) = render_configuration(options) else {
+            return InflowHTMLExportResult::error(STATUS_INVALID_ARGUMENT, 0);
+        };
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowHTMLExportResult::error(STATUS_INVALID_ARGUMENT, 0);
+        };
+        let Ok(markdown) = std::str::from_utf8(input) else {
+            return InflowHTMLExportResult::error(STATUS_INVALID_UTF8, 0);
+        };
+
+        match export::prepare_html_document_with_configuration(markdown, configuration) {
+            Ok(prepared) => InflowHTMLExportResult {
+                status: STATUS_OK,
+                html: InflowOwnedBytes::from_vec(prepared.bytes),
+                blocking_issues: prepared.warnings,
+            },
+            Err(ExportError::OutputTooLarge) => {
+                InflowHTMLExportResult::error(STATUS_OUTPUT_TOO_LARGE, 0)
+            }
+            Err(ExportError::UnsupportedContent(_)) => {
+                unreachable!("preparation converts reviewable content to safe output")
+            }
+        }
+    }))
+    .unwrap_or_else(|_| InflowHTMLExportResult::error(STATUS_PANIC, 0))
+}
+
 fn render_configuration(options: u32) -> Option<render::RenderConfiguration> {
     if options & !RENDER_OPTIONS_DEFAULT != 0 {
         return None;
@@ -1749,6 +1792,30 @@ mod tests {
         assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
         assert!(invalid.html.data.is_null());
         assert_eq!(invalid.html.length, 0);
+    }
+
+    #[test]
+    fn ffi_prepares_safe_html_and_returns_reviewable_warnings() {
+        let markdown = b"[local](/Users/person/Secret.md) [run](javascript:alert(1))";
+        let result = unsafe {
+            inflow_markdown_prepare_html_with_options(
+                markdown.as_ptr(),
+                markdown.len(),
+                RENDER_OPTIONS_DEFAULT,
+            )
+        };
+
+        assert_eq!(result.status, STATUS_OK);
+        assert_eq!(
+            result.blocking_issues,
+            export::ISSUE_LOCAL_LINK | export::ISSUE_UNSAFE_LINK
+        );
+        let html = unsafe { std::slice::from_raw_parts(result.html.data, result.html.length) };
+        let html = std::str::from_utf8(html).unwrap();
+        assert_eq!(html.matches("inflow-disabled-link").count(), 2);
+        assert!(!html.contains("/Users/person"));
+        assert!(!html.contains("javascript:"));
+        unsafe { inflow_owned_bytes_free(result.html.data, result.html.length) };
     }
 
     #[test]
