@@ -1,10 +1,23 @@
 import AppKit
 import SwiftUI
 
+enum ReadOnlyDocumentPrompt {
+    static let message = "你可以阅读、复制或将它另存到其他位置。"
+    static let saveAsTitle = "另存为…"
+    static let showInFinderTitle = "在 Finder 中显示"
+    static let closeTitle = "关闭"
+
+    static func title(filename: String) -> String {
+        "「\(filename)」是只读的"
+    }
+}
+
 struct DocumentFileSafetyBanner: View {
     let state: DocumentFileSafetyState
     let onCompare: () -> Void
+    let onSaveAs: () -> Void
     let onSaveCopy: () -> Void
+    let onClose: () -> Void
 
     var body: some View {
         switch state {
@@ -13,13 +26,14 @@ struct DocumentFileSafetyBanner: View {
         case let .readOnly(url):
             banner(
                 icon: "lock.fill",
-                title: "只读",
-                detail: "「\(url.lastPathComponent)」当前不可写。可以复制内容或另存到其他位置。"
+                title: ReadOnlyDocumentPrompt.title(filename: url.lastPathComponent),
+                detail: ReadOnlyDocumentPrompt.message
             ) {
-                Button("另存副本…", action: onSaveCopy)
-                Button("在 Finder 中显示") {
+                Button(ReadOnlyDocumentPrompt.saveAsTitle, action: onSaveAs)
+                Button(ReadOnlyDocumentPrompt.showInFinderTitle) {
                     NSWorkspace.shared.activateFileViewerSelecting([url])
                 }
+                Button(ReadOnlyDocumentPrompt.closeTitle, action: onClose)
             }
         case let .changed(snapshot):
             banner(

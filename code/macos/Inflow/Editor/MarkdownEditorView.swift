@@ -297,7 +297,13 @@ struct MarkdownEditorView: View {
             DocumentFileSafetyBanner(
                 state: displayedFileSafetyState,
                 onCompare: { isFileSafetyPresented = true },
-                onSaveCopy: { beginDocumentRelocation(.saveCopy) }
+                onSaveAs: { beginDocumentRelocation(.saveAs) },
+                onSaveCopy: { beginDocumentRelocation(.saveCopy) },
+                onClose: {
+                    MixedLineEndingPrompt.closeDocumentWindow(
+                        sourceEditorSession.textView.window ?? NSApp.keyWindow
+                    )
+                }
             )
 
             if document.properties.requiresLineEndingChoice {

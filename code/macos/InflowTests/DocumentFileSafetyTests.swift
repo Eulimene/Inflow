@@ -3,6 +3,20 @@ import XCTest
 @testable import Inflow
 
 final class DocumentFileSafetyTests: XCTestCase {
+    func testReadOnlyPromptUsesFrozenSafeExitCopy() {
+        XCTAssertEqual(
+            ReadOnlyDocumentPrompt.title(filename: "notes.md"),
+            "「notes.md」是只读的"
+        )
+        XCTAssertEqual(
+            ReadOnlyDocumentPrompt.message,
+            "你可以阅读、复制或将它另存到其他位置。"
+        )
+        XCTAssertEqual(ReadOnlyDocumentPrompt.saveAsTitle, "另存为…")
+        XCTAssertEqual(ReadOnlyDocumentPrompt.showInFinderTitle, "在 Finder 中显示")
+        XCTAssertEqual(ReadOnlyDocumentPrompt.closeTitle, "关闭")
+    }
+
     func testWriteGuardAllowsOwnSaveAndAdoptsCompletedWrite() throws {
         let fixture = try FileSafetyFixture()
         defer { fixture.remove() }
