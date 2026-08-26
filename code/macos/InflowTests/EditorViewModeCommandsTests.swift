@@ -50,15 +50,8 @@ final class EditorViewModeCommandsTests: XCTestCase {
             Text("Preview")
         }
         let hostingView = NSHostingView(rootView: root)
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1_002, height: 500),
-            styleMask: [.titled, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        defer { window.close() }
-        window.contentView = hostingView
-        window.makeKeyAndOrderFront(nil)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 1_002, height: 500)
+        hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
 
         let splitView = try XCTUnwrap(
@@ -77,7 +70,8 @@ final class EditorViewModeCommandsTests: XCTestCase {
         XCTAssertEqual(splitView.subviews[0].frame.width / availableWidth, 0.75, accuracy: 0.01)
         XCTAssertEqual(storedFraction, 0.75, accuracy: 0.01)
 
-        window.setContentSize(NSSize(width: 1_202, height: 500))
+        hostingView.frame.size.width = 1_202
+        hostingView.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
         let resizedAvailableWidth = splitView.bounds.width - splitView.dividerThickness
         XCTAssertEqual(
