@@ -331,6 +331,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     private var activeSessions: [UUID: ActiveSession] = [:]
     private var loadTask: Task<Void, Never>?
     private var hasClaimedAutomaticPresentation = false
+    private var isDegradedProtectionWarningDismissed = false
 
     init(
         rootURL: URL? = nil,
@@ -403,7 +404,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
               let store
         else {
             if store == nil {
-                protectionErrorMessage = Self.degradedProtectionMessage
+                showDegradedProtectionWarning()
             }
             return
         }
@@ -412,9 +413,10 @@ final class DocumentRecoveryCoordinator: ObservableObject {
             if activeSessions[id] == nil {
                 try await store.remove(id)
             }
+            isDegradedProtectionWarningDismissed = false
             protectionErrorMessage = nil
         } catch {
-            protectionErrorMessage = Self.degradedProtectionMessage
+            showDegradedProtectionWarning()
         }
     }
 
@@ -437,6 +439,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     }
 
     func retryProtection() async {
+        isDegradedProtectionWarningDismissed = false
         guard let store else {
             protectionErrorMessage = Self.degradedProtectionMessage
             return
@@ -447,6 +450,11 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         } catch {
             protectionErrorMessage = Self.degradedProtectionMessage
         }
+    }
+
+    func continueWritingWithoutProtection() {
+        isDegradedProtectionWarningDismissed = true
+        protectionErrorMessage = nil
     }
 
     func claimAutomaticPresentation() -> Bool {
@@ -462,7 +470,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
 
     private func loadRecords() async {
         guard let store else {
-            protectionErrorMessage = Self.degradedProtectionMessage
+            showDegradedProtectionWarning()
             isLoaded = true
             return
         }
@@ -476,7 +484,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
                 protectionErrorMessage = nil
             }
         } catch {
-            protectionErrorMessage = Self.degradedProtectionMessage
+            showDegradedProtectionWarning()
         }
         isLoaded = true
     }
@@ -488,6 +496,11 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         try? FileManager.default.removeItem(at: url)
     }
 
-    private static let degradedProtectionMessage =
-        "恢复保护暂时不可用。你仍可以手动保存 Markdown 文件；保护恢复前请避免关闭未保存文档。"
+    private func showDegradedProtectionWarning() {
+        guard !isDegradedProtectionWarningDismissed else { return }
+        protectionErrorMessage = Self.degradedProtectionMessage
+    }
+
+    static let degradedProtectionMessage =
+        "你仍可以手动保存 Markdown 文件。在保护恢复前，请避免关闭未保存文档。"
 }

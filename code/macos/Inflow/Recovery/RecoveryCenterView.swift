@@ -2,6 +2,12 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum RecoveryProtectionPrompt {
+    static let title = "恢复保护暂时不可用"
+    static let retryTitle = "重试保护"
+    static let continueTitle = "继续写作"
+}
+
 enum RecoveryDiskPreview: Equatable, Sendable {
     case unnamed
     case missing(URL)
@@ -96,11 +102,18 @@ struct RecoveryProtectionStatusBanner: View {
                     Image(systemName: "externaldrive.badge.exclamationmark")
                         .foregroundStyle(.orange)
                         .accessibilityHidden(true)
-                    Text(message)
-                        .font(.caption)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(RecoveryProtectionPrompt.title)
+                            .font(.headline)
+                        Text(message)
+                            .font(.caption)
+                    }
                     Spacer(minLength: 8)
-                    Button("重试保护") {
+                    Button(RecoveryProtectionPrompt.retryTitle) {
                         Task { await coordinator.retryProtection() }
+                    }
+                    Button(RecoveryProtectionPrompt.continueTitle) {
+                        coordinator.continueWritingWithoutProtection()
                     }
                 }
                 .padding(.horizontal, 12)

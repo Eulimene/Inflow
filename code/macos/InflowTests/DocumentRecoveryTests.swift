@@ -4,6 +4,17 @@ import XCTest
 @testable import Inflow
 
 final class DocumentRecoveryTests: XCTestCase {
+    @MainActor
+    func testRecoveryProtectionPromptUsesFrozenSafeExitCopy() {
+        XCTAssertEqual(RecoveryProtectionPrompt.title, "恢复保护暂时不可用")
+        XCTAssertEqual(
+            DocumentRecoveryCoordinator.degradedProtectionMessage,
+            "你仍可以手动保存 Markdown 文件。在保护恢复前，请避免关闭未保存文档。"
+        )
+        XCTAssertEqual(RecoveryProtectionPrompt.retryTitle, "重试保护")
+        XCTAssertEqual(RecoveryProtectionPrompt.continueTitle, "继续写作")
+    }
+
     func testRecoveryRecordRoundTripsDocumentPropertiesAndWorkspaceState() throws {
         let document = MarkdownDocument(
             text: "# 恢复 🌍\n\n正文\n",
@@ -215,6 +226,45 @@ final class DocumentRecoveryTests: XCTestCase {
         XCTAssertTrue(coordinator.recoveredRecords.isEmpty)
         let afterDiscard = try await store.load()
         XCTAssertTrue(afterDiscard.records.isEmpty)
+    }
+
+    @MainActor
+    func testContinuingWritingDismissesDegradedProtectionUntilExplicitRetry() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let unavailableRoot = fixture.root.appendingPathComponent("not-a-directory")
+        try Data("occupied".utf8).write(to: unavailableRoot)
+        let coordinator = DocumentRecoveryCoordinator(
+            rootURL: unavailableRoot,
+            intervalNanoseconds: 5_000_000
+        )
+
+        await coordinator.loadIfNeeded()
+        XCTAssertEqual(
+            coordinator.protectionErrorMessage,
+            DocumentRecoveryCoordinator.degradedProtectionMessage
+        )
+
+        coordinator.continueWritingWithoutProtection()
+        XCTAssertNil(coordinator.protectionErrorMessage)
+        let record = DocumentRecoveryRecord(
+            id: UUID(),
+            document: MarkdownDocument(text: "still writing"),
+            originalURL: nil,
+            selectedUTF16Range: NSRange(location: 0, length: 0),
+            viewMode: .source,
+            verticalScrollOffset: 0
+        )
+        coordinator.update(record)
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertNil(coordinator.protectionErrorMessage)
+
+        await coordinator.retryProtection()
+        XCTAssertEqual(
+            coordinator.protectionErrorMessage,
+            DocumentRecoveryCoordinator.degradedProtectionMessage
+        )
+        coordinator.close(record.id)
     }
 
     func testDiskInspectorDistinguishesMissingMatchingAndChangedFiles() async throws {
