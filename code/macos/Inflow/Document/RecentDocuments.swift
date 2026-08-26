@@ -90,6 +90,178 @@ struct RecentDocumentEntry: Identifiable, Equatable, Sendable {
     }
 }
 
+enum MarkdownOpenPreflight: Equatable, Sendable {
+    case supported
+    case unsupportedEncoding(originalData: Data)
+
+    static func inspect(_ data: Data) throws -> Self {
+        do {
+            _ = try MarkdownCodec.decode(data)
+            return .supported
+        } catch MarkdownCodecError.invalidUTF8 {
+            return .unsupportedEncoding(originalData: data)
+        }
+    }
+}
+
+actor MarkdownOpenPreflightWorker {
+    func inspect(_ url: URL) throws -> MarkdownOpenPreflight {
+        let data = try Data(contentsOf: url)
+        return try MarkdownOpenPreflight.inspect(data)
+    }
+}
+
+enum UnsupportedEncodingRecoveryCopyError: Error, Equatable, LocalizedError {
+    case sourceDestinationConflict
+    case targetChanged
+    case cannotCopy
+
+    var errorDescription: String? {
+        switch self {
+        case .sourceDestinationConflict:
+            "请选择其他位置。复制原文件不会覆盖源文件。"
+        case .targetChanged:
+            "确认后，复制目标已被创建或修改。本次没有写入，请重新选择。"
+        case .cannotCopy:
+            "未能安全复制原文件。源文件没有被修改。"
+        }
+    }
+}
+
+enum UnsupportedEncodingRecoveryCopy {
+    static func write(
+        originalData: Data,
+        sourceURL: URL,
+        targetURL: URL,
+        expectedTarget: HTMLExportTargetSnapshot,
+        beforeCommit: (() throws -> Void)? = nil
+    ) throws {
+        guard sourceURL.standardizedFileURL != targetURL.standardizedFileURL,
+              !referencesSameExistingFile(sourceURL, targetURL)
+        else {
+            throw UnsupportedEncodingRecoveryCopyError.sourceDestinationConflict
+        }
+        do {
+            try HTMLExportFileWriter.write(
+                originalData,
+                to: targetURL,
+                expectedTarget: expectedTarget,
+                beforeCommit: beforeCommit
+            )
+        } catch HTMLExportTargetError.targetChanged {
+            throw UnsupportedEncodingRecoveryCopyError.targetChanged
+        } catch {
+            throw UnsupportedEncodingRecoveryCopyError.cannotCopy
+        }
+    }
+
+    private static func referencesSameExistingFile(_ first: URL, _ second: URL) -> Bool {
+        var firstMetadata = stat()
+        var secondMetadata = stat()
+        let firstStatus: Int32 = first.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return stat(path, &firstMetadata)
+        }
+        let secondStatus: Int32 = second.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return stat(path, &secondMetadata)
+        }
+        return firstStatus == 0
+            && secondStatus == 0
+            && firstMetadata.st_dev == secondMetadata.st_dev
+            && firstMetadata.st_ino == secondMetadata.st_ino
+    }
+}
+
+@MainActor
+enum UnsupportedEncodingRecoveryUI {
+    static let title = "不支持这个文件的编码"
+    static let message = "Inflow 不会猜测编码或覆盖原文件。"
+    static let showInFinderTitle = "在 Finder 中显示"
+    static let copyOriginalTitle = "复制原文件…"
+    static let cancelTitle = "取消"
+
+    static func present(
+        sourceURL: URL,
+        originalData: Data,
+        attachedTo window: NSWindow?
+    ) async {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: showInFinderTitle)
+        alert.addButton(withTitle: copyOriginalTitle)
+        alert.addButton(withTitle: cancelTitle)
+
+        switch await response(to: alert, attachedTo: window) {
+        case .alertFirstButtonReturn:
+            NSWorkspace.shared.activateFileViewerSelecting([sourceURL])
+        case .alertSecondButtonReturn:
+            await copyOriginalFile(
+                sourceURL: sourceURL,
+                originalData: originalData,
+                attachedTo: window
+            )
+        default:
+            break
+        }
+    }
+
+    private static func copyOriginalFile(
+        sourceURL: URL,
+        originalData: Data,
+        attachedTo window: NSWindow?
+    ) async {
+        let panel = NSSavePanel()
+        panel.title = copyOriginalTitle
+        panel.prompt = "复制"
+        panel.message = "保存原始字节的完整副本；Inflow 不会转换编码。"
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.nameFieldStringValue = sourceURL.lastPathComponent
+        guard await response(to: panel, attachedTo: window) == .OK,
+              let targetURL = panel.url
+        else {
+            return
+        }
+
+        do {
+            let expectedTarget = try HTMLExportTargetSnapshot.capture(targetURL)
+            try UnsupportedEncodingRecoveryCopy.write(
+                originalData: originalData,
+                sourceURL: sourceURL,
+                targetURL: targetURL,
+                expectedTarget: expectedTarget
+            )
+        } catch {
+            let failure = NSAlert(error: error)
+            failure.alertStyle = .warning
+            _ = await response(to: failure, attachedTo: window)
+        }
+    }
+
+    private static func response(
+        to alert: NSAlert,
+        attachedTo window: NSWindow?
+    ) async -> NSApplication.ModalResponse {
+        guard let window else { return alert.runModal() }
+        return await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: window) { continuation.resume(returning: $0) }
+        }
+    }
+
+    private static func response(
+        to panel: NSSavePanel,
+        attachedTo window: NSWindow?
+    ) async -> NSApplication.ModalResponse {
+        guard let window else { return panel.runModal() }
+        return await withCheckedContinuation { continuation in
+            panel.beginSheetModal(for: window) { continuation.resume(returning: $0) }
+        }
+    }
+}
+
 @MainActor
 enum DocumentWindowReusePolicy {
     static func reusableBlankDocument(
@@ -120,6 +292,7 @@ final class RecentDocumentsController: NSObject, ObservableObject {
     private let openBehavior: () -> MarkdownOpenBehavior
     private let bookmarkData: (URL) -> Data?
     private let systemSynchronizer: ([RecentDocumentEntry]) -> Void
+    private let openPreflightWorker = MarkdownOpenPreflightWorker()
     private var applicationObservers: [AnyCancellable] = []
     private var isMenuIntegrationInstalled = false
 
@@ -308,11 +481,44 @@ final class RecentDocumentsController: NSObject, ObservableObject {
 
     private func open(_ url: URL, reusableDocument: NSDocument?) {
         let accessed = url.startAccessingSecurityScopedResource()
+        Task { @MainActor [weak self] in
+            guard let self else {
+                if accessed { url.stopAccessingSecurityScopedResource() }
+                return
+            }
+            do {
+                switch try await openPreflightWorker.inspect(url) {
+                case .supported:
+                    openVerifiedDocument(
+                        url,
+                        reusableDocument: reusableDocument,
+                        securityScopeIsActive: accessed
+                    )
+                case let .unsupportedEncoding(originalData):
+                    if accessed { url.stopAccessingSecurityScopedResource() }
+                    await UnsupportedEncodingRecoveryUI.present(
+                        sourceURL: url,
+                        originalData: originalData,
+                        attachedTo: NSApp.keyWindow ?? NSApp.mainWindow
+                    )
+                }
+            } catch {
+                if accessed { url.stopAccessingSecurityScopedResource() }
+                NSDocumentController.shared.presentError(error)
+            }
+        }
+    }
+
+    private func openVerifiedDocument(
+        _ url: URL,
+        reusableDocument: NSDocument?,
+        securityScopeIsActive: Bool
+    ) {
         NSDocumentController.shared.openDocument(
             withContentsOf: url,
             display: true
         ) { [weak self] document, wasAlreadyOpen, error in
-            if accessed { url.stopAccessingSecurityScopedResource() }
+            if securityScopeIsActive { url.stopAccessingSecurityScopedResource() }
             if let error {
                 NSDocumentController.shared.presentError(error)
                 return

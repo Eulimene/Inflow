@@ -125,6 +125,108 @@ final class RecentDocumentsTests: XCTestCase {
         )
     }
 
+    func testOpenPreflightAcceptsUTF8AndPreservesUnsupportedOriginalBytes() throws {
+        XCTAssertEqual(
+            try MarkdownOpenPreflight.inspect(Data("# 你好\n".utf8)),
+            .supported
+        )
+
+        let unsupported = Data([0x48, 0x69, 0x20, 0xFF, 0xFE, 0x00])
+        XCTAssertEqual(
+            try MarkdownOpenPreflight.inspect(unsupported),
+            .unsupportedEncoding(originalData: unsupported)
+        )
+    }
+
+    func testUnsupportedEncodingRecoveryUsesFrozenProductCopy() {
+        XCTAssertEqual(UnsupportedEncodingRecoveryUI.title, "不支持这个文件的编码")
+        XCTAssertEqual(
+            UnsupportedEncodingRecoveryUI.message,
+            "Inflow 不会猜测编码或覆盖原文件。"
+        )
+        XCTAssertEqual(UnsupportedEncodingRecoveryUI.showInFinderTitle, "在 Finder 中显示")
+        XCTAssertEqual(UnsupportedEncodingRecoveryUI.copyOriginalTitle, "复制原文件…")
+        XCTAssertEqual(UnsupportedEncodingRecoveryUI.cancelTitle, "取消")
+    }
+
+    func testUnsupportedEncodingCopyPreservesSourceAndExactOriginalBytes() throws {
+        try withTemporaryDirectory { directory in
+            let source = directory.appendingPathComponent("legacy.md")
+            let target = directory.appendingPathComponent("legacy-copy.md")
+            let original = Data([0xFF, 0xFE, 0x41, 0x00, 0x0D, 0x00, 0x0A, 0x00])
+            try original.write(to: source)
+
+            try UnsupportedEncodingRecoveryCopy.write(
+                originalData: original,
+                sourceURL: source,
+                targetURL: target,
+                expectedTarget: HTMLExportTargetSnapshot.capture(target)
+            )
+
+            XCTAssertEqual(try Data(contentsOf: source), original)
+            XCTAssertEqual(try Data(contentsOf: target), original)
+        }
+    }
+
+    func testUnsupportedEncodingCopyRejectsSourceAndChangedTarget() throws {
+        try withTemporaryDirectory { directory in
+            let source = directory.appendingPathComponent("legacy.md")
+            let target = directory.appendingPathComponent("copy.md")
+            let original = Data([0xFF, 0xFE])
+            try original.write(to: source)
+
+            XCTAssertThrowsError(
+                try UnsupportedEncodingRecoveryCopy.write(
+                    originalData: original,
+                    sourceURL: source,
+                    targetURL: source,
+                    expectedTarget: HTMLExportTargetSnapshot.capture(source)
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? UnsupportedEncodingRecoveryCopyError,
+                    .sourceDestinationConflict
+                )
+            }
+            XCTAssertEqual(try Data(contentsOf: source), original)
+
+            let hardLink = directory.appendingPathComponent("legacy-alias.md")
+            try FileManager.default.linkItem(at: source, to: hardLink)
+            XCTAssertThrowsError(
+                try UnsupportedEncodingRecoveryCopy.write(
+                    originalData: original,
+                    sourceURL: source,
+                    targetURL: hardLink,
+                    expectedTarget: HTMLExportTargetSnapshot.capture(hardLink)
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? UnsupportedEncodingRecoveryCopyError,
+                    .sourceDestinationConflict
+                )
+            }
+            XCTAssertEqual(try Data(contentsOf: source), original)
+
+            let expectedTarget = try HTMLExportTargetSnapshot.capture(target)
+            XCTAssertThrowsError(
+                try UnsupportedEncodingRecoveryCopy.write(
+                    originalData: original,
+                    sourceURL: source,
+                    targetURL: target,
+                    expectedTarget: expectedTarget,
+                    beforeCommit: { try Data("other".utf8).write(to: target) }
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? UnsupportedEncodingRecoveryCopyError,
+                    .targetChanged
+                )
+            }
+            XCTAssertEqual(try Data(contentsOf: source), original)
+            XCTAssertEqual(try Data(contentsOf: target), Data("other".utf8))
+        }
+    }
+
     @MainActor
     func testFileMenuUsesProductRecentDocumentLabelsWithoutRemovingOpen() throws {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
@@ -147,6 +249,19 @@ final class RecentDocumentsTests: XCTestCase {
             exactPath: URL(fileURLWithPath: path).standardizedFileURL.path,
             bookmark: bookmark
         )
+    }
+
+    private func withTemporaryDirectory(_ body: (URL) throws -> Void) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "inflow-unsupported-encoding-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try body(directory)
     }
 }
 
