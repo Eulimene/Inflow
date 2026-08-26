@@ -97,7 +97,9 @@ struct PreviewAppearanceConfiguration: Equatable, Sendable {
         colorScheme: .system,
         theme: .standard,
         increasedContrast: false,
-        reduceMotion: false
+        reduceMotion: false,
+        mathRenderingEnabled: true,
+        mermaidRenderingEnabled: true
     )
 
     let contentWidth: Double
@@ -106,6 +108,39 @@ struct PreviewAppearanceConfiguration: Equatable, Sendable {
     let theme: PreviewTheme
     let increasedContrast: Bool
     let reduceMotion: Bool
+    let mathRenderingEnabled: Bool
+    let mermaidRenderingEnabled: Bool
+
+    init(
+        contentWidth: Double,
+        zoom: Double,
+        colorScheme: PreviewColorScheme,
+        theme: PreviewTheme,
+        increasedContrast: Bool,
+        reduceMotion: Bool,
+        mathRenderingEnabled: Bool = true,
+        mermaidRenderingEnabled: Bool = true
+    ) {
+        self.contentWidth = contentWidth
+        self.zoom = zoom
+        self.colorScheme = colorScheme
+        self.theme = theme
+        self.increasedContrast = increasedContrast
+        self.reduceMotion = reduceMotion
+        self.mathRenderingEnabled = mathRenderingEnabled
+        self.mermaidRenderingEnabled = mermaidRenderingEnabled
+    }
+
+    var coreRenderOptions: UInt32 {
+        var options = UInt32(0)
+        if mathRenderingEnabled {
+            options |= INFLOW_RENDER_OPTION_MATH
+        }
+        if mermaidRenderingEnabled {
+            options |= INFLOW_RENDER_OPTION_MERMAID
+        }
+        return options
+    }
 }
 
 @MainActor
@@ -130,6 +165,8 @@ final class AppPreferences: ObservableObject {
         static let previewZoom = "preferences.preview.zoom"
         static let previewColorScheme = "preferences.preview.colorScheme"
         static let previewTheme = "preferences.preview.theme"
+        static let mathRenderingEnabled = "preferences.preview.mathRenderingEnabled"
+        static let mermaidRenderingEnabled = "preferences.preview.mermaidRenderingEnabled"
         static let increasedContrast = "preferences.accessibility.increasedContrast"
         static let reduceMotion = "preferences.accessibility.reduceMotion"
     }
@@ -215,6 +252,14 @@ final class AppPreferences: ObservableObject {
         didSet { defaults.set(previewTheme.rawValue, forKey: Key.previewTheme) }
     }
 
+    @Published var mathRenderingEnabled: Bool {
+        didSet { defaults.set(mathRenderingEnabled, forKey: Key.mathRenderingEnabled) }
+    }
+
+    @Published var mermaidRenderingEnabled: Bool {
+        didSet { defaults.set(mermaidRenderingEnabled, forKey: Key.mermaidRenderingEnabled) }
+    }
+
     @Published var increasedContrast: AccessibilityPreference {
         didSet { defaults.set(increasedContrast.rawValue, forKey: Key.increasedContrast) }
     }
@@ -291,6 +336,16 @@ final class AppPreferences: ObservableObject {
             in: defaults,
             defaultValue: .standard
         )
+        mathRenderingEnabled = Self.bool(
+            forKey: Key.mathRenderingEnabled,
+            in: defaults,
+            defaultValue: PreviewAppearanceConfiguration.default.mathRenderingEnabled
+        )
+        mermaidRenderingEnabled = Self.bool(
+            forKey: Key.mermaidRenderingEnabled,
+            in: defaults,
+            defaultValue: PreviewAppearanceConfiguration.default.mermaidRenderingEnabled
+        )
         increasedContrast = Self.enumeration(
             AccessibilityPreference.self,
             forKey: Key.increasedContrast,
@@ -336,7 +391,9 @@ final class AppPreferences: ObservableObject {
             ),
             reduceMotion: reduceMotion.resolve(
                 systemValue: workspace.accessibilityDisplayShouldReduceMotion
-            )
+            ),
+            mathRenderingEnabled: mathRenderingEnabled,
+            mermaidRenderingEnabled: mermaidRenderingEnabled
         )
     }
 
@@ -353,6 +410,8 @@ final class AppPreferences: ObservableObject {
         previewZoom = PreviewAppearanceConfiguration.default.zoom
         previewColorScheme = .system
         previewTheme = .standard
+        mathRenderingEnabled = PreviewAppearanceConfiguration.default.mathRenderingEnabled
+        mermaidRenderingEnabled = PreviewAppearanceConfiguration.default.mermaidRenderingEnabled
         increasedContrast = .followSystem
         reduceMotion = .followSystem
     }
@@ -370,6 +429,8 @@ final class AppPreferences: ObservableObject {
         defaults.set(previewZoom, forKey: Key.previewZoom)
         defaults.set(previewColorScheme.rawValue, forKey: Key.previewColorScheme)
         defaults.set(previewTheme.rawValue, forKey: Key.previewTheme)
+        defaults.set(mathRenderingEnabled, forKey: Key.mathRenderingEnabled)
+        defaults.set(mermaidRenderingEnabled, forKey: Key.mermaidRenderingEnabled)
         defaults.set(increasedContrast.rawValue, forKey: Key.increasedContrast)
         defaults.set(reduceMotion.rawValue, forKey: Key.reduceMotion)
     }

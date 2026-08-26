@@ -69,9 +69,10 @@ enum HTMLExportError: Error, LocalizedError, Sendable {
 enum HTMLExporter {
     static func generate(snapshot: HTMLExportSnapshot) throws -> Data {
         let result: InflowHTMLExportResult = snapshot.utf8.withUnsafeBytes { buffer in
-            inflow_markdown_export_html(
+            inflow_markdown_export_html_with_options(
                 buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count)
+                UInt(buffer.count),
+                snapshot.appearance.coreRenderOptions
             )
         }
 

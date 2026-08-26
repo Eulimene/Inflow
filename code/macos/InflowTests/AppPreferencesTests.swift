@@ -20,6 +20,8 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.previewZoom, 1)
             XCTAssertEqual(preferences.previewColorScheme, .system)
             XCTAssertEqual(preferences.previewTheme, .standard)
+            XCTAssertTrue(preferences.mathRenderingEnabled)
+            XCTAssertTrue(preferences.mermaidRenderingEnabled)
             XCTAssertEqual(preferences.increasedContrast, .followSystem)
             XCTAssertEqual(preferences.reduceMotion, .followSystem)
         }
@@ -40,6 +42,8 @@ final class AppPreferencesTests: XCTestCase {
             first.previewZoom = 1.65
             first.previewColorScheme = .dark
             first.previewTheme = .longform
+            first.mathRenderingEnabled = false
+            first.mermaidRenderingEnabled = false
             first.increasedContrast = .enabled
             first.reduceMotion = .disabled
 
@@ -56,6 +60,8 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(second.previewZoom, 1.65)
             XCTAssertEqual(second.previewColorScheme, .dark)
             XCTAssertEqual(second.previewTheme, .longform)
+            XCTAssertFalse(second.mathRenderingEnabled)
+            XCTAssertFalse(second.mermaidRenderingEnabled)
             XCTAssertEqual(second.increasedContrast, .enabled)
             XCTAssertEqual(second.reduceMotion, .disabled)
 
@@ -99,6 +105,8 @@ final class AppPreferencesTests: XCTestCase {
             preferences.showsLineNumbers = true
             preferences.scrollSyncEnabled = false
             preferences.headingNavigationEnabled = false
+            preferences.mathRenderingEnabled = false
+            preferences.mermaidRenderingEnabled = false
             preferences.increasedContrast = .enabled
 
             preferences.resetWritingAndPreview()
@@ -111,6 +119,8 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertFalse(preferences.showsLineNumbers)
             XCTAssertTrue(preferences.scrollSyncEnabled)
             XCTAssertTrue(preferences.headingNavigationEnabled)
+            XCTAssertTrue(preferences.mathRenderingEnabled)
+            XCTAssertTrue(preferences.mermaidRenderingEnabled)
             XCTAssertEqual(preferences.increasedContrast, .followSystem)
             XCTAssertEqual(defaults.string(forKey: "document.recovery.record"), "recovery-sentinel")
         }

@@ -24,6 +24,10 @@ pub const STATUS_PANIC: i32 = 255;
 pub const LINE_ENDING_LF: u8 = 0;
 pub const LINE_ENDING_CRLF: u8 = 1;
 
+pub const RENDER_OPTION_MATH: u32 = 1 << 0;
+pub const RENDER_OPTION_MERMAID: u32 = 1 << 1;
+pub const RENDER_OPTIONS_DEFAULT: u32 = RENDER_OPTION_MATH | RENDER_OPTION_MERMAID;
+
 pub const INLINE_FORMAT_BOLD: u8 = 1;
 pub const INLINE_FORMAT_ITALIC: u8 = 2;
 pub const INLINE_FORMAT_STRIKETHROUGH: u8 = 3;
@@ -496,7 +500,25 @@ pub unsafe extern "C" fn inflow_markdown_render_html(
     utf8: *const u8,
     length: usize,
 ) -> InflowEncodeResult {
+    unsafe { inflow_markdown_render_html_with_options(utf8, length, RENDER_OPTIONS_DEFAULT) }
+}
+
+/// Renders UTF-8 Markdown using an explicit, validated presentation policy.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_markdown_render_html_with_options(
+    utf8: *const u8,
+    length: usize,
+    options: u32,
+) -> InflowEncodeResult {
     catch_unwind(AssertUnwindSafe(|| {
+        let Some(configuration) = render_configuration(options) else {
+            return InflowEncodeResult::error(STATUS_INVALID_ARGUMENT);
+        };
         let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
             return InflowEncodeResult::error(STATUS_INVALID_ARGUMENT);
         };
@@ -506,7 +528,9 @@ pub unsafe extern "C" fn inflow_markdown_render_html(
 
         InflowEncodeResult {
             status: STATUS_OK,
-            bytes: InflowOwnedBytes::from_vec(render::html_fragment(markdown).into_bytes()),
+            bytes: InflowOwnedBytes::from_vec(
+                render::html_fragment_with_configuration(markdown, configuration).into_bytes(),
+            ),
         }
     }))
     .unwrap_or_else(|_| InflowEncodeResult::error(STATUS_PANIC))
@@ -523,7 +547,25 @@ pub unsafe extern "C" fn inflow_markdown_export_html(
     utf8: *const u8,
     length: usize,
 ) -> InflowHTMLExportResult {
+    unsafe { inflow_markdown_export_html_with_options(utf8, length, RENDER_OPTIONS_DEFAULT) }
+}
+
+/// Exports a snapshot using an explicit, validated presentation policy.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_markdown_export_html_with_options(
+    utf8: *const u8,
+    length: usize,
+    options: u32,
+) -> InflowHTMLExportResult {
     catch_unwind(AssertUnwindSafe(|| {
+        let Some(configuration) = render_configuration(options) else {
+            return InflowHTMLExportResult::error(STATUS_INVALID_ARGUMENT, 0);
+        };
         let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
             return InflowHTMLExportResult::error(STATUS_INVALID_ARGUMENT, 0);
         };
@@ -531,7 +573,7 @@ pub unsafe extern "C" fn inflow_markdown_export_html(
             return InflowHTMLExportResult::error(STATUS_INVALID_UTF8, 0);
         };
 
-        match export::html_document(markdown) {
+        match export::html_document_with_configuration(markdown, configuration) {
             Ok(html) => InflowHTMLExportResult {
                 status: STATUS_OK,
                 html: InflowOwnedBytes::from_vec(html),
@@ -546,6 +588,16 @@ pub unsafe extern "C" fn inflow_markdown_export_html(
         }
     }))
     .unwrap_or_else(|_| InflowHTMLExportResult::error(STATUS_PANIC, 0))
+}
+
+fn render_configuration(options: u32) -> Option<render::RenderConfiguration> {
+    if options & !RENDER_OPTIONS_DEFAULT != 0 {
+        return None;
+    }
+    Some(render::RenderConfiguration {
+        math_enabled: options & RENDER_OPTION_MATH != 0,
+        mermaid_enabled: options & RENDER_OPTION_MERMAID != 0,
+    })
 }
 
 /// Plans one predictable inline Markdown formatting edit for a UTF-8 snapshot.
@@ -1393,6 +1445,32 @@ mod tests {
     }
 
     #[test]
+    fn ffi_renders_with_independent_presentation_options() {
+        let markdown = "$x$\n\n```mermaid\nflowchart TD\nA --> B\n```";
+        let result = unsafe {
+            inflow_markdown_render_html_with_options(
+                markdown.as_ptr(),
+                markdown.len(),
+                RENDER_OPTION_MERMAID,
+            )
+        };
+        assert_eq!(result.status, STATUS_OK);
+        let html = unsafe { std::slice::from_raw_parts(result.bytes.data, result.bytes.length) };
+        let html = std::str::from_utf8(html).unwrap();
+        assert!(html.contains("$x$"));
+        assert!(!html.contains("<math"));
+        assert!(html.contains("mermaid-diagram"));
+        unsafe { inflow_owned_bytes_free(result.bytes.data, result.bytes.length) };
+
+        let invalid = unsafe {
+            inflow_markdown_render_html_with_options(markdown.as_ptr(), markdown.len(), 1 << 31)
+        };
+        assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
+        assert!(invalid.bytes.data.is_null());
+        assert_eq!(invalid.bytes.length, 0);
+    }
+
+    #[test]
     fn ffi_analyzes_duplicate_unicode_headings_and_statistics() {
         let markdown = "# 概览\n\nBody 123\n\n## Same\n\n## Same\n";
         let result = unsafe { inflow_document_analyze(markdown.as_ptr(), markdown.len()) };
@@ -1650,6 +1728,27 @@ mod tests {
         let html = unsafe { std::slice::from_raw_parts(result.html.data, result.html.length) };
         assert!(std::str::from_utf8(html).unwrap().contains("<msubsup>"));
         unsafe { inflow_owned_bytes_free(result.html.data, result.html.length) };
+
+        let configurable = unsafe {
+            inflow_markdown_export_html_with_options(
+                formula.as_ptr(),
+                formula.len(),
+                RENDER_OPTION_MERMAID,
+            )
+        };
+        assert_eq!(configurable.status, STATUS_OK);
+        let html =
+            unsafe { std::slice::from_raw_parts(configurable.html.data, configurable.html.length) };
+        assert!(std::str::from_utf8(html).unwrap().contains("$x_1^2$"));
+        assert!(!std::str::from_utf8(html).unwrap().contains("<math"));
+        unsafe { inflow_owned_bytes_free(configurable.html.data, configurable.html.length) };
+
+        let invalid = unsafe {
+            inflow_markdown_export_html_with_options(formula.as_ptr(), formula.len(), 1 << 31)
+        };
+        assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
+        assert!(invalid.html.data.is_null());
+        assert_eq!(invalid.html.length, 0);
     }
 
     #[test]

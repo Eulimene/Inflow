@@ -21,17 +21,29 @@ pub enum ExportError {
     OutputTooLarge,
 }
 
+#[allow(dead_code)] // Preserves the default-policy core entry point for future hosts.
 pub fn html_document(markdown: &str) -> Result<Vec<u8>, ExportError> {
-    html_document_with_limit(markdown, MAX_HTML_BYTES)
+    html_document_with_configuration(markdown, render::RenderConfiguration::default())
 }
 
-fn html_document_with_limit(markdown: &str, maximum_bytes: usize) -> Result<Vec<u8>, ExportError> {
+pub fn html_document_with_configuration(
+    markdown: &str,
+    configuration: render::RenderConfiguration,
+) -> Result<Vec<u8>, ExportError> {
+    html_document_with_limit(markdown, configuration, MAX_HTML_BYTES)
+}
+
+fn html_document_with_limit(
+    markdown: &str,
+    configuration: render::RenderConfiguration,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, ExportError> {
     let issues = blocking_issues(markdown);
     if issues != 0 {
         return Err(ExportError::UnsupportedContent(issues));
     }
 
-    let fragment = render::html_fragment(markdown);
+    let fragment = render::html_fragment_with_configuration(markdown, configuration);
     let document = format!("{DOCUMENT_PREFIX}{fragment}{DOCUMENT_SUFFIX}");
     if document.len() > maximum_bytes {
         return Err(ExportError::OutputTooLarge);
@@ -245,9 +257,31 @@ mod tests {
     fn rejects_output_larger_than_limit_before_returning_bytes() {
         let minimum = DOCUMENT_PREFIX.len() + DOCUMENT_SUFFIX.len();
         assert_eq!(
-            html_document_with_limit("", minimum - 1),
+            html_document_with_limit("", render::RenderConfiguration::default(), minimum - 1),
             Err(ExportError::OutputTooLarge)
         );
-        assert!(html_document_with_limit("", minimum).is_ok());
+        assert!(
+            html_document_with_limit("", render::RenderConfiguration::default(), minimum).is_ok()
+        );
+    }
+
+    #[test]
+    fn export_honors_the_frozen_presentation_configuration() {
+        let html = String::from_utf8(
+            html_document_with_configuration(
+                "$x$\n\n```mermaid\nflowchart TD\nA --> B\n```",
+                render::RenderConfiguration {
+                    math_enabled: false,
+                    mermaid_enabled: false,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(html.contains("$x$"));
+        assert!(!html.contains("<math"));
+        assert!(html.contains("language-mermaid"));
+        assert!(!html.contains("<figure class=\"mermaid-diagram\""));
     }
 }

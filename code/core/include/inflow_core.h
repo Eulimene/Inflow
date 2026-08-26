@@ -21,6 +21,12 @@ static const InflowStatus INFLOW_STATUS_PANIC = 255;
 static const uint8_t INFLOW_LINE_ENDING_LF = 0;
 static const uint8_t INFLOW_LINE_ENDING_CRLF = 1;
 
+typedef uint32_t InflowRenderOptions;
+static const InflowRenderOptions INFLOW_RENDER_OPTION_MATH = UINT32_C(1) << 0;
+static const InflowRenderOptions INFLOW_RENDER_OPTION_MERMAID = UINT32_C(1) << 1;
+static const InflowRenderOptions INFLOW_RENDER_OPTIONS_DEFAULT =
+    INFLOW_RENDER_OPTION_MATH | INFLOW_RENDER_OPTION_MERMAID;
+
 static const uint8_t INFLOW_INLINE_FORMAT_BOLD = 1;
 static const uint8_t INFLOW_INLINE_FORMAT_ITALIC = 2;
 static const uint8_t INFLOW_INLINE_FORMAT_STRIKETHROUGH = 3;
@@ -238,6 +244,16 @@ InflowEncodeResult inflow_markdown_render_html(
     uintptr_t length
 );
 
+/// Renders UTF-8 Markdown with explicit presentation options. Unknown option
+/// bits return INFLOW_STATUS_INVALID_ARGUMENT and no bytes. With math disabled,
+/// formula delimiters remain ordinary text; with Mermaid disabled, Mermaid
+/// fences remain ordinary code blocks. Returned bytes belong to Inflow.
+InflowEncodeResult inflow_markdown_render_html_with_options(
+    const uint8_t *utf8,
+    uintptr_t length,
+    InflowRenderOptions options
+);
+
 /// Exports an immutable UTF-8 Markdown snapshot as one self-contained HTML
 /// document. The result never references local resources or runtime scripts.
 /// Unsupported images, local links and unsafe link schemes are reported
@@ -247,6 +263,14 @@ InflowEncodeResult inflow_markdown_render_html(
 InflowHTMLExportResult inflow_markdown_export_html(
     const uint8_t *utf8,
     uintptr_t length
+);
+
+/// Exports a snapshot with the same explicit presentation options as preview.
+/// Unknown option bits return INFLOW_STATUS_INVALID_ARGUMENT and no bytes.
+InflowHTMLExportResult inflow_markdown_export_html_with_options(
+    const uint8_t *utf8,
+    uintptr_t length,
+    InflowRenderOptions options
 );
 
 /// Plans a single inline Markdown edit without modifying the source. Selection

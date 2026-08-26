@@ -15,12 +15,16 @@ enum MarkdownRenderError: Error, LocalizedError {
 }
 
 enum MarkdownRenderer {
-    static func htmlFragment(for markdown: String) throws -> String {
+    static func htmlFragment(
+        for markdown: String,
+        configuration: PreviewAppearanceConfiguration = .default
+    ) throws -> String {
         let utf8 = Data(markdown.utf8)
         let result: InflowEncodeResult = utf8.withUnsafeBytes { buffer in
-            inflow_markdown_render_html(
+            inflow_markdown_render_html_with_options(
                 buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count)
+                UInt(buffer.count),
+                configuration.coreRenderOptions
             )
         }
         guard result.status == INFLOW_STATUS_OK else {
@@ -50,7 +54,7 @@ enum MarkdownRenderer {
     ) -> String {
         do {
             let headingFragment = PreviewNavigationMarkup.annotateHeadings(
-                in: try htmlFragment(for: markdown),
+                in: try htmlFragment(for: markdown, configuration: configuration),
                 headings: navigationHeadings
             )
             let linkTargets = try MarkdownReferenceScanner.references(in: markdown)

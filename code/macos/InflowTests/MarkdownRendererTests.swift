@@ -5,6 +5,19 @@ import XCTest
 @testable import Inflow
 
 final class MarkdownRendererTests: XCTestCase {
+    func testRenderOptionValuesMatchRustContract() {
+        XCTAssertEqual(INFLOW_RENDER_OPTION_MATH, UInt32(1 << 0))
+        XCTAssertEqual(INFLOW_RENDER_OPTION_MERMAID, UInt32(1 << 1))
+        XCTAssertEqual(
+            INFLOW_RENDER_OPTIONS_DEFAULT,
+            INFLOW_RENDER_OPTION_MATH | INFLOW_RENDER_OPTION_MERMAID
+        )
+        XCTAssertEqual(
+            PreviewAppearanceConfiguration.default.coreRenderOptions,
+            INFLOW_RENDER_OPTIONS_DEFAULT
+        )
+    }
+
     func testRendersCommonMarkdownAndExtensions() throws {
         let html = try MarkdownRenderer.htmlFragment(
             for: "# Title\n\n**Bold** and ~~old~~\n\n- [x] Done\n"
@@ -23,6 +36,32 @@ final class MarkdownRendererTests: XCTestCase {
 
         XCTAssertFalse(html.contains("<script>"))
         XCTAssertTrue(html.contains("&lt;script&gt;"))
+    }
+
+    func testPresentationFeaturesCanBeDisabledWithoutChangingSource() throws {
+        let configuration = PreviewAppearanceConfiguration(
+            contentWidth: 760,
+            zoom: 1,
+            colorScheme: .system,
+            theme: .standard,
+            increasedContrast: false,
+            reduceMotion: false,
+            mathRenderingEnabled: false,
+            mermaidRenderingEnabled: false
+        )
+        let source = "$x^2$\n\n```mermaid\nflowchart TD\nA --> B\n```"
+        let html = try MarkdownRenderer.htmlFragment(
+            for: source,
+            configuration: configuration
+        )
+
+        XCTAssertTrue(html.contains("$x^2$"))
+        XCTAssertFalse(html.contains("<math"))
+        XCTAssertTrue(html.contains("language-mermaid"))
+        XCTAssertTrue(html.contains("flowchart TD"))
+        XCTAssertFalse(html.contains("mermaid-diagram"))
+        XCTAssertFalse(html.contains("<svg"))
+        XCTAssertEqual(source, "$x^2$\n\n```mermaid\nflowchart TD\nA --> B\n```")
     }
 
     func testPreviewDocumentForbidsScriptsAndNetworkRequests() {

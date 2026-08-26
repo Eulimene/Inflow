@@ -95,6 +95,10 @@ struct InflowSettingsView: View {
                     Text(theme.label).tag(theme)
                 }
             }
+            Toggle("呈现数学公式", isOn: $preferences.mathRenderingEnabled)
+                .help("关闭后，公式定界符和内容作为普通文本显示。")
+            Toggle("呈现 Mermaid 图表", isOn: $preferences.mermaidRenderingEnabled)
+                .help("关闭后，Mermaid 围栏作为普通代码块显示。")
             Toggle("编辑器到预览滚动同步", isOn: $preferences.scrollSyncEnabled)
                 .help("手动滚动预览后会暂停跟随，直到再次滚动源码编辑器。")
             Toggle("点击预览标题定位源码", isOn: $preferences.headingNavigationEnabled)

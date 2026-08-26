@@ -4,15 +4,38 @@ use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 
 use crate::{math, mermaid};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RenderConfiguration {
+    pub math_enabled: bool,
+    pub mermaid_enabled: bool,
+}
+
+impl Default for RenderConfiguration {
+    fn default() -> Self {
+        Self {
+            math_enabled: true,
+            mermaid_enabled: true,
+        }
+    }
+}
+
+#[allow(dead_code)] // Default policy convenience used by core callers and regression tests.
 pub fn html_fragment(markdown: &str) -> String {
-    let events = safe_events(markdown);
+    html_fragment_with_configuration(markdown, RenderConfiguration::default())
+}
+
+pub fn html_fragment_with_configuration(
+    markdown: &str,
+    configuration: RenderConfiguration,
+) -> String {
+    let events = safe_events(markdown, configuration);
     let mut output = String::with_capacity(markdown.len());
     html::push_html(&mut output, events.into_iter());
     output
 }
 
-fn safe_events(markdown: &str) -> Vec<Event<'_>> {
-    let mut parser = Parser::new_ext(markdown, options());
+fn safe_events(markdown: &str, configuration: RenderConfiguration) -> Vec<Event<'_>> {
+    let mut parser = Parser::new_ext(markdown, options_with_configuration(configuration));
     let mut events = Vec::new();
     while let Some(event) = parser.next() {
         if let Event::Start(Tag::Image { dest_url, .. }) = &event {
@@ -34,14 +57,16 @@ fn safe_events(markdown: &str) -> Vec<Event<'_>> {
                 )
                 .into(),
             ));
-        } else if matches!(
-            &event,
-            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(language)))
-                if language
-                    .split_ascii_whitespace()
-                    .next()
-                    .is_some_and(|name| name.eq_ignore_ascii_case("mermaid"))
-        ) {
+        } else if configuration.mermaid_enabled
+            && matches!(
+                &event,
+                Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(language)))
+                    if language
+                        .split_ascii_whitespace()
+                        .next()
+                        .is_some_and(|name| name.eq_ignore_ascii_case("mermaid"))
+            )
+        {
             let mut source = String::new();
             for code_event in parser.by_ref() {
                 match code_event {
@@ -72,10 +97,16 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 pub(crate) fn options() -> Options {
+    options_with_configuration(RenderConfiguration::default())
+}
+
+fn options_with_configuration(configuration: RenderConfiguration) -> Options {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_FOOTNOTES);
-    options.insert(Options::ENABLE_MATH);
+    if configuration.math_enabled {
+        options.insert(Options::ENABLE_MATH);
+    }
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TASKLISTS);
     options
@@ -155,6 +186,51 @@ mod tests {
         assert!(fallback.contains("无法呈现这个图表"));
         assert!(fallback.contains("pie"));
         assert!(fallback.contains("<p>Still readable</p>"));
+    }
+
+    #[test]
+    fn disabled_presentation_features_remain_readable_markdown_source() {
+        let configuration = RenderConfiguration {
+            math_enabled: false,
+            mermaid_enabled: false,
+        };
+        let html = html_fragment_with_configuration(
+            "Inline $x^2$\n\n```mermaid\nflowchart TD\nA --> B\n```\n",
+            configuration,
+        );
+
+        assert!(html.contains("Inline $x^2$"));
+        assert!(!html.contains("<math"));
+        assert!(html.contains("<pre><code class=\"language-mermaid\">"));
+        assert!(html.contains("flowchart TD"));
+        assert!(!html.contains("class=\"mermaid-diagram\""));
+        assert!(!html.contains("<svg"));
+    }
+
+    #[test]
+    fn presentation_features_can_be_toggled_independently() {
+        let markdown = "$x$\n\n```mermaid\nflowchart TD\nA --> B\n```\n";
+        let math_only = html_fragment_with_configuration(
+            markdown,
+            RenderConfiguration {
+                math_enabled: true,
+                mermaid_enabled: false,
+            },
+        );
+        assert!(math_only.contains("<math"));
+        assert!(math_only.contains("language-mermaid"));
+        assert!(!math_only.contains("mermaid-diagram"));
+
+        let mermaid_only = html_fragment_with_configuration(
+            markdown,
+            RenderConfiguration {
+                math_enabled: false,
+                mermaid_enabled: true,
+            },
+        );
+        assert!(!mermaid_only.contains("<math"));
+        assert!(mermaid_only.contains("$x$"));
+        assert!(mermaid_only.contains("mermaid-diagram"));
     }
 
     #[test]

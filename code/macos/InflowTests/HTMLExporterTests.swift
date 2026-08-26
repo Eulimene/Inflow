@@ -155,6 +155,32 @@ final class HTMLExporterTests: XCTestCase {
         XCTAssertFalse(html.contains("cdn"))
     }
 
+    func testExportFreezesDisabledFormulaAndMermaidPresentation() throws {
+        let appearance = PreviewAppearanceConfiguration(
+            contentWidth: 760,
+            zoom: 1,
+            colorScheme: .system,
+            theme: .standard,
+            increasedContrast: false,
+            reduceMotion: false,
+            mathRenderingEnabled: false,
+            mermaidRenderingEnabled: false
+        )
+        let data = try HTMLExporter.generate(
+            snapshot: HTMLExportSnapshot(
+                markdown: "$x$\n\n```mermaid\nflowchart TD\nA --> B\n```",
+                appearance: appearance
+            )
+        )
+        let html = try XCTUnwrap(String(data: data, encoding: .utf8))
+
+        XCTAssertTrue(html.contains("$x$"))
+        XCTAssertFalse(html.contains("<math"))
+        XCTAssertTrue(html.contains("language-mermaid"))
+        XCTAssertFalse(html.contains("<figure class=\"mermaid-diagram\""))
+        XCTAssertFalse(html.contains("<svg"))
+    }
+
     func testWriterCreatesNewFileWithoutLeavingTemporaryArtifacts() throws {
         try withTemporaryDirectory { directory in
             let target = directory.appendingPathComponent("document.html")
