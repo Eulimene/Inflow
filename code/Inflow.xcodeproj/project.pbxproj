@@ -64,6 +64,8 @@
 		A10000000000000000000037 /* PreviewZoomCommandsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000003C /* PreviewZoomCommandsTests.swift */; };
 		A10000000000000000000038 /* InflowHelp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000003D /* InflowHelp.swift */; };
 		A10000000000000000000039 /* InflowHelpTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000003E /* InflowHelpTests.swift */; };
+		A1000000000000000000003A /* RecentDocuments.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000003F /* RecentDocuments.swift */; };
+		A1000000000000000000003B /* RecentDocumentsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000040 /* RecentDocumentsTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -139,6 +141,8 @@
 		A2000000000000000000003C /* PreviewZoomCommandsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewZoomCommandsTests.swift; sourceTree = "<group>"; };
 		A2000000000000000000003D /* InflowHelp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Help/InflowHelp.swift; sourceTree = "<group>"; };
 		A2000000000000000000003E /* InflowHelpTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InflowHelpTests.swift; sourceTree = "<group>"; };
+		A2000000000000000000003F /* RecentDocuments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Document/RecentDocuments.swift; sourceTree = "<group>"; };
+		A20000000000000000000040 /* RecentDocumentsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentDocumentsTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -188,6 +192,7 @@
 				A2000000000000000000002A /* DocumentFileSafetyView.swift */,
 				A2000000000000000000002C /* DocumentRelocation.swift */,
 				A2000000000000000000002D /* DocumentSaveCommands.swift */,
+				A2000000000000000000003F /* RecentDocuments.swift */,
 				A2000000000000000000002E /* DocumentRelocationView.swift */,
 				A20000000000000000000030 /* AppPreferences.swift */,
 				A20000000000000000000031 /* InflowSettingsView.swift */,
@@ -247,6 +252,7 @@
 				A2000000000000000000003A /* WritingModeTests.swift */,
 				A2000000000000000000003C /* PreviewZoomCommandsTests.swift */,
 				A2000000000000000000003E /* InflowHelpTests.swift */,
+				A20000000000000000000040 /* RecentDocumentsTests.swift */,
 			);
 			path = macos/InflowTests;
 			sourceTree = "<group>";
@@ -424,6 +430,7 @@
 				A10000000000000000000025 /* DocumentFileSafetyView.swift in Sources */,
 				A10000000000000000000027 /* DocumentRelocation.swift in Sources */,
 				A10000000000000000000028 /* DocumentSaveCommands.swift in Sources */,
+				A1000000000000000000003A /* RecentDocuments.swift in Sources */,
 				A10000000000000000000029 /* DocumentRelocationView.swift in Sources */,
 				A1000000000000000000002B /* AppPreferences.swift in Sources */,
 				A1000000000000000000002C /* InflowSettingsView.swift in Sources */,
@@ -453,6 +460,7 @@
 				A10000000000000000000035 /* WritingModeTests.swift in Sources */,
 				A10000000000000000000037 /* PreviewZoomCommandsTests.swift in Sources */,
 				A10000000000000000000039 /* InflowHelpTests.swift in Sources */,
+				A1000000000000000000003B /* RecentDocumentsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

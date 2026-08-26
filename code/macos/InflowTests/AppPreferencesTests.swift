@@ -25,6 +25,8 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.increasedContrast, .followSystem)
             XCTAssertEqual(preferences.reduceMotion, .followSystem)
             XCTAssertEqual(preferences.lastActiveEditorViewMode, .split)
+            XCTAssertEqual(preferences.recentDocumentCapacity, 20)
+            XCTAssertEqual(preferences.markdownOpenBehavior, .newWindow)
         }
     }
 
@@ -48,6 +50,8 @@ final class AppPreferencesTests: XCTestCase {
             first.increasedContrast = .enabled
             first.reduceMotion = .disabled
             first.recordActiveEditorViewMode(.preview)
+            first.recentDocumentCapacity = 42
+            first.markdownOpenBehavior = .reuseBlankWindow
 
             let second = AppPreferences(defaults: defaults)
             XCTAssertEqual(second.editorFontSize, 24)
@@ -67,15 +71,19 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(second.increasedContrast, .enabled)
             XCTAssertEqual(second.reduceMotion, .disabled)
             XCTAssertEqual(second.lastActiveEditorViewMode, .preview)
+            XCTAssertEqual(second.recentDocumentCapacity, 42)
+            XCTAssertEqual(second.markdownOpenBehavior, .reuseBlankWindow)
 
             second.editorFontSize = 100
             second.editorLineHeight = -4
             second.previewContentWidth = 50
             second.previewZoom = 9
+            second.recentDocumentCapacity = 500
             XCTAssertEqual(second.editorFontSize, 28)
             XCTAssertEqual(second.editorLineHeight, 1.2)
             XCTAssertEqual(second.previewContentWidth, 600)
             XCTAssertEqual(second.previewZoom, 2)
+            XCTAssertEqual(second.recentDocumentCapacity, 50)
         }
     }
 
@@ -86,6 +94,8 @@ final class AppPreferencesTests: XCTestCase {
             defaults.set(5_000, forKey: "preferences.preview.contentWidth")
             defaults.set("retired-theme", forKey: "preferences.preview.theme")
             defaults.set("retired-view", forKey: "preferences.window.lastActiveEditorViewMode")
+            defaults.set(-40, forKey: RecentDocumentPolicy.capacityKey)
+            defaults.set("retired-open", forKey: RecentDocumentPolicy.openBehaviorKey)
             defaults.set("keep-me", forKey: "unrelated.document-state")
 
             let preferences = AppPreferences(defaults: defaults)
@@ -94,6 +104,8 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.previewContentWidth, 1_200)
             XCTAssertEqual(preferences.previewTheme, .standard)
             XCTAssertEqual(preferences.lastActiveEditorViewMode, .split)
+            XCTAssertEqual(preferences.recentDocumentCapacity, 5)
+            XCTAssertEqual(preferences.markdownOpenBehavior, .newWindow)
             XCTAssertEqual(defaults.string(forKey: "unrelated.document-state"), "keep-me")
         }
     }
@@ -114,6 +126,8 @@ final class AppPreferencesTests: XCTestCase {
             preferences.mermaidRenderingEnabled = false
             preferences.increasedContrast = .enabled
             preferences.recordActiveEditorViewMode(.source)
+            preferences.recentDocumentCapacity = 31
+            preferences.markdownOpenBehavior = .reuseBlankWindow
 
             preferences.resetWritingAndPreview()
 
@@ -129,6 +143,8 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertTrue(preferences.mermaidRenderingEnabled)
             XCTAssertEqual(preferences.increasedContrast, .followSystem)
             XCTAssertEqual(preferences.lastActiveEditorViewMode, .source)
+            XCTAssertEqual(preferences.recentDocumentCapacity, 31)
+            XCTAssertEqual(preferences.markdownOpenBehavior, .reuseBlankWindow)
             XCTAssertEqual(defaults.string(forKey: "document.recovery.record"), "recovery-sentinel")
         }
     }

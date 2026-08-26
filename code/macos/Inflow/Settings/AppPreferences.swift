@@ -275,6 +275,23 @@ final class AppPreferences: ObservableObject {
         }
     }
 
+    @Published var recentDocumentCapacity: Int {
+        didSet {
+            let clamped = RecentDocumentPolicy.clampCapacity(recentDocumentCapacity)
+            guard clamped == recentDocumentCapacity else {
+                recentDocumentCapacity = clamped
+                return
+            }
+            defaults.set(clamped, forKey: RecentDocumentPolicy.capacityKey)
+        }
+    }
+
+    @Published var markdownOpenBehavior: MarkdownOpenBehavior {
+        didSet {
+            defaults.set(markdownOpenBehavior.rawValue, forKey: RecentDocumentPolicy.openBehaviorKey)
+        }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         editorFontSize = Self.number(
@@ -371,6 +388,8 @@ final class AppPreferences: ObservableObject {
             in: defaults,
             defaultValue: .split
         )
+        recentDocumentCapacity = RecentDocumentPolicy.capacity(in: defaults)
+        markdownOpenBehavior = RecentDocumentPolicy.openBehavior(in: defaults)
 
         persistCurrentValues()
         accessibilityObserver = NSWorkspace.shared.notificationCenter
@@ -451,6 +470,8 @@ final class AppPreferences: ObservableObject {
         defaults.set(increasedContrast.rawValue, forKey: Key.increasedContrast)
         defaults.set(reduceMotion.rawValue, forKey: Key.reduceMotion)
         defaults.set(lastActiveEditorViewMode.rawValue, forKey: Key.lastActiveEditorViewMode)
+        defaults.set(recentDocumentCapacity, forKey: RecentDocumentPolicy.capacityKey)
+        defaults.set(markdownOpenBehavior.rawValue, forKey: RecentDocumentPolicy.openBehaviorKey)
     }
 
     private static func clamped(_ value: Double, range: ClosedRange<Double>) -> Double {

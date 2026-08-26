@@ -31,6 +31,13 @@ struct InflowApp: App {
     @StateObject private var recoveryCoordinator = DocumentRecoveryCoordinator()
     @StateObject private var preferences = AppPreferences()
     @StateObject private var anonymousUsage = AnonymousUsageDataController()
+    @StateObject private var recentDocuments: RecentDocumentsController
+
+    init() {
+        let controller = RecentDocumentsController()
+        controller.installMenuIntegration()
+        _recentDocuments = StateObject(wrappedValue: controller)
+    }
 
     var body: some Scene {
         DocumentGroup(newDocument: MarkdownDocument()) { configuration in
@@ -40,7 +47,8 @@ struct InflowApp: App {
                 isEditable: configuration.isEditable,
                 recoveryCoordinator: recoveryCoordinator,
                 preferences: preferences,
-                anonymousUsage: anonymousUsage
+                anonymousUsage: anonymousUsage,
+                recentDocuments: recentDocuments
             )
                 .frame(minWidth: 720, minHeight: 480)
         }
@@ -66,7 +74,8 @@ struct InflowApp: App {
         Settings {
             InflowSettingsView(
                 preferences: preferences,
-                anonymousUsage: anonymousUsage
+                anonymousUsage: anonymousUsage,
+                recentDocuments: recentDocuments
             )
         }
     }

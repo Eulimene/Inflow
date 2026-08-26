@@ -119,6 +119,7 @@ struct MarkdownEditorView: View {
     var recoveryCoordinator: DocumentRecoveryCoordinator? = nil
     @ObservedObject private var preferences: AppPreferences
     private let anonymousUsage: AnonymousUsageDataController?
+    private let recentDocuments: RecentDocumentsController?
 
     init(
         document: Binding<MarkdownDocument>,
@@ -126,7 +127,8 @@ struct MarkdownEditorView: View {
         isEditable: Bool,
         recoveryCoordinator: DocumentRecoveryCoordinator? = nil,
         preferences: AppPreferences? = nil,
-        anonymousUsage: AnonymousUsageDataController? = nil
+        anonymousUsage: AnonymousUsageDataController? = nil,
+        recentDocuments: RecentDocumentsController? = nil
     ) {
         _document = document
         self.fileURL = fileURL
@@ -134,6 +136,7 @@ struct MarkdownEditorView: View {
         self.recoveryCoordinator = recoveryCoordinator
         _preferences = ObservedObject(wrappedValue: preferences ?? AppPreferences())
         self.anonymousUsage = anonymousUsage
+        self.recentDocuments = recentDocuments
     }
 
     @SceneStorage("editorViewMode") private var storedViewMode = ""
@@ -308,6 +311,9 @@ struct MarkdownEditorView: View {
         editorSurface
         .onAppear {
             registerDocumentNavigation(url: fileURL)
+            if let fileURL {
+                recentDocuments?.note(fileURL)
+            }
             applyRestorationStateIfNeeded()
             initializeViewModeIfNeeded()
             scheduleDerivedContent(
@@ -376,6 +382,9 @@ struct MarkdownEditorView: View {
         }
         .onChange(of: fileURL) { _, newURL in
             registerDocumentNavigation(url: newURL)
+            if let newURL {
+                recentDocuments?.note(newURL)
+            }
             scheduleDerivedContent(
                 for: document.text,
                 documentDirectory: newURL?.deletingLastPathComponent(),

@@ -3,10 +3,14 @@ import SwiftUI
 struct InflowSettingsView: View {
     @ObservedObject var preferences: AppPreferences
     @ObservedObject var anonymousUsage: AnonymousUsageDataController
+    @ObservedObject var recentDocuments: RecentDocumentsController
     @State private var isResetConfirmationPresented = false
 
     var body: some View {
         TabView {
+            generalSettings
+                .tabItem { Label("通用", systemImage: "gearshape") }
+
             writingSettings
                 .tabItem { Label("写作", systemImage: "pencil") }
 
@@ -20,7 +24,7 @@ struct InflowSettingsView: View {
                 .tabItem { Label("隐私", systemImage: "hand.raised") }
         }
         .padding(20)
-        .frame(width: 560, height: 410)
+        .frame(width: 620, height: 470)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("恢复默认…") {
@@ -38,6 +42,71 @@ struct InflowSettingsView: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("只会重置本页设置，不会删除文档、自动恢复副本或最近打开记录。")
+        }
+    }
+
+    private var generalSettings: some View {
+        Form {
+            Section("文档窗口") {
+                Picker("打开 Markdown 文件", selection: $preferences.markdownOpenBehavior) {
+                    ForEach(MarkdownOpenBehavior.allCases) { behavior in
+                        Text(behavior.label).tag(behavior)
+                    }
+                }
+                Text("只有当前窗口是未编辑的未命名空白文档时才会复用；打开失败时原窗口保留。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Stepper(
+                    "最近文档：\(preferences.recentDocumentCapacity) 项",
+                    value: $preferences.recentDocumentCapacity,
+                    in: RecentDocumentPolicy.capacityRange
+                )
+            }
+
+            Section("最近文档") {
+                if recentDocuments.entries.isEmpty {
+                    Text("暂无最近文档")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(recentDocuments.entries) { entry in
+                        HStack(spacing: 10) {
+                            Image(systemName: entry.isAvailable ? "doc.text" : "doc.badge.ellipsis")
+                                .foregroundStyle(entry.isAvailable ? Color.primary : Color.orange)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.displayName)
+                                    .lineLimit(1)
+                                Text(
+                                    entry.isAvailable
+                                        ? entry.directoryPath
+                                        : "原位置已不可用 · \(entry.directoryPath)"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            }
+                            Spacer()
+                            Button {
+                                recentDocuments.remove(entry)
+                            } label: {
+                                Image(systemName: "xmark.circle")
+                            }
+                            .buttonStyle(.borderless)
+                            .help("从最近文档移除 \(entry.displayName)")
+                            .accessibilityLabel("从最近文档移除 \(entry.displayName)")
+                        }
+                    }
+
+                    Button("清除最近记录", role: .destructive) {
+                        recentDocuments.clear()
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { recentDocuments.refresh() }
+        .onChange(of: preferences.recentDocumentCapacity) { _, _ in
+            recentDocuments.applyCapacity()
         }
     }
 
