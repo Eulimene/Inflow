@@ -1,5 +1,21 @@
 import SwiftUI
 
+@MainActor
+final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
+    let recentDocuments: RecentDocumentsController
+
+    override init() {
+        let controller = RecentDocumentsController()
+        controller.installMenuIntegration()
+        recentDocuments = controller
+        super.init()
+    }
+
+    func application(_: NSApplication, open urls: [URL]) {
+        recentDocuments.openExternalDocuments(urls)
+    }
+}
+
 private struct OutlineVisibilityFocusedKey: FocusedValueKey {
     typealias Value = Binding<Bool>
 }
@@ -28,16 +44,11 @@ private struct OutlineCommands: Commands {
 
 @main
 struct InflowApp: App {
+    @NSApplicationDelegateAdaptor(InflowApplicationDelegate.self)
+    private var applicationDelegate
     @StateObject private var recoveryCoordinator = DocumentRecoveryCoordinator()
     @StateObject private var preferences = AppPreferences()
     @StateObject private var anonymousUsage = AnonymousUsageDataController()
-    @StateObject private var recentDocuments: RecentDocumentsController
-
-    init() {
-        let controller = RecentDocumentsController()
-        controller.installMenuIntegration()
-        _recentDocuments = StateObject(wrappedValue: controller)
-    }
 
     var body: some Scene {
         DocumentGroup(newDocument: MarkdownDocument()) { configuration in
@@ -48,7 +59,7 @@ struct InflowApp: App {
                 recoveryCoordinator: recoveryCoordinator,
                 preferences: preferences,
                 anonymousUsage: anonymousUsage,
-                recentDocuments: recentDocuments
+                recentDocuments: applicationDelegate.recentDocuments
             )
                 .frame(minWidth: 720, minHeight: 480)
         }
@@ -75,7 +86,7 @@ struct InflowApp: App {
             InflowSettingsView(
                 preferences: preferences,
                 anonymousUsage: anonymousUsage,
-                recentDocuments: recentDocuments
+                recentDocuments: applicationDelegate.recentDocuments
             )
         }
     }

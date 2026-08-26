@@ -396,6 +396,24 @@ final class RecentDocumentsController: NSObject, ObservableObject {
         }
     }
 
+    func openExternalDocuments(_ urls: [URL]) {
+        let supportedURLs = Self.supportedExternalDocumentURLs(from: urls)
+        let reusableDocument = reusableBlankDocument()
+        for (index, url) in supportedURLs.enumerated() {
+            open(url, reusableDocument: index == 0 ? reusableDocument : nil)
+        }
+    }
+
+    static func supportedExternalDocumentURLs(from urls: [URL]) -> [URL] {
+        urls.filter { url in
+            guard url.isFileURL else { return false }
+            switch url.pathExtension.lowercased() {
+            case "md", "markdown": return true
+            default: return false
+            }
+        }
+    }
+
     @objc private func clearRecentMenuItem(_: Any?) {
         clear()
     }

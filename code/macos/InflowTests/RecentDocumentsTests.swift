@@ -138,6 +138,20 @@ final class RecentDocumentsTests: XCTestCase {
         )
     }
 
+    func testExternalOpenRouterAcceptsOnlySupportedLocalMarkdownURLs() {
+        let markdown = URL(fileURLWithPath: "/tmp/Notes.MD")
+        let longExtension = URL(fileURLWithPath: "/tmp/guide.Markdown")
+        let text = URL(fileURLWithPath: "/tmp/plain.txt")
+        let remote = URL(string: "https://example.com/readme.md")!
+
+        XCTAssertEqual(
+            RecentDocumentsController.supportedExternalDocumentURLs(
+                from: [markdown, longExtension, text, remote]
+            ),
+            [markdown, longExtension]
+        )
+    }
+
     func testUnsupportedEncodingRecoveryUsesFrozenProductCopy() {
         XCTAssertEqual(UnsupportedEncodingRecoveryUI.title, "不支持这个文件的编码")
         XCTAssertEqual(
