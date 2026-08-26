@@ -127,12 +127,28 @@ enum NativeDocumentSaveCoordinator {
         to targetURL: URL,
         operation: DocumentRelocationOperation
     ) async throws {
+        try await save(
+            document: document,
+            to: targetURL,
+            operation: operation.nativeOperation
+        )
+    }
+
+    static func saveCurrent(document: NSDocument, to targetURL: URL) async throws {
+        try await save(document: document, to: targetURL, operation: .saveOperation)
+    }
+
+    private static func save(
+        document: NSDocument,
+        to targetURL: URL,
+        operation: NSDocument.SaveOperationType
+    ) async throws {
         try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<Void, Error>) in
             document.save(
                 to: targetURL,
                 ofType: document.fileType ?? UTType.inflowMarkdown.identifier,
-                for: operation.nativeOperation
+                for: operation
             ) { error in
                 if let error {
                     continuation.resume(throwing: error)

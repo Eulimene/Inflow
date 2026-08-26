@@ -236,6 +236,8 @@ struct MarkdownEditorView: View {
     @State private var relocationRequest: DocumentRelocationRequest?
     @State private var isRelocatingDocument = false
     @State private var relocationNativeDocument: NSDocument?
+    @State private var isSavingDocument = false
+    @State private var documentSaveFailureMessage: String?
 
     private var viewMode: EditorViewMode {
         get {
@@ -649,6 +651,22 @@ struct MarkdownEditorView: View {
         .alert(item: $fileSafetyNotice) { notice in
             notice.alert
         }
+        .confirmationDialog(
+            "未能保存「\(fileURL?.lastPathComponent ?? "未命名文档")」",
+            isPresented: Binding(
+                get: { documentSaveFailureMessage != nil },
+                set: { if !$0 { documentSaveFailureMessage = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("重试") { saveCurrentDocument() }
+            Button("另存为…") { beginDocumentRelocation(.saveAs) }
+            Button("继续编辑", role: .cancel) {}
+        } message: {
+            Text(
+                "\(documentSaveFailureMessage ?? "目标当前不可写。")\n\n原文件未被破坏，当前编辑仍已保留。"
+            )
+        }
         .alert(
             "无法修改 Markdown",
             isPresented: Binding(
@@ -754,6 +772,11 @@ struct MarkdownEditorView: View {
             )
 
             Text(viewMode.label)
+
+            if isSavingDocument {
+                Label("正在保存…", systemImage: "arrow.triangle.2.circlepath")
+                    .accessibilityLabel("正在保存 Markdown 文档")
+            }
 
             if isFocusModeEnabled {
                 Label("专注", systemImage: "scope")
@@ -904,16 +927,42 @@ struct MarkdownEditorView: View {
 
     private var documentSaveCommandActions: DocumentSaveCommandActions {
         DocumentSaveCommandActions(
-            isBusy: isRelocatingDocument || relocationRequest != nil,
-            save: {
-                NSApp.sendAction(#selector(NSDocument.save(_:)), to: nil, from: nil)
-            },
+            isBusy: isSavingDocument || isRelocatingDocument || relocationRequest != nil,
+            save: saveCurrentDocument,
             saveAs: { beginDocumentRelocation(.saveAs) },
             saveCopy: { beginDocumentRelocation(.saveCopy) },
             showInFinder: fileURL.map { url in
                 { NSWorkspace.shared.activateFileViewerSelecting([url]) }
             }
         )
+    }
+
+    private func saveCurrentDocument() {
+        guard !isSavingDocument, !isRelocatingDocument, relocationRequest == nil else { return }
+        guard let fileURL else {
+            NSApp.sendAction(#selector(NSDocument.save(_:)), to: nil, from: nil)
+            return
+        }
+        guard let nativeDocument = NativeDocumentSaveCoordinator.activeDocument(
+            sourceURL: fileURL
+        ), NativeDocumentSaveCoordinator.represents(nativeDocument, sourceURL: fileURL) else {
+            documentSaveFailureMessage = "无法确认当前文档的保存目标。"
+            return
+        }
+
+        isSavingDocument = true
+        Task { @MainActor in
+            defer { isSavingDocument = false }
+            do {
+                try await NativeDocumentSaveCoordinator.saveCurrent(
+                    document: nativeDocument,
+                    to: fileURL
+                )
+                documentSaveFailureMessage = nil
+            } catch {
+                documentSaveFailureMessage = error.localizedDescription
+            }
+        }
     }
 
     private func beginDocumentRelocation(_ operation: DocumentRelocationOperation) {

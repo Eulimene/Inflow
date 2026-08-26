@@ -298,6 +298,25 @@ final class DocumentRelocationTests: XCTestCase {
         )
         XCTAssertEqual(document.lastURL, copyURL)
         XCTAssertEqual(document.lastOperation, .saveToOperation)
+
+        let currentURL = URL(fileURLWithPath: "/tmp/inflow-current.md")
+        try await NativeDocumentSaveCoordinator.saveCurrent(
+            document: document,
+            to: currentURL
+        )
+        XCTAssertEqual(document.lastURL, currentURL)
+        XCTAssertEqual(document.lastOperation, .saveOperation)
+
+        document.nextError = CocoaError(.fileWriteNoPermission)
+        do {
+            try await NativeDocumentSaveCoordinator.saveCurrent(
+                document: document,
+                to: currentURL
+            )
+            XCTFail("Expected save failure to propagate")
+        } catch {
+            XCTAssertEqual((error as? CocoaError)?.code, .fileWriteNoPermission)
+        }
     }
 
     @MainActor
@@ -371,6 +390,7 @@ final class DocumentRelocationTests: XCTestCase {
 private final class RecordingDocument: NSDocument {
     private(set) var lastURL: URL?
     private(set) var lastOperation: NSDocument.SaveOperationType?
+    var nextError: Error?
 
     override func save(
         to url: URL,
@@ -380,6 +400,7 @@ private final class RecordingDocument: NSDocument {
     ) {
         lastURL = url
         lastOperation = saveOperation
-        completionHandler(nil)
+        completionHandler(nextError)
+        nextError = nil
     }
 }
