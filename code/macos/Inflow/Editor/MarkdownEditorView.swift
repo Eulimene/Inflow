@@ -111,6 +111,37 @@ enum EditorStatisticMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum EmptyMarkdownGuidance {
+    static let title = "这份 Markdown 属于你"
+    static let description =
+        "直接在源码编辑器中开始写作；首次保存时由你选择文件名和位置，Inflow 不会把内容导入专有格式。"
+
+    static func isVisible(markdown: String) -> Bool {
+        markdown.isEmpty
+    }
+}
+
+private struct EmptyMarkdownPreviewView: View {
+    let onStartWriting: () -> Void
+    let onOpenDocument: () -> Void
+
+    var body: some View {
+        ContentUnavailableView {
+            Label(EmptyMarkdownGuidance.title, systemImage: "doc.text")
+        } description: {
+            Text(EmptyMarkdownGuidance.description)
+        } actions: {
+            VStack(spacing: 10) {
+                Button("在源码编辑器中开始", action: onStartWriting)
+                Button("打开现有 Markdown…", action: onOpenDocument)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .textBackgroundColor))
+        .accessibilityElement(children: .contain)
+    }
+}
+
 struct MarkdownEditorView: View {
     @Environment(\.openDocument) private var openDocument
     @Binding var document: MarkdownDocument
@@ -663,20 +694,33 @@ struct MarkdownEditorView: View {
     }
 
     private var preview: some View {
-        MarkdownPreviewView(
-            html: previewHTML,
-            baseURL: fileURL?.deletingLastPathComponent(),
-            scrollRequest: preferences.scrollSyncEnabled && !previewScrollPausedByUser
-                ? previewScrollRequest
-                : nil,
-            onHeadingActivated: activatePreviewHeading,
-            onLinkActivated: activatePreviewLink,
-            onManualScroll: {
-                if preferences.scrollSyncEnabled {
-                    previewScrollPausedByUser = true
+        ZStack {
+            MarkdownPreviewView(
+                html: previewHTML,
+                baseURL: fileURL?.deletingLastPathComponent(),
+                scrollRequest: preferences.scrollSyncEnabled && !previewScrollPausedByUser
+                    ? previewScrollRequest
+                    : nil,
+                onHeadingActivated: activatePreviewHeading,
+                onLinkActivated: activatePreviewLink,
+                onManualScroll: {
+                    if preferences.scrollSyncEnabled {
+                        previewScrollPausedByUser = true
+                    }
                 }
+            )
+
+            if EmptyMarkdownGuidance.isVisible(markdown: document.text) {
+                EmptyMarkdownPreviewView(
+                    onStartWriting: {
+                        selectViewMode(viewMode == .preview ? .source : viewMode)
+                    },
+                    onOpenDocument: {
+                        recentDocuments?.chooseDocumentToOpen()
+                    }
+                )
             }
-        )
+        }
     }
 
     private var statusBar: some View {

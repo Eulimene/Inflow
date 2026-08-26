@@ -210,6 +210,10 @@ final class RecentDocumentsController: NSObject, ObservableObject {
     }
 
     @objc private func openDocumentMenuItem(_: Any?) {
+        chooseDocumentToOpen()
+    }
+
+    func chooseDocumentToOpen() {
         let reusableDocument = reusableBlankDocument()
         NSDocumentController.shared.beginOpenPanel { [weak self] urls in
             guard let self, let urls else { return }

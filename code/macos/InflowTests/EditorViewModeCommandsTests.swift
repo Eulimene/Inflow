@@ -27,6 +27,15 @@ final class EditorViewModeCommandsTests: XCTestCase {
         )
     }
 
+    func testEmptyMarkdownGuidanceExplainsOwnershipAndNextSteps() {
+        XCTAssertTrue(EmptyMarkdownGuidance.isVisible(markdown: ""))
+        XCTAssertFalse(EmptyMarkdownGuidance.isVisible(markdown: "\n"))
+        XCTAssertTrue(EmptyMarkdownGuidance.title.contains("属于你"))
+        XCTAssertTrue(EmptyMarkdownGuidance.description.contains("源码编辑器"))
+        XCTAssertTrue(EmptyMarkdownGuidance.description.contains("选择文件名和位置"))
+        XCTAssertTrue(EmptyMarkdownGuidance.description.contains("不会把内容导入专有格式"))
+    }
+
     @MainActor
     func testHostedSplitRestoresFractionAndConstrainsDivider() throws {
         var storedFraction = 0.6
