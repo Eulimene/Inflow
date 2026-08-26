@@ -62,6 +62,8 @@
 		A10000000000000000000035 /* WritingModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000003A /* WritingModeTests.swift */; };
 		A10000000000000000000036 /* PreviewZoomCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000003B /* PreviewZoomCommands.swift */; };
 		A10000000000000000000037 /* PreviewZoomCommandsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000003C /* PreviewZoomCommandsTests.swift */; };
+		A10000000000000000000038 /* InflowHelp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000003D /* InflowHelp.swift */; };
+		A10000000000000000000039 /* InflowHelpTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000003E /* InflowHelpTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -135,6 +137,8 @@
 		A2000000000000000000003A /* WritingModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WritingModeTests.swift; sourceTree = "<group>"; };
 		A2000000000000000000003B /* PreviewZoomCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preview/PreviewZoomCommands.swift; sourceTree = "<group>"; };
 		A2000000000000000000003C /* PreviewZoomCommandsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewZoomCommandsTests.swift; sourceTree = "<group>"; };
+		A2000000000000000000003D /* InflowHelp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Help/InflowHelp.swift; sourceTree = "<group>"; };
+		A2000000000000000000003E /* InflowHelpTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InflowHelpTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -174,6 +178,7 @@
 				A20000000000000000000018 /* EditorViewModeCommands.swift */,
 				A20000000000000000000039 /* WritingModeCommands.swift */,
 				A2000000000000000000003B /* PreviewZoomCommands.swift */,
+				A2000000000000000000003D /* InflowHelp.swift */,
 				A2000000000000000000001A /* HTMLExporter.swift */,
 				A2000000000000000000001B /* HTMLExportCommands.swift */,
 				A20000000000000000000025 /* PDFExporter.swift */,
@@ -241,6 +246,7 @@
 				A20000000000000000000038 /* MarkdownHighlighterTests.swift */,
 				A2000000000000000000003A /* WritingModeTests.swift */,
 				A2000000000000000000003C /* PreviewZoomCommandsTests.swift */,
+				A2000000000000000000003E /* InflowHelpTests.swift */,
 			);
 			path = macos/InflowTests;
 			sourceTree = "<group>";
@@ -403,6 +409,7 @@
 				A10000000000000000000013 /* EditorViewModeCommands.swift in Sources */,
 				A10000000000000000000034 /* WritingModeCommands.swift in Sources */,
 				A10000000000000000000036 /* PreviewZoomCommands.swift in Sources */,
+				A10000000000000000000038 /* InflowHelp.swift in Sources */,
 				A10000000000000000000015 /* HTMLExporter.swift in Sources */,
 				A10000000000000000000016 /* HTMLExportCommands.swift in Sources */,
 				A10000000000000000000018 /* MarkdownFormatter.swift in Sources */,
@@ -445,6 +452,7 @@
 				A10000000000000000000033 /* MarkdownHighlighterTests.swift in Sources */,
 				A10000000000000000000035 /* WritingModeTests.swift in Sources */,
 				A10000000000000000000037 /* PreviewZoomCommandsTests.swift in Sources */,
+				A10000000000000000000039 /* InflowHelpTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

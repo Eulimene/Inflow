@@ -55,8 +55,13 @@ struct InflowApp: App {
             HTMLExportCommands()
             MarkdownFormatCommands()
             MarkdownInsertCommands()
-            RecoveryCommands()
+            InflowSupplementalCommands()
         }
+
+        Window("Inflow 帮助", id: InflowHelpWindow.identifier) {
+            InflowHelpView()
+        }
+        .defaultSize(width: 760, height: 680)
 
         Settings {
             InflowSettingsView(
