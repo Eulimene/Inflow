@@ -199,6 +199,7 @@ final class AppPreferences: ObservableObject {
         static let lastActiveEditorViewMode = "preferences.window.lastActiveEditorViewMode"
         static let autosaveEnabled = "preferences.documents.autosaveEnabled"
         static let autosaveDelay = "preferences.documents.autosaveDelay"
+        static let existingImagePlacement = "preferences.resources.existingImagePlacement"
     }
 
     private let defaults: UserDefaults
@@ -335,6 +336,12 @@ final class AppPreferences: ObservableObject {
         }
     }
 
+    @Published var existingImagePlacement: ExistingImagePlacementPreference {
+        didSet {
+            defaults.set(existingImagePlacement.rawValue, forKey: Key.existingImagePlacement)
+        }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         editorFontSize = Self.number(
@@ -444,6 +451,12 @@ final class AppPreferences: ObservableObject {
             in: defaults,
             defaultValue: .oneSecond
         )
+        existingImagePlacement = Self.enumeration(
+            ExistingImagePlacementPreference.self,
+            forKey: Key.existingImagePlacement,
+            in: defaults,
+            defaultValue: .copyToAssets
+        )
 
         persistCurrentValues()
         accessibilityObserver = NSWorkspace.shared.notificationCenter
@@ -532,6 +545,7 @@ final class AppPreferences: ObservableObject {
         defaults.set(markdownOpenBehavior.rawValue, forKey: RecentDocumentPolicy.openBehaviorKey)
         defaults.set(autosaveEnabled, forKey: Key.autosaveEnabled)
         defaults.set(autosaveDelay.rawValue, forKey: Key.autosaveDelay)
+        defaults.set(existingImagePlacement.rawValue, forKey: Key.existingImagePlacement)
     }
 
     private static func clamped(_ value: Double, range: ClosedRange<Double>) -> Double {

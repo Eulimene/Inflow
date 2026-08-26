@@ -281,6 +281,23 @@ final class MarkdownInsertionTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testExistingImageCollisionOffersEverySafeExit() {
+        XCTAssertEqual(
+            ImageAssetPicker.existingImageCollisionDecision(for: .alertFirstButtonReturn),
+            .incrementName
+        )
+        XCTAssertEqual(
+            ImageAssetPicker.existingImageCollisionDecision(for: .alertSecondButtonReturn),
+            .replace
+        )
+        XCTAssertEqual(
+            ImageAssetPicker.existingImageCollisionDecision(for: .alertThirdButtonReturn),
+            .keepOriginal
+        )
+        XCTAssertNil(ImageAssetPicker.existingImageCollisionDecision(for: .cancel))
+    }
+
     func testRetainedImageRemainsUnmodifiedAndRendersFromRelativeReference() async throws {
         let root = try temporaryImageDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

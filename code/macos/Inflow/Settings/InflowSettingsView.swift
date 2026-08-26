@@ -17,6 +17,9 @@ struct InflowSettingsView: View {
             previewSettings
                 .tabItem { Label("预览", systemImage: "doc.richtext") }
 
+            resourceSettings
+                .tabItem { Label("资源", systemImage: "photo.on.rectangle") }
+
             accessibilitySettings
                 .tabItem { Label("辅助功能", systemImage: "accessibility") }
 
@@ -211,6 +214,40 @@ struct InflowSettingsView: View {
                 .foregroundStyle(.secondary)
         }
         .formStyle(.grouped)
+    }
+
+    private var resourceSettings: some View {
+        Form {
+            Section("既有图片") {
+                Picker("插入时", selection: $preferences.existingImagePlacement) {
+                    ForEach(ExistingImagePlacementPreference.allCases) { placement in
+                        Text(placement.label).tag(placement)
+                    }
+                }
+                Text(resourcePlacementExplanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("安全边界") {
+                LabeledContent("同名文件", value: "每次询问")
+                Text("粘贴或新建的图片始终保存到文档同级 assets，不会引用不可迁移的临时位置。同名时不静默覆盖。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var resourcePlacementExplanation: String {
+        switch preferences.existingImagePlacement {
+        case .copyToAssets:
+            "默认把选择或拖入的既有图片复制到当前 Markdown 同级 assets，并写入相对引用。"
+        case .keepOriginal:
+            "不复制既有图片；可形成相对路径时优先使用，否则仍会在写入绝对本地地址前单独确认。"
+        case .askEveryTime:
+            "每次选择或拖入既有图片时，先说明复制与保留原位置的迁移影响。"
+        }
     }
 }
 

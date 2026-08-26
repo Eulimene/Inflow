@@ -238,9 +238,39 @@ enum ImageAssetCollisionResolution: Sendable, Equatable {
     case numberedSequence
 }
 
+enum ExistingImageCollisionDecision: Sendable, Equatable {
+    case incrementName
+    case replace
+    case keepOriginal
+}
+
 enum ExistingImagePlacement: Sendable, Equatable {
     case copyToAssets
     case keepOriginal
+}
+
+enum ExistingImagePlacementPreference: String, CaseIterable, Identifiable, Sendable {
+    case copyToAssets
+    case keepOriginal
+    case askEveryTime
+
+    var id: Self { self }
+
+    var label: String {
+        switch self {
+        case .copyToAssets: "复制到文档同级 assets"
+        case .keepOriginal: "保留原位置"
+        case .askEveryTime: "每次询问"
+        }
+    }
+
+    var automaticPlacement: ExistingImagePlacement? {
+        switch self {
+        case .copyToAssets: .copyToAssets
+        case .keepOriginal: .keepOriginal
+        case .askEveryTime: nil
+        }
+    }
 }
 
 struct RetainedImageReference: Sendable, Equatable {
@@ -744,23 +774,33 @@ enum ImageAssetPicker {
         return selected
     }
 
-    static func resolveCollision(
+    static func resolveExistingImageCollision(
         filename: String,
         attachedTo window: NSWindow?
-    ) async -> ImageAssetCollisionResolution? {
+    ) async -> ExistingImageCollisionDecision? {
         let alert = NSAlert()
         alert.messageText = "assets 中已存在同名图片"
-        alert.informativeText = "\(filename) 已存在。请明确选择覆盖，或保留原文件并使用递增名称。"
+        alert.informativeText = "\(filename) 已存在。请选择使用递增名称、明确覆盖，或改为引用原图位置。"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "保留并递增名称")
         alert.addButton(withTitle: "覆盖")
-        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "保留原位置")
+        let cancelButton = alert.addButton(withTitle: "取消")
+        cancelButton.keyEquivalent = "\u{1b}"
         let response = await run(alert, attachedTo: window)
+        return existingImageCollisionDecision(for: response)
+    }
+
+    static func existingImageCollisionDecision(
+        for response: NSApplication.ModalResponse
+    ) -> ExistingImageCollisionDecision? {
         switch response {
         case .alertFirstButtonReturn:
-            return ImageAssetCollisionResolution.incrementName
+            return .incrementName
         case .alertSecondButtonReturn:
-            return ImageAssetCollisionResolution.replace
+            return .replace
+        case .alertThirdButtonReturn:
+            return .keepOriginal
         default:
             return nil
         }

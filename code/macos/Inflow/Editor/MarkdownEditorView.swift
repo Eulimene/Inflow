@@ -1545,44 +1545,30 @@ struct MarkdownEditorView: View {
 
             do {
                 let image = try await worker.loadSource(at: sourceURL)
-                guard let placement = await ImageAssetPicker.choosePlacement(
-                    filename: sourceURL.lastPathComponent,
-                    attachedTo: window
-                ) else {
-                    return
+                let placement: ExistingImagePlacement
+                if let automaticPlacement = preferences.existingImagePlacement.automaticPlacement {
+                    placement = automaticPlacement
+                } else {
+                    guard let selectedPlacement = await ImageAssetPicker.choosePlacement(
+                        filename: sourceURL.lastPathComponent,
+                        attachedTo: window
+                    ) else {
+                        return
+                    }
+                    placement = selectedPlacement
                 }
                 let alternative = sourceURL.deletingPathExtension().lastPathComponent
 
                 if placement == .keepOriginal {
-                    let reference = try await worker.retainedReference(
+                    try await retainExistingImage(
                         sourceURL: sourceURL,
-                        documentURL: documentURL
+                        documentURL: documentURL,
+                        sourceSnapshot: sourceSnapshot,
+                        selectedRange: selectedRange,
+                        defaultAlternative: alternative,
+                        window: window,
+                        worker: worker
                     )
-                    if !reference.isRelative {
-                        guard await ImageAssetPicker.confirmAbsoluteReference(
-                            filename: sourceURL.lastPathComponent,
-                            attachedTo: window
-                        ) else {
-                            return
-                        }
-                    }
-                    let plan = try MarkdownFormatter.imagePlan(
-                        source: sourceSnapshot,
-                        selectedUTF16Range: selectedRange,
-                        destination: reference.markdownDestination,
-                        defaultAlternative: alternative.isEmpty ? "图片描述" : alternative
-                    )
-                    viewMode = viewMode.sourceVisible
-                    guard sourceEditorSession.applyMarkdownFormat(
-                        plan,
-                        actionName: "插入图片"
-                    ) else {
-                        markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未引用图片。"
-                        return
-                    }
-                    imageDirectoryAccess.authorize(sourceURL)
-                    await Task.yield()
-                    _ = sourceEditorSession.focusEditor()
                     return
                 }
 
@@ -1601,13 +1587,29 @@ struct MarkdownEditorView: View {
                 )
                 let resolution: ImageAssetCollisionResolution
                 if destinationSnapshot.exists {
-                    guard let choice = await ImageAssetPicker.resolveCollision(
+                    guard let choice = await ImageAssetPicker.resolveExistingImageCollision(
                         filename: filename,
                         attachedTo: window
                     ) else {
                         return
                     }
-                    resolution = choice
+                    switch choice {
+                    case .incrementName:
+                        resolution = .incrementName
+                    case .replace:
+                        resolution = .replace
+                    case .keepOriginal:
+                        try await retainExistingImage(
+                            sourceURL: sourceURL,
+                            documentURL: documentURL,
+                            sourceSnapshot: sourceSnapshot,
+                            selectedRange: selectedRange,
+                            defaultAlternative: alternative,
+                            window: window,
+                            worker: worker
+                        )
+                        return
+                    }
                 } else {
                     resolution = .failIfExists
                 }
@@ -1650,6 +1652,49 @@ struct MarkdownEditorView: View {
                     ?? ImageAssetImportError.copyFailed.localizedDescription
             }
         }
+    }
+
+    @MainActor
+    private func retainExistingImage(
+        sourceURL: URL,
+        documentURL: URL,
+        sourceSnapshot: String,
+        selectedRange: NSRange,
+        defaultAlternative: String,
+        window: NSWindow?,
+        worker: ImageAssetWorker
+    ) async throws {
+        let reference = try await worker.retainedReference(
+            sourceURL: sourceURL,
+            documentURL: documentURL
+        )
+        if !reference.isRelative {
+            guard await ImageAssetPicker.confirmAbsoluteReference(
+                filename: sourceURL.lastPathComponent,
+                attachedTo: window
+            ) else {
+                return
+            }
+        }
+        let plan = try MarkdownFormatter.imagePlan(
+            source: sourceSnapshot,
+            selectedUTF16Range: selectedRange,
+            destination: reference.markdownDestination,
+            defaultAlternative: defaultAlternative.isEmpty
+                ? "图片描述"
+                : defaultAlternative
+        )
+        viewMode = viewMode.sourceVisible
+        guard sourceEditorSession.applyMarkdownFormat(
+            plan,
+            actionName: "插入图片"
+        ) else {
+            markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未引用图片。"
+            return
+        }
+        imageDirectoryAccess.authorize(sourceURL)
+        await Task.yield()
+        _ = sourceEditorSession.focusEditor()
     }
 
     private func pasteImage(_ payload: ClipboardImagePayload) {

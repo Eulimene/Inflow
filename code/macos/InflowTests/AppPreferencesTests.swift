@@ -30,6 +30,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.markdownOpenBehavior, .newWindow)
             XCTAssertTrue(preferences.autosaveEnabled)
             XCTAssertEqual(preferences.autosaveDelay, .oneSecond)
+            XCTAssertEqual(preferences.existingImagePlacement, .copyToAssets)
             XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 1)
         }
     }
@@ -58,6 +59,7 @@ final class AppPreferencesTests: XCTestCase {
             first.markdownOpenBehavior = .reuseBlankWindow
             first.autosaveEnabled = false
             first.autosaveDelay = .fiveSeconds
+            first.existingImagePlacement = .keepOriginal
 
             let second = AppPreferences(defaults: defaults)
             second.applyAutosavePolicy()
@@ -82,6 +84,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(second.markdownOpenBehavior, .reuseBlankWindow)
             XCTAssertFalse(second.autosaveEnabled)
             XCTAssertEqual(second.autosaveDelay, .fiveSeconds)
+            XCTAssertEqual(second.existingImagePlacement, .keepOriginal)
             XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
 
             second.editorFontSize = 100
@@ -107,6 +110,10 @@ final class AppPreferencesTests: XCTestCase {
             defaults.set(-40, forKey: RecentDocumentPolicy.capacityKey)
             defaults.set("retired-open", forKey: RecentDocumentPolicy.openBehaviorKey)
             defaults.set("retired-delay", forKey: "preferences.documents.autosaveDelay")
+            defaults.set(
+                "retired-placement",
+                forKey: "preferences.resources.existingImagePlacement"
+            )
             defaults.set("keep-me", forKey: "unrelated.document-state")
 
             let preferences = AppPreferences(defaults: defaults)
@@ -118,6 +125,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.recentDocumentCapacity, 5)
             XCTAssertEqual(preferences.markdownOpenBehavior, .newWindow)
             XCTAssertEqual(preferences.autosaveDelay, .oneSecond)
+            XCTAssertEqual(preferences.existingImagePlacement, .copyToAssets)
             XCTAssertEqual(defaults.string(forKey: "unrelated.document-state"), "keep-me")
         }
     }
@@ -180,6 +188,18 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
             XCTAssertTrue(NSDocument.instancesRespond(to: #selector(NSDocument.save(_:))))
         }
+    }
+
+    func testExistingImagePlacementPreferenceKeepsPromptAsAnExplicitChoice() {
+        XCTAssertEqual(
+            ExistingImagePlacementPreference.copyToAssets.automaticPlacement,
+            .copyToAssets
+        )
+        XCTAssertEqual(
+            ExistingImagePlacementPreference.keepOriginal.automaticPlacement,
+            .keepOriginal
+        )
+        XCTAssertNil(ExistingImagePlacementPreference.askEveryTime.automaticPlacement)
     }
 
     func testSourceAppearanceChangesStyleWithoutChangingTextSelectionOrUndo() throws {
