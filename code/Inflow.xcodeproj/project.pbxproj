@@ -365,6 +365,7 @@
 				"$(PROJECT_DIR)/core/Cargo.toml",
 				"$(PROJECT_DIR)/core/Cargo.lock",
 				"$(PROJECT_DIR)/core/src/analysis.rs",
+				"$(PROJECT_DIR)/core/src/code_highlight.rs",
 				"$(PROJECT_DIR)/core/src/document.rs",
 				"$(PROJECT_DIR)/core/src/export.rs",
 				"$(PROJECT_DIR)/core/src/format.rs",

@@ -101,6 +101,12 @@ enum MarkdownRenderer {
             code { font: .88em/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: #afb8c133; border-radius: 5px; padding: .16em .34em; }
             pre { overflow: auto; padding: 16px; background: #f6f8fa; border-radius: 8px; }
             pre code { padding: 0; background: transparent; }
+            .tok-keyword { color: #cf222e; font-weight: 600; }
+            .tok-type { color: #8250df; }
+            .tok-string { color: #0a3069; }
+            .tok-number, .tok-literal { color: #0550ae; }
+            .tok-comment { color: #57606a; font-style: italic; }
+            .tok-tag { color: #116329; }
             table { width: 100%; border-collapse: collapse; display: block; overflow-x: auto; }
             th, td { border: 1px solid #d0d7de; padding: 7px 12px; }
             tr:nth-child(even) { background: #f6f8fa; }
@@ -124,6 +130,12 @@ enum MarkdownRenderer {
               blockquote { color: #8b949e; border-color: #3b434b; }
               pre, tr:nth-child(even) { background: #161b22; }
               code { background: #6e768166; }
+              .tok-keyword { color: #ff7b72; }
+              .tok-type { color: #d2a8ff; }
+              .tok-string { color: #a5d6ff; }
+              .tok-number, .tok-literal { color: #79c0ff; }
+              .tok-comment { color: #8b949e; }
+              .tok-tag { color: #7ee787; }
               hr { background: #30363d; }
               .mermaid-diagram .node rect { fill: #161b22; stroke: #8b949e; }
               .mermaid-error { color: #d29922; border-color: #9e6a03; }
@@ -279,9 +291,9 @@ enum PreviewAppearanceCSS {
         case .system:
             ":root { color-scheme: light dark; }"
         case .light:
-            ":root { color-scheme: light; } body { color: #111111; background: #ffffff; } h1, h2, th, td { border-color: #767676; } a { color: #004ea8; } blockquote { color: #333333; border-color: #606060; } pre, tr:nth-child(even) { background: #f1f1f1; } code { background: #d8d8d866; }"
+            ":root { color-scheme: light; } body { color: #111111; background: #ffffff; } h1, h2, th, td { border-color: #767676; } a { color: #004ea8; } blockquote { color: #333333; border-color: #606060; } pre, tr:nth-child(even) { background: #f1f1f1; } code { background: #d8d8d866; } \(syntaxLightRules)"
         case .dark:
-            ":root { color-scheme: dark; } body { color: #f2f2f2; background: #101214; } h1, h2, th, td { border-color: #8a8a8a; } a { color: #78b7ff; } blockquote { color: #d0d0d0; border-color: #a0a0a0; } pre, tr:nth-child(even) { background: #202428; } code { background: #ffffff24; }"
+            ":root { color-scheme: dark; } body { color: #f2f2f2; background: #101214; } h1, h2, th, td { border-color: #8a8a8a; } a { color: #78b7ff; } blockquote { color: #d0d0d0; border-color: #a0a0a0; } pre, tr:nth-child(even) { background: #202428; } code { background: #ffffff24; } \(syntaxDarkRules)"
         }
 
         let contrastRules = configuration.increasedContrast ? highContrastRules : ""
@@ -314,8 +326,14 @@ enum PreviewAppearanceCSS {
         return result
     }
 
+    private static let syntaxLightRules =
+        ".tok-keyword { color: #cf222e; } .tok-type { color: #8250df; } .tok-string { color: #0a3069; } .tok-number, .tok-literal { color: #0550ae; } .tok-comment { color: #57606a; } .tok-tag { color: #116329; }"
+
+    private static let syntaxDarkRules =
+        ".tok-keyword { color: #ff7b72; } .tok-type { color: #d2a8ff; } .tok-string { color: #a5d6ff; } .tok-number, .tok-literal { color: #79c0ff; } .tok-comment { color: #8b949e; } .tok-tag { color: #7ee787; }"
+
     private static let highContrastRules =
-        "body { color: CanvasText; background: Canvas; } a { color: LinkText; text-decoration: underline; text-decoration-thickness: 2px; } h1, h2, th, td, blockquote { border-color: currentColor; } :focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }"
+        "body { color: CanvasText; background: Canvas; } a { color: LinkText; text-decoration: underline; text-decoration-thickness: 2px; } h1, h2, th, td, blockquote { border-color: currentColor; } .tok-keyword, .tok-type, .tok-string, .tok-number, .tok-literal, .tok-comment, .tok-tag { color: currentColor; } .tok-keyword, .tok-type { font-weight: 700; } .tok-comment { text-decoration: underline dotted; } :focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }"
 
     private static func decimal(_ value: Double) -> String {
         String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), value)

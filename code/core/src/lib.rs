@@ -3,6 +3,7 @@
 //! Platform clients communicate with this crate through the versioned C ABI.
 
 mod analysis;
+mod code_highlight;
 mod document;
 mod export;
 mod ffi;

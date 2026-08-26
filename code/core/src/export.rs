@@ -104,6 +104,12 @@ const DOCUMENT_PREFIX: &str = r#"<!doctype html>
     code { font: .88em/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: #afb8c133; border-radius: 5px; padding: .16em .34em; }
     pre { overflow: auto; padding: 16px; background: #f6f8fa; border-radius: 8px; }
     pre code { padding: 0; background: transparent; }
+    .tok-keyword { color: #cf222e; font-weight: 600; }
+    .tok-type { color: #8250df; }
+    .tok-string { color: #0a3069; }
+    .tok-number, .tok-literal { color: #0550ae; }
+    .tok-comment { color: #57606a; font-style: italic; }
+    .tok-tag { color: #116329; }
     table { width: 100%; border-collapse: collapse; display: block; overflow-x: auto; }
     th, td { border: 1px solid #d0d7de; padding: 7px 12px; }
     tr:nth-child(even) { background: #f6f8fa; }
@@ -124,6 +130,12 @@ const DOCUMENT_PREFIX: &str = r#"<!doctype html>
       blockquote { color: #8b949e; border-color: #3b434b; }
       pre, tr:nth-child(even) { background: #161b22; }
       code { background: #6e768166; }
+      .tok-keyword { color: #ff7b72; }
+      .tok-type { color: #d2a8ff; }
+      .tok-string { color: #a5d6ff; }
+      .tok-number, .tok-literal { color: #79c0ff; }
+      .tok-comment { color: #8b949e; }
+      .tok-tag { color: #7ee787; }
       hr { background: #30363d; }
       .mermaid-diagram .node rect { fill: #161b22; stroke: #8b949e; }
       .mermaid-error { color: #d29922; border-color: #9e6a03; }
@@ -163,6 +175,22 @@ mod tests {
         assert!(!html.contains("<script"));
         assert!(!html.contains("http://cdn"));
         assert!(html.ends_with("</html>\n"));
+    }
+
+    #[test]
+    fn exported_code_highlighting_is_self_contained_and_safe() {
+        let bytes =
+            html_document("```python\ndef greet(name):\n    return f\"<b>{name}</b>\"\n```\n")
+                .expect("supported code can be exported");
+        let html = String::from_utf8(bytes).expect("export is UTF-8");
+
+        assert!(html.contains("language-python inflow-code-highlight"));
+        assert!(html.contains("<span class=\"tok-keyword\">def</span>"));
+        assert!(html.contains("<span class=\"tok-keyword\">return</span>"));
+        assert!(html.contains(".tok-keyword { color:"));
+        assert!(html.contains("&lt;b&gt;{name}&lt;/b&gt;"));
+        assert!(!html.contains("<b>{name}</b>"));
+        assert!(!html.contains("<script"));
     }
 
     #[test]

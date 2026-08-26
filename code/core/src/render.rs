@@ -2,7 +2,7 @@
 
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 
-use crate::{math, mermaid};
+use crate::{code_highlight, math, mermaid};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RenderConfiguration {
@@ -79,6 +79,23 @@ fn safe_events(markdown: &str, configuration: RenderConfiguration) -> Vec<Event<
             let diagram = mermaid::svg(source.trim_end())
                 .unwrap_or_else(|error| mermaid::fallback(source.trim_end(), &error));
             events.push(Event::InlineHtml(diagram.into()));
+        } else if let Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(language))) = &event {
+            if code_highlight::supports_language(language) {
+                let mut source = String::new();
+                for code_event in parser.by_ref() {
+                    match code_event {
+                        Event::End(TagEnd::CodeBlock) => break,
+                        Event::Text(text) | Event::Code(text) => source.push_str(&text),
+                        Event::SoftBreak | Event::HardBreak => source.push('\n'),
+                        _ => {}
+                    }
+                }
+                let block = code_highlight::highlighted_code_block(language, &source)
+                    .expect("the language profile was checked above");
+                events.push(Event::InlineHtml(block.into()));
+            } else {
+                events.push(sanitize_event(event));
+            }
         } else {
             events.push(sanitize_event(event));
         }
@@ -155,9 +172,32 @@ mod tests {
     fn escapes_html_inside_code_blocks() {
         let html = html_fragment("```html\n<script>bad()</script>\n```\n");
 
-        assert!(html.contains("<pre><code class=\"language-html\">"));
-        assert!(html.contains("&lt;script&gt;bad()&lt;/script&gt;"));
+        assert!(html.contains("<pre><code class=\"language-html inflow-code-highlight\">"));
+        assert!(html.contains("&lt;script&gt;"));
+        assert!(html.contains("bad()"));
+        assert!(html.contains("&lt;/script&gt;"));
         assert!(!html.contains("<script>bad()"));
+    }
+
+    #[test]
+    fn highlights_known_code_languages_without_scripts_or_source_loss() {
+        let html =
+            html_fragment("```swift\nlet greeting = \"<script>你好</script>\" // 注释\n```\n");
+
+        assert!(html.contains("language-swift inflow-code-highlight"));
+        assert!(html.contains("<span class=\"tok-keyword\">let</span>"));
+        assert!(html.contains("<span class=\"tok-comment\">// 注释</span>"));
+        assert!(html.contains("&lt;script&gt;你好&lt;/script&gt;"));
+        assert!(!html.contains("<script>"));
+    }
+
+    #[test]
+    fn leaves_unknown_language_blocks_readable_and_escaped() {
+        let html = html_fragment("```unknown\n<unsafe>& text\n```\n");
+
+        assert!(html.contains("<pre><code class=\"language-unknown\">"));
+        assert!(html.contains("&lt;unsafe&gt;&amp; text"));
+        assert!(!html.contains("inflow-code-highlight"));
     }
 
     #[test]

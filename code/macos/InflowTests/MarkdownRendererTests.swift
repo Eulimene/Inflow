@@ -5,6 +5,51 @@ import XCTest
 @testable import Inflow
 
 final class MarkdownRendererTests: XCTestCase {
+    func testPreviewAddsSafeSelfContainedColorsForKnownCodeLanguages() throws {
+        let fragment = try MarkdownRenderer.htmlFragment(
+            for: "```rust\nfn main() { println!(\"<tag>你好</tag>\"); } // note\n```\n"
+        )
+
+        XCTAssertTrue(fragment.contains("language-rust inflow-code-highlight"))
+        XCTAssertTrue(fragment.contains("<span class=\"tok-keyword\">fn</span>"))
+        XCTAssertTrue(fragment.contains("<span class=\"tok-comment\">// note</span>"))
+        XCTAssertTrue(fragment.contains("&lt;tag&gt;你好&lt;/tag&gt;"))
+        XCTAssertFalse(fragment.contains("<tag>你好</tag>"))
+
+        let document = MarkdownRenderer.document(containing: fragment)
+        XCTAssertTrue(document.contains(".tok-keyword { color:"))
+        XCTAssertTrue(document.contains("@media (prefers-color-scheme: dark)"))
+        XCTAssertFalse(document.contains("<script"))
+
+        let forcedDark = PreviewAppearanceCSS.styleElement(
+            for: PreviewAppearanceConfiguration(
+                contentWidth: 760,
+                zoom: 1,
+                colorScheme: .dark,
+                theme: .standard,
+                increasedContrast: false,
+                reduceMotion: false,
+                mathRenderingEnabled: true,
+                mermaidRenderingEnabled: true
+            )
+        )
+        XCTAssertTrue(forcedDark.contains(".tok-keyword { color: #ff7b72; }"))
+
+        let highContrast = PreviewAppearanceCSS.styleElement(
+            for: PreviewAppearanceConfiguration(
+                contentWidth: 760,
+                zoom: 1,
+                colorScheme: .system,
+                theme: .highContrast,
+                increasedContrast: false,
+                reduceMotion: false,
+                mathRenderingEnabled: true,
+                mermaidRenderingEnabled: true
+            )
+        )
+        XCTAssertTrue(highContrast.contains(".tok-comment { text-decoration: underline dotted; }"))
+    }
+
     func testRenderOptionValuesMatchRustContract() {
         XCTAssertEqual(INFLOW_RENDER_OPTION_MATH, UInt32(1 << 0))
         XCTAssertEqual(INFLOW_RENDER_OPTION_MERMAID, UInt32(1 << 1))
