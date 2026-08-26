@@ -10,6 +10,24 @@ final class EditorViewModeCommandsTests: XCTestCase {
         XCTAssertEqual(EditorViewMode.resolve(storedValue: "removed-mode"), .split)
     }
 
+    func testNewSceneUsesLastActiveModeWhileRestoredSceneKeepsItsOwnMode() {
+        XCTAssertEqual(
+            EditorViewMode.initialMode(storedValue: "", lastActiveMode: .preview),
+            .preview
+        )
+        XCTAssertEqual(
+            EditorViewMode.initialMode(
+                storedValue: EditorViewMode.source.rawValue,
+                lastActiveMode: .preview
+            ),
+            .source
+        )
+        XCTAssertEqual(
+            EditorViewMode.initialMode(storedValue: "retired-mode", lastActiveMode: .preview),
+            .split
+        )
+    }
+
     @MainActor
     func testCommandActionsAreScopedAndOnlySelectOnActivation() {
         var firstMode = EditorViewMode.source

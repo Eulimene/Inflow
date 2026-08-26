@@ -169,6 +169,7 @@ final class AppPreferences: ObservableObject {
         static let mermaidRenderingEnabled = "preferences.preview.mermaidRenderingEnabled"
         static let increasedContrast = "preferences.accessibility.increasedContrast"
         static let reduceMotion = "preferences.accessibility.reduceMotion"
+        static let lastActiveEditorViewMode = "preferences.window.lastActiveEditorViewMode"
     }
 
     private let defaults: UserDefaults
@@ -268,6 +269,12 @@ final class AppPreferences: ObservableObject {
         didSet { defaults.set(reduceMotion.rawValue, forKey: Key.reduceMotion) }
     }
 
+    @Published private(set) var lastActiveEditorViewMode: EditorViewMode {
+        didSet {
+            defaults.set(lastActiveEditorViewMode.rawValue, forKey: Key.lastActiveEditorViewMode)
+        }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         editorFontSize = Self.number(
@@ -358,6 +365,12 @@ final class AppPreferences: ObservableObject {
             in: defaults,
             defaultValue: .followSystem
         )
+        lastActiveEditorViewMode = Self.enumeration(
+            EditorViewMode.self,
+            forKey: Key.lastActiveEditorViewMode,
+            in: defaults,
+            defaultValue: .split
+        )
 
         persistCurrentValues()
         accessibilityObserver = NSWorkspace.shared.notificationCenter
@@ -397,6 +410,10 @@ final class AppPreferences: ObservableObject {
         )
     }
 
+    func recordActiveEditorViewMode(_ mode: EditorViewMode) {
+        lastActiveEditorViewMode = mode
+    }
+
     func resetWritingAndPreview() {
         editorFontSize = SourceEditorAppearance.default.fontSize
         editorLineHeight = SourceEditorAppearance.default.lineHeight
@@ -433,6 +450,7 @@ final class AppPreferences: ObservableObject {
         defaults.set(mermaidRenderingEnabled, forKey: Key.mermaidRenderingEnabled)
         defaults.set(increasedContrast.rawValue, forKey: Key.increasedContrast)
         defaults.set(reduceMotion.rawValue, forKey: Key.reduceMotion)
+        defaults.set(lastActiveEditorViewMode.rawValue, forKey: Key.lastActiveEditorViewMode)
     }
 
     private static func clamped(_ value: Double, range: ClosedRange<Double>) -> Double {

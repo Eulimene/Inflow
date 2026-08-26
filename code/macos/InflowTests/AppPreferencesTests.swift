@@ -24,6 +24,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertTrue(preferences.mermaidRenderingEnabled)
             XCTAssertEqual(preferences.increasedContrast, .followSystem)
             XCTAssertEqual(preferences.reduceMotion, .followSystem)
+            XCTAssertEqual(preferences.lastActiveEditorViewMode, .split)
         }
     }
 
@@ -46,6 +47,7 @@ final class AppPreferencesTests: XCTestCase {
             first.mermaidRenderingEnabled = false
             first.increasedContrast = .enabled
             first.reduceMotion = .disabled
+            first.recordActiveEditorViewMode(.preview)
 
             let second = AppPreferences(defaults: defaults)
             XCTAssertEqual(second.editorFontSize, 24)
@@ -64,6 +66,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertFalse(second.mermaidRenderingEnabled)
             XCTAssertEqual(second.increasedContrast, .enabled)
             XCTAssertEqual(second.reduceMotion, .disabled)
+            XCTAssertEqual(second.lastActiveEditorViewMode, .preview)
 
             second.editorFontSize = 100
             second.editorLineHeight = -4
@@ -82,6 +85,7 @@ final class AppPreferencesTests: XCTestCase {
             defaults.set(0, forKey: "preferences.editor.lineHeight")
             defaults.set(5_000, forKey: "preferences.preview.contentWidth")
             defaults.set("retired-theme", forKey: "preferences.preview.theme")
+            defaults.set("retired-view", forKey: "preferences.window.lastActiveEditorViewMode")
             defaults.set("keep-me", forKey: "unrelated.document-state")
 
             let preferences = AppPreferences(defaults: defaults)
@@ -89,6 +93,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.editorLineHeight, 1.2)
             XCTAssertEqual(preferences.previewContentWidth, 1_200)
             XCTAssertEqual(preferences.previewTheme, .standard)
+            XCTAssertEqual(preferences.lastActiveEditorViewMode, .split)
             XCTAssertEqual(defaults.string(forKey: "unrelated.document-state"), "keep-me")
         }
     }
@@ -108,6 +113,7 @@ final class AppPreferencesTests: XCTestCase {
             preferences.mathRenderingEnabled = false
             preferences.mermaidRenderingEnabled = false
             preferences.increasedContrast = .enabled
+            preferences.recordActiveEditorViewMode(.source)
 
             preferences.resetWritingAndPreview()
 
@@ -122,6 +128,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertTrue(preferences.mathRenderingEnabled)
             XCTAssertTrue(preferences.mermaidRenderingEnabled)
             XCTAssertEqual(preferences.increasedContrast, .followSystem)
+            XCTAssertEqual(preferences.lastActiveEditorViewMode, .source)
             XCTAssertEqual(defaults.string(forKey: "document.recovery.record"), "recovery-sentinel")
         }
     }

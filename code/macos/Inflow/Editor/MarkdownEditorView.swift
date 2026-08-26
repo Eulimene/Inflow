@@ -84,6 +84,13 @@ enum EditorViewMode: String, CaseIterable, Identifiable {
     static func resolve(storedValue: String) -> EditorViewMode {
         EditorViewMode(rawValue: storedValue) ?? .split
     }
+
+    static func initialMode(
+        storedValue: String,
+        lastActiveMode: EditorViewMode
+    ) -> EditorViewMode {
+        storedValue.isEmpty ? lastActiveMode : resolve(storedValue: storedValue)
+    }
 }
 
 enum EditorStatisticMode: String, CaseIterable, Identifiable {
@@ -129,7 +136,7 @@ struct MarkdownEditorView: View {
         self.anonymousUsage = anonymousUsage
     }
 
-    @SceneStorage("editorViewMode") private var storedViewMode = EditorViewMode.split.rawValue
+    @SceneStorage("editorViewMode") private var storedViewMode = ""
     @SceneStorage("isDocumentOutlineVisible") private var isOutlineVisible = true
     @SceneStorage("editorStatisticMode") private var storedStatisticMode =
         EditorStatisticMode.words.rawValue
@@ -182,7 +189,12 @@ struct MarkdownEditorView: View {
     @State private var relocationNativeDocument: NSDocument?
 
     private var viewMode: EditorViewMode {
-        get { EditorViewMode.resolve(storedValue: storedViewMode) }
+        get {
+            EditorViewMode.initialMode(
+                storedValue: storedViewMode,
+                lastActiveMode: preferences.lastActiveEditorViewMode
+            )
+        }
         nonmutating set { storedViewMode = newValue.rawValue }
     }
 
@@ -297,6 +309,7 @@ struct MarkdownEditorView: View {
         .onAppear {
             registerDocumentNavigation(url: fileURL)
             applyRestorationStateIfNeeded()
+            initializeViewModeIfNeeded()
             scheduleDerivedContent(
                 for: document.text,
                 documentDirectory: fileURL?.deletingLastPathComponent(),
@@ -766,6 +779,11 @@ struct MarkdownEditorView: View {
         didApplyRestorationState = true
         storedViewMode = restorationState.viewModeRawValue
         sourceEditorSession.requestRestoration(restorationState)
+    }
+
+    private func initializeViewModeIfNeeded() {
+        guard storedViewMode.isEmpty else { return }
+        storedViewMode = preferences.lastActiveEditorViewMode.rawValue
     }
 
     private func updateRecoveryProtection() {
@@ -1869,6 +1887,7 @@ struct MarkdownEditorView: View {
 
     private func selectViewMode(_ mode: EditorViewMode) {
         viewMode = mode
+        preferences.recordActiveEditorViewMode(mode)
         let command: AnonymousUsageCommand = switch mode {
         case .source: .selectSourceView
         case .split: .selectSplitView
