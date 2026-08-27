@@ -117,6 +117,26 @@ enum AccessibilityPreference: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum AppPreferenceGroup: String, CaseIterable, Identifiable, Sendable {
+    case general
+    case writing
+    case preview
+    case resources
+    case accessibility
+
+    var id: Self { self }
+
+    var label: String {
+        switch self {
+        case .general: "通用"
+        case .writing: "写作"
+        case .preview: "预览"
+        case .resources: "资源"
+        case .accessibility: "辅助功能"
+        }
+    }
+}
+
 struct PreviewAppearanceConfiguration: Equatable, Sendable {
     static let `default` = Self(
         contentWidth: 760,
@@ -504,13 +524,42 @@ final class AppPreferences: ObservableObject {
         documentController.autosavingDelay = autosaveEnabled ? autosaveDelay.seconds : 0
     }
 
-    func resetWritingAndPreview() {
+    func reset(_ group: AppPreferenceGroup) {
+        switch group {
+        case .general:
+            autosaveEnabled = true
+            autosaveDelay = .oneSecond
+            lastActiveEditorViewMode = .split
+            recentDocumentCapacity = RecentDocumentPolicy.defaultCapacity
+            markdownOpenBehavior = .newWindow
+        case .writing:
+            resetWriting()
+        case .preview:
+            resetPreview()
+        case .resources:
+            existingImagePlacement = .copyToAssets
+        case .accessibility:
+            increasedContrast = .followSystem
+            reduceMotion = .followSystem
+        }
+    }
+
+    func resetAll() {
+        for group in AppPreferenceGroup.allCases {
+            reset(group)
+        }
+    }
+
+    private func resetWriting() {
         editorFontSize = SourceEditorAppearance.default.fontSize
         editorLineHeight = SourceEditorAppearance.default.lineHeight
         syntaxHighlightingEnabled = true
         spellingEnabled = SourceEditorAppearance.default.spellingEnabled
         wrapsLines = SourceEditorAppearance.default.wrapsLines
         showsLineNumbers = SourceEditorAppearance.default.showsLineNumbers
+    }
+
+    private func resetPreview() {
         scrollSyncEnabled = true
         headingNavigationEnabled = true
         previewContentWidth = PreviewAppearanceConfiguration.default.contentWidth
@@ -519,8 +568,6 @@ final class AppPreferences: ObservableObject {
         previewTheme = .standard
         mathRenderingEnabled = PreviewAppearanceConfiguration.default.mathRenderingEnabled
         mermaidRenderingEnabled = PreviewAppearanceConfiguration.default.mermaidRenderingEnabled
-        increasedContrast = .followSystem
-        reduceMotion = .followSystem
     }
 
     private func persistCurrentValues() {

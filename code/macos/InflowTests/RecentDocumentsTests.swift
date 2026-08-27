@@ -51,12 +51,19 @@ final class RecentDocumentsTests: XCTestCase {
         controller.note(gammaURL)
         let gamma = record(gammaURL.path, bookmark: Data([3]))
         XCTAssertEqual(controller.entries.map(\.record), [gamma, alpha, beta, delta, epsilon])
-        XCTAssertEqual(persistence.records, [gamma, alpha, beta, delta, epsilon])
-
-        controller.remove(try XCTUnwrap(controller.entries.first))
-        XCTAssertEqual(controller.entries.map(\.record), [alpha, beta, delta, epsilon])
+        XCTAssertEqual(persistence.records, [gamma, alpha, beta, delta, epsilon, zeta])
 
         capacity = 6
+        controller.applyCapacity()
+        XCTAssertEqual(
+            controller.entries.map(\.record),
+            [gamma, alpha, beta, delta, epsilon, zeta]
+        )
+
+        controller.remove(try XCTUnwrap(controller.entries.first))
+        XCTAssertEqual(controller.entries.map(\.record), [alpha, beta, delta, epsilon, zeta])
+        XCTAssertEqual(persistence.records, [alpha, beta, delta, epsilon, zeta])
+
         controller.note(URL(fileURLWithPath: zeta.exactPath))
         XCTAssertEqual(
             controller.entries.map(\.id),

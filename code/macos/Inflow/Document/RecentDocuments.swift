@@ -288,6 +288,7 @@ final class RecentDocumentsController: NSObject, ObservableObject {
     @Published private(set) var entries: [RecentDocumentEntry] = []
 
     private let persistence: RecentDocumentPersistence
+    private var storedRecords: [RecentDocumentRecord] = []
     private let capacity: () -> Int
     private let openBehavior: () -> MarkdownOpenBehavior
     private let bookmarkData: (URL) -> Data?
@@ -318,7 +319,7 @@ final class RecentDocumentsController: NSObject, ObservableObject {
         self.bookmarkData = bookmarkData
         self.systemSynchronizer = systemSynchronizer
         super.init()
-        replace(with: normalized(persistence.load()), synchronizeSystem: false)
+        replaceStoredRecords(with: persistence.load(), synchronizeSystem: false)
     }
 
     func installMenuIntegration() {
@@ -343,32 +344,32 @@ final class RecentDocumentsController: NSObject, ObservableObject {
         guard url.isFileURL else { return }
         let exactURL = url.standardizedFileURL
         let identity = RecentDocumentEntry.identity(for: exactURL)
-        var records = entries.map(\.record)
+        var records = storedRecords
         records.removeAll { $0.exactPath == identity }
         records.insert(
             RecentDocumentRecord(exactPath: identity, bookmark: bookmarkData(exactURL)),
             at: 0
         )
-        replace(with: records, synchronizeSystem: true)
+        replaceStoredRecords(with: records, synchronizeSystem: true)
     }
 
     func refresh() {
-        replace(with: normalized(persistence.load()), synchronizeSystem: false)
+        replaceStoredRecords(with: persistence.load(), synchronizeSystem: false)
     }
 
     func applyCapacity() {
-        replace(with: entries.map(\.record), synchronizeSystem: true)
+        publishVisibleEntries(synchronizeSystem: true)
     }
 
     func remove(_ entry: RecentDocumentEntry) {
-        replace(
-            with: entries.map(\.record).filter { $0.exactPath != entry.id },
+        replaceStoredRecords(
+            with: storedRecords.filter { $0.exactPath != entry.id },
             synchronizeSystem: true
         )
     }
 
     func clear() {
-        replace(with: [], synchronizeSystem: true)
+        replaceStoredRecords(with: [], synchronizeSystem: true)
     }
 
     @objc private func openRecentMenuItem(_ sender: NSMenuItem) {
@@ -559,10 +560,22 @@ final class RecentDocumentsController: NSObject, ObservableObject {
         )
     }
 
-    private func replace(with records: [RecentDocumentRecord], synchronizeSystem: Bool) {
-        let retained = Array(normalized(records).prefix(RecentDocumentPolicy.clampCapacity(capacity())))
-        entries = retained.map(RecentDocumentEntry.init(record:))
-        persistence.save(retained)
+    private func replaceStoredRecords(
+        with records: [RecentDocumentRecord],
+        synchronizeSystem: Bool
+    ) {
+        storedRecords = Array(
+            normalized(records).prefix(RecentDocumentPolicy.capacityRange.upperBound)
+        )
+        persistence.save(storedRecords)
+        publishVisibleEntries(synchronizeSystem: synchronizeSystem)
+    }
+
+    private func publishVisibleEntries(synchronizeSystem: Bool) {
+        let visibleRecords = storedRecords.prefix(
+            RecentDocumentPolicy.clampCapacity(capacity())
+        )
+        entries = visibleRecords.map(RecentDocumentEntry.init(record:))
         if synchronizeSystem {
             systemSynchronizer(entries)
         }

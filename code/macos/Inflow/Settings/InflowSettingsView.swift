@@ -1,51 +1,130 @@
 import SwiftUI
 
+enum InflowSettingsSection: String, CaseIterable, Identifiable, Sendable {
+    case general
+    case writing
+    case preview
+    case resources
+    case accessibility
+    case privacy
+
+    var id: Self { self }
+
+    var label: String {
+        switch self {
+        case .general: "通用"
+        case .writing: "写作"
+        case .preview: "预览"
+        case .resources: "资源"
+        case .accessibility: "辅助功能"
+        case .privacy: "隐私"
+        }
+    }
+
+    var preferenceGroup: AppPreferenceGroup? {
+        AppPreferenceGroup(rawValue: rawValue)
+    }
+}
+
+enum SettingsResetScope: Equatable, Sendable {
+    case current(InflowSettingsSection)
+    case all
+
+    var menuTitle: String {
+        switch self {
+        case let .current(section): "恢复“\(section.label)”默认设置…"
+        case .all: "恢复全部默认设置…"
+        }
+    }
+}
+
+enum SettingsResetPrompt {
+    static let title = "恢复默认设置？"
+    static let message = "只会重置所选偏好，不会删除任何用户内容或记录。"
+    static let confirmTitle = "恢复默认"
+    static let cancelTitle = "取消"
+}
+
 struct InflowSettingsView: View {
     @ObservedObject var preferences: AppPreferences
     @ObservedObject var anonymousUsage: AnonymousUsageDataController
     @ObservedObject var recentDocuments: RecentDocumentsController
-    @State private var isResetConfirmationPresented = false
+    @State private var selectedSection = InflowSettingsSection.general
+    @State private var pendingResetScope: SettingsResetScope?
 
     var body: some View {
-        TabView {
+        TabView(selection: $selectedSection) {
             generalSettings
                 .tabItem { Label("通用", systemImage: "gearshape") }
+                .tag(InflowSettingsSection.general)
 
             writingSettings
                 .tabItem { Label("写作", systemImage: "pencil") }
+                .tag(InflowSettingsSection.writing)
 
             previewSettings
                 .tabItem { Label("预览", systemImage: "doc.richtext") }
+                .tag(InflowSettingsSection.preview)
 
             resourceSettings
                 .tabItem { Label("资源", systemImage: "photo.on.rectangle") }
+                .tag(InflowSettingsSection.resources)
 
             accessibilitySettings
                 .tabItem { Label("辅助功能", systemImage: "accessibility") }
+                .tag(InflowSettingsSection.accessibility)
 
             AnonymousUsagePrivacyView(controller: anonymousUsage)
                 .tabItem { Label("隐私", systemImage: "hand.raised") }
+                .tag(InflowSettingsSection.privacy)
         }
         .padding(20)
         .frame(width: 620, height: 470)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("恢复默认…") {
-                    isResetConfirmationPresented = true
+                Menu("恢复默认…") {
+                    Button(SettingsResetScope.current(selectedSection).menuTitle) {
+                        pendingResetScope = .current(selectedSection)
+                    }
+                    Button(SettingsResetScope.all.menuTitle) {
+                        pendingResetScope = .all
+                    }
                 }
             }
         }
         .confirmationDialog(
-            "恢复写作与预览默认设置？",
-            isPresented: $isResetConfirmationPresented
+            SettingsResetPrompt.title,
+            isPresented: Binding(
+                get: { pendingResetScope != nil },
+                set: { if !$0 { pendingResetScope = nil } }
+            ),
+            titleVisibility: .visible
         ) {
-            Button("恢复默认", role: .destructive) {
-                preferences.resetWritingAndPreview()
+            Button(SettingsResetPrompt.confirmTitle, role: .destructive) {
+                applyPendingReset()
             }
-            Button("取消", role: .cancel) {}
+            Button(SettingsResetPrompt.cancelTitle, role: .cancel) {
+                pendingResetScope = nil
+            }
         } message: {
-            Text("只会重置本页设置，不会删除文档、自动恢复副本或最近打开记录。")
+            Text(SettingsResetPrompt.message)
         }
+    }
+
+    private func applyPendingReset() {
+        guard let pendingResetScope else { return }
+        switch pendingResetScope {
+        case let .current(section):
+            if let group = section.preferenceGroup {
+                preferences.reset(group)
+            } else {
+                anonymousUsage.disable(clearPending: false)
+            }
+        case .all:
+            preferences.resetAll()
+            anonymousUsage.disable(clearPending: false)
+        }
+        self.pendingResetScope = nil
     }
 
     private var generalSettings: some View {

@@ -130,48 +130,113 @@ final class AppPreferencesTests: XCTestCase {
         }
     }
 
-    func testResetOnlyChangesWritingPreviewAndAccessibilityPreferences() {
+    func testGroupResetOnlyChangesTheSelectedPreferenceGroup() {
         withDefaults { defaults in
             defaults.set("recovery-sentinel", forKey: "document.recovery.record")
             let preferences = AppPreferences(defaults: defaults)
             preferences.editorFontSize = 27
             preferences.previewZoom = 1.8
-            preferences.previewTheme = .code
             preferences.syntaxHighlightingEnabled = false
-            preferences.wrapsLines = false
-            preferences.showsLineNumbers = true
             preferences.scrollSyncEnabled = false
-            preferences.headingNavigationEnabled = false
-            preferences.mathRenderingEnabled = false
-            preferences.mermaidRenderingEnabled = false
             preferences.increasedContrast = .enabled
             preferences.recordActiveEditorViewMode(.source)
             preferences.recentDocumentCapacity = 31
             preferences.markdownOpenBehavior = .reuseBlankWindow
             preferences.autosaveEnabled = false
             preferences.autosaveDelay = .twoSeconds
+            preferences.existingImagePlacement = .keepOriginal
 
-            preferences.resetWritingAndPreview()
+            preferences.reset(.writing)
 
             XCTAssertEqual(preferences.editorFontSize, 15)
-            XCTAssertEqual(preferences.previewZoom, 1)
-            XCTAssertEqual(preferences.previewTheme, .standard)
             XCTAssertTrue(preferences.syntaxHighlightingEnabled)
-            XCTAssertTrue(preferences.wrapsLines)
-            XCTAssertFalse(preferences.showsLineNumbers)
-            XCTAssertTrue(preferences.scrollSyncEnabled)
-            XCTAssertTrue(preferences.headingNavigationEnabled)
-            XCTAssertTrue(preferences.mathRenderingEnabled)
-            XCTAssertTrue(preferences.mermaidRenderingEnabled)
-            XCTAssertEqual(preferences.increasedContrast, .followSystem)
+            XCTAssertEqual(preferences.previewZoom, 1.8)
+            XCTAssertFalse(preferences.scrollSyncEnabled)
+            XCTAssertEqual(preferences.increasedContrast, .enabled)
             XCTAssertEqual(preferences.lastActiveEditorViewMode, .source)
             XCTAssertEqual(preferences.recentDocumentCapacity, 31)
             XCTAssertEqual(preferences.markdownOpenBehavior, .reuseBlankWindow)
             XCTAssertFalse(preferences.autosaveEnabled)
             XCTAssertEqual(preferences.autosaveDelay, .twoSeconds)
+            XCTAssertEqual(preferences.existingImagePlacement, .keepOriginal)
             XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
             XCTAssertEqual(defaults.string(forKey: "document.recovery.record"), "recovery-sentinel")
         }
+    }
+
+    func testResetAllReturnsEveryLaunchPreferenceToDefaultWithoutDeletingOtherRecords() {
+        withDefaults { defaults in
+            defaults.set("recovery-sentinel", forKey: "document.recovery.record")
+            defaults.set("recent-sentinel", forKey: RecentDocumentPolicy.recordsKey)
+            let preferences = AppPreferences(defaults: defaults)
+            preferences.editorFontSize = 27
+            preferences.editorLineHeight = 1.9
+            preferences.syntaxHighlightingEnabled = false
+            preferences.spellingEnabled = false
+            preferences.wrapsLines = false
+            preferences.showsLineNumbers = true
+            preferences.scrollSyncEnabled = false
+            preferences.headingNavigationEnabled = false
+            preferences.previewContentWidth = 1_040
+            preferences.previewZoom = 1.8
+            preferences.previewColorScheme = .dark
+            preferences.previewTheme = .code
+            preferences.mathRenderingEnabled = false
+            preferences.mermaidRenderingEnabled = false
+            preferences.increasedContrast = .enabled
+            preferences.reduceMotion = .disabled
+            preferences.recordActiveEditorViewMode(.source)
+            preferences.recentDocumentCapacity = 31
+            preferences.markdownOpenBehavior = .reuseBlankWindow
+            preferences.autosaveEnabled = false
+            preferences.autosaveDelay = .fiveSeconds
+            preferences.existingImagePlacement = .keepOriginal
+
+            preferences.resetAll()
+
+            XCTAssertEqual(preferences.editorFontSize, 15)
+            XCTAssertEqual(preferences.editorLineHeight, 1.6)
+            XCTAssertTrue(preferences.syntaxHighlightingEnabled)
+            XCTAssertTrue(preferences.spellingEnabled)
+            XCTAssertTrue(preferences.wrapsLines)
+            XCTAssertFalse(preferences.showsLineNumbers)
+            XCTAssertTrue(preferences.scrollSyncEnabled)
+            XCTAssertTrue(preferences.headingNavigationEnabled)
+            XCTAssertEqual(preferences.previewContentWidth, 760)
+            XCTAssertEqual(preferences.previewZoom, 1)
+            XCTAssertEqual(preferences.previewColorScheme, .system)
+            XCTAssertEqual(preferences.previewTheme, .standard)
+            XCTAssertTrue(preferences.mathRenderingEnabled)
+            XCTAssertTrue(preferences.mermaidRenderingEnabled)
+            XCTAssertEqual(preferences.increasedContrast, .followSystem)
+            XCTAssertEqual(preferences.reduceMotion, .followSystem)
+            XCTAssertEqual(preferences.lastActiveEditorViewMode, .split)
+            XCTAssertEqual(preferences.recentDocumentCapacity, 20)
+            XCTAssertEqual(preferences.markdownOpenBehavior, .newWindow)
+            XCTAssertTrue(preferences.autosaveEnabled)
+            XCTAssertEqual(preferences.autosaveDelay, .oneSecond)
+            XCTAssertEqual(preferences.existingImagePlacement, .copyToAssets)
+            XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 1)
+            XCTAssertEqual(defaults.string(forKey: "document.recovery.record"), "recovery-sentinel")
+            XCTAssertEqual(defaults.string(forKey: RecentDocumentPolicy.recordsKey), "recent-sentinel")
+        }
+    }
+
+    func testSettingsResetUsesFrozenCopyAndNamesCurrentOrAllScope() {
+        XCTAssertEqual(SettingsResetPrompt.title, "恢复默认设置？")
+        XCTAssertEqual(
+            SettingsResetPrompt.message,
+            "只会重置所选偏好，不会删除任何用户内容或记录。"
+        )
+        XCTAssertEqual(SettingsResetPrompt.confirmTitle, "恢复默认")
+        XCTAssertEqual(SettingsResetPrompt.cancelTitle, "取消")
+        XCTAssertEqual(
+            SettingsResetScope.current(.resources).menuTitle,
+            "恢复“资源”默认设置…"
+        )
+        XCTAssertEqual(SettingsResetScope.all.menuTitle, "恢复全部默认设置…")
+        XCTAssertNil(InflowSettingsSection.privacy.preferenceGroup)
+        XCTAssertEqual(InflowSettingsSection.preview.preferenceGroup, .preview)
     }
 
     func testAutosavePolicySupportsEveryContractDelayAndKeepsManualSaveAvailable() {
