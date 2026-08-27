@@ -132,11 +132,33 @@ fn safe_events(
             } else {
                 events.push(sanitize_event(event));
             }
+        } else if let Event::InlineMath(source) = &event {
+            events.push(render_math(
+                source,
+                false,
+                (!neutralize_delivery_links).then_some(&event_range),
+            ));
+        } else if let Event::DisplayMath(source) = &event {
+            events.push(render_math(
+                source,
+                true,
+                (!neutralize_delivery_links).then_some(&event_range),
+            ));
         } else {
             events.push(sanitize_event(event));
         }
     }
     events
+}
+
+fn render_math(
+    source: &str,
+    display: bool,
+    source_range: Option<&std::ops::Range<usize>>,
+) -> Event<'static> {
+    let markup = math::mathml(source, display)
+        .unwrap_or_else(|error| math::fallback(source, error, display, source_range));
+    Event::InlineHtml(markup.into())
 }
 
 pub(crate) fn is_portable_link(destination: &str) -> bool {
@@ -187,8 +209,6 @@ fn options_with_configuration(configuration: RenderConfiguration) -> Options {
 fn sanitize_event(event: Event<'_>) -> Event<'_> {
     match event {
         Event::Html(raw_html) | Event::InlineHtml(raw_html) => Event::Text(raw_html),
-        Event::InlineMath(source) => Event::InlineHtml(math::mathml(&source, false).into()),
-        Event::DisplayMath(source) => Event::InlineHtml(math::mathml(&source, true).into()),
         other => other,
     }
 }
@@ -265,6 +285,26 @@ mod tests {
         assert!(html.contains("<msubsup>") || html.contains("<msup>"));
         assert!(html.contains("<mfrac>"));
         assert!(!html.contains("<script"));
+    }
+
+    #[test]
+    fn localizes_formula_failure_with_preview_actions_and_delivery_privacy() {
+        let markdown = "Before $\\unknown{x}$ after";
+        let preview = html_fragment(markdown);
+        let formula_start = markdown.find('$').unwrap();
+        let formula_end = markdown.rfind('$').unwrap() + 1;
+        assert!(preview.contains("无法呈现这个公式"));
+        assert!(preview.contains(&format!("data-inflow-source-start=\"{formula_start}\"")));
+        assert!(preview.contains(&format!("data-inflow-source-end=\"{formula_end}\"")));
+        assert!(preview.contains("data-inflow-preview-error-action=\"locate\""));
+        assert!(preview.contains("<p>Before "));
+        assert!(preview.contains(" after</p>"));
+
+        let delivery = html_fragment_for_delivery(markdown, RenderConfiguration::default());
+        assert!(delivery.contains("无法呈现这个公式"));
+        assert!(!delivery.contains("data-inflow-source-start"));
+        assert!(!delivery.contains("data-inflow-preview-error-action"));
+        assert!(!delivery.contains("<button"));
     }
 
     #[test]

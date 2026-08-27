@@ -147,6 +147,10 @@ const DOCUMENT_PREFIX: &str = r#"<!doctype html>
     img { display: block; max-width: 100%; height: auto; margin: 1em 0; }
     math { font-family: STIX Two Math, STIXGeneral, serif; }
     math[display="block"] { display: block; max-width: 100%; overflow-x: auto; margin: 1.2em 0; text-align: center; }
+    .math-error { border: 1px solid #d4a72c; border-radius: 8px; padding: 12px 14px; color: #9a6700; }
+    .math-error-inline { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: .35em; margin: 0 .15em; }
+    .math-error pre { margin: 10px 0 0; }
+    .math-error-inline code { max-width: 100%; overflow-wrap: anywhere; }
     .mermaid-diagram { margin: 1.4em 0; overflow-x: auto; }
     .mermaid-diagram svg { min-width: 420px; width: 100%; height: auto; color: currentColor; }
     .mermaid-diagram .node rect { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
@@ -168,6 +172,7 @@ const DOCUMENT_PREFIX: &str = r#"<!doctype html>
       .tok-tag { color: #7ee787; }
       hr { background: #30363d; }
       .mermaid-diagram .node rect { fill: #161b22; stroke: #8b949e; }
+      .math-error { color: #d29922; border-color: #9e6a03; }
       .mermaid-error { color: #d29922; border-color: #9e6a03; }
     }
   </style>

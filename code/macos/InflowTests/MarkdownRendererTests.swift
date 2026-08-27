@@ -159,6 +159,25 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertFalse(fragment.contains("<script"))
     }
 
+    func testFormulaFailureCarriesSafeSourceLocationAndRecoveryActions() throws {
+        let source = "前文 $\\unknown{<script>}$ 后文"
+        let fragment = try MarkdownRenderer.htmlFragment(for: source)
+        let formula = try XCTUnwrap(source.range(of: "$\\unknown{<script>}$"))
+        let lower = try XCTUnwrap(formula.lowerBound.samePosition(in: source.utf8))
+        let upper = try XCTUnwrap(formula.upperBound.samePosition(in: source.utf8))
+        let start = source.utf8.distance(from: source.utf8.startIndex, to: lower)
+        let end = source.utf8.distance(from: source.utf8.startIndex, to: upper)
+
+        XCTAssertTrue(fragment.contains("无法呈现这个公式"))
+        XCTAssertTrue(fragment.contains("原内容已保留，当前文档的其他内容和其他文档不受影响。"))
+        XCTAssertTrue(fragment.contains("data-inflow-source-start=\"\(start)\""))
+        XCTAssertTrue(fragment.contains("data-inflow-source-end=\"\(end)\""))
+        XCTAssertTrue(fragment.contains("data-inflow-preview-error-action=\"locate\""))
+        XCTAssertTrue(fragment.contains("data-inflow-preview-error-action=\"retry\""))
+        XCTAssertTrue(fragment.contains("&lt;script&gt;"))
+        XCTAssertFalse(fragment.contains("<script>"))
+    }
+
     func testPreviewDocumentForbidsScriptsAndNetworkRequests() {
         let html = MarkdownRenderer.htmlDocument(for: "# Safe preview")
 

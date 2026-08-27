@@ -174,6 +174,23 @@ final class HTMLExporterTests: XCTestCase {
         XCTAssertFalse(html.contains("<script"))
     }
 
+    func testExportedFormulaFallbackHasNoEditorOffsetsOrDeadActions() throws {
+        let data = try HTMLExporter.generate(
+            snapshot: HTMLExportSnapshot(
+                markdown: "Before $\\unknown{<script>}$ after"
+            )
+        )
+        let html = try XCTUnwrap(String(data: data, encoding: .utf8))
+
+        XCTAssertTrue(html.contains("无法呈现这个公式"))
+        XCTAssertTrue(html.contains("\\unknown{&lt;script&gt;}"))
+        XCTAssertFalse(html.contains("<script>"))
+        XCTAssertFalse(html.contains("data-inflow-source-start"))
+        XCTAssertFalse(html.contains("data-inflow-source-end"))
+        XCTAssertFalse(html.contains("data-inflow-preview-error-action"))
+        XCTAssertFalse(html.contains("<button"))
+    }
+
     func testExportRendersMermaidAsSelfContainedSVG() throws {
         let data = try HTMLExporter.generate(
             snapshot: HTMLExportSnapshot(
