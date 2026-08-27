@@ -87,6 +87,8 @@ final class MarkdownCodecTests: XCTestCase {
             backing: .buffered,
             defer: false
         )
+        window.animationBehavior = .none
+        window.isReleasedWhenClosed = false
         window.makeKeyAndOrderFront(nil)
         XCTAssertTrue(window.isVisible)
 
@@ -106,6 +108,8 @@ final class MarkdownCodecTests: XCTestCase {
             backing: .buffered,
             defer: false
         )
+        window.animationBehavior = .none
+        window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(
             rootView: MarkdownDocumentEditorHarness(model: model)
         )
