@@ -115,6 +115,58 @@ final class DocumentFileSafetyTests: XCTestCase {
         XCTAssertFalse(first.hasSameFacts(as: changedAgain))
     }
 
+    func testOnlyDirectoryMutatingConflictActionsRequireExactDirectoryAccess() {
+        let url = URL(fileURLWithPath: "/tmp/notes.md")
+        let baseline = Data("baseline".utf8)
+        let disk = Data("disk".utf8)
+        let unchangedLocal = DocumentFileConflictSnapshot(
+            url: url,
+            baselineData: baseline,
+            baselineText: "baseline",
+            localData: baseline,
+            localText: "baseline",
+            diskData: disk,
+            diskText: "disk",
+            diskExists: true
+        )
+        let changedLocal = DocumentFileConflictSnapshot(
+            url: url,
+            baselineData: baseline,
+            baselineText: "baseline",
+            localData: Data("local".utf8),
+            localText: "local",
+            diskData: disk,
+            diskText: "disk",
+            diskExists: true
+        )
+        let deleted = DocumentFileConflictSnapshot(
+            url: url,
+            baselineData: baseline,
+            baselineText: "baseline",
+            localData: Data("local".utf8),
+            localText: "local",
+            diskData: nil,
+            diskText: nil,
+            diskExists: false
+        )
+
+        XCTAssertNil(DocumentFileSafetyState.safe.directoryMutationSnapshotID)
+        XCTAssertNil(
+            DocumentFileSafetyState.readOnly(url).directoryMutationSnapshotID
+        )
+        XCTAssertNil(
+            DocumentFileSafetyState.changed(unchangedLocal).directoryMutationSnapshotID
+        )
+        XCTAssertEqual(
+            DocumentFileSafetyState.changed(changedLocal).directoryMutationSnapshotID,
+            changedLocal.id
+        )
+        XCTAssertEqual(
+            DocumentFileSafetyState.deleted(deleted).directoryMutationSnapshotID,
+            deleted.id
+        )
+    }
+
     func testWriteGuardAllowsOwnSaveAndAdoptsCompletedWrite() throws {
         let fixture = try FileSafetyFixture()
         defer { fixture.remove() }

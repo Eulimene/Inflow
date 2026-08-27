@@ -371,6 +371,19 @@ enum DocumentFileSafetyState {
         if case .readOnly = self { return true }
         return false
     }
+
+    /// The exact disk snapshot whose recovery action must create a sibling file.
+    /// A new snapshot ID means the user must make a new directory-access decision.
+    var directoryMutationSnapshotID: DocumentFileConflictSnapshot.ID? {
+        switch self {
+        case let .changed(snapshot) where snapshot.localHasChanges:
+            snapshot.id
+        case let .deleted(snapshot):
+            snapshot.id
+        case .safe, .readOnly, .changed:
+            nil
+        }
+    }
 }
 
 @MainActor
