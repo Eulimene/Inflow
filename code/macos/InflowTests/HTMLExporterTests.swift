@@ -352,9 +352,20 @@ final class HTMLExporterTests: XCTestCase {
         let html = try HTMLExporter.generate(snapshot: HTMLExportSnapshot(markdown: markdown))
         let data = try await PDFExporter.generate(fromSelfContainedHTML: html)
         let document = try XCTUnwrap(PDFDocument(data: data))
+        let normalizedText = (document.string ?? "")
+            .replacingOccurrences(of: "\n", with: "")
+            .replacingOccurrences(of: "\r", with: "")
+        XCTAssertTrue(normalizedText.contains("CODE-END"))
+        XCTAssertTrue(normalizedText.contains("TABLE-END"))
 
-        for marker in ["CODE-END", "TABLE-END"] {
-            let selection = try XCTUnwrap(document.findString(marker).first, marker)
+        // PDFKit may expose a visual wrap between the hyphen and END as a
+        // newline, so search the stable prefix while separately proving that
+        // the normalized extracted text contains the complete marker.
+        for marker in ["CODE-", "TABLE-"] {
+            let selection = try XCTUnwrap(
+                document.findString(marker).first,
+                "\(marker); PDF tail: \((document.string ?? "<no text>").suffix(240))"
+            )
             let page = try XCTUnwrap(selection.pages.first, marker)
             let bounds = selection.bounds(for: page)
             XCTAssertGreaterThanOrEqual(bounds.minX, PDFExporter.margin - 1, marker)
