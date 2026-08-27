@@ -317,6 +317,34 @@ enum MixedLineEndingPrompt {
     }
 }
 
+private struct RelativeResourceDirectoryAccessBanner: View {
+    let directory: URL
+    let onAuthorize: () -> Void
+    let onDefer: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "folder.badge.questionmark")
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("允许访问「\(directory.lastPathComponent)」？")
+                    .font(.headline)
+                Text(ImageAssetPicker.resourceDirectoryPromptMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+            Button("选择目录…", action: onAuthorize)
+            Button("暂不", action: onDefer)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.08))
+        .accessibilityElement(children: .contain)
+    }
+}
+
 enum DeferredImageInsertion: Equatable {
     case chooseExistingImage
     case paste(ClipboardImagePayload)
@@ -409,6 +437,8 @@ struct MarkdownEditorView: View {
     @State private var previewHTML = MarkdownRenderer.htmlDocument(for: "")
     @State private var previewSourceSnapshot = ""
     @State private var previewFailureMessage: String?
+    @State private var relativeResourceSourceSnapshot = ""
+    @State private var hasRelativeResources = false
     @State private var analysisState = DocumentAnalysisState.updating(previous: .empty)
     @State private var derivedContentGeneration = 0
     @State private var derivedContentTask: Task<Void, Never>?
@@ -450,6 +480,8 @@ struct MarkdownEditorView: View {
     @State private var deferredImageInsertionQueue = DeferredImageInsertionQueue()
     @State private var imageAssetWorker = ImageAssetWorker()
     @StateObject private var imageDirectoryAccess = ImageAssetDirectoryAccess()
+    @State private var deferredResourceDirectoryPath: String?
+    @State private var resourceDirectoryAccessErrorMessage: String?
     @State private var recoveryRecordID = UUID()
     @State private var isRecoveryCenterPresented = false
     @State private var didApplyRestorationState = false
@@ -496,6 +528,22 @@ struct MarkdownEditorView: View {
         return fileSafetySession.state
     }
 
+    private var pendingResourceDirectoryAuthorization: URL? {
+        guard let fileURL,
+              UTF8Text.isExactlyEqual(relativeResourceSourceSnapshot, document.text),
+              hasRelativeResources
+        else {
+            return nil
+        }
+        let directory = fileURL.deletingLastPathComponent().standardizedFileURL
+        guard !imageDirectoryAccess.isAuthorized(directory),
+              deferredResourceDirectoryPath != directory.path
+        else {
+            return nil
+        }
+        return directory
+    }
+
     var body: some View {
         presentationLayer
     }
@@ -534,6 +582,15 @@ struct MarkdownEditorView: View {
                     )
                 }
             )
+
+            if let directory = pendingResourceDirectoryAuthorization {
+                RelativeResourceDirectoryAccessBanner(
+                    directory: directory,
+                    onAuthorize: { authorizeRelativeResourceDirectory(directory) },
+                    onDefer: { deferredResourceDirectoryPath = directory.path }
+                )
+                Divider()
+            }
 
             if let activeExportProgress {
                 ExportProgressBanner(
@@ -617,6 +674,7 @@ struct MarkdownEditorView: View {
             // Apply the host policy only after this document scene is attached.
             preferences.applyAutosavePolicy()
             registerDocumentNavigation(url: fileURL)
+            restoreRelativeResourceDirectoryAccess(for: fileURL)
             if let fileURL {
                 recentDocuments?.note(fileURL)
             }
@@ -688,6 +746,8 @@ struct MarkdownEditorView: View {
         }
         .onChange(of: fileURL) { _, newURL in
             releaseStaleDocumentSecurityScope(for: newURL)
+            deferredResourceDirectoryPath = nil
+            restoreRelativeResourceDirectoryAccess(for: newURL)
             registerDocumentNavigation(url: newURL)
             if let newURL {
                 recentDocuments?.note(newURL)
@@ -1039,6 +1099,17 @@ struct MarkdownEditorView: View {
             Button("好", role: .cancel) {}
         } message: {
             Text(markdownFormatErrorMessage ?? "正文未被修改。")
+        }
+        .alert(
+            "未能保留目录访问权限",
+            isPresented: Binding(
+                get: { resourceDirectoryAccessErrorMessage != nil },
+                set: { if !$0 { resourceDirectoryAccessErrorMessage = nil } }
+            )
+        ) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(resourceDirectoryAccessErrorMessage ?? "文档和资源未被修改。")
         }
     }
 
@@ -2050,6 +2121,31 @@ struct MarkdownEditorView: View {
         importExistingImage(from: nil)
     }
 
+    private func restoreRelativeResourceDirectoryAccess(for documentURL: URL?) {
+        guard let directory = documentURL?.deletingLastPathComponent() else { return }
+        _ = imageDirectoryAccess.restoreAuthorization(for: directory)
+    }
+
+    private func authorizeRelativeResourceDirectory(_ directory: URL) {
+        let window = sourceEditorSession.textView.window ?? NSApp.keyWindow
+        Task { @MainActor in
+            do {
+                guard let authorized = try await ImageAssetPicker.authorizeRelativeResources(
+                    in: directory,
+                    attachedTo: window
+                ) else {
+                    return
+                }
+                try imageDirectoryAccess.authorizePersistently(authorized)
+                deferredResourceDirectoryPath = nil
+                retryPreview()
+            } catch {
+                resourceDirectoryAccessErrorMessage =
+                    "请选择当前 Markdown 文档所在的精确目录。文档和资源未被修改。"
+            }
+        }
+    }
+
     private func dropImage(_ sourceURL: URL) {
         guard fileURL != nil else {
             deferImageInsertionUntilFirstSave(.drop(sourceURL))
@@ -2283,7 +2379,7 @@ struct MarkdownEditorView: View {
             ) else {
                 return nil
             }
-            imageDirectoryAccess.authorize(authorizedDirectory)
+            try imageDirectoryAccess.authorizePersistently(authorizedDirectory)
             return .assets(in: authorizedDirectory)
         case .copyToRelativeDirectory:
             guard let plan = try await ImageAssetPicker.chooseRelativeAssetDirectory(
@@ -3165,6 +3261,8 @@ struct MarkdownEditorView: View {
             previewHTML = content.html
             previewSourceSnapshot = content.sourceSnapshot
             previewFailureMessage = content.previewFailureMessage
+            relativeResourceSourceSnapshot = content.sourceSnapshot
+            hasRelativeResources = content.hasRelativeResources
             _ = sourceEditorSession.applySyntaxHighlighting(
                 content.syntaxHighlighting,
                 source: markdown,
@@ -3274,6 +3372,7 @@ private struct DerivedDocumentContent: Sendable {
     let sourceSnapshot: String
     let html: String
     let previewFailureMessage: String?
+    let hasRelativeResources: Bool
     let analysis: DocumentAnalysisOutcome
     let syntaxHighlighting: [MarkdownSyntaxSpan]
 }
@@ -3326,6 +3425,7 @@ private actor DocumentContentDeriver {
             sourceSnapshot: markdown,
             html: previewDocument.html,
             previewFailureMessage: previewDocument.failureMessage,
+            hasRelativeResources: previewDocument.hasRelativeResources,
             analysis: analysis,
             syntaxHighlighting: syntaxHighlighting
         )

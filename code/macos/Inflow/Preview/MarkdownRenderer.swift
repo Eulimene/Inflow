@@ -24,6 +24,7 @@ enum PreviewFailurePrompt {
 struct MarkdownPreviewDocument: Equatable, Sendable {
     let html: String
     let failureMessage: String?
+    let hasRelativeResources: Bool
 }
 
 enum MarkdownRenderer {
@@ -116,14 +117,17 @@ enum MarkdownRenderer {
                     ),
                     configuration: configuration
                 ),
-                failureMessage: nil
+                failureMessage: nil,
+                hasRelativeResources: RelativeResourceDirectoryPolicy
+                    .hasRelativeResources(in: references)
             )
         } catch {
             let message = (error as? LocalizedError)?.errorDescription
                 ?? MarkdownRenderError.coreFailure.localizedDescription
             return MarkdownPreviewDocument(
                 html: errorDocument(configuration: configuration),
-                failureMessage: message
+                failureMessage: message,
+                hasRelativeResources: false
             )
         }
     }

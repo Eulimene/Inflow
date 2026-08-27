@@ -894,33 +894,176 @@ actor ImageAssetWorker {
     }
 }
 
+struct ResourceDirectoryAuthorizationRecord: Codable, Equatable, Sendable {
+    let exactPath: String
+    let bookmark: Data
+    let authorizedAt: Date
+}
+
+@MainActor
+protocol ResourceDirectoryAuthorizationPersistence: AnyObject {
+    func load() -> [ResourceDirectoryAuthorizationRecord]
+    func save(_ records: [ResourceDirectoryAuthorizationRecord])
+}
+
+@MainActor
+final class UserDefaultsResourceDirectoryAuthorizationPersistence:
+    ResourceDirectoryAuthorizationPersistence
+{
+    static let recordsKey = "resources.directory-authorizations.v1"
+
+    private let defaults: UserDefaults
+    private let key: String
+
+    init(
+        defaults: UserDefaults = .standard,
+        key: String = UserDefaultsResourceDirectoryAuthorizationPersistence.recordsKey
+    ) {
+        self.defaults = defaults
+        self.key = key
+    }
+
+    func load() -> [ResourceDirectoryAuthorizationRecord] {
+        guard let data = defaults.data(forKey: key) else { return [] }
+        return (try? JSONDecoder().decode(
+            [ResourceDirectoryAuthorizationRecord].self,
+            from: data
+        )) ?? []
+    }
+
+    func save(_ records: [ResourceDirectoryAuthorizationRecord]) {
+        guard let data = try? JSONEncoder().encode(records) else { return }
+        defaults.set(data, forKey: key)
+    }
+}
+
 @MainActor
 final class ImageAssetDirectoryAccess: ObservableObject {
+    typealias BookmarkResolver = (Data) -> (url: URL, isStale: Bool)?
+
     private struct Access {
         let url: URL
         let isSecurityScopeActive: Bool
     }
 
+    @Published private(set) var authorizationVersion = 0
+
+    private static let maximumPersistedDirectories = 100
     private var accesses: [String: Access] = [:]
+    private let persistence: ResourceDirectoryAuthorizationPersistence
+    private let bookmarkData: (URL) throws -> Data
+    private let resolveBookmark: BookmarkResolver
+    private let beginAccess: (URL) -> Bool
+    private let endAccess: (URL) -> Void
+
+    init(
+        persistence: ResourceDirectoryAuthorizationPersistence =
+            UserDefaultsResourceDirectoryAuthorizationPersistence(),
+        bookmarkData: @escaping (URL) throws -> Data = { url in
+            try url.bookmarkData(
+                options: .withSecurityScope,
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+        },
+        resolveBookmark: @escaping BookmarkResolver = { data in
+            var stale = false
+            guard let url = try? URL(
+                resolvingBookmarkData: data,
+                options: [.withSecurityScope, .withoutUI],
+                relativeTo: nil,
+                bookmarkDataIsStale: &stale
+            ) else {
+                return nil
+            }
+            return (url, stale)
+        },
+        beginAccess: @escaping (URL) -> Bool = {
+            $0.startAccessingSecurityScopedResource()
+        },
+        endAccess: @escaping (URL) -> Void = {
+            $0.stopAccessingSecurityScopedResource()
+        }
+    ) {
+        self.persistence = persistence
+        self.bookmarkData = bookmarkData
+        self.resolveBookmark = resolveBookmark
+        self.beginAccess = beginAccess
+        self.endAccess = endAccess
+    }
 
     func authorize(_ url: URL) {
         let key = url.standardizedFileURL.path
         guard accesses[key] == nil else { return }
         accesses[key] = Access(
             url: url,
-            isSecurityScopeActive: url.startAccessingSecurityScopedResource()
+            isSecurityScopeActive: beginAccess(url)
         )
+        authorizationVersion &+= 1
+    }
+
+    func authorizePersistently(_ directory: URL, now: Date = Date()) throws {
+        let exactURL = directory.standardizedFileURL
+        let bookmark = try bookmarkData(exactURL)
+        var records = persistence.load().filter {
+            $0.exactPath != exactURL.path
+        }
+        records.insert(
+            ResourceDirectoryAuthorizationRecord(
+                exactPath: exactURL.path,
+                bookmark: bookmark,
+                authorizedAt: now
+            ),
+            at: 0
+        )
+        persistence.save(Array(records.prefix(Self.maximumPersistedDirectories)))
+        authorize(exactURL)
+    }
+
+    @discardableResult
+    func restoreAuthorization(for directory: URL) -> Bool {
+        let exactURL = directory.standardizedFileURL
+        var records = persistence.load()
+        guard let index = records.firstIndex(where: {
+            $0.exactPath == exactURL.path
+        }), let resolved = resolveBookmark(records[index].bookmark),
+              resolved.url.standardizedFileURL.path == exactURL.path
+        else {
+            records.removeAll { $0.exactPath == exactURL.path }
+            persistence.save(records)
+            return false
+        }
+
+        authorize(resolved.url)
+        if resolved.isStale, let refreshed = try? bookmarkData(resolved.url) {
+            records[index] = ResourceDirectoryAuthorizationRecord(
+                exactPath: exactURL.path,
+                bookmark: refreshed,
+                authorizedAt: records[index].authorizedAt
+            )
+            persistence.save(records)
+        }
+        return true
+    }
+
+    func isAuthorized(_ directory: URL) -> Bool {
+        accesses[directory.standardizedFileURL.path] != nil
     }
 
     deinit {
-        for access in accesses.values where access.isSecurityScopeActive {
-            access.url.stopAccessingSecurityScopedResource()
+        MainActor.assumeIsolated {
+            for access in accesses.values where access.isSecurityScopeActive {
+                endAccess(access.url)
+            }
         }
     }
 }
 
 @MainActor
 enum ImageAssetPicker {
+    static let resourceDirectoryPromptMessage =
+        "访问该目录后，Inflow 才能显示相对图片、打开链接或创建冲突副本。"
+
     static func chooseSource(attachedTo window: NSWindow?) async -> URL? {
         let panel = NSOpenPanel()
         panel.title = "选择图片"
@@ -995,6 +1138,36 @@ enum ImageAssetPicker {
             throw ImageAssetImportError.unauthorizedDirectory
         }
         return selected
+    }
+
+    static func authorizeRelativeResources(
+        in documentDirectory: URL,
+        attachedTo window: NSWindow?
+    ) async throws -> URL? {
+        let expected = documentDirectory.standardizedFileURL
+        let panel = NSOpenPanel()
+        panel.title = "允许访问「\(expected.lastPathComponent)」？"
+        panel.message = resourceDirectoryPromptMessage
+        panel.prompt = "选择目录…"
+        panel.directoryURL = expected
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = false
+        guard await run(panel, attachedTo: window) == .OK, let selected = panel.url else {
+            return nil
+        }
+        let selectedURL = selected.standardizedFileURL
+        let values = try selectedURL.resourceValues(forKeys: [
+            .isDirectoryKey,
+            .isSymbolicLinkKey,
+        ])
+        guard selectedURL.path == expected.path,
+              values.isDirectory == true,
+              values.isSymbolicLink != true
+        else {
+            throw ImageAssetImportError.unauthorizedDirectory
+        }
+        return selectedURL
     }
 
     static func chooseRelativeAssetDirectory(

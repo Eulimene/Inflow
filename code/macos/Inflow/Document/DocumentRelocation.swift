@@ -107,6 +107,30 @@ enum MarkdownReferenceScanner {
     }
 }
 
+enum RelativeResourceDirectoryPolicy {
+    static func hasRelativeResources(in markdown: String) -> Bool {
+        guard let references = try? MarkdownReferenceScanner.references(in: markdown) else {
+            return false
+        }
+        return hasRelativeResources(in: references)
+    }
+
+    static func hasRelativeResources(in references: [MarkdownReference]) -> Bool {
+        references.contains { isRelativeResourceTarget($0.target) }
+    }
+
+    static func isRelativeResourceTarget(_ target: String) -> Bool {
+        guard !target.isEmpty,
+              !target.hasPrefix("#"),
+              !target.hasPrefix("/"),
+              URL(string: target)?.scheme == nil
+        else {
+            return false
+        }
+        return true
+    }
+}
+
 enum DocumentRelocationImpact: String, Sendable {
     case unchanged
     case changed

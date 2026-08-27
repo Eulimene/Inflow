@@ -3,6 +3,72 @@ import XCTest
 @testable import Inflow
 
 final class MarkdownInsertionTests: XCTestCase {
+    @MainActor
+    func testRelativeResourceDirectoryPolicyAndFrozenPermissionCopy() {
+        XCTAssertFalse(RelativeResourceDirectoryPolicy.hasRelativeResources(in: "# Title"))
+        XCTAssertFalse(RelativeResourceDirectoryPolicy.hasRelativeResources(
+            in: "![remote](https://example.com/image.png) [heading](#part)"
+        ))
+        XCTAssertTrue(RelativeResourceDirectoryPolicy.hasRelativeResources(
+            in: "![local](assets/image.png) [guide](guide/readme.md)"
+        ))
+        XCTAssertEqual(
+            ImageAssetPicker.resourceDirectoryPromptMessage,
+            "访问该目录后，Inflow 才能显示相对图片、打开链接或创建冲突副本。"
+        )
+    }
+
+    @MainActor
+    func testDirectoryAuthorizationPersistsRestoresAndRejectsMovedBookmark() throws {
+        let exact = URL(fileURLWithPath: "/tmp/inflow-resources/document")
+        let moved = URL(fileURLWithPath: "/tmp/inflow-resources/moved")
+        let persistence = TestResourceDirectoryAuthorizationPersistence()
+        var started: [URL] = []
+        var stopped: [URL] = []
+
+        var manager: ImageAssetDirectoryAccess? = ImageAssetDirectoryAccess(
+            persistence: persistence,
+            bookmarkData: { url in Data(url.path.utf8) },
+            resolveBookmark: { _ in (exact, false) },
+            beginAccess: { url in
+                started.append(url)
+                return true
+            },
+            endAccess: { stopped.append($0) }
+        )
+        try manager?.authorizePersistently(
+            exact,
+            now: Date(timeIntervalSince1970: 1_000)
+        )
+        XCTAssertTrue(manager?.isAuthorized(exact) == true)
+        XCTAssertEqual(persistence.records.map(\.exactPath), [exact.path])
+        XCTAssertEqual(started, [exact])
+        manager = nil
+        XCTAssertEqual(stopped, [exact])
+
+        let restored = ImageAssetDirectoryAccess(
+            persistence: persistence,
+            bookmarkData: { _ in Data([9]) },
+            resolveBookmark: { _ in (exact, true) },
+            beginAccess: { _ in true },
+            endAccess: { _ in }
+        )
+        XCTAssertTrue(restored.restoreAuthorization(for: exact))
+        XCTAssertTrue(restored.isAuthorized(exact))
+        XCTAssertEqual(persistence.records.first?.bookmark, Data([9]))
+
+        let rejected = ImageAssetDirectoryAccess(
+            persistence: persistence,
+            bookmarkData: { _ in Data([7]) },
+            resolveBookmark: { _ in (moved, false) },
+            beginAccess: { _ in true },
+            endAccess: { _ in }
+        )
+        XCTAssertFalse(rejected.restoreAuthorization(for: exact))
+        XCTAssertFalse(rejected.isAuthorized(exact))
+        XCTAssertTrue(persistence.records.isEmpty)
+    }
+
     func testUnsavedImageActionWaitsForOneSuccessfulFirstSave() {
         let payload = ClipboardImagePayload(data: Data([1, 2, 3]), kind: .png)
         var queue = DeferredImageInsertionQueue()
@@ -1117,5 +1183,17 @@ final class MarkdownInsertionTests: XCTestCase {
         } catch {
             // Expected.
         }
+    }
+}
+
+@MainActor
+private final class TestResourceDirectoryAuthorizationPersistence:
+    ResourceDirectoryAuthorizationPersistence
+{
+    var records: [ResourceDirectoryAuthorizationRecord] = []
+
+    func load() -> [ResourceDirectoryAuthorizationRecord] { records }
+    func save(_ records: [ResourceDirectoryAuthorizationRecord]) {
+        self.records = records
     }
 }

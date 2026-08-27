@@ -38,6 +38,18 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertFalse(result.html.contains(PreviewFailurePrompt.title))
     }
 
+    func testPreviewDerivationReportsRelativeResourcesWithoutAnotherSourceScan() {
+        let local = MarkdownRenderer.previewDocument(
+            for: "![cover](assets/cover.png) [guide](guide/readme.md)"
+        )
+        let remote = MarkdownRenderer.previewDocument(
+            for: "![cover](https://example.com/cover.png) [part](#part)"
+        )
+
+        XCTAssertTrue(local.hasRelativeResources)
+        XCTAssertFalse(remote.hasRelativeResources)
+    }
+
     func testPreviewAddsSafeSelfContainedColorsForKnownCodeLanguages() throws {
         let fragment = try MarkdownRenderer.htmlFragment(
             for: "```rust\nfn main() { println!(\"<tag>你好</tag>\"); } // note\n```\n"
