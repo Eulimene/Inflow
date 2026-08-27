@@ -476,6 +476,17 @@ final class RecentDocumentsController: NSObject, ObservableObject {
         )
     }
 
+    func openRecentDocument(_ entry: RecentDocumentEntry) {
+        guard let currentEntry = entries.first(where: { $0.id == entry.id }),
+              currentEntry.isAvailable,
+              let url = exactAuthorizedURL(for: currentEntry.record)
+        else {
+            refresh()
+            return
+        }
+        open(url, reusableDocument: reusableBlankDocument())
+    }
+
     static func supportedExternalDocumentURLs(from urls: [URL]) -> [URL] {
         urls.filter { url in
             guard url.isFileURL else { return false }

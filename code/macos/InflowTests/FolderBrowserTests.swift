@@ -4,17 +4,13 @@ import XCTest
 
 @MainActor
 final class FolderBrowserTests: XCTestCase {
-    func testLaunchPolicyAlwaysPresentsAnUntitledMainWindow() {
-        XCTAssertTrue(InflowLaunchPolicy.opensUntitledDocument)
+    func testLaunchPolicyPresentsTheApplicationBeforeAnyDocumentPicker() {
+        XCTAssertTrue(InflowLaunchPolicy.presentsApplicationWindowFirst)
+        XCTAssertFalse(InflowLaunchPolicy.automaticallyOpensUntitledDocument)
+        XCTAssertTrue(InflowLaunchPolicy.isRunningUnderXCTest)
         let delegate = InflowApplicationDelegate()
         XCTAssertTrue(delegate.applicationShouldOpenUntitledFile(NSApp))
-        var openedDocumentCount = 0
-        XCTAssertTrue(
-            InflowLaunchPolicy.openUntitledDocument {
-                openedDocumentCount += 1
-            }
-        )
-        XCTAssertEqual(openedDocumentCount, 1)
+        XCTAssertFalse(NSApp.windows.contains { $0.title == InflowMainWindow.title })
     }
 
     func testScannerRecursivelyListsOnlyVisibleMarkdownFilesInStableOrder() throws {

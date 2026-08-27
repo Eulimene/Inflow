@@ -4,12 +4,13 @@ import Foundation
 import SwiftUI
 
 enum InflowLaunchPolicy {
-    static let opensUntitledDocument = true
-
-    @MainActor
-    static func openUntitledDocument(using openDocument: () -> Void) -> Bool {
-        openDocument()
-        return true
+    /// A normal launch belongs to Inflow's workspace scene. The document
+    /// framework is entered only after an explicit New/Open action.
+    static let presentsApplicationWindowFirst = true
+    static let automaticallyOpensUntitledDocument = false
+    static var isRunningUnderXCTest: Bool {
+        NSClassFromString("XCTestCase") != nil
+            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
 }
 

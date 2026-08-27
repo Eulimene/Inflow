@@ -3,12 +3,20 @@ import SwiftUI
 @MainActor
 final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     let recentDocuments: RecentDocumentsController
+    let folderBrowser: FolderBrowserController
+    private var mainWindowController: NSWindowController?
 
     override init() {
         let controller = RecentDocumentsController()
         controller.installMenuIntegration()
         recentDocuments = controller
+        folderBrowser = FolderBrowserController()
         super.init()
+    }
+
+    func applicationDidFinishLaunching(_: Notification) {
+        guard !InflowLaunchPolicy.isRunningUnderXCTest else { return }
+        presentMainWindow()
     }
 
     func application(_: NSApplication, open urls: [URL]) {
@@ -16,13 +24,54 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldOpenUntitledFile(_: NSApplication) -> Bool {
-        InflowLaunchPolicy.opensUntitledDocument
+        InflowLaunchPolicy.isRunningUnderXCTest
+            || InflowLaunchPolicy.automaticallyOpensUntitledDocument
     }
 
     func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
-        InflowLaunchPolicy.openUntitledDocument {
-            NSDocumentController.shared.newDocument(sender)
+        guard InflowLaunchPolicy.isRunningUnderXCTest else { return false }
+        NSDocumentController.shared.newDocument(sender)
+        return true
+    }
+
+    func applicationShouldHandleReopen(
+        _: NSApplication,
+        hasVisibleWindows: Bool
+    ) -> Bool {
+        guard !InflowLaunchPolicy.isRunningUnderXCTest else { return false }
+        guard !hasVisibleWindows else { return true }
+        presentMainWindow()
+        return true
+    }
+
+    private func presentMainWindow() {
+        if let mainWindowController {
+            mainWindowController.showWindow(nil)
+            mainWindowController.window?.makeKeyAndOrderFront(nil)
+            return
         }
+
+        let rootView = InflowMainView(
+            recentDocuments: recentDocuments,
+            folderBrowser: folderBrowser,
+            onNewDocument: {
+                NSDocumentController.shared.newDocument(nil)
+            }
+        )
+        .frame(minWidth: 760, minHeight: 500)
+
+        let hostingController = NSHostingController(rootView: rootView)
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = InflowMainWindow.title
+        window.setContentSize(NSSize(width: 980, height: 640))
+        window.minSize = NSSize(width: 760, height: 500)
+        window.styleMask.insert([.resizable, .miniaturizable, .closable, .titled])
+        window.center()
+        window.isReleasedWhenClosed = false
+        let controller = NSWindowController(window: window)
+        mainWindowController = controller
+        controller.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
     }
 }
 
@@ -82,7 +131,6 @@ struct InflowApp: App {
     @StateObject private var recoveryCoordinator = DocumentRecoveryCoordinator()
     @StateObject private var preferences = AppPreferences()
     @StateObject private var anonymousUsage = AnonymousUsageDataController()
-    @StateObject private var folderBrowser = FolderBrowserController()
 
     var body: some Scene {
         DocumentGroup(newDocument: MarkdownDocument()) { configuration in
@@ -94,13 +142,13 @@ struct InflowApp: App {
                 preferences: preferences,
                 anonymousUsage: anonymousUsage,
                 recentDocuments: applicationDelegate.recentDocuments,
-                folderBrowser: folderBrowser
+                folderBrowser: applicationDelegate.folderBrowser
             )
                 .frame(minWidth: 720, minHeight: 480)
         }
         .defaultSize(width: 1_080, height: 720)
         .commands {
-            InflowPrimaryCommands(folderBrowser: folderBrowser)
+            InflowPrimaryCommands(folderBrowser: applicationDelegate.folderBrowser)
             InflowEditingCommands()
         }
 
