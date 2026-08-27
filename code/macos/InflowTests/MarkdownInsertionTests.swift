@@ -3,6 +3,25 @@ import XCTest
 @testable import Inflow
 
 final class MarkdownInsertionTests: XCTestCase {
+    func testUnsavedImageActionWaitsForOneSuccessfulFirstSave() {
+        let payload = ClipboardImagePayload(data: Data([1, 2, 3]), kind: .png)
+        var queue = DeferredImageInsertionQueue()
+
+        XCTAssertTrue(queue.enqueue(.paste(payload)))
+        XCTAssertTrue(queue.hasPending)
+        XCTAssertFalse(queue.enqueue(.chooseExistingImage))
+        XCTAssertEqual(queue.consumeAfterSuccessfulSave(), .paste(payload))
+        XCTAssertFalse(queue.hasPending)
+        XCTAssertNil(queue.consumeAfterSuccessfulSave())
+
+        XCTAssertTrue(queue.enqueue(.drop(URL(fileURLWithPath: "/tmp/photo.png"))))
+        queue.cancel()
+        XCTAssertFalse(queue.hasPending)
+        XCTAssertEqual(DeferredImageInsertion.savePanelTitle, "先保存这份 Markdown")
+        XCTAssertEqual(DeferredImageInsertion.savePanelActionTitle, "保存并继续")
+        XCTAssertTrue(DeferredImageInsertion.savePanelMessage.contains("取消不会创建资源"))
+    }
+
     func testLinkPlanWrapsUnicodeSelectionAndUpdatesExistingLink() throws {
         let source = "Read 文档👩‍💻 now"
         let selected = (source as NSString).range(of: "文档👩‍💻")

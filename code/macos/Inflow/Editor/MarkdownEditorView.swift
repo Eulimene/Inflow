@@ -317,6 +317,38 @@ enum MixedLineEndingPrompt {
     }
 }
 
+enum DeferredImageInsertion: Equatable {
+    case chooseExistingImage
+    case paste(ClipboardImagePayload)
+    case drop(URL)
+
+    static let savePanelTitle = "先保存这份 Markdown"
+    static let savePanelMessage =
+        "图片必须保存在你确认的文档相对目录中。保存成功后会继续本次图片操作；取消不会创建资源。"
+    static let savePanelActionTitle = "保存并继续"
+}
+
+struct DeferredImageInsertionQueue: Equatable {
+    private(set) var pending: DeferredImageInsertion?
+
+    var hasPending: Bool { pending != nil }
+
+    mutating func enqueue(_ insertion: DeferredImageInsertion) -> Bool {
+        guard pending == nil else { return false }
+        pending = insertion
+        return true
+    }
+
+    mutating func cancel() {
+        pending = nil
+    }
+
+    mutating func consumeAfterSuccessfulSave() -> DeferredImageInsertion? {
+        defer { pending = nil }
+        return pending
+    }
+}
+
 private struct EmptyMarkdownPreviewView: View {
     let onStartWriting: () -> Void
     let onOpenDocument: () -> Void
@@ -415,6 +447,7 @@ struct MarkdownEditorView: View {
     @State private var markdownFormatErrorMessage: String?
     @State private var linkInsertionRequest: MarkdownLinkInsertionRequest?
     @State private var isImportingImage = false
+    @State private var deferredImageInsertionQueue = DeferredImageInsertionQueue()
     @State private var imageAssetWorker = ImageAssetWorker()
     @StateObject private var imageDirectoryAccess = ImageAssetDirectoryAccess()
     @State private var recoveryRecordID = UUID()
@@ -873,6 +906,7 @@ struct MarkdownEditorView: View {
             DocumentRelocationView(
                 request: request,
                 onCancel: {
+                    deferredImageInsertionQueue.cancel()
                     relocationRequest = nil
                     relocationNativeDocument = nil
                 },
@@ -1357,25 +1391,36 @@ struct MarkdownEditorView: View {
         }
     }
 
-    private func beginDocumentRelocation(_ operation: DocumentRelocationOperation) {
-        guard !isRelocatingDocument, relocationRequest == nil else { return }
+    @discardableResult
+    private func beginDocumentRelocation(_ operation: DocumentRelocationOperation) -> Bool {
+        guard !isRelocatingDocument, relocationRequest == nil else { return false }
         guard let nativeDocument = NativeDocumentSaveCoordinator.activeDocument(
             sourceURL: fileURL
         ) else {
             presentFileOperationFailure(DocumentRelocationError.cannotInspect)
-            return
+            return false
         }
         let snapshotData: Data
         do {
             snapshotData = try document.encodedFileData()
         } catch {
             presentFileOperationFailure(error, fallback: "当前正文无法编码，未写入任何文件。")
-            return
+            return false
         }
 
         let panel = NSSavePanel()
-        panel.title = operation.panelTitle
-        panel.prompt = operation.actionTitle
+        let isSavingBeforeImage = operation == .saveAs
+            && fileURL == nil
+            && deferredImageInsertionQueue.hasPending
+        panel.title = isSavingBeforeImage
+            ? DeferredImageInsertion.savePanelTitle
+            : operation.panelTitle
+        panel.message = isSavingBeforeImage
+            ? DeferredImageInsertion.savePanelMessage
+            : ""
+        panel.prompt = isSavingBeforeImage
+            ? DeferredImageInsertion.savePanelActionTitle
+            : operation.actionTitle
         panel.allowedContentTypes = [.inflowMarkdown]
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
@@ -1394,6 +1439,7 @@ struct MarkdownEditorView: View {
             defer { isRelocatingDocument = false }
             guard response == .OK, let targetURL = panel.url else {
                 relocationNativeDocument = nil
+                if isSavingBeforeImage { deferredImageInsertionQueue.cancel() }
                 return
             }
 
@@ -1410,6 +1456,7 @@ struct MarkdownEditorView: View {
                 openDocument.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
                 presentFileOperationFailure(DocumentRelocationError.targetOpen)
                 relocationNativeDocument = nil
+                if isSavingBeforeImage { deferredImageInsertionQueue.cancel() }
                 return
             }
 
@@ -1430,8 +1477,10 @@ struct MarkdownEditorView: View {
             } catch {
                 presentFileOperationFailure(error)
                 relocationNativeDocument = nil
+                if isSavingBeforeImage { deferredImageInsertionQueue.cancel() }
             }
         }
+        return true
     }
 
     private func confirmDocumentRelocation(_ request: DocumentRelocationRequest) async {
@@ -1483,15 +1532,30 @@ struct MarkdownEditorView: View {
                 operation: request.operation
             )
 
+            let deferredInsertion = request.operation == .saveAs
+                ? deferredImageInsertionQueue.consumeAfterSuccessfulSave()
+                : nil
             relocationRequest = nil
             relocationNativeDocument = nil
             switch request.operation {
             case .saveAs:
-                fileSafetyNotice = .savedAs(request.plan.targetURL)
+                if deferredInsertion == nil {
+                    fileSafetyNotice = .savedAs(request.plan.targetURL)
+                }
             case .saveCopy:
                 fileSafetyNotice = .copySaved(request.plan.targetURL)
             }
+            if let deferredInsertion {
+                Task { @MainActor in
+                    await Task.yield()
+                    resumeDeferredImageInsertion(
+                        deferredInsertion,
+                        savedDocumentURL: request.plan.targetURL
+                    )
+                }
+            }
         } catch {
+            deferredImageInsertionQueue.cancel()
             relocationRequest = nil
             relocationNativeDocument = nil
             presentFileOperationFailure(error)
@@ -1929,16 +1993,56 @@ struct MarkdownEditorView: View {
     }
 
     private func insertImage() {
+        guard fileURL != nil else {
+            deferImageInsertionUntilFirstSave(.chooseExistingImage)
+            return
+        }
         importExistingImage(from: nil)
     }
 
     private func dropImage(_ sourceURL: URL) {
+        guard fileURL != nil else {
+            deferImageInsertionUntilFirstSave(.drop(sourceURL))
+            return
+        }
         importExistingImage(from: sourceURL)
     }
 
-    private func importExistingImage(from providedSourceURL: URL?) {
+    private func deferImageInsertionUntilFirstSave(_ insertion: DeferredImageInsertion) {
+        guard canEditDocument,
+              !isImportingImage,
+              !deferredImageInsertionQueue.hasPending,
+              !isRelocatingDocument,
+              relocationRequest == nil
+        else {
+            return
+        }
+        guard deferredImageInsertionQueue.enqueue(insertion) else { return }
+        if !beginDocumentRelocation(.saveAs) {
+            deferredImageInsertionQueue.cancel()
+        }
+    }
+
+    private func resumeDeferredImageInsertion(
+        _ insertion: DeferredImageInsertion,
+        savedDocumentURL: URL
+    ) {
+        switch insertion {
+        case .chooseExistingImage:
+            importExistingImage(from: nil, documentURLOverride: savedDocumentURL)
+        case let .paste(payload):
+            pasteImage(payload, documentURLOverride: savedDocumentURL)
+        case let .drop(sourceURL):
+            importExistingImage(from: sourceURL, documentURLOverride: savedDocumentURL)
+        }
+    }
+
+    private func importExistingImage(
+        from providedSourceURL: URL?,
+        documentURLOverride: URL? = nil
+    ) {
         guard canEditDocument, !isImportingImage else { return }
-        guard let documentURL = fileURL else {
+        guard let documentURL = documentURLOverride ?? fileURL else {
             markdownFormatErrorMessage = ImageAssetImportError.unsavedDocument.localizedDescription
             return
         }
@@ -2146,9 +2250,16 @@ struct MarkdownEditorView: View {
     }
 
     private func pasteImage(_ payload: ClipboardImagePayload) {
+        pasteImage(payload, documentURLOverride: nil)
+    }
+
+    private func pasteImage(
+        _ payload: ClipboardImagePayload,
+        documentURLOverride: URL?
+    ) {
         guard canEditDocument, !isImportingImage else { return }
-        guard let documentURL = fileURL else {
-            markdownFormatErrorMessage = ImageAssetImportError.unsavedDocument.localizedDescription
+        guard let documentURL = documentURLOverride ?? fileURL else {
+            deferImageInsertionUntilFirstSave(.paste(payload))
             return
         }
         let sourceSnapshot = document.text
