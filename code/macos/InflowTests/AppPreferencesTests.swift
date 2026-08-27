@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 import XCTest
 @testable import Inflow
 
@@ -305,6 +306,18 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
             XCTAssertTrue(NSDocument.instancesRespond(to: #selector(NSDocument.save(_:))))
         }
+    }
+
+    func testDocumentGroupDocumentClassSupportsInPlaceAutosave() throws {
+        let document = try NSDocumentController.shared.makeUntitledDocument(
+            ofType: UTType.inflowMarkdown.identifier
+        )
+        defer { document.close() }
+
+        XCTAssertTrue(
+            type(of: document).autosavesInPlace,
+            "The autosave delay is ineffective unless the actual document class opts into in-place autosave"
+        )
     }
 
     func testExistingImagePlacementPreferenceKeepsPromptAsAnExplicitChoice() {
