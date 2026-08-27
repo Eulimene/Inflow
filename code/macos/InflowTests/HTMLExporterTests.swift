@@ -336,6 +336,36 @@ final class HTMLExporterTests: XCTestCase {
         XCTAssertTrue(document.string?.contains("Section 180") == true)
     }
 
+    @MainActor
+    func testPDFWrapsWideCodeAndTableContentInsidePrintableBounds() async throws {
+        let codePrefix = String(repeating: "code-segment-", count: 80)
+        let tablePrefix = String(repeating: "table-segment-", count: 80)
+        let markdown = """
+        ```text
+        \(codePrefix)CODE-END
+        ```
+
+        | Column |
+        | --- |
+        | \(tablePrefix)TABLE-END |
+        """
+        let html = try HTMLExporter.generate(snapshot: HTMLExportSnapshot(markdown: markdown))
+        let data = try await PDFExporter.generate(fromSelfContainedHTML: html)
+        let document = try XCTUnwrap(PDFDocument(data: data))
+
+        for marker in ["CODE-END", "TABLE-END"] {
+            let selection = try XCTUnwrap(document.findString(marker).first, marker)
+            let page = try XCTUnwrap(selection.pages.first, marker)
+            let bounds = selection.bounds(for: page)
+            XCTAssertGreaterThanOrEqual(bounds.minX, PDFExporter.margin - 1, marker)
+            XCTAssertLessThanOrEqual(
+                bounds.maxX,
+                PDFExporter.paperSize.width - PDFExporter.margin + 1,
+                marker
+            )
+        }
+    }
+
     func testExportRendersFormulaAsSelfContainedMathML() throws {
         let data = try HTMLExporter.generate(
             snapshot: HTMLExportSnapshot(markdown: "Inline $x_1^2$\n\n$$\\frac{a}{b}$$\n")

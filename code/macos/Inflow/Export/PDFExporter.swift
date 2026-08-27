@@ -160,8 +160,15 @@ enum PDFExporter {
         let style = """
         <style>
           @page { size: A4 portrait; margin: 0; }
+          *, *::before, *::after { box-sizing: border-box; }
           html, body { width: auto !important; max-width: none !important; margin: 0 !important; padding: 0 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           img, svg, table, pre, math { max-width: 100% !important; }
+          pre { white-space: pre-wrap !important; overflow: visible !important; overflow-wrap: anywhere; word-break: break-word; }
+          pre code { white-space: inherit !important; }
+          table { display: table !important; width: 100% !important; table-layout: fixed; overflow: visible !important; }
+          th, td { overflow-wrap: anywhere; word-break: break-word; }
+          .mermaid-diagram { overflow: visible !important; }
+          .mermaid-diagram svg { min-width: 0 !important; }
           h1, h2, h3, h4, h5, h6 { break-after: avoid-page; }
           pre, table, img, svg, math { break-inside: avoid-page; }
         </style>
