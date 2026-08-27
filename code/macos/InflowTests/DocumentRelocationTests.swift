@@ -341,6 +341,41 @@ final class DocumentRelocationTests: XCTestCase {
     }
 
     @MainActor
+    func testMenusDoNotExposePostLaunchCommands() throws {
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        let items = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu))
+        let postLaunchTitles = [
+            "打开工作区…",
+            "打印…",
+            "浏览本地版本时间线…",
+            "即时渲染编辑",
+            "快速打开…",
+            "工作区搜索…",
+            "结构洞察",
+            "资源管家",
+            "文档健康中心",
+            "迁移内容…",
+            "能力中心",
+            "权限中心",
+            "编辑来源信息…",
+            "插件市场",
+            "插件购买与订阅…",
+            "开发者中心…",
+            "关闭窗口",
+            "显示上一个标签页",
+            "显示下一个标签页",
+            "将标签页移到新窗口",
+        ]
+        for title in postLaunchTitles {
+            XCTAssertTrue(items.filter { $0.title == title }.isEmpty, title)
+        }
+        XCTAssertTrue(items.filter {
+            $0.keyEquivalent == "p"
+                && $0.keyEquivalentModifierMask.contains(.command)
+        }.isEmpty)
+    }
+
+    @MainActor
     func testSaveCommandActionsRemainScopedToTheirDocumentScene() {
         var firstEvents: [String] = []
         var secondEvents: [String] = []
