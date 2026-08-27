@@ -5,6 +5,43 @@ import XCTest
 @testable import Inflow
 
 final class MarkdownRendererTests: XCTestCase {
+    func testMegabyteDocumentDerivesCompletePreviewWithinUpdateBudget() throws {
+        let paragraph = String(repeating: "alpha beta gamma delta ", count: 5)
+        var lines = (0..<10_000).map { index in
+            index.isMultiple(of: 100)
+                ? "## Section \(index) \(paragraph)"
+                : "Paragraph \(index) \(paragraph)"
+        }
+        lines.append("## FINAL-PREVIEW-MARKER")
+        let source = lines.joined(separator: "\n")
+        XCTAssertGreaterThan(source.utf8.count, 1_000_000)
+        XCTAssertGreaterThanOrEqual(source.filter(\.isNewline).count, 10_000)
+
+        let analysisStarted = ProcessInfo.processInfo.systemUptime
+        let analysis = try MarkdownAnalyzer.analyze(source)
+        let analysisElapsed = ProcessInfo.processInfo.systemUptime - analysisStarted
+        let highlightingStarted = ProcessInfo.processInfo.systemUptime
+        let highlighting = try MarkdownHighlighter.spans(in: source)
+        let highlightingElapsed = ProcessInfo.processInfo.systemUptime - highlightingStarted
+        let previewStarted = ProcessInfo.processInfo.systemUptime
+        let preview = MarkdownRenderer.previewDocument(
+            for: source,
+            navigationHeadings: analysis.headings
+        )
+        let previewElapsed = ProcessInfo.processInfo.systemUptime - previewStarted
+
+        XCTAssertNil(preview.failureMessage)
+        XCTAssertTrue(preview.html.contains("FINAL-PREVIEW-MARKER"))
+        XCTAssertEqual(analysis.headings.last?.title, "FINAL-PREVIEW-MARKER")
+        XCTAssertTrue(highlighting.contains { $0.utf8Range.upperBound > 1_000_000 })
+        let elapsed = analysisElapsed + highlightingElapsed + previewElapsed
+        #if DEBUG
+        XCTAssertLessThan(elapsed, 1.0, "Debug pipeline took \(elapsed) seconds")
+        #else
+        XCTAssertLessThan(elapsed, 0.3, "Release pipeline took \(elapsed) seconds")
+        #endif
+    }
+
     func testPreviewFailureUsesFrozenSafeExitCopyAndKeepsDetailsOutOfHTML() {
         XCTAssertEqual(PreviewFailurePrompt.title, "暂时无法更新预览")
         XCTAssertEqual(PreviewFailurePrompt.message, "编辑和保存仍可用。")

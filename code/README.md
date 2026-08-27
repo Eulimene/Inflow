@@ -108,6 +108,24 @@ cargo clippy --manifest-path core/Cargo.toml --locked --all-targets -- -D warnin
 cargo test --manifest-path core/Cargo.toml --locked
 ```
 
+1 MiB / 10,000 行完整预览的 300 ms 预算必须使用与交付物一致的 Release 优化代码验证（Debug 构建中的 Rust 不代表发布性能）：
+
+```sh
+xcodebuild \
+  -project Inflow.xcodeproj \
+  -scheme Inflow \
+  -configuration Release \
+  -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath .derivedData-performance \
+  CODE_SIGNING_ALLOWED=NO \
+  ENABLE_TESTABILITY=YES \
+  -parallel-testing-enabled NO \
+  -only-testing:InflowTests/MarkdownRendererTests/testMegabyteDocumentDerivesCompletePreviewWithinUpdateBudget \
+  test
+```
+
+该门禁同时复核预览尾部、最后标题与超过 1 MiB 位置的语法结果，不允许用截断或降级换取时间。冷启动、视图切换和输入停顿仍需在附录 A 的 8 GB、最低支持 macOS 目标机上执行发布验收。
+
 匿名使用数据接收地址不检入仓库。只有在发布构建中将 `INFLOW_ANONYMOUS_USAGE_ENDPOINT` 注入为受控的 HTTPS URL，并验证服务端不超过披露的用途与保留期后，客户端才会提供开启操作。
 
 ## 提交规则
