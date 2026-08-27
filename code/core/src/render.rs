@@ -51,10 +51,11 @@ fn safe_events(
     configuration: RenderConfiguration,
     neutralize_delivery_links: bool,
 ) -> Vec<Event<'_>> {
-    let mut parser = Parser::new_ext(markdown, options_with_configuration(configuration));
+    let mut parser =
+        Parser::new_ext(markdown, options_with_configuration(configuration)).into_offset_iter();
     let mut events = Vec::new();
     let mut neutralized_link_depth = 0_u32;
-    while let Some(event) = parser.next() {
+    while let Some((event, event_range)) = parser.next() {
         if neutralize_delivery_links
             && matches!(&event, Event::Start(Tag::Link { dest_url, .. }) if !is_portable_link(dest_url))
         {
@@ -69,7 +70,7 @@ fn safe_events(
         } else if let Event::Start(Tag::Image { dest_url, .. }) = &event {
             let destination = dest_url.to_string();
             let mut alternative = String::new();
-            for image_event in parser.by_ref() {
+            for (image_event, _) in parser.by_ref() {
                 match image_event {
                     Event::End(TagEnd::Image) => break,
                     Event::Text(text) | Event::Code(text) => alternative.push_str(&text),
@@ -96,7 +97,9 @@ fn safe_events(
             )
         {
             let mut source = String::new();
-            for code_event in parser.by_ref() {
+            let mut source_end = event_range.end;
+            for (code_event, code_range) in parser.by_ref() {
+                source_end = code_range.end;
                 match code_event {
                     Event::End(TagEnd::CodeBlock) => break,
                     Event::Text(text) | Event::Code(text) => source.push_str(&text),
@@ -104,13 +107,18 @@ fn safe_events(
                     _ => {}
                 }
             }
-            let diagram = mermaid::svg(source.trim_end())
-                .unwrap_or_else(|error| mermaid::fallback(source.trim_end(), &error));
+            let diagram = mermaid::svg(source.trim_end()).unwrap_or_else(|error| {
+                if neutralize_delivery_links {
+                    mermaid::fallback(source.trim_end(), &error)
+                } else {
+                    mermaid::fallback_at(source.trim_end(), &error, event_range.start..source_end)
+                }
+            });
             events.push(Event::InlineHtml(diagram.into()));
         } else if let Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(language))) = &event {
             if code_highlight::supports_language(language) {
                 let mut source = String::new();
-                for code_event in parser.by_ref() {
+                for (code_event, _) in parser.by_ref() {
                     match code_event {
                         Event::End(TagEnd::CodeBlock) => break,
                         Event::Text(text) | Event::Code(text) => source.push_str(&text),
@@ -269,9 +277,17 @@ mod tests {
         assert!(html.contains("<p>After</p>"));
         assert!(!html.contains("<script"));
 
-        let fallback = html_fragment("```mermaid\npie\ntitle Values\n```\n\nStill readable");
+        let markdown = "```mermaid\npie\ntitle Values\n```\n\nStill readable";
+        let fallback = html_fragment(markdown);
+        let diagram_end = markdown.find("\n\nStill readable").unwrap();
         assert!(fallback.contains("无法呈现这个图表"));
         assert!(fallback.contains("pie"));
+        assert!(fallback.contains("data-inflow-source-start=\"0\""));
+        assert!(fallback.contains(&format!("data-inflow-source-end=\"{diagram_end}\"")));
+        assert!(fallback.contains("data-inflow-preview-error-action=\"locate\""));
+        assert!(fallback.contains("data-inflow-preview-error-action=\"retry\""));
+        assert!(fallback.contains("定位源文本"));
+        assert!(fallback.contains("重试"));
         assert!(fallback.contains("<p>Still readable</p>"));
     }
 
@@ -292,6 +308,19 @@ mod tests {
         assert!(html.contains("flowchart TD"));
         assert!(!html.contains("class=\"mermaid-diagram\""));
         assert!(!html.contains("<svg"));
+    }
+
+    #[test]
+    fn delivery_mermaid_failure_does_not_expose_editor_offsets_or_dead_actions() {
+        let html = html_fragment_for_delivery(
+            "```mermaid\npie\ntitle Values\n```",
+            RenderConfiguration::default(),
+        );
+
+        assert!(html.contains("无法呈现这个图表"));
+        assert!(!html.contains("data-inflow-source-start"));
+        assert!(!html.contains("data-inflow-preview-error-action"));
+        assert!(!html.contains("<button"));
     }
 
     #[test]

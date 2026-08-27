@@ -142,6 +142,23 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(source, "$x^2$\n\n```mermaid\nflowchart TD\nA --> B\n```")
     }
 
+    func testMermaidFailureCarriesSafeSourceLocationAndRecoveryActions() throws {
+        let source = "前文\n\n```mermaid\npie\ntitle Values\n```\n\n后文"
+        let fragment = try MarkdownRenderer.htmlFragment(for: source)
+        let marker = try XCTUnwrap(source.range(of: "```mermaid"))
+        let markerStart = try XCTUnwrap(marker.lowerBound.samePosition(in: source.utf8))
+        let start = source.utf8.distance(from: source.utf8.startIndex, to: markerStart)
+
+        XCTAssertTrue(fragment.contains("无法呈现这个图表"))
+        XCTAssertTrue(fragment.contains("当前文档的其他内容和其他文档不受影响"))
+        XCTAssertTrue(fragment.contains("data-inflow-source-start=\"\(start)\""))
+        XCTAssertTrue(fragment.contains("data-inflow-preview-error-action=\"locate\""))
+        XCTAssertTrue(fragment.contains("data-inflow-preview-error-action=\"retry\""))
+        XCTAssertTrue(fragment.contains(">定位源文本</button>"))
+        XCTAssertTrue(fragment.contains(">重试</button>"))
+        XCTAssertFalse(fragment.contains("<script"))
+    }
+
     func testPreviewDocumentForbidsScriptsAndNetworkRequests() {
         let html = MarkdownRenderer.htmlDocument(for: "# Safe preview")
 
@@ -293,6 +310,14 @@ final class MarkdownRendererTests: XCTestCase {
         )
         XCTAssertEqual(
             PreviewNavigationMessage.decode([
+                "type": "previewIssue",
+                "action": "locate",
+                "sourceUTF8Offset": NSNumber(value: 19),
+            ]),
+            .previewIssue(action: .locate, sourceUTF8Offset: 19)
+        )
+        XCTAssertEqual(
+            PreviewNavigationMessage.decode([
                 "type": "link",
                 "targetHex": hex("../资料/说明.md#标题"),
             ]),
@@ -319,6 +344,11 @@ final class MarkdownRendererTests: XCTestCase {
             "targetHex": hex("https://example.com/\nprivate"),
         ]))
         XCTAssertNil(PreviewNavigationMessage.decode([
+            "type": "previewIssue",
+            "action": "open-private-path",
+            "sourceUTF8Offset": NSNumber(value: 0),
+        ]))
+        XCTAssertNil(PreviewNavigationMessage.decode([
             "type": "unknown",
             "document": "must not cross bridge",
         ]))
@@ -330,22 +360,52 @@ final class MarkdownRendererTests: XCTestCase {
         let webView = WKWebView()
         var selectedOffset: Int?
         var selectedLink: String?
+        var selectedIssue: (PreviewIssueAction, Int)?
         var manualScrollCount = 0
         coordinator.update(
             scrollRequest: PreviewScrollRequest(generation: 1, fraction: 0.5),
             onHeadingActivated: { selectedOffset = $0 },
             onLinkActivated: { selectedLink = $0 },
+            onPreviewIssueAction: { selectedIssue = ($0, $1) },
             onManualScroll: { manualScrollCount += 1 },
             webView: webView
         )
 
         coordinator.handle(.heading(sourceUTF8Offset: 128))
         coordinator.handle(.link(target: "https://example.com"))
+        coordinator.handle(.previewIssue(action: .retry, sourceUTF8Offset: 64))
         coordinator.handle(.manualScroll)
 
         XCTAssertEqual(selectedOffset, 128)
         XCTAssertEqual(selectedLink, "https://example.com")
+        XCTAssertEqual(selectedIssue?.0, .retry)
+        XCTAssertEqual(selectedIssue?.1, 64)
         XCTAssertEqual(manualScrollCount, 1)
+    }
+
+    func testPreviewIssueNavigationRejectsStaleAndInvalidUTF8Offsets() throws {
+        let rendered = "# 图表\n\n```mermaid\npie\n```"
+        let marker = try XCTUnwrap(rendered.range(of: "```mermaid"))
+        let markerStart = try XCTUnwrap(marker.lowerBound.samePosition(in: rendered.utf8))
+        let offset = rendered.utf8.distance(from: rendered.utf8.startIndex, to: markerStart)
+        XCTAssertEqual(
+            PreviewIssueNavigation.validatedOffset(
+                offset,
+                renderedSource: rendered,
+                currentSource: rendered
+            ),
+            offset
+        )
+        XCTAssertNil(PreviewIssueNavigation.validatedOffset(
+            offset,
+            renderedSource: rendered,
+            currentSource: rendered + "\nchanged"
+        ))
+        XCTAssertNil(PreviewIssueNavigation.validatedOffset(
+            2,
+            renderedSource: "e\u{301}",
+            currentSource: "e\u{301}"
+        ))
     }
 
     func testLinkPlannerRequiresAnExactParsedCurrentReferenceAndSafeScheme() {
@@ -630,6 +690,7 @@ final class MarkdownRendererTests: XCTestCase {
             scrollRequest: PreviewScrollRequest(generation: 7, fraction: 0.75),
             onHeadingActivated: { _ in },
             onLinkActivated: { _ in },
+            onPreviewIssueAction: { _, _ in },
             onManualScroll: {},
             webView: webView
         )
@@ -703,6 +764,75 @@ final class MarkdownRendererTests: XCTestCase {
         )
         await fulfillment(of: [received], timeout: 5)
         XCTAssertEqual(receivedTarget, "https://example.com/a b?x=1&y=2")
+    }
+
+    @MainActor
+    func testMountedMermaidFailureRoutesOnlyClosedRecoveryActions() async throws {
+        let received = expectation(description: "preview issue actions reported")
+        received.expectedFulfillmentCount = 2
+        var actions: [(PreviewIssueAction, Int)] = []
+        let markdown = "前文\n\n```mermaid\npie\ntitle Values\n```"
+        let marker = try XCTUnwrap(markdown.range(of: "```mermaid"))
+        let markerStart = try XCTUnwrap(marker.lowerBound.samePosition(in: markdown.utf8))
+        let expectedOffset = markdown.utf8.distance(
+            from: markdown.utf8.startIndex,
+            to: markerStart
+        )
+        let root = MarkdownPreviewView(
+            html: MarkdownRenderer.htmlDocument(for: markdown),
+            baseURL: nil,
+            onPreviewIssueAction: { action, offset in
+                actions.append((action, offset))
+                received.fulfill()
+            }
+        )
+        let hosting = NSHostingView(rootView: root)
+        hosting.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
+        let window = NSWindow(
+            contentRect: hosting.frame,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.animationBehavior = .none
+        window.contentView = hosting
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        hosting.layoutSubtreeIfNeeded()
+
+        var webView: WKWebView?
+        var actionsAreReady = false
+        for _ in 0..<100 {
+            webView = descendants(of: hosting).compactMap { $0 as? WKWebView }.first
+            if let candidate = webView,
+               candidate.isLoading == false,
+               let isReady = try? await candidate.callAsyncJavaScript(
+                   "return document.querySelectorAll('[data-inflow-preview-error-action]').length === 2;",
+                   arguments: [:],
+                   in: nil,
+                   contentWorld: .defaultClient
+               ) as? Bool,
+               isReady
+            {
+                actionsAreReady = true
+                break
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let mounted = try XCTUnwrap(webView)
+        XCTAssertTrue(actionsAreReady)
+        XCTAssertFalse(mounted.configuration.defaultWebpagePreferences.allowsContentJavaScript)
+        for action in ["locate", "retry"] {
+            _ = try await mounted.callAsyncJavaScript(
+                "document.querySelector(`[data-inflow-preview-error-action='${action}']`).click(); return true;",
+                arguments: ["action": action],
+                in: nil,
+                contentWorld: .defaultClient
+            )
+        }
+        await fulfillment(of: [received], timeout: 5)
+        XCTAssertEqual(actions.map(\.0), [.locate, .retry])
+        XCTAssertEqual(actions.map(\.1), [expectedOffset, expectedOffset])
     }
 
     private func temporaryDirectory() throws -> URL {

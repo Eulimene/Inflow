@@ -189,6 +189,22 @@ final class HTMLExporterTests: XCTestCase {
         XCTAssertFalse(html.contains("cdn"))
     }
 
+    func testExportedMermaidFallbackHasNoEditorOffsetsOrDeadActions() throws {
+        let data = try HTMLExporter.generate(
+            snapshot: HTMLExportSnapshot(
+                markdown: "```mermaid\npie\ntitle Values\n```"
+            )
+        )
+        let html = try XCTUnwrap(String(data: data, encoding: .utf8))
+
+        XCTAssertTrue(html.contains("无法呈现这个图表"))
+        XCTAssertTrue(html.contains("pie"))
+        XCTAssertFalse(html.contains("data-inflow-source-start"))
+        XCTAssertFalse(html.contains("data-inflow-source-end"))
+        XCTAssertFalse(html.contains("data-inflow-preview-error-action"))
+        XCTAssertFalse(html.contains("<button"))
+    }
+
     func testExportFreezesDisabledFormulaAndMermaidPresentation() throws {
         let appearance = PreviewAppearanceConfiguration(
             contentWidth: 760,

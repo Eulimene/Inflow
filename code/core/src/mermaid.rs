@@ -355,13 +355,43 @@ fn render(diagram: &Diagram, source: &str) -> Result<String, MermaidError> {
 }
 
 pub fn fallback(source: &str, error: &MermaidError) -> String {
+    fallback_with_attributes(source, error, "", false)
+}
+
+pub fn fallback_at(
+    source: &str,
+    error: &MermaidError,
+    source_range: std::ops::Range<usize>,
+) -> String {
+    fallback_with_attributes(
+        source,
+        error,
+        &format!(
+            " data-inflow-source-start=\"{}\" data-inflow-source-end=\"{}\"",
+            source_range.start, source_range.end
+        ),
+        true,
+    )
+}
+
+fn fallback_with_attributes(
+    source: &str,
+    error: &MermaidError,
+    attributes: &str,
+    includes_actions: bool,
+) -> String {
     let reason = match error {
         MermaidError::UnsupportedType => "当前仅支持流程图、时序图、类图和状态图。",
         MermaidError::InvalidSyntax => "请检查图表声明、节点和连接语法。",
     };
+    let actions = if includes_actions {
+        "<div class=\"mermaid-error-actions\"><button type=\"button\" data-inflow-preview-error-action=\"locate\">定位源文本</button><button type=\"button\" data-inflow-preview-error-action=\"retry\">重试</button></div>"
+    } else {
+        ""
+    };
     format!(
-        "<figure class=\"mermaid-error\" role=\"group\" aria-label=\"无法呈现这个图表\"><figcaption><strong>无法呈现这个图表</strong><br>{reason}<br>原内容已保留，当前文档的其他内容不受影响。</figcaption><pre><code>{}</code></pre></figure>",
-        escape(source)
+        "<figure class=\"mermaid-error\" role=\"group\" aria-label=\"无法呈现这个图表\"{attributes}><figcaption><strong>无法呈现这个图表</strong><br>{reason}<br>原内容已保留，当前文档的其他内容和其他文档不受影响。</figcaption><pre><code>{}</code></pre>{actions}</figure>",
+        escape(source),
     )
 }
 

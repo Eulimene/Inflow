@@ -204,6 +204,7 @@ struct MarkdownEditorView: View {
     @SceneStorage("editorSplitFraction") private var editorSplitFraction =
         EditorSplitLayout.defaultFraction
     @State private var previewHTML = MarkdownRenderer.htmlDocument(for: "")
+    @State private var previewSourceSnapshot = ""
     @State private var previewFailureMessage: String?
     @State private var analysisState = DocumentAnalysisState.updating(previous: .empty)
     @State private var derivedContentGeneration = 0
@@ -770,6 +771,7 @@ struct MarkdownEditorView: View {
                         : nil,
                     onHeadingActivated: activatePreviewHeading,
                     onLinkActivated: activatePreviewLink,
+                    onPreviewIssueAction: activatePreviewIssue,
                     onManualScroll: {
                         if preferences.scrollSyncEnabled {
                             previewScrollPausedByUser = true
@@ -1209,6 +1211,32 @@ struct MarkdownEditorView: View {
             return
         }
         selectHeading(heading)
+    }
+
+    private func activatePreviewIssue(
+        action: PreviewIssueAction,
+        sourceUTF8Offset: Int
+    ) {
+        guard let validatedOffset = PreviewIssueNavigation.validatedOffset(
+            sourceUTF8Offset,
+            renderedSource: previewSourceSnapshot,
+            currentSource: document.text
+        ) else {
+            retryPreview()
+            return
+        }
+
+        switch action {
+        case .locate:
+            viewMode = viewMode.sourceVisible
+            sourceSelectionGeneration &+= 1
+            sourceSelectionRequest = SourceSelectionRequest(
+                generation: sourceSelectionGeneration,
+                utf8Range: validatedOffset..<validatedOffset
+            )
+        case .retry:
+            retryPreview()
+        }
     }
 
     private func activatePreviewLink(_ target: String) {
@@ -2457,6 +2485,7 @@ struct MarkdownEditorView: View {
 
             guard !Task.isCancelled, generation == derivedContentGeneration else { return }
             previewHTML = content.html
+            previewSourceSnapshot = content.sourceSnapshot
             previewFailureMessage = content.previewFailureMessage
             _ = sourceEditorSession.applySyntaxHighlighting(
                 content.syntaxHighlighting,
@@ -2564,6 +2593,7 @@ struct MarkdownEditorView: View {
 }
 
 private struct DerivedDocumentContent: Sendable {
+    let sourceSnapshot: String
     let html: String
     let previewFailureMessage: String?
     let analysis: DocumentAnalysisOutcome
@@ -2615,10 +2645,29 @@ private actor DocumentContentDeriver {
         )
         guard !Task.isCancelled else { return nil }
         return DerivedDocumentContent(
+            sourceSnapshot: markdown,
             html: previewDocument.html,
             previewFailureMessage: previewDocument.failureMessage,
             analysis: analysis,
             syntaxHighlighting: syntaxHighlighting
         )
+    }
+}
+
+enum PreviewIssueNavigation {
+    static func validatedOffset(
+        _ offset: Int,
+        renderedSource: String,
+        currentSource: String
+    ) -> Int? {
+        guard UTF8Text.isExactlyEqual(renderedSource, currentSource),
+              MarkdownSourceRange.navigationTarget(
+                  forUTF8Range: offset..<offset,
+                  in: currentSource
+              ) != nil
+        else {
+            return nil
+        }
+        return offset
     }
 }

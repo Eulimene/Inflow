@@ -6,9 +6,15 @@ struct PreviewScrollRequest: Equatable {
     let fraction: Double
 }
 
+enum PreviewIssueAction: String, Equatable, Sendable {
+    case locate
+    case retry
+}
+
 enum PreviewNavigationMessage: Equatable {
     case heading(sourceUTF8Offset: Int)
     case link(target: String)
+    case previewIssue(action: PreviewIssueAction, sourceUTF8Offset: Int)
     case manualScroll
 
     static func decode(_ body: Any) -> Self? {
@@ -19,17 +25,8 @@ enum PreviewNavigationMessage: Equatable {
         }
         switch type {
         case "heading":
-            guard let number = dictionary["sourceUTF8Offset"] as? NSNumber else { return nil }
-            let value = number.doubleValue
-            guard CFGetTypeID(number) != CFBooleanGetTypeID(),
-                  value.isFinite,
-                  value >= 0,
-                  value <= 9_007_199_254_740_991,
-                  value.rounded(.towardZero) == value
-            else {
-                return nil
-            }
-            return .heading(sourceUTF8Offset: Int(value))
+            guard let offset = decodeSourceOffset(dictionary) else { return nil }
+            return .heading(sourceUTF8Offset: offset)
         case "link":
             guard let targetHex = dictionary["targetHex"] as? String,
                   let target = decodeHexTarget(targetHex),
@@ -42,9 +39,31 @@ enum PreviewNavigationMessage: Equatable {
             return .link(target: target)
         case "manualScroll":
             return .manualScroll
+        case "previewIssue":
+            guard let actionName = dictionary["action"] as? String,
+                  let action = PreviewIssueAction(rawValue: actionName),
+                  let offset = decodeSourceOffset(dictionary)
+            else {
+                return nil
+            }
+            return .previewIssue(action: action, sourceUTF8Offset: offset)
         default:
             return nil
         }
+    }
+
+    private static func decodeSourceOffset(_ dictionary: [String: Any]) -> Int? {
+        guard let number = dictionary["sourceUTF8Offset"] as? NSNumber else { return nil }
+        let value = number.doubleValue
+        guard CFGetTypeID(number) != CFBooleanGetTypeID(),
+              value.isFinite,
+              value >= 0,
+              value <= 9_007_199_254_740_991,
+              value.rounded(.towardZero) == value
+        else {
+            return nil
+        }
+        return Int(value)
     }
 
     private static func decodeHexTarget(_ hex: String) -> String? {
@@ -82,6 +101,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
     let scrollRequest: PreviewScrollRequest?
     let onHeadingActivated: (Int) -> Void
     let onLinkActivated: (String) -> Void
+    let onPreviewIssueAction: (PreviewIssueAction, Int) -> Void
     let onManualScroll: () -> Void
 
     init(
@@ -90,6 +110,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
         scrollRequest: PreviewScrollRequest? = nil,
         onHeadingActivated: @escaping (Int) -> Void = { _ in },
         onLinkActivated: @escaping (String) -> Void = { _ in },
+        onPreviewIssueAction: @escaping (PreviewIssueAction, Int) -> Void = { _, _ in },
         onManualScroll: @escaping () -> Void = {}
     ) {
         self.html = html
@@ -97,6 +118,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
         self.scrollRequest = scrollRequest
         self.onHeadingActivated = onHeadingActivated
         self.onLinkActivated = onLinkActivated
+        self.onPreviewIssueAction = onPreviewIssueAction
         self.onManualScroll = onManualScroll
     }
 
@@ -129,6 +151,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
             scrollRequest: scrollRequest,
             onHeadingActivated: onHeadingActivated,
             onLinkActivated: onLinkActivated,
+            onPreviewIssueAction: onPreviewIssueAction,
             onManualScroll: onManualScroll,
             webView: webView
         )
@@ -140,6 +163,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
             scrollRequest: scrollRequest,
             onHeadingActivated: onHeadingActivated,
             onLinkActivated: onLinkActivated,
+            onPreviewIssueAction: onPreviewIssueAction,
             onManualScroll: onManualScroll,
             webView: webView
         )
@@ -179,18 +203,21 @@ struct MarkdownPreviewView: NSViewRepresentable {
         private var isDocumentLoaded = false
         private var onHeadingActivated: (Int) -> Void = { _ in }
         private var onLinkActivated: (String) -> Void = { _ in }
+        private var onPreviewIssueAction: (PreviewIssueAction, Int) -> Void = { _, _ in }
         private var onManualScroll: () -> Void = {}
 
         func update(
             scrollRequest: PreviewScrollRequest?,
             onHeadingActivated: @escaping (Int) -> Void,
             onLinkActivated: @escaping (String) -> Void,
+            onPreviewIssueAction: @escaping (PreviewIssueAction, Int) -> Void,
             onManualScroll: @escaping () -> Void,
             webView: WKWebView
         ) {
             requestedScroll = scrollRequest
             self.onHeadingActivated = onHeadingActivated
             self.onLinkActivated = onLinkActivated
+            self.onPreviewIssueAction = onPreviewIssueAction
             self.onManualScroll = onManualScroll
             applyScrollIfPossible(to: webView)
         }
@@ -224,6 +251,8 @@ struct MarkdownPreviewView: NSViewRepresentable {
                 onHeadingActivated(sourceUTF8Offset)
             case let .link(target):
                 onLinkActivated(target)
+            case let .previewIssue(action, sourceUTF8Offset):
+                onPreviewIssueAction(action, sourceUTF8Offset)
             case .manualScroll:
                 onManualScroll()
             }
@@ -295,6 +324,21 @@ struct MarkdownPreviewView: NSViewRepresentable {
       };
 
       document.addEventListener('click', (event) => {
+        const issueAction = event.target instanceof Element
+          ? event.target.closest('[data-inflow-preview-error-action]')
+          : null;
+        if (issueAction) {
+          event.preventDefault();
+          const issue = issueAction.closest('[data-inflow-source-start]');
+          const sourceUTF8Offset = Number(issue?.dataset.inflowSourceStart);
+          const action = issueAction.dataset.inflowPreviewErrorAction;
+          if (Number.isSafeInteger(sourceUTF8Offset)
+              && sourceUTF8Offset >= 0
+              && (action === 'locate' || action === 'retry')) {
+            handler.postMessage({ type: 'previewIssue', action, sourceUTF8Offset });
+          }
+          return;
+        }
         const link = event.target instanceof Element
           ? event.target.closest('a[data-inflow-link-target-hex]')
           : null;

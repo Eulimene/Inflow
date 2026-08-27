@@ -169,6 +169,8 @@ enum MarkdownRenderer {
             .mermaid-diagram .node rect { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
             .mermaid-diagram text { fill: currentColor; font: 14px -apple-system, BlinkMacSystemFont, sans-serif; }
             .mermaid-error { border: 1px solid #d4a72c; border-radius: 8px; padding: 12px 14px; color: #9a6700; }
+            .mermaid-error-actions { display: flex; gap: 8px; margin-top: 10px; }
+            .mermaid-error-actions button { font: inherit; color: inherit; border: 1px solid currentColor; border-radius: 6px; background: transparent; padding: 5px 9px; cursor: pointer; }
             .task-list-item { list-style: none; } input[type="checkbox"] { margin: 0 .45em 0 -1.35em; }
             .preview-error { margin-top: 30vh; text-align: center; color: #9a6700; }
             @media (prefers-color-scheme: dark) {
