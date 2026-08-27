@@ -89,6 +89,66 @@ Inflow 是一款本地优先的 Markdown 写作工作台。首发客户端支持
 
 需要 Xcode 26 或兼容版本，以及 `rust-toolchain.toml` 指定的 Rust 工具链。
 
+### 发布工作流助手
+
+首选入口是 `scripts/release-workflow.sh`。它不会接收或保存 Apple 密码，也不会覆盖已有 Archive 或输出目录：
+
+```sh
+# 查看所有命令
+scripts/release-workflow.sh help
+
+# 只跑完整仓库门禁；临时 Archive 会在结束后清理
+scripts/release-workflow.sh check
+
+# 完整门禁 + 保留无签名 Archive、ZIP 与 SHA-256
+scripts/release-workflow.sh candidate
+
+# 打开某个 Archive 内的 App 做人工验收
+scripts/release-workflow.sh open-archive \
+  /absolute/path/to/Inflow.xcarchive
+
+# 拷贝到另一台机器后复核 Archive 和 ZIP
+scripts/release-workflow.sh verify-local-archive \
+  /absolute/path/to/Inflow.xcarchive
+scripts/release-workflow.sh verify-zip \
+  /absolute/path/to/Inflow.xcarchive.zip
+```
+
+`candidate` 默认在 `build/releases/Inflow-local-<UTC 时间>/` 生成全新的候选目录；它先执行 Rust、XCTest、Analyze、Release 性能和 Archive 校验，再压缩并执行 `unzip -t`。无签名候选只供本地验收，不能分发。
+
+直接分发需要钥匙串中存在匹配 Team ID 的 `Developer ID Application` 证书：
+
+```sh
+scripts/release-workflow.sh developer-id-archive YOUR_TEAM_ID
+```
+
+该命令显式要求 Developer ID、secure timestamp 与 hardened runtime，并对生成的 Archive 再跑完整严格门禁。工程使用自动签名但不检入 `DEVELOPMENT_TEAM`；Team ID 和证书属于发布环境。
+
+Apple 公证凭据只存入钥匙串 profile：
+
+```sh
+xcrun notarytool store-credentials inflow-notary \
+  --apple-id 'your-apple-id@example.com' \
+  --team-id YOUR_TEAM_ID
+
+scripts/release-workflow.sh notarize \
+  /absolute/path/to/Inflow.xcarchive \
+  inflow-notary
+```
+
+省略 `--password` 后 `notarytool` 会使用安全提示读取 App 专用密码，避免凭据进入 shell 历史。
+
+公证命令会重新执行严格 Archive 门禁、保存 Apple 返回的结果与日志、装订 ticket、执行 Gatekeeper 评估，再生成最终 `Inflow-notarized.zip` 和 `.sha256`。可独立复核已导出的 App：
+
+```sh
+scripts/release-workflow.sh verify-notarized-app \
+  /absolute/path/to/Inflow.app
+```
+
+以上签名与公证命令面向 Developer ID 直接分发。通过 Mac App Store 发布时，应在 Xcode Organizer 选择 App Store Connect，并仍先执行 `check`；不要对商店包运行 Developer ID 公证命令。
+
+### 开发构建
+
 ```sh
 xcodebuild \
   -project Inflow.xcodeproj \
@@ -133,7 +193,7 @@ xcodebuild \
   -project Inflow.xcodeproj \
   -scheme Inflow \
   -configuration Release \
-  -destination 'generic/platform=macOS' \
+  -destination 'platform=macOS,arch=arm64' \
   -archivePath build/Inflow.xcarchive \
   archive
 scripts/verify-release-archive.sh build/Inflow.xcarchive

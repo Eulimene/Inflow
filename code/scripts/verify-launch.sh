@@ -52,6 +52,21 @@ trap '/bin/rm -rf -- "${VERIFICATION_ROOT}"' EXIT HUP INT TERM
 DEBUG_RESULTS="${VERIFICATION_ROOT}/DebugTests.xcresult"
 PERFORMANCE_RESULTS="${VERIFICATION_ROOT}/PerformanceTests.xcresult"
 
+if [ "${MODE}" = "local" ]; then
+  LOCAL_ARCHIVE="${INFLOW_LOCAL_ARCHIVE_PATH:-${VERIFICATION_ROOT}/Inflow.xcarchive}"
+  case "${LOCAL_ARCHIVE}" in
+    /*) ;;
+    *)
+      echo "error: INFLOW_LOCAL_ARCHIVE_PATH must be an absolute path" >&2
+      exit 1
+      ;;
+  esac
+  if [ -e "${LOCAL_ARCHIVE}" ]; then
+    echo "error: refusing to replace existing local archive: ${LOCAL_ARCHIVE}" >&2
+    exit 1
+  fi
+fi
+
 test_summary_value() {
   result_path="$1"
   key="$2"
@@ -119,12 +134,11 @@ assert_test_results "${DEBUG_RESULTS}" 1
 assert_test_results "${PERFORMANCE_RESULTS}" 1
 
 if [ "${MODE}" = "local" ]; then
-  LOCAL_ARCHIVE="${VERIFICATION_ROOT}/Inflow.xcarchive"
   /usr/bin/xcodebuild \
     -project "${PROJECT_PATH}" \
     -scheme "${SCHEME}" \
     -configuration Release \
-    -destination 'generic/platform=macOS' \
+    -destination 'platform=macOS,arch=arm64' \
     -derivedDataPath "${VERIFICATION_ROOT}/ArchiveDerivedData" \
     -archivePath "${LOCAL_ARCHIVE}" \
     CODE_SIGNING_ALLOWED=NO \

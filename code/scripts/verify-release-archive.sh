@@ -101,8 +101,13 @@ fi
 
 MARKETING_VERSION="$(/usr/bin/plutil -extract CFBundleShortVersionString raw "${INFO_PATH}")"
 BUILD_VERSION="$(/usr/bin/plutil -extract CFBundleVersion raw "${INFO_PATH}")"
+BUNDLE_IDENTIFIER="$(/usr/bin/plutil -extract CFBundleIdentifier raw "${INFO_PATH}")"
 if [ -z "${MARKETING_VERSION}" ] || [ -z "${BUILD_VERSION}" ]; then
   echo "error: archive is missing version metadata" >&2
+  exit 1
+fi
+if [ "${BUNDLE_IDENTIFIER}" != "com.inflow.desktop" ]; then
+  echo "error: unexpected bundle identifier: ${BUNDLE_IDENTIFIER}" >&2
   exit 1
 fi
 
@@ -176,13 +181,39 @@ if /usr/bin/codesign --verify --deep --strict "${APP_PATH}" >/dev/null 2>&1; the
     echo "error: archived app has only an ad-hoc signature" >&2
     exit 1
   fi
+  SIGNING_AUTHORITY="$(
+    echo "${SIGNATURE_DETAILS}" \
+      | /usr/bin/awk -F= '$1 == "Authority" { print $2; exit }'
+  )"
+  if [ "${LOCAL_VALIDATION}" -ne 1 ]; then
+    case "${SIGNING_AUTHORITY}" in
+      "Developer ID Application:"* | "Apple Distribution:"* \
+        | "3rd Party Mac Developer Application:"*) ;;
+      *)
+        echo "error: archived app is not signed by a distribution identity: ${SIGNING_AUTHORITY:-none}" >&2
+        exit 1
+        ;;
+    esac
+    case "${SIGNING_AUTHORITY}" in
+      "Developer ID Application:"*)
+        SIGNATURE_TIMESTAMP="$(
+          echo "${SIGNATURE_DETAILS}" \
+            | /usr/bin/awk -F= '$1 == "Timestamp" { print $2; exit }'
+        )"
+        if [ -z "${SIGNATURE_TIMESTAMP}" ] || [ "${SIGNATURE_TIMESTAMP}" = "none" ]; then
+          echo "error: Developer ID signature is missing a secure timestamp" >&2
+          exit 1
+        fi
+        ;;
+    esac
+  fi
 
   SIGNED_ENTITLEMENTS="$(/usr/bin/mktemp -t inflow-entitlements).plist"
   trap '/bin/rm -f "${SIGNED_ENTITLEMENTS}"' EXIT HUP INT TERM
   /usr/bin/codesign -d --entitlements :- "${APP_PATH}" \
     >"${SIGNED_ENTITLEMENTS}" 2>/dev/null
   ENTITLEMENTS_PATH="${SIGNED_ENTITLEMENTS}"
-  SIGNATURE_DESCRIPTION="signed hardened runtime"
+  SIGNATURE_DESCRIPTION="signed hardened runtime (${SIGNING_AUTHORITY})"
 elif [ "${LOCAL_VALIDATION}" -eq 1 ]; then
   ENTITLEMENTS_PATH="${SCRIPT_DIRECTORY}/../macos/Inflow/Resources/Inflow.entitlements"
 else
@@ -198,6 +229,15 @@ for ENTITLEMENT_KEY in \
 do
   require_true_entitlement "${ENTITLEMENTS_PATH}" "${ENTITLEMENT_KEY}"
 done
+
+GET_TASK_ALLOW="$(
+  /usr/libexec/PlistBuddy -c 'Print :com.apple.security.get-task-allow' \
+    "${ENTITLEMENTS_PATH}" 2>/dev/null || true
+)"
+if [ "${GET_TASK_ALLOW}" = "true" ]; then
+  echo "error: release entitlement must not enable get-task-allow" >&2
+  exit 1
+fi
 
 if /usr/bin/strings "${BINARY_PATH}" \
   | /usr/bin/grep -E '/Users/|/home/|/private/var/folders/|\.cargo/registry/' \

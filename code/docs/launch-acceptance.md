@@ -44,13 +44,20 @@
 无发布证书的开发机运行：
 
 ```sh
-scripts/verify-launch.sh --local
+scripts/release-workflow.sh check
 ```
 
-取得真实签名归档后运行：
+需要保留本地候选包时运行：
 
 ```sh
-scripts/verify-launch.sh --signed-archive /path/to/Inflow.xcarchive
+scripts/release-workflow.sh candidate
+```
+
+取得 Developer ID 证书与公证 Keychain profile 后运行：
+
+```sh
+scripts/release-workflow.sh developer-id-archive YOUR_TEAM_ID
+scripts/release-workflow.sh notarize /path/to/Inflow.xcarchive KEYCHAIN_PROFILE
 ```
 
 门禁包含 Rust 格式/Clippy/150 项单测、非零且无跳过的 macOS 全量 XCTest、Analyze、Release 大文档性能测试，以及 Archive 的 arm64/macOS 14 Mach-O、系统动态依赖、无开发产物污染、版本、私有路径、dSYM、hardened runtime、entitlement 和隐私清单检查。
