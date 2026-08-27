@@ -191,6 +191,39 @@ struct PreviewAppearanceConfiguration: Equatable, Sendable {
 }
 
 @MainActor
+protocol AppPreferencePersistence: AnyObject {
+    func persist(_ values: [String: Any]) -> Bool
+}
+
+@MainActor
+final class UserDefaultsAppPreferencePersistence: AppPreferencePersistence {
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func persist(_ values: [String: Any]) -> Bool {
+        for (key, value) in values {
+            defaults.set(value, forKey: key)
+        }
+        guard defaults.synchronize() else { return false }
+        return values.allSatisfy { key, value in
+            guard let stored = defaults.object(forKey: key) as? NSObject,
+                  let expected = value as? NSObject
+            else {
+                return false
+            }
+            return stored.isEqual(expected)
+        }
+    }
+}
+
+struct SettingsPersistenceFailure: Identifiable, Equatable, Sendable {
+    let id = UUID()
+}
+
+@MainActor
 final class AppPreferences: ObservableObject {
     enum Limits {
         static let editorFontSize = 12.0 ... 28.0
@@ -223,16 +256,19 @@ final class AppPreferences: ObservableObject {
     }
 
     private let defaults: UserDefaults
+    private let persistence: any AppPreferencePersistence
     private var accessibilityObserver: AnyCancellable?
+    @Published private(set) var persistenceFailure: SettingsPersistenceFailure?
 
     @Published var editorFontSize: Double {
         didSet {
             let clamped = Self.clamped(editorFontSize, range: Limits.editorFontSize)
             guard clamped == editorFontSize else {
                 editorFontSize = clamped
+                persist(clamped, forKey: Key.editorFontSize)
                 return
             }
-            defaults.set(clamped, forKey: Key.editorFontSize)
+            persist(clamped, forKey: Key.editorFontSize)
         }
     }
 
@@ -241,36 +277,37 @@ final class AppPreferences: ObservableObject {
             let clamped = Self.clamped(editorLineHeight, range: Limits.editorLineHeight)
             guard clamped == editorLineHeight else {
                 editorLineHeight = clamped
+                persist(clamped, forKey: Key.editorLineHeight)
                 return
             }
-            defaults.set(clamped, forKey: Key.editorLineHeight)
+            persist(clamped, forKey: Key.editorLineHeight)
         }
     }
 
     @Published var spellingEnabled: Bool {
-        didSet { defaults.set(spellingEnabled, forKey: Key.spellingEnabled) }
+        didSet { persist(spellingEnabled, forKey: Key.spellingEnabled) }
     }
 
     @Published var syntaxHighlightingEnabled: Bool {
         didSet {
-            defaults.set(syntaxHighlightingEnabled, forKey: Key.syntaxHighlightingEnabled)
+            persist(syntaxHighlightingEnabled, forKey: Key.syntaxHighlightingEnabled)
         }
     }
 
     @Published var wrapsLines: Bool {
-        didSet { defaults.set(wrapsLines, forKey: Key.wrapsLines) }
+        didSet { persist(wrapsLines, forKey: Key.wrapsLines) }
     }
 
     @Published var showsLineNumbers: Bool {
-        didSet { defaults.set(showsLineNumbers, forKey: Key.showsLineNumbers) }
+        didSet { persist(showsLineNumbers, forKey: Key.showsLineNumbers) }
     }
 
     @Published var scrollSyncEnabled: Bool {
-        didSet { defaults.set(scrollSyncEnabled, forKey: Key.scrollSyncEnabled) }
+        didSet { persist(scrollSyncEnabled, forKey: Key.scrollSyncEnabled) }
     }
 
     @Published var headingNavigationEnabled: Bool {
-        didSet { defaults.set(headingNavigationEnabled, forKey: Key.headingNavigationEnabled) }
+        didSet { persist(headingNavigationEnabled, forKey: Key.headingNavigationEnabled) }
     }
 
     @Published var previewContentWidth: Double {
@@ -278,9 +315,10 @@ final class AppPreferences: ObservableObject {
             let clamped = Self.clamped(previewContentWidth, range: Limits.previewContentWidth)
             guard clamped == previewContentWidth else {
                 previewContentWidth = clamped
+                persist(clamped, forKey: Key.previewContentWidth)
                 return
             }
-            defaults.set(clamped, forKey: Key.previewContentWidth)
+            persist(clamped, forKey: Key.previewContentWidth)
         }
     }
 
@@ -289,39 +327,40 @@ final class AppPreferences: ObservableObject {
             let clamped = Self.clamped(previewZoom, range: Limits.previewZoom)
             guard clamped == previewZoom else {
                 previewZoom = clamped
+                persist(clamped, forKey: Key.previewZoom)
                 return
             }
-            defaults.set(clamped, forKey: Key.previewZoom)
+            persist(clamped, forKey: Key.previewZoom)
         }
     }
 
     @Published var previewColorScheme: PreviewColorScheme {
-        didSet { defaults.set(previewColorScheme.rawValue, forKey: Key.previewColorScheme) }
+        didSet { persist(previewColorScheme.rawValue, forKey: Key.previewColorScheme) }
     }
 
     @Published var previewTheme: PreviewTheme {
-        didSet { defaults.set(previewTheme.rawValue, forKey: Key.previewTheme) }
+        didSet { persist(previewTheme.rawValue, forKey: Key.previewTheme) }
     }
 
     @Published var mathRenderingEnabled: Bool {
-        didSet { defaults.set(mathRenderingEnabled, forKey: Key.mathRenderingEnabled) }
+        didSet { persist(mathRenderingEnabled, forKey: Key.mathRenderingEnabled) }
     }
 
     @Published var mermaidRenderingEnabled: Bool {
-        didSet { defaults.set(mermaidRenderingEnabled, forKey: Key.mermaidRenderingEnabled) }
+        didSet { persist(mermaidRenderingEnabled, forKey: Key.mermaidRenderingEnabled) }
     }
 
     @Published var increasedContrast: AccessibilityPreference {
-        didSet { defaults.set(increasedContrast.rawValue, forKey: Key.increasedContrast) }
+        didSet { persist(increasedContrast.rawValue, forKey: Key.increasedContrast) }
     }
 
     @Published var reduceMotion: AccessibilityPreference {
-        didSet { defaults.set(reduceMotion.rawValue, forKey: Key.reduceMotion) }
+        didSet { persist(reduceMotion.rawValue, forKey: Key.reduceMotion) }
     }
 
     @Published private(set) var lastActiveEditorViewMode: EditorViewMode {
         didSet {
-            defaults.set(lastActiveEditorViewMode.rawValue, forKey: Key.lastActiveEditorViewMode)
+            persist(lastActiveEditorViewMode.rawValue, forKey: Key.lastActiveEditorViewMode)
         }
     }
 
@@ -330,40 +369,49 @@ final class AppPreferences: ObservableObject {
             let clamped = RecentDocumentPolicy.clampCapacity(recentDocumentCapacity)
             guard clamped == recentDocumentCapacity else {
                 recentDocumentCapacity = clamped
+                persist(clamped, forKey: RecentDocumentPolicy.capacityKey)
                 return
             }
-            defaults.set(clamped, forKey: RecentDocumentPolicy.capacityKey)
+            persist(clamped, forKey: RecentDocumentPolicy.capacityKey)
         }
     }
 
     @Published var markdownOpenBehavior: MarkdownOpenBehavior {
         didSet {
-            defaults.set(markdownOpenBehavior.rawValue, forKey: RecentDocumentPolicy.openBehaviorKey)
+            persist(
+                markdownOpenBehavior.rawValue,
+                forKey: RecentDocumentPolicy.openBehaviorKey
+            )
         }
     }
 
     @Published var autosaveEnabled: Bool {
         didSet {
-            defaults.set(autosaveEnabled, forKey: Key.autosaveEnabled)
+            persist(autosaveEnabled, forKey: Key.autosaveEnabled)
             applyAutosavePolicy()
         }
     }
 
     @Published var autosaveDelay: AutosaveDelay {
         didSet {
-            defaults.set(autosaveDelay.rawValue, forKey: Key.autosaveDelay)
+            persist(autosaveDelay.rawValue, forKey: Key.autosaveDelay)
             applyAutosavePolicy()
         }
     }
 
     @Published var existingImagePlacement: ExistingImagePlacementPreference {
         didSet {
-            defaults.set(existingImagePlacement.rawValue, forKey: Key.existingImagePlacement)
+            persist(existingImagePlacement.rawValue, forKey: Key.existingImagePlacement)
         }
     }
 
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        persistence: (any AppPreferencePersistence)? = nil
+    ) {
         self.defaults = defaults
+        self.persistence = persistence ?? UserDefaultsAppPreferencePersistence(defaults: defaults)
+        persistenceFailure = nil
         editorFontSize = Self.number(
             forKey: Key.editorFontSize,
             in: defaults,
@@ -550,6 +598,14 @@ final class AppPreferences: ObservableObject {
         }
     }
 
+    func retryPersistence() {
+        persistCurrentValues()
+    }
+
+    func continueUsingSessionPreferences() {
+        persistenceFailure = nil
+    }
+
     private func resetWriting() {
         editorFontSize = SourceEditorAppearance.default.fontSize
         editorLineHeight = SourceEditorAppearance.default.lineHeight
@@ -571,28 +627,37 @@ final class AppPreferences: ObservableObject {
     }
 
     private func persistCurrentValues() {
-        defaults.set(editorFontSize, forKey: Key.editorFontSize)
-        defaults.set(editorLineHeight, forKey: Key.editorLineHeight)
-        defaults.set(syntaxHighlightingEnabled, forKey: Key.syntaxHighlightingEnabled)
-        defaults.set(spellingEnabled, forKey: Key.spellingEnabled)
-        defaults.set(wrapsLines, forKey: Key.wrapsLines)
-        defaults.set(showsLineNumbers, forKey: Key.showsLineNumbers)
-        defaults.set(scrollSyncEnabled, forKey: Key.scrollSyncEnabled)
-        defaults.set(headingNavigationEnabled, forKey: Key.headingNavigationEnabled)
-        defaults.set(previewContentWidth, forKey: Key.previewContentWidth)
-        defaults.set(previewZoom, forKey: Key.previewZoom)
-        defaults.set(previewColorScheme.rawValue, forKey: Key.previewColorScheme)
-        defaults.set(previewTheme.rawValue, forKey: Key.previewTheme)
-        defaults.set(mathRenderingEnabled, forKey: Key.mathRenderingEnabled)
-        defaults.set(mermaidRenderingEnabled, forKey: Key.mermaidRenderingEnabled)
-        defaults.set(increasedContrast.rawValue, forKey: Key.increasedContrast)
-        defaults.set(reduceMotion.rawValue, forKey: Key.reduceMotion)
-        defaults.set(lastActiveEditorViewMode.rawValue, forKey: Key.lastActiveEditorViewMode)
-        defaults.set(recentDocumentCapacity, forKey: RecentDocumentPolicy.capacityKey)
-        defaults.set(markdownOpenBehavior.rawValue, forKey: RecentDocumentPolicy.openBehaviorKey)
-        defaults.set(autosaveEnabled, forKey: Key.autosaveEnabled)
-        defaults.set(autosaveDelay.rawValue, forKey: Key.autosaveDelay)
-        defaults.set(existingImagePlacement.rawValue, forKey: Key.existingImagePlacement)
+        let succeeded = persistence.persist([
+                Key.editorFontSize: editorFontSize,
+                Key.editorLineHeight: editorLineHeight,
+                Key.syntaxHighlightingEnabled: syntaxHighlightingEnabled,
+                Key.spellingEnabled: spellingEnabled,
+                Key.wrapsLines: wrapsLines,
+                Key.showsLineNumbers: showsLineNumbers,
+                Key.scrollSyncEnabled: scrollSyncEnabled,
+                Key.headingNavigationEnabled: headingNavigationEnabled,
+                Key.previewContentWidth: previewContentWidth,
+                Key.previewZoom: previewZoom,
+                Key.previewColorScheme: previewColorScheme.rawValue,
+                Key.previewTheme: previewTheme.rawValue,
+                Key.mathRenderingEnabled: mathRenderingEnabled,
+                Key.mermaidRenderingEnabled: mermaidRenderingEnabled,
+                Key.increasedContrast: increasedContrast.rawValue,
+                Key.reduceMotion: reduceMotion.rawValue,
+                Key.lastActiveEditorViewMode: lastActiveEditorViewMode.rawValue,
+                RecentDocumentPolicy.capacityKey: recentDocumentCapacity,
+                RecentDocumentPolicy.openBehaviorKey: markdownOpenBehavior.rawValue,
+                Key.autosaveEnabled: autosaveEnabled,
+                Key.autosaveDelay: autosaveDelay.rawValue,
+                Key.existingImagePlacement: existingImagePlacement.rawValue,
+            ])
+        persistenceFailure = succeeded ? nil : SettingsPersistenceFailure()
+    }
+
+    private func persist(_ value: Any, forKey key: String) {
+        if !persistence.persist([key: value]) {
+            persistenceFailure = SettingsPersistenceFailure()
+        }
     }
 
     private static func clamped(_ value: Double, range: ClosedRange<Double>) -> Double {

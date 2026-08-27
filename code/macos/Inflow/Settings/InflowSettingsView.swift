@@ -45,6 +45,14 @@ enum SettingsResetPrompt {
     static let cancelTitle = "取消"
 }
 
+enum SettingsPersistencePrompt {
+    static let title = "暂时无法保存设置"
+    static let message =
+        "本次会话可继续使用当前选择，重新打开 Inflow 后可能恢复之前的值。"
+    static let retryTitle = "重试"
+    static let continueTitle = "继续使用"
+}
+
 struct InflowSettingsView: View {
     @ObservedObject var preferences: AppPreferences
     @ObservedObject var anonymousUsage: AnonymousUsageDataController
@@ -108,6 +116,29 @@ struct InflowSettingsView: View {
             }
         } message: {
             Text(SettingsResetPrompt.message)
+        }
+        .alert(
+            SettingsPersistencePrompt.title,
+            isPresented: Binding(
+                get: { preferences.persistenceFailure != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        preferences.continueUsingSessionPreferences()
+                    }
+                }
+            )
+        ) {
+            Button(SettingsPersistencePrompt.retryTitle) {
+                Task { @MainActor in
+                    await Task.yield()
+                    preferences.retryPersistence()
+                }
+            }
+            Button(SettingsPersistencePrompt.continueTitle, role: .cancel) {
+                preferences.continueUsingSessionPreferences()
+            }
+        } message: {
+            Text(SettingsPersistencePrompt.message)
         }
     }
 

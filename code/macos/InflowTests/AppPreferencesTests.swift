@@ -97,6 +97,13 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(second.previewContentWidth, 600)
             XCTAssertEqual(second.previewZoom, 2)
             XCTAssertEqual(second.recentDocumentCapacity, 50)
+
+            let third = AppPreferences(defaults: defaults)
+            XCTAssertEqual(third.editorFontSize, 28)
+            XCTAssertEqual(third.editorLineHeight, 1.2)
+            XCTAssertEqual(third.previewContentWidth, 600)
+            XCTAssertEqual(third.previewZoom, 2)
+            XCTAssertEqual(third.recentDocumentCapacity, 50)
         }
     }
 
@@ -237,6 +244,51 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertEqual(SettingsResetScope.all.menuTitle, "恢复全部默认设置…")
         XCTAssertNil(InflowSettingsSection.privacy.preferenceGroup)
         XCTAssertEqual(InflowSettingsSection.preview.preferenceGroup, .preview)
+    }
+
+    func testSettingsPersistenceFailureKeepsSessionValuesAndSupportsRetry() {
+        withDefaults { defaults in
+            let persistence = ControlledPreferencePersistence(defaults: defaults)
+            let preferences = AppPreferences(
+                defaults: defaults,
+                persistence: persistence
+            )
+            XCTAssertNil(preferences.persistenceFailure)
+            XCTAssertEqual(defaults.double(forKey: "preferences.preview.zoom"), 1)
+
+            persistence.shouldFail = true
+            preferences.previewZoom = 1.55
+
+            XCTAssertEqual(preferences.previewZoom, 1.55)
+            XCTAssertEqual(defaults.double(forKey: "preferences.preview.zoom"), 1)
+            XCTAssertNotNil(preferences.persistenceFailure)
+            XCTAssertEqual(SettingsPersistencePrompt.title, "暂时无法保存设置")
+            XCTAssertEqual(
+                SettingsPersistencePrompt.message,
+                "本次会话可继续使用当前选择，重新打开 Inflow 后可能恢复之前的值。"
+            )
+            XCTAssertEqual(SettingsPersistencePrompt.retryTitle, "重试")
+            XCTAssertEqual(SettingsPersistencePrompt.continueTitle, "继续使用")
+
+            preferences.continueUsingSessionPreferences()
+            XCTAssertNil(preferences.persistenceFailure)
+            XCTAssertEqual(preferences.previewZoom, 1.55)
+
+            preferences.previewTheme = .code
+            XCTAssertNotNil(preferences.persistenceFailure)
+            preferences.retryPersistence()
+            XCTAssertNotNil(preferences.persistenceFailure)
+
+            persistence.shouldFail = false
+            preferences.retryPersistence()
+
+            XCTAssertNil(preferences.persistenceFailure)
+            XCTAssertEqual(defaults.double(forKey: "preferences.preview.zoom"), 1.55)
+            XCTAssertEqual(
+                defaults.string(forKey: "preferences.preview.theme"),
+                PreviewTheme.code.rawValue
+            )
+        }
     }
 
     func testAutosavePolicySupportsEveryContractDelayAndKeepsManualSaveAvailable() {
@@ -405,5 +457,23 @@ final class AppPreferencesTests: XCTestCase {
             defaults.removePersistentDomain(forName: suiteName)
         }
         try body(defaults)
+    }
+}
+
+@MainActor
+private final class ControlledPreferencePersistence: AppPreferencePersistence {
+    private let defaults: UserDefaults
+    var shouldFail = false
+
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+    }
+
+    func persist(_ values: [String: Any]) -> Bool {
+        guard !shouldFail else { return false }
+        for (key, value) in values {
+            defaults.set(value, forKey: key)
+        }
+        return defaults.synchronize()
     }
 }
