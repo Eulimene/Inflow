@@ -292,6 +292,35 @@ final class HTMLExporterTests: XCTestCase {
     }
 
     @MainActor
+    func testPDFExportRemovesHostVersionAndTimestampMetadata() async throws {
+        let html = try HTMLExporter.generate(
+            snapshot: HTMLExportSnapshot(markdown: "# Private metadata check")
+        )
+        let data = try await PDFExporter.generate(fromSelfContainedHTML: html)
+        let document = try XCTUnwrap(PDFDocument(data: data))
+        XCTAssertTrue((document.documentAttributes ?? [:]).isEmpty)
+
+        let rawPDF = try XCTUnwrap(String(data: data, encoding: .isoLatin1))
+        for forbidden in [
+            "/CreationDate",
+            "/ModDate",
+            "/Producer",
+            "Quartz PDFContext",
+            "macOS Version",
+        ] {
+            XCTAssertFalse(rawPDF.contains(forbidden), forbidden)
+        }
+    }
+
+    func testPDFMetadataSanitizerFailsClosedForUnknownContainer() {
+        XCTAssertThrowsError(
+            try PDFContainerPrivacySanitizer.sanitize(Data("%PDF-1.7\n%%EOF".utf8))
+        ) { error in
+            XCTAssertEqual(error as? PDFExportError, .invalidOutput)
+        }
+    }
+
+    @MainActor
     func testLongPDFPaginatesWithoutChangingPaperSize() async throws {
         let markdown = (1...180).map { "## Section \($0)\n\nParagraph \($0) with content." }
             .joined(separator: "\n\n")

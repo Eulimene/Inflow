@@ -87,7 +87,7 @@ enum PDFExporter {
                 throw PDFExportError.invalidOutput
             }
         }
-        return data
+        return try PDFContainerPrivacySanitizer.sanitize(data)
     }
 
     private static func measuredContentHeight(in webView: WKWebView) async throws -> CGFloat {
@@ -167,6 +167,75 @@ enum PDFExporter {
         </style>
         """
         return html.replacingOccurrences(of: "</head>", with: "\(style)</head>")
+    }
+}
+
+/// Quartz writes the host macOS build and export timestamps into the PDF Info
+/// object even when no metadata dictionary is supplied. Inflow clears that
+/// object in place so page offsets and the cross-reference table remain exact,
+/// while the delivered bytes no longer disclose host details.
+enum PDFContainerPrivacySanitizer {
+    private static let infoReferenceExpression = try! NSRegularExpression(
+        pattern: #"/Info\s+([0-9]+)\s+([0-9]+)\s+R"#
+    )
+    private static let trailerMarker = Data("\ntrailer\n".utf8)
+    private static let endObjectMarker = Data("endobj".utf8)
+
+    static func sanitize(_ data: Data) throws -> Data {
+        guard let trailerRange = data.range(
+            of: trailerMarker,
+            options: .backwards
+        ) else {
+            throw PDFExportError.invalidOutput
+        }
+        let trailerData = Data(data[trailerRange.lowerBound...])
+        guard let trailer = String(data: trailerData, encoding: .isoLatin1) else {
+            throw PDFExportError.invalidOutput
+        }
+        let fullRange = NSRange(location: 0, length: (trailer as NSString).length)
+        guard let match = infoReferenceExpression.firstMatch(
+            in: trailer,
+            range: fullRange
+        ), let objectNumberRange = Range(match.range(at: 1), in: trailer),
+           let generationRange = Range(match.range(at: 2), in: trailer)
+        else {
+            throw PDFExportError.invalidOutput
+        }
+
+        let objectNumber = trailer[objectNumberRange]
+        let generation = trailer[generationRange]
+        let objectHeader = Data("\n\(objectNumber) \(generation) obj".utf8)
+        guard let headerRange = data.range(
+            of: objectHeader,
+            options: .backwards,
+            in: data.startIndex..<trailerRange.lowerBound
+        ), let endRange = data.range(
+            of: endObjectMarker,
+            in: headerRange.upperBound..<trailerRange.lowerBound
+        ) else {
+            throw PDFExportError.invalidOutput
+        }
+
+        let payloadRange = headerRange.upperBound..<endRange.lowerBound
+        let emptyInfo = Data("\n<< >>\n".utf8)
+        guard payloadRange.count >= emptyInfo.count else {
+            throw PDFExportError.invalidOutput
+        }
+        var replacement = emptyInfo
+        replacement.append(
+            Data(repeating: 0x20, count: payloadRange.count - emptyInfo.count)
+        )
+        var sanitized = data
+        sanitized.replaceSubrange(payloadRange, with: replacement)
+
+        guard sanitized.count == data.count,
+              let document = PDFDocument(data: sanitized),
+              document.pageCount > 0,
+              (document.documentAttributes ?? [:]).isEmpty
+        else {
+            throw PDFExportError.invalidOutput
+        }
+        return sanitized
     }
 }
 
