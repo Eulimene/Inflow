@@ -51,7 +51,7 @@ scripts/verify-launch.sh --local
 scripts/verify-launch.sh --signed-archive /path/to/Inflow.xcarchive
 ```
 
-门禁包含 Rust 格式/Clippy/150 项单测、非零且无跳过的 macOS 全量 XCTest、Analyze、Release 大文档性能测试，以及 Archive 的 arm64、macOS 14、版本、私有路径、dSYM、hardened runtime、entitlement 和隐私清单检查。
+门禁包含 Rust 格式/Clippy/150 项单测、非零且无跳过的 macOS 全量 XCTest、Analyze、Release 大文档性能测试，以及 Archive 的 arm64/macOS 14 Mach-O、系统动态依赖、无开发产物污染、版本、私有路径、dSYM、hardened runtime、entitlement 和隐私清单检查。
 
 ## 仍需外部完成的发布条件
 

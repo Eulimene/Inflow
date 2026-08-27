@@ -85,6 +85,14 @@ if [ "${ARCHITECTURES}" != "arm64" ]; then
   exit 1
 fi
 
+BINARY_BUILD_INFO="$(/usr/bin/xcrun vtool -show-build "${BINARY_PATH}")"
+BINARY_PLATFORM="$(echo "${BINARY_BUILD_INFO}" | /usr/bin/awk '$1 == "platform" { print $2; exit }')"
+BINARY_MINIMUM_SYSTEM="$(echo "${BINARY_BUILD_INFO}" | /usr/bin/awk '$1 == "minos" { print $2; exit }')"
+if [ "${BINARY_PLATFORM}" != "MACOS" ] || [ "${BINARY_MINIMUM_SYSTEM}" != "14.0" ]; then
+  echo "error: expected a macOS 14.0 Mach-O, found ${BINARY_PLATFORM} ${BINARY_MINIMUM_SYSTEM}" >&2
+  exit 1
+fi
+
 MINIMUM_SYSTEM="$(/usr/bin/plutil -extract LSMinimumSystemVersion raw "${INFO_PATH}")"
 if [ "${MINIMUM_SYSTEM}" != "14.0" ]; then
   echo "error: expected macOS 14.0 minimum, found ${MINIMUM_SYSTEM}" >&2
@@ -97,6 +105,37 @@ if [ -z "${MARKETING_VERSION}" ] || [ -z "${BUILD_VERSION}" ]; then
   echo "error: archive is missing version metadata" >&2
   exit 1
 fi
+
+UNEXPECTED_BUNDLE_ARTIFACT="$({
+  /usr/bin/find "${APP_PATH}" \
+    \( -name '*.xctest' -o -name '*.swiftmodule' -o -name '*.swiftinterface' \
+      -o -name '*.a' -o -name '*.dSYM' \) \
+    -print -quit
+} 2>/dev/null)"
+if [ -n "${UNEXPECTED_BUNDLE_ARTIFACT}" ]; then
+  echo "error: archived app contains a development artifact: ${UNEXPECTED_BUNDLE_ARTIFACT}" >&2
+  exit 1
+fi
+
+UNEXPECTED_EXECUTABLE="$({
+  /usr/bin/find "${APP_PATH}" -type f -perm -111 ! -path "${BINARY_PATH}" -print -quit
+} 2>/dev/null)"
+if [ -n "${UNEXPECTED_EXECUTABLE}" ]; then
+  echo "error: archived app contains an unexpected executable: ${UNEXPECTED_EXECUTABLE}" >&2
+  exit 1
+fi
+
+/usr/bin/otool -L "${BINARY_PATH}" \
+  | /usr/bin/awk 'NR > 1 { print $1 }' \
+  | while IFS= read -r DEPENDENCY; do
+      case "${DEPENDENCY}" in
+        /System/Library/* | /usr/lib/*) ;;
+        *)
+          echo "error: release executable has a non-system dependency: ${DEPENDENCY}" >&2
+          exit 1
+          ;;
+      esac
+    done
 
 BINARY_DWARF_ID="$(
   /usr/bin/xcrun dwarfdump --uuid "${BINARY_PATH}" \
@@ -168,4 +207,4 @@ then
   exit 1
 fi
 
-echo "verified Inflow ${MARKETING_VERSION} (${BUILD_VERSION}), arm64, macOS ${MINIMUM_SYSTEM}+, dSYM ${BINARY_DWARF_ID}, ${SIGNATURE_DESCRIPTION}"
+echo "verified Inflow ${MARKETING_VERSION} (${BUILD_VERSION}), arm64, macOS ${MINIMUM_SYSTEM}+, system-only dynamic dependencies, dSYM ${BINARY_DWARF_ID}, ${SIGNATURE_DESCRIPTION}"
