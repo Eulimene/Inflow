@@ -69,6 +69,7 @@
 		A1000000000000000000003C /* PersistentSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000041 /* PersistentSplitView.swift */; };
 		A1000000000000000000003D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000042 /* Assets.xcassets */; };
 		A1000000000000000000003E /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000043 /* PrivacyInfo.xcprivacy */; };
+		A1000000000000000000003F /* LaunchJourneyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000044 /* LaunchJourneyTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -149,6 +150,7 @@
 		A20000000000000000000041 /* PersistentSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/PersistentSplitView.swift; sourceTree = "<group>"; };
 		A20000000000000000000042 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
 		A20000000000000000000043 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Resources/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		A20000000000000000000044 /* LaunchJourneyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchJourneyTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -262,6 +264,7 @@
 				A2000000000000000000003C /* PreviewZoomCommandsTests.swift */,
 				A2000000000000000000003E /* InflowHelpTests.swift */,
 				A20000000000000000000040 /* RecentDocumentsTests.swift */,
+				A20000000000000000000044 /* LaunchJourneyTests.swift */,
 			);
 			path = macos/InflowTests;
 			sourceTree = "<group>";
@@ -474,6 +477,7 @@
 				A10000000000000000000037 /* PreviewZoomCommandsTests.swift in Sources */,
 				A10000000000000000000039 /* InflowHelpTests.swift in Sources */,
 				A1000000000000000000003B /* RecentDocumentsTests.swift in Sources */,
+				A1000000000000000000003F /* LaunchJourneyTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
