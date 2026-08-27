@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import ObjectiveC
 
 enum MarkdownOpenBehavior: String, CaseIterable, Identifiable, Sendable {
     case newWindow
@@ -87,6 +88,62 @@ struct RecentDocumentEntry: Identifiable, Equatable, Sendable {
 
     static func identity(for url: URL) -> String {
         url.standardizedFileURL.path
+    }
+}
+
+@MainActor
+final class SecurityScopedDocumentLease: NSObject {
+    let url: URL
+    private var isActive: Bool
+    private let stopAccess: (URL) -> Void
+
+    init(url: URL, stopAccess: @escaping (URL) -> Void) {
+        self.url = url
+        isActive = true
+        self.stopAccess = stopAccess
+    }
+
+    func invalidate() {
+        guard isActive else { return }
+        isActive = false
+        stopAccess(url)
+    }
+
+    deinit {
+        MainActor.assumeIsolated {
+            invalidate()
+        }
+    }
+}
+
+@MainActor
+enum SecurityScopedDocumentLeaseRegistry {
+    nonisolated(unsafe) private static var associationKey: UInt8 = 0
+
+    static func retainActiveAccess(
+        to url: URL,
+        for document: NSDocument,
+        stopAccess: @escaping (URL) -> Void = { $0.stopAccessingSecurityScopedResource() }
+    ) {
+        objc_setAssociatedObject(
+            document,
+            &associationKey,
+            SecurityScopedDocumentLease(url: url, stopAccess: stopAccess),
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
+    }
+
+    static func releaseAccess(for document: NSDocument) {
+        objc_setAssociatedObject(
+            document,
+            &associationKey,
+            nil,
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
+    }
+
+    static func activeURL(for document: NSDocument) -> URL? {
+        (objc_getAssociatedObject(document, &associationKey) as? SecurityScopedDocumentLease)?.url
     }
 }
 
@@ -537,12 +594,21 @@ final class RecentDocumentsController: NSObject, ObservableObject {
             withContentsOf: url,
             display: true
         ) { [weak self] document, wasAlreadyOpen, error in
-            if securityScopeIsActive { url.stopAccessingSecurityScopedResource() }
             if let error {
+                if securityScopeIsActive { url.stopAccessingSecurityScopedResource() }
                 NSDocumentController.shared.presentError(error)
                 return
             }
-            guard let self, document != nil else { return }
+            guard let self, let document else {
+                if securityScopeIsActive { url.stopAccessingSecurityScopedResource() }
+                return
+            }
+            if securityScopeIsActive {
+                SecurityScopedDocumentLeaseRegistry.retainActiveAccess(
+                    to: url,
+                    for: document
+                )
+            }
             self.note(url)
             if !wasAlreadyOpen,
                let reusableDocument,

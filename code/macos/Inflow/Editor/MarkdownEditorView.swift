@@ -654,6 +654,7 @@ struct MarkdownEditorView: View {
             fileSafetySession.update(document: document, fileURL: fileURL)
         }
         .onChange(of: fileURL) { _, newURL in
+            releaseStaleDocumentSecurityScope(for: newURL)
             registerDocumentNavigation(url: newURL)
             if let newURL {
                 recentDocuments?.note(newURL)
@@ -730,6 +731,19 @@ struct MarkdownEditorView: View {
             isFocusModeEnabled = false
             isTypewriterModeEnabled = false
         }
+    }
+
+    private func releaseStaleDocumentSecurityScope(for newURL: URL?) {
+        guard let nativeDocument = sourceEditorSession.textView.window?
+            .windowController?.document as? NSDocument,
+              let authorizedURL = SecurityScopedDocumentLeaseRegistry.activeURL(
+                  for: nativeDocument
+              ),
+              authorizedURL.standardizedFileURL != newURL?.standardizedFileURL
+        else {
+            return
+        }
+        SecurityScopedDocumentLeaseRegistry.releaseAccess(for: nativeDocument)
     }
 
     private var interactionObservationLayer: some View {

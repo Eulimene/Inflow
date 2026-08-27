@@ -4,6 +4,42 @@ import XCTest
 
 @MainActor
 final class RecentDocumentsTests: XCTestCase {
+    func testSecurityScopedAccessLivesWithDocumentAndReleasesExactlyOnce() {
+        let document = NSDocument()
+        let firstURL = URL(fileURLWithPath: "/tmp/first.md")
+        let secondURL = URL(fileURLWithPath: "/tmp/second.md")
+        var released: [URL] = []
+
+        SecurityScopedDocumentLeaseRegistry.retainActiveAccess(
+            to: firstURL,
+            for: document,
+            stopAccess: { released.append($0) }
+        )
+        XCTAssertEqual(
+            SecurityScopedDocumentLeaseRegistry.activeURL(for: document),
+            firstURL
+        )
+        XCTAssertTrue(released.isEmpty)
+
+        SecurityScopedDocumentLeaseRegistry.retainActiveAccess(
+            to: secondURL,
+            for: document,
+            stopAccess: { released.append($0) }
+        )
+        XCTAssertEqual(released, [firstURL])
+        XCTAssertEqual(
+            SecurityScopedDocumentLeaseRegistry.activeURL(for: document),
+            secondURL
+        )
+
+        SecurityScopedDocumentLeaseRegistry.releaseAccess(for: document)
+        XCTAssertEqual(released, [firstURL, secondURL])
+        XCTAssertNil(SecurityScopedDocumentLeaseRegistry.activeURL(for: document))
+
+        SecurityScopedDocumentLeaseRegistry.releaseAccess(for: document)
+        XCTAssertEqual(released, [firstURL, secondURL])
+    }
+
     func testPolicyDefaultsAndBoundsAreStable() {
         let suiteName = "Inflow.RecentDocumentPolicyTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
