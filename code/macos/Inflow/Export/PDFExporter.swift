@@ -48,6 +48,8 @@ enum PDFExporter {
         webView.navigationDelegate = loader
         try await loader.load(htmlString, in: webView)
         try Task.checkCancellation()
+        try await fitWideDisplayFormulae(in: webView)
+        try Task.checkCancellation()
 
         let contentHeight = try await measuredContentHeight(in: webView)
         try Task.checkCancellation()
@@ -88,6 +90,45 @@ enum PDFExporter {
             }
         }
         return try PDFContainerPrivacySanitizer.sanitize(data)
+    }
+
+    private static func fitWideDisplayFormulae(in webView: WKWebView) async throws {
+        let script = """
+        (() => {
+          for (const formula of document.querySelectorAll('math[display="block"]')) {
+            formula.style.transform = '';
+            const availableWidth = Math.min(
+              document.documentElement.clientWidth,
+              formula.parentElement ? formula.parentElement.clientWidth : Number.POSITIVE_INFINITY
+            );
+            const content = formula.firstElementChild;
+            const requiredWidth = Math.max(
+              formula.scrollWidth,
+              content ? content.getBoundingClientRect().width : 0
+            );
+            if (availableWidth <= 0 || requiredWidth <= availableWidth) continue;
+
+            const scale = availableWidth / requiredWidth * 0.98;
+            if (!Number.isFinite(scale) || scale <= 0) return false;
+            formula.style.transformOrigin = 'left top';
+            formula.style.transform = `scale(${scale})`;
+            formula.style.overflow = 'visible';
+
+            const fittedWidth = formula.getBoundingClientRect().width;
+            if (fittedWidth > availableWidth + 1) return false;
+          }
+          return true;
+        })()
+        """
+        let result: Any?
+        do {
+            result = try await webView.evaluateJavaScript(script)
+        } catch {
+            throw PDFExportError.renderingFailed
+        }
+        guard (result as? NSNumber)?.boolValue == true else {
+            throw PDFExportError.renderingFailed
+        }
     }
 
     private static func measuredContentHeight(in webView: WKWebView) async throws -> CGFloat {
@@ -161,7 +202,7 @@ enum PDFExporter {
         <style>
           @page { size: A4 portrait; margin: 0; }
           *, *::before, *::after { box-sizing: border-box; }
-          html, body { width: auto !important; max-width: none !important; margin: 0 !important; padding: 0 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          html, body { width: 100% !important; max-width: 100% !important; margin: 0 !important; padding: 0 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           img, svg, table, pre, math { max-width: 100% !important; }
           pre { white-space: pre-wrap !important; overflow: visible !important; overflow-wrap: anywhere; word-break: break-word; }
           pre code { white-space: inherit !important; }

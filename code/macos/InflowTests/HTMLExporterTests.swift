@@ -366,6 +366,24 @@ final class HTMLExporterTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testPDFFitsWideDisplayFormulaInsidePrintableBounds() async throws {
+        let formula = String(repeating: "x+", count: 160) + "FORMULAEND"
+        let markdown = "$$\n\\text{\(formula)}\n$$\n"
+        let html = try HTMLExporter.generate(snapshot: HTMLExportSnapshot(markdown: markdown))
+        let data = try await PDFExporter.generate(fromSelfContainedHTML: html)
+        let document = try XCTUnwrap(PDFDocument(data: data))
+        let selection = try XCTUnwrap(document.findString("FORMULAEND").first)
+        let page = try XCTUnwrap(selection.pages.first)
+        let bounds = selection.bounds(for: page)
+
+        XCTAssertGreaterThanOrEqual(bounds.minX, PDFExporter.margin - 1)
+        XCTAssertLessThanOrEqual(
+            bounds.maxX,
+            PDFExporter.paperSize.width - PDFExporter.margin + 1
+        )
+    }
+
     func testExportRendersFormulaAsSelfContainedMathML() throws {
         let data = try HTMLExporter.generate(
             snapshot: HTMLExportSnapshot(markdown: "Inline $x_1^2$\n\n$$\\frac{a}{b}$$\n")
