@@ -232,11 +232,11 @@ final class MarkdownInsertionTests: XCTestCase {
 
         let worker = ImageAssetWorker()
         let image = try await worker.loadSource(at: sourceURL)
-        let snapshot = try await worker.destinationSnapshot(
-            documentDirectory: documentDirectory,
-            originalFilename: sourceURL.lastPathComponent
-        )
         await XCTAssertThrowsErrorAsync {
+            let snapshot = try await worker.destinationSnapshot(
+                documentDirectory: documentDirectory,
+                originalFilename: sourceURL.lastPathComponent
+            )
             _ = try await worker.importAsset(
                 image: image,
                 originalFilename: sourceURL.lastPathComponent,
@@ -246,6 +246,119 @@ final class MarkdownInsertionTests: XCTestCase {
             )
         }
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: outsideDirectory.path).isEmpty)
+    }
+
+    func testImageWorkerCopiesIntoSelectedRelativeDirectoryWithEncodedReference() async throws {
+        let root = try temporaryImageDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceURL = root.appendingPathComponent("photo #1.png")
+        let documentDirectory = root.appendingPathComponent("document", isDirectory: true)
+        let selectedDirectory = documentDirectory
+            .appendingPathComponent("资源 图片", isDirectory: true)
+            .appendingPathComponent("covers", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: selectedDirectory,
+            withIntermediateDirectories: true
+        )
+        try testPNGData().write(to: sourceURL)
+
+        let plan = try ImageAssetDirectoryPlan.selected(
+            selectedDirectory,
+            relativeTo: documentDirectory
+        )
+        XCTAssertEqual(plan.markdownDirectoryPath, "%E8%B5%84%E6%BA%90%20%E5%9B%BE%E7%89%87/covers")
+        XCTAssertFalse(plan.allowsCreation)
+
+        let worker = ImageAssetWorker()
+        let image = try await worker.loadSource(at: sourceURL)
+        let snapshot = try await worker.destinationSnapshot(
+            directoryPlan: plan,
+            originalFilename: sourceURL.lastPathComponent
+        )
+        let asset = try await worker.importAsset(
+            image: image,
+            originalFilename: sourceURL.lastPathComponent,
+            directoryPlan: plan,
+            collisionResolution: .failIfExists,
+            expectedDestination: snapshot
+        )
+
+        XCTAssertEqual(
+            asset.relativeMarkdownPath,
+            "%E8%B5%84%E6%BA%90%20%E5%9B%BE%E7%89%87/covers/photo%20%231.png"
+        )
+        XCTAssertEqual(asset.destinationURL, selectedDirectory.appendingPathComponent("photo #1.png"))
+        XCTAssertEqual(try Data(contentsOf: asset.destinationURL), image.data)
+    }
+
+    func testSelectedRelativeDirectoryRejectsOutsideAndSymbolicLinkTargets() throws {
+        let root = try temporaryImageDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let documentDirectory = root.appendingPathComponent("document", isDirectory: true)
+        let childDirectory = documentDirectory.appendingPathComponent("media", isDirectory: true)
+        let outsideDirectory = root.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: childDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: outsideDirectory,
+            withIntermediateDirectories: true
+        )
+
+        XCTAssertThrowsError(
+            try ImageAssetDirectoryPlan.selected(
+                outsideDirectory,
+                relativeTo: documentDirectory
+            )
+        ) { error in
+            XCTAssertEqual(error as? ImageAssetImportError, .unauthorizedDirectory)
+        }
+
+        let linkedDirectory = documentDirectory.appendingPathComponent("linked", isDirectory: true)
+        try FileManager.default.createSymbolicLink(
+            at: linkedDirectory,
+            withDestinationURL: outsideDirectory
+        )
+        XCTAssertThrowsError(
+            try ImageAssetDirectoryPlan.selected(
+                linkedDirectory,
+                relativeTo: documentDirectory
+            )
+        ) { error in
+            XCTAssertEqual(error as? ImageAssetImportError, .unauthorizedDirectory)
+        }
+
+        let rootPlan = try ImageAssetDirectoryPlan.selected(
+            documentDirectory,
+            relativeTo: documentDirectory
+        )
+        XCTAssertEqual(rootPlan.markdownDirectoryPath, "")
+    }
+
+    func testSelectedRelativeDirectoryAuthorizationExpiresWhenDirectoryIsReplaced() throws {
+        let root = try temporaryImageDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let documentDirectory = root.appendingPathComponent("document", isDirectory: true)
+        let selectedDirectory = documentDirectory.appendingPathComponent("media", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: selectedDirectory,
+            withIntermediateDirectories: true
+        )
+        let plan = try ImageAssetDirectoryPlan.selected(
+            selectedDirectory,
+            relativeTo: documentDirectory
+        )
+
+        try FileManager.default.removeItem(at: selectedDirectory)
+        try FileManager.default.createDirectory(
+            at: selectedDirectory,
+            withIntermediateDirectories: false
+        )
+
+        XCTAssertThrowsError(try plan.validatedDirectory(createIfNeeded: false)) { error in
+            XCTAssertEqual(error as? ImageAssetImportError, .destinationChanged)
+        }
     }
 
     func testRetainedImagePrefersEncodedRelativeReferenceAndFallsBackToFileURL() throws {
@@ -283,6 +396,19 @@ final class MarkdownInsertionTests: XCTestCase {
 
     @MainActor
     func testExistingImageCollisionOffersEverySafeExit() {
+        XCTAssertEqual(
+            ImageAssetPicker.placementDecision(for: .alertFirstButtonReturn),
+            .copyToAssets
+        )
+        XCTAssertEqual(
+            ImageAssetPicker.placementDecision(for: .alertSecondButtonReturn),
+            .copyToRelativeDirectory
+        )
+        XCTAssertEqual(
+            ImageAssetPicker.placementDecision(for: .alertThirdButtonReturn),
+            .keepOriginal
+        )
+        XCTAssertNil(ImageAssetPicker.placementDecision(for: .cancel))
         XCTAssertEqual(
             ImageAssetPicker.existingImageCollisionDecision(for: .alertFirstButtonReturn),
             .incrementName

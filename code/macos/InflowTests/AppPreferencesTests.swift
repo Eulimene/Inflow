@@ -59,7 +59,7 @@ final class AppPreferencesTests: XCTestCase {
             first.markdownOpenBehavior = .reuseBlankWindow
             first.autosaveEnabled = false
             first.autosaveDelay = .fiveSeconds
-            first.existingImagePlacement = .keepOriginal
+            first.existingImagePlacement = .copyToRelativeDirectory
 
             let second = AppPreferences(defaults: defaults)
             second.applyAutosavePolicy()
@@ -84,7 +84,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(second.markdownOpenBehavior, .reuseBlankWindow)
             XCTAssertFalse(second.autosaveEnabled)
             XCTAssertEqual(second.autosaveDelay, .fiveSeconds)
-            XCTAssertEqual(second.existingImagePlacement, .keepOriginal)
+            XCTAssertEqual(second.existingImagePlacement, .copyToRelativeDirectory)
             XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
 
             second.editorFontSize = 100
@@ -311,6 +311,10 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertEqual(
             ExistingImagePlacementPreference.copyToAssets.automaticPlacement,
             .copyToAssets
+        )
+        XCTAssertEqual(
+            ExistingImagePlacementPreference.copyToRelativeDirectory.automaticPlacement,
+            .copyToRelativeDirectory
         )
         XCTAssertEqual(
             ExistingImagePlacementPreference.keepOriginal.automaticPlacement,

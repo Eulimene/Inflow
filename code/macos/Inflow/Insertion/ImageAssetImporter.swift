@@ -246,11 +246,13 @@ enum ExistingImageCollisionDecision: Sendable, Equatable {
 
 enum ExistingImagePlacement: Sendable, Equatable {
     case copyToAssets
+    case copyToRelativeDirectory
     case keepOriginal
 }
 
 enum ExistingImagePlacementPreference: String, CaseIterable, Identifiable, Sendable {
     case copyToAssets
+    case copyToRelativeDirectory
     case keepOriginal
     case askEveryTime
 
@@ -259,6 +261,7 @@ enum ExistingImagePlacementPreference: String, CaseIterable, Identifiable, Senda
     var label: String {
         switch self {
         case .copyToAssets: "复制到文档同级 assets"
+        case .copyToRelativeDirectory: "复制到指定相对目录…"
         case .keepOriginal: "保留原位置"
         case .askEveryTime: "每次询问"
         }
@@ -267,9 +270,178 @@ enum ExistingImagePlacementPreference: String, CaseIterable, Identifiable, Senda
     var automaticPlacement: ExistingImagePlacement? {
         switch self {
         case .copyToAssets: .copyToAssets
+        case .copyToRelativeDirectory: .copyToRelativeDirectory
         case .keepOriginal: .keepOriginal
         case .askEveryTime: nil
         }
+    }
+}
+
+struct ImageAssetDirectoryPlan: Equatable, Sendable {
+    private struct Identity: Equatable, Sendable {
+        let device: UInt64
+        let inode: UInt64
+        let generation: UInt32
+
+        static func capture(_ url: URL) throws -> Self {
+            var metadata = stat()
+            errno = 0
+            let status: Int32 = url.withUnsafeFileSystemRepresentation { path in
+                guard let path else { return Int32(-1) }
+                return lstat(path, &metadata)
+            }
+            guard status == 0,
+                  metadata.st_mode & S_IFMT == S_IFDIR
+            else {
+                throw ImageAssetImportError.unauthorizedDirectory
+            }
+            return Self(
+                device: UInt64(metadata.st_dev),
+                inode: metadata.st_ino,
+                generation: metadata.st_gen
+            )
+        }
+    }
+
+    let documentDirectory: URL
+    let directoryURL: URL
+    let relativeComponents: [String]
+    let allowsCreation: Bool
+    private let expectedIdentity: Identity?
+
+    static func assets(in documentDirectory: URL) -> Self {
+        let root = documentDirectory.standardizedFileURL
+        return Self(
+            documentDirectory: root,
+            directoryURL: root.appendingPathComponent("assets", isDirectory: true),
+            relativeComponents: ["assets"],
+            allowsCreation: true,
+            expectedIdentity: nil
+        )
+    }
+
+    static func selected(
+        _ selectedDirectory: URL,
+        relativeTo documentDirectory: URL,
+        fileManager: FileManager = .default
+    ) throws -> Self {
+        let root = documentDirectory.standardizedFileURL
+        let selected = selectedDirectory.standardizedFileURL
+        let relativeComponents = try validatedRelativeComponents(
+            from: root,
+            to: selected
+        )
+        let plan = Self(
+            documentDirectory: root,
+            directoryURL: selected,
+            relativeComponents: relativeComponents,
+            allowsCreation: false,
+            expectedIdentity: try Identity.capture(selected)
+        )
+        _ = try plan.validatedDirectory(
+            createIfNeeded: false,
+            fileManager: fileManager
+        )
+        return plan
+    }
+
+    var markdownDirectoryPath: String {
+        relativeComponents.map(Self.encodedPathComponent).joined(separator: "/")
+    }
+
+    func validatedDirectory(
+        createIfNeeded: Bool,
+        fileManager: FileManager = .default
+    ) throws -> URL {
+        let root = documentDirectory.standardizedFileURL
+        guard root.isFileURL,
+              directoryURL.standardizedFileURL == relativeComponents.reduce(root, {
+                  $0.appendingPathComponent($1, isDirectory: true)
+              })
+        else {
+            throw ImageAssetImportError.unauthorizedDirectory
+        }
+
+        let rootValues: URLResourceValues
+        do {
+            rootValues = try root.resourceValues(forKeys: [
+                .isDirectoryKey,
+                .isSymbolicLinkKey,
+            ])
+        } catch {
+            throw ImageAssetImportError.unauthorizedDirectory
+        }
+        guard rootValues.isDirectory == true, rootValues.isSymbolicLink != true else {
+            throw ImageAssetImportError.unauthorizedDirectory
+        }
+
+        var current = root
+        for (index, component) in relativeComponents.enumerated() {
+            current.appendPathComponent(component, isDirectory: true)
+            if !fileManager.fileExists(atPath: current.path) {
+                let isFinalComponent = index == relativeComponents.indices.last
+                guard createIfNeeded, allowsCreation, isFinalComponent else {
+                    throw ImageAssetImportError.unauthorizedDirectory
+                }
+                do {
+                    try fileManager.createDirectory(
+                        at: current,
+                        withIntermediateDirectories: false
+                    )
+                } catch {
+                    throw ImageAssetImportError.copyFailed
+                }
+            }
+            let values: URLResourceValues
+            do {
+                values = try current.resourceValues(forKeys: [
+                    .isDirectoryKey,
+                    .isSymbolicLinkKey,
+                ])
+            } catch {
+                throw ImageAssetImportError.unauthorizedDirectory
+            }
+            guard values.isDirectory == true, values.isSymbolicLink != true else {
+                throw ImageAssetImportError.unauthorizedDirectory
+            }
+        }
+
+        let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedDirectory = current.resolvingSymlinksInPath().standardizedFileURL
+        _ = try Self.validatedRelativeComponents(from: resolvedRoot, to: resolvedDirectory)
+        if let expectedIdentity,
+           try Identity.capture(current) != expectedIdentity
+        {
+            throw ImageAssetImportError.destinationChanged
+        }
+        return current
+    }
+
+    private static func validatedRelativeComponents(
+        from root: URL,
+        to candidate: URL
+    ) throws -> [String] {
+        guard root.isFileURL, candidate.isFileURL else {
+            throw ImageAssetImportError.unauthorizedDirectory
+        }
+        let rootComponents = root.pathComponents
+        let candidateComponents = candidate.pathComponents
+        guard candidateComponents.count >= rootComponents.count,
+              candidateComponents.prefix(rootComponents.count).elementsEqual(rootComponents)
+        else {
+            throw ImageAssetImportError.unauthorizedDirectory
+        }
+        let relative = Array(candidateComponents.dropFirst(rootComponents.count))
+        guard !relative.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else {
+            throw ImageAssetImportError.unauthorizedDirectory
+        }
+        return relative
+    }
+
+    static func encodedPathComponent(_ component: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/?#%")
+        return component.addingPercentEncoding(withAllowedCharacters: allowed) ?? component
     }
 }
 
@@ -494,7 +666,7 @@ enum ImageAssetImportError: Error, LocalizedError, Equatable {
         case .invalidFilename:
             "图片文件名包含控制字符，无法创建安全的相对引用。"
         case .unauthorizedDirectory:
-            "请选择当前 Markdown 文档所在的文件夹，以授权创建 assets。"
+            "请选择当前 Markdown 文档所在目录或其真实子目录。"
         case .destinationChanged:
             "目标图片已被其他操作修改。为避免覆盖，资源变更已停止。"
         case .copyFailed:
@@ -531,10 +703,20 @@ actor ImageAssetWorker {
         _ image: ValidatedLocalImage,
         documentDirectory: URL
     ) throws -> ImportedImageAsset {
+        try importClipboardImage(
+            image,
+            directoryPlan: .assets(in: documentDirectory)
+        )
+    }
+
+    func importClipboardImage(
+        _ image: ValidatedLocalImage,
+        directoryPlan: ImageAssetDirectoryPlan
+    ) throws -> ImportedImageAsset {
         try importAsset(
             image: image,
             originalFilename: image.mimeType == "image/jpeg" ? "image.jpg" : "image.png",
-            documentDirectory: documentDirectory,
+            directoryPlan: directoryPlan,
             collisionResolution: .numberedSequence,
             expectedDestination: nil
         )
@@ -544,9 +726,26 @@ actor ImageAssetWorker {
         documentDirectory: URL,
         originalFilename: String
     ) throws -> ImageAssetDestinationSnapshot {
-        try ImageAssetDestinationSnapshot.capture(
-            documentDirectory
-                .appendingPathComponent("assets", isDirectory: true)
+        try destinationSnapshot(
+            directoryPlan: .assets(in: documentDirectory),
+            originalFilename: originalFilename
+        )
+    }
+
+    func destinationSnapshot(
+        directoryPlan: ImageAssetDirectoryPlan,
+        originalFilename: String
+    ) throws -> ImageAssetDestinationSnapshot {
+        let directory: URL
+        if directoryPlan.allowsCreation,
+           !FileManager.default.fileExists(atPath: directoryPlan.directoryURL.path)
+        {
+            directory = directoryPlan.directoryURL
+        } else {
+            directory = try directoryPlan.validatedDirectory(createIfNeeded: false)
+        }
+        return try ImageAssetDestinationSnapshot.capture(
+            directory
                 .appendingPathComponent(originalFilename, isDirectory: false)
         )
     }
@@ -558,6 +757,22 @@ actor ImageAssetWorker {
         collisionResolution: ImageAssetCollisionResolution,
         expectedDestination: ImageAssetDestinationSnapshot?
     ) throws -> ImportedImageAsset {
+        try importAsset(
+            image: image,
+            originalFilename: originalFilename,
+            directoryPlan: .assets(in: documentDirectory),
+            collisionResolution: collisionResolution,
+            expectedDestination: expectedDestination
+        )
+    }
+
+    func importAsset(
+        image: ValidatedLocalImage,
+        originalFilename: String,
+        directoryPlan: ImageAssetDirectoryPlan,
+        collisionResolution: ImageAssetCollisionResolution,
+        expectedDestination: ImageAssetDestinationSnapshot?
+    ) throws -> ImportedImageAsset {
         guard !originalFilename.isEmpty,
               !originalFilename.unicodeScalars.contains(where: {
                   $0.value < 0x20 || $0.value == 0x7F
@@ -566,21 +781,16 @@ actor ImageAssetWorker {
             throw ImageAssetImportError.invalidFilename
         }
         let fileManager = FileManager.default
-        let assetsDirectory = documentDirectory.appendingPathComponent("assets", isDirectory: true)
-        let directoryExisted = fileManager.fileExists(atPath: assetsDirectory.path)
+        let assetDirectory = directoryPlan.directoryURL
+        let directoryExisted = fileManager.fileExists(atPath: assetDirectory.path)
+        let createdDirectory = !directoryExisted && directoryPlan.allowsCreation
         do {
-            try fileManager.createDirectory(at: assetsDirectory, withIntermediateDirectories: true)
-            let directoryValues = try assetsDirectory.resourceValues(forKeys: [
-                .isDirectoryKey,
-                .isSymbolicLinkKey,
-            ])
-            guard directoryValues.isDirectory == true,
-                  directoryValues.isSymbolicLink != true
-            else {
-                throw ImageAssetImportError.destinationChanged
-            }
+            let validatedDirectory = try directoryPlan.validatedDirectory(
+                createIfNeeded: true,
+                fileManager: fileManager
+            )
             let destinationURL = try resolvedDestination(
-                assetsDirectory: assetsDirectory,
+                assetsDirectory: validatedDirectory,
                 originalFilename: originalFilename,
                 collisionResolution: collisionResolution
             )
@@ -610,21 +820,24 @@ actor ImageAssetWorker {
                 previousData = nil
                 try image.data.write(to: destinationURL, options: .withoutOverwriting)
             }
-            let encodedFilename = destinationURL.lastPathComponent.addingPercentEncoding(
-                withAllowedCharacters: .urlPathAllowed
-            ) ?? destinationURL.lastPathComponent
+            let encodedFilename = ImageAssetDirectoryPlan.encodedPathComponent(
+                destinationURL.lastPathComponent
+            )
+            let relativePath = [directoryPlan.markdownDirectoryPath, encodedFilename]
+                .filter { !$0.isEmpty }
+                .joined(separator: "/")
             return ImportedImageAsset(
                 destinationURL: destinationURL,
-                relativeMarkdownPath: "assets/\(encodedFilename)",
+                relativeMarkdownPath: relativePath,
                 importedData: image.data,
                 previousData: previousData,
-                createdAssetsDirectory: !directoryExisted
+                createdAssetsDirectory: createdDirectory
             )
         } catch let error as ImageAssetImportError {
-            removeDirectoryIfNewAndEmpty(assetsDirectory, existed: directoryExisted)
+            removeDirectoryIfNewAndEmpty(assetDirectory, existed: !createdDirectory)
             throw error
         } catch {
-            removeDirectoryIfNewAndEmpty(assetsDirectory, existed: directoryExisted)
+            removeDirectoryIfNewAndEmpty(assetDirectory, existed: !createdDirectory)
             throw ImageAssetImportError.copyFailed
         }
     }
@@ -725,15 +938,25 @@ enum ImageAssetPicker {
     ) async -> ExistingImagePlacement? {
         let alert = NSAlert()
         alert.messageText = "如何引用这张图片？"
-        alert.informativeText = "复制会把 \(filename) 放入文档同级 assets；保留原位置不会复制图片，但移动文档或原图后引用可能失效。"
+        alert.informativeText = "可将 \(filename) 复制到文档同级 assets 或你选择的文档内相对目录。保留原位置不会复制图片，但移动文档或原图后引用可能失效。"
         alert.addButton(withTitle: "复制到 assets")
+        alert.addButton(withTitle: "选择相对目录…")
         alert.addButton(withTitle: "保留原位置")
-        alert.addButton(withTitle: "取消")
+        let cancelButton = alert.addButton(withTitle: "取消")
+        cancelButton.keyEquivalent = "\u{1b}"
         let response = await run(alert, attachedTo: window)
+        return placementDecision(for: response)
+    }
+
+    static func placementDecision(
+        for response: NSApplication.ModalResponse
+    ) -> ExistingImagePlacement? {
         switch response {
         case .alertFirstButtonReturn:
             return .copyToAssets
         case .alertSecondButtonReturn:
+            return .copyToRelativeDirectory
+        case .alertThirdButtonReturn:
             return .keepOriginal
         default:
             return nil
@@ -774,12 +997,37 @@ enum ImageAssetPicker {
         return selected
     }
 
+    static func chooseRelativeAssetDirectory(
+        relativeTo documentDirectory: URL,
+        attachedTo window: NSWindow?
+    ) async throws -> ImageAssetDirectoryPlan? {
+        let panel = NSOpenPanel()
+        panel.title = "选择相对资源目录"
+        panel.message = "请选择当前 Markdown 文档所在目录或其子目录。不会允许符号链接或目录外位置。"
+        panel.prompt = "使用此目录"
+        panel.directoryURL = documentDirectory
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        guard await run(panel, attachedTo: window) == .OK, let selected = panel.url else {
+            return nil
+        }
+        let accessIsActive = selected.startAccessingSecurityScopedResource()
+        defer {
+            if accessIsActive { selected.stopAccessingSecurityScopedResource() }
+        }
+        return try ImageAssetDirectoryPlan.selected(
+            selected,
+            relativeTo: documentDirectory
+        )
+    }
+
     static func resolveExistingImageCollision(
         filename: String,
         attachedTo window: NSWindow?
     ) async -> ExistingImageCollisionDecision? {
         let alert = NSAlert()
-        alert.messageText = "assets 中已存在同名图片"
+        alert.messageText = "资源目录中已存在同名图片"
         alert.informativeText = "\(filename) 已存在。请选择使用递增名称、明确覆盖，或改为引用原图位置。"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "保留并递增名称")

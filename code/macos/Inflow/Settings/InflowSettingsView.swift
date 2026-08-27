@@ -341,7 +341,7 @@ struct InflowSettingsView: View {
 
             Section("安全边界") {
                 LabeledContent("同名文件", value: "每次询问")
-                Text("粘贴或新建的图片始终保存到文档同级 assets，不会引用不可迁移的临时位置。同名时不静默覆盖。")
+                Text("粘贴或新建的图片只保存到文档同级 assets 或你选择的文档内相对目录，不会引用不可迁移的临时位置。同名时不静默覆盖。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -353,6 +353,8 @@ struct InflowSettingsView: View {
         switch preferences.existingImagePlacement {
         case .copyToAssets:
             "默认把选择或拖入的既有图片复制到当前 Markdown 同级 assets，并写入相对引用。"
+        case .copyToRelativeDirectory:
+            "每次复制或粘贴图片时选择当前 Markdown 目录或其真实子目录，并写入经编码的相对引用。"
         case .keepOriginal:
             "不复制既有图片；可形成相对路径时优先使用，否则仍会在写入绝对本地地址前单独确认。"
         case .askEveryTime:

@@ -1990,17 +1990,17 @@ struct MarkdownEditorView: View {
                     return
                 }
 
-                guard let authorizedDirectory = try await ImageAssetPicker.authorizeDocumentDirectory(
-                    documentDirectory,
+                guard let directoryPlan = try await imageAssetDirectoryPlan(
+                    for: placement,
+                    documentDirectory: documentDirectory,
                     attachedTo: window
                 ) else {
                     return
                 }
-                imageDirectoryAccess.authorize(authorizedDirectory)
 
                 let filename = sourceURL.lastPathComponent
                 let destinationSnapshot = try await worker.destinationSnapshot(
-                    documentDirectory: authorizedDirectory,
+                    directoryPlan: directoryPlan,
                     originalFilename: filename
                 )
                 let resolution: ImageAssetCollisionResolution
@@ -2035,7 +2035,7 @@ struct MarkdownEditorView: View {
                 let asset = try await worker.importAsset(
                     image: image,
                     originalFilename: filename,
-                    documentDirectory: authorizedDirectory,
+                    directoryPlan: directoryPlan,
                     collisionResolution: resolution,
                     expectedDestination: destinationSnapshot
                 )
@@ -2115,6 +2115,36 @@ struct MarkdownEditorView: View {
         _ = sourceEditorSession.focusEditor()
     }
 
+    @MainActor
+    private func imageAssetDirectoryPlan(
+        for placement: ExistingImagePlacement,
+        documentDirectory: URL,
+        attachedTo window: NSWindow?
+    ) async throws -> ImageAssetDirectoryPlan? {
+        switch placement {
+        case .copyToAssets:
+            guard let authorizedDirectory = try await ImageAssetPicker.authorizeDocumentDirectory(
+                documentDirectory,
+                attachedTo: window
+            ) else {
+                return nil
+            }
+            imageDirectoryAccess.authorize(authorizedDirectory)
+            return .assets(in: authorizedDirectory)
+        case .copyToRelativeDirectory:
+            guard let plan = try await ImageAssetPicker.chooseRelativeAssetDirectory(
+                relativeTo: documentDirectory,
+                attachedTo: window
+            ) else {
+                return nil
+            }
+            imageDirectoryAccess.authorize(plan.directoryURL)
+            return plan
+        case .keepOriginal:
+            return nil
+        }
+    }
+
     private func pasteImage(_ payload: ClipboardImagePayload) {
         guard canEditDocument, !isImportingImage else { return }
         guard let documentURL = fileURL else {
@@ -2132,16 +2162,20 @@ struct MarkdownEditorView: View {
             defer { isImportingImage = false }
             do {
                 let image = try await worker.prepareClipboardImage(payload)
-                guard let authorizedDirectory = try await ImageAssetPicker.authorizeDocumentDirectory(
-                    documentDirectory,
+                let copyPlacement: ExistingImagePlacement =
+                    preferences.existingImagePlacement == .copyToRelativeDirectory
+                    ? .copyToRelativeDirectory
+                    : .copyToAssets
+                guard let directoryPlan = try await imageAssetDirectoryPlan(
+                    for: copyPlacement,
+                    documentDirectory: documentDirectory,
                     attachedTo: window
                 ) else {
                     return
                 }
-                imageDirectoryAccess.authorize(authorizedDirectory)
                 let asset = try await worker.importClipboardImage(
                     image,
-                    documentDirectory: authorizedDirectory
+                    directoryPlan: directoryPlan
                 )
                 do {
                     let alternative = asset.destinationURL.deletingPathExtension().lastPathComponent
