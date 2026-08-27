@@ -34,6 +34,52 @@ final class HTMLExporterTests: XCTestCase {
         XCTAssertEqual(ExportResultPrompt.doneTitle, "完成")
     }
 
+    func testExportFailurePromptsAndFormatChangeKeepTheFrozenSnapshot() {
+        let request = FrozenExportRequest(
+            format: .html,
+            snapshot: HTMLExportSnapshot(markdown: "# 冻结版本\n\ne\u{301}"),
+            suggestedFilename: "draft.notes.html"
+        )
+        let alternate = request.changingFormat()
+
+        XCTAssertEqual(alternate.format, .pdf)
+        XCTAssertEqual(alternate.suggestedFilename, "draft.notes.pdf")
+        XCTAssertEqual(alternate.snapshot.utf8, request.snapshot.utf8)
+        XCTAssertEqual(alternate.snapshot.documentVersion, request.snapshot.documentVersion)
+
+        XCTAssertEqual(ExportFailurePrompt.targetChangedTitle, "导出目标已变化")
+        XCTAssertEqual(
+            ExportFailurePrompt.targetChangedMessage,
+            "选择位置后，目标已被创建、替换或修改。"
+        )
+        XCTAssertEqual(ExportFailurePrompt.reconfirmReplacementTitle, "重新确认替换…")
+        XCTAssertEqual(ExportFailurePrompt.chooseAnotherLocationTitle, "选择其他位置…")
+        XCTAssertEqual(ExportFailurePrompt.cancelTitle, "取消")
+        XCTAssertEqual(ExportFailurePrompt.tooLargeTitle, "导出内容过大")
+        XCTAssertEqual(
+            ExportFailurePrompt.tooLargeMessage(limit: "100 MiB"),
+            "预计交付物超出100 MiB，未写入目标。"
+        )
+        XCTAssertEqual(ExportFailurePrompt.returnToAdjustTitle, "返回调整")
+        XCTAssertEqual(ExportFailurePrompt.changeFormatTitle, "更换格式…")
+        XCTAssertEqual(ExportFailurePrompt.checkFailedTitle, "导出结果未通过检查")
+        XCTAssertEqual(
+            ExportFailurePrompt.checkFailedMessage,
+            "交付物包含不安全动作、私密路径或结构不完整，因此没有替换目标。"
+        )
+        XCTAssertEqual(ExportFailurePrompt.viewProblemsTitle, "查看问题")
+        XCTAssertEqual(ExportFailurePrompt.closeTitle, "关闭")
+        XCTAssertEqual(ExportFailurePrompt.retryTitle, "重试")
+        XCTAssertEqual(
+            ExportFailurePrompt.failureTitle(fileName: "draft.notes.html"),
+            "未能导出「draft.notes.html」"
+        )
+        XCTAssertEqual(
+            ExportFailurePrompt.failureMessage(reason: "无法完成原子写入。"),
+            "无法完成原子写入。Markdown 文档未改变，也没有留下残缺目标。"
+        )
+    }
+
     @MainActor
     func testCancelledPDFGenerationStopsBeforeCreatingOutput() async {
         let task = Task { @MainActor in

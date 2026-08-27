@@ -1,41 +1,122 @@
 import AppKit
 import SwiftUI
 
-private enum HTMLExportNotice: Identifiable {
-    case success(format: ExportFormat, url: URL, documentVersion: String)
-    case failure(format: ExportFormat, message: String)
+enum ExportFormat: String, Sendable {
+    case html = "HTML"
+    case pdf = "PDF"
 
-    var id: String {
+    var filenameExtension: String {
+        rawValue.lowercased()
+    }
+
+    var alternate: Self {
+        self == .html ? .pdf : .html
+    }
+}
+
+struct FrozenExportRequest: Sendable {
+    let format: ExportFormat
+    let snapshot: HTMLExportSnapshot
+    let suggestedFilename: String
+
+    func changingFormat() -> Self {
+        let stem = (suggestedFilename as NSString).deletingPathExtension
+        let alternateFormat = format.alternate
+        return Self(
+            format: alternateFormat,
+            snapshot: snapshot,
+            suggestedFilename: "\(stem).\(alternateFormat.filenameExtension)"
+        )
+    }
+}
+
+private struct PreparedExportDelivery: Sendable {
+    let request: FrozenExportRequest
+    let data: Data
+}
+
+private enum ExportRecoveryContext: Sendable {
+    case prepare(FrozenExportRequest)
+    case capture(PreparedExportDelivery, URL)
+    case write(PreparedExportDelivery, URL, HTMLExportTargetSnapshot)
+
+    var request: FrozenExportRequest {
         switch self {
-        case let .success(format, url, documentVersion):
-            "success:\(format.rawValue):\(url.path):\(documentVersion)"
-        case let .failure(format, message):
-            "failure:\(format.rawValue):\(message)"
+        case let .prepare(request): request
+        case let .capture(delivery, _), let .write(delivery, _, _): delivery.request
         }
     }
 
-    var title: String {
+    var delivery: PreparedExportDelivery? {
         switch self {
-        case let .success(_, url, _):
-            ExportResultPrompt.successTitle(exportName: url.lastPathComponent)
-        case let .failure(format, _):
-            "\(format.rawValue) 导出未完成"
+        case .prepare: nil
+        case let .capture(delivery, _), let .write(delivery, _, _): delivery
         }
     }
 
-    var message: String {
+    var fileName: String {
         switch self {
-        case let .success(_, _, documentVersion):
-            ExportResultPrompt.successMessage(documentVersion: documentVersion)
-        case let .failure(_, message):
-            message
+        case let .prepare(request): request.suggestedFilename
+        case let .capture(_, url), let .write(_, url, _): url.lastPathComponent
         }
     }
 }
 
-private enum ExportFormat: String, Sendable {
-    case html = "HTML"
-    case pdf = "PDF"
+private enum ExportDeliveryStep: Sendable {
+    case chooseDestination
+    case capture(URL)
+    case write(URL, HTMLExportTargetSnapshot)
+}
+
+private enum ExportNoticeOutcome: Sendable {
+    case success(format: ExportFormat, url: URL, documentVersion: String)
+    case targetChanged(delivery: PreparedExportDelivery, targetURL: URL)
+    case tooLarge(FrozenExportRequest)
+    case checkFailed(request: FrozenExportRequest, details: String)
+    case failure(context: ExportRecoveryContext, reason: String)
+}
+
+private struct HTMLExportNotice: Identifiable {
+    let id = UUID()
+    let outcome: ExportNoticeOutcome
+
+    static func success(
+        format: ExportFormat,
+        url: URL,
+        documentVersion: String
+    ) -> Self {
+        Self(outcome: .success(format: format, url: url, documentVersion: documentVersion))
+    }
+
+    var title: String {
+        switch outcome {
+        case let .success(_, url, _):
+            ExportResultPrompt.successTitle(exportName: url.lastPathComponent)
+        case .targetChanged:
+            ExportFailurePrompt.targetChangedTitle
+        case .tooLarge:
+            ExportFailurePrompt.tooLargeTitle
+        case .checkFailed:
+            ExportFailurePrompt.checkFailedTitle
+        case let .failure(context, _):
+            ExportFailurePrompt.failureTitle(fileName: context.fileName)
+        }
+    }
+
+    var message: String {
+        switch outcome {
+        case let .success(_, _, documentVersion):
+            ExportResultPrompt.successMessage(documentVersion: documentVersion)
+        case .targetChanged:
+            ExportFailurePrompt.targetChangedMessage
+        case .tooLarge:
+            ExportFailurePrompt.tooLargeMessage(limit: ExportFailurePrompt.outputLimit)
+        case .checkFailed:
+            ExportFailurePrompt.checkFailedMessage
+        case let .failure(_, reason):
+            ExportFailurePrompt.failureMessage(reason: reason)
+        }
+    }
 }
 
 enum ExportProgressPrompt {
@@ -62,6 +143,46 @@ enum ExportResultPrompt {
     static func successMessage(documentVersion: String) -> String {
         "使用文档版本 \(documentVersion)。"
     }
+}
+
+enum ExportFailurePrompt {
+    static let outputLimit = "100 MiB"
+    static let targetChangedTitle = "导出目标已变化"
+    static let targetChangedMessage = "选择位置后，目标已被创建、替换或修改。"
+    static let reconfirmReplacementTitle = "重新确认替换…"
+    static let chooseAnotherLocationTitle = "选择其他位置…"
+    static let cancelTitle = "取消"
+    static let tooLargeTitle = "导出内容过大"
+    static let returnToAdjustTitle = "返回调整"
+    static let changeFormatTitle = "更换格式…"
+    static let checkFailedTitle = "导出结果未通过检查"
+    static let checkFailedMessage =
+        "交付物包含不安全动作、私密路径或结构不完整，因此没有替换目标。"
+    static let viewProblemsTitle = "查看问题"
+    static let closeTitle = "关闭"
+    static let retryTitle = "重试"
+
+    static func tooLargeMessage(limit: String) -> String {
+        "预计交付物超出\(limit)，未写入目标。"
+    }
+
+    static func failureTitle(fileName: String) -> String {
+        "未能导出「\(fileName)」"
+    }
+
+    static func failureMessage(reason: String) -> String {
+        let normalized = reason.trimmingCharacters(
+            in: CharacterSet.whitespacesAndNewlines.union(
+                CharacterSet(charactersIn: "。.!！?？")
+            )
+        )
+        return "\(normalized)。Markdown 文档未改变，也没有留下残缺目标。"
+    }
+}
+
+private struct ExportIssueDetails: Identifiable {
+    let id = UUID()
+    let message: String
 }
 
 private struct ActiveExportProgress: Equatable {
@@ -112,10 +233,8 @@ private struct ExportProgressBanner: View {
 
 private struct PendingExportConfirmation: Identifiable {
     let id = UUID()
-    let format: ExportFormat
+    let request: FrozenExportRequest
     let preparation: HTMLExportPreparation
-    let suggestedFilename: String
-    let documentVersion: String
 }
 
 enum EditorViewMode: String, CaseIterable, Identifiable {
@@ -291,6 +410,7 @@ struct MarkdownEditorView: View {
     @State private var exportGeneration = 0
     @State private var activeExportProgress: ActiveExportProgress?
     @State private var htmlExportNotice: HTMLExportNotice?
+    @State private var exportIssueDetails: ExportIssueDetails?
     @State private var pendingExportConfirmation: PendingExportConfirmation?
     @State private var markdownFormatErrorMessage: String?
     @State private var linkInsertionRequest: MarkdownLinkInsertionRequest?
@@ -754,7 +874,7 @@ struct MarkdownEditorView: View {
             titleVisibility: .visible
         ) {
             if let notice = htmlExportNotice {
-                switch notice {
+                switch notice.outcome {
                 case let .success(_, url, _):
                     Button(ExportResultPrompt.showInFinderTitle) {
                         NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -767,8 +887,51 @@ struct MarkdownEditorView: View {
                     Button(ExportResultPrompt.doneTitle, role: .cancel) {
                         htmlExportNotice = nil
                     }
-                case .failure:
-                    Button("好", role: .cancel) {
+                case let .targetChanged(delivery, targetURL):
+                    Button(ExportFailurePrompt.reconfirmReplacementTitle) {
+                        htmlExportNotice = nil
+                        deliver(delivery, from: .capture(targetURL))
+                    }
+                    Button(ExportFailurePrompt.chooseAnotherLocationTitle) {
+                        htmlExportNotice = nil
+                        deliver(delivery, from: .chooseDestination)
+                    }
+                    Button(ExportFailurePrompt.cancelTitle, role: .cancel) {
+                        htmlExportNotice = nil
+                    }
+                case let .tooLarge(request):
+                    Button(ExportFailurePrompt.returnToAdjustTitle, role: .cancel) {
+                        htmlExportNotice = nil
+                    }
+                    Button(ExportFailurePrompt.changeFormatTitle) {
+                        htmlExportNotice = nil
+                        prepareExport(request.changingFormat())
+                    }
+                case let .checkFailed(request, details):
+                    Button(ExportFailurePrompt.viewProblemsTitle) {
+                        htmlExportNotice = nil
+                        Task { @MainActor in
+                            await Task.yield()
+                            exportIssueDetails = ExportIssueDetails(message: details)
+                        }
+                    }
+                    Button(ExportFailurePrompt.changeFormatTitle) {
+                        htmlExportNotice = nil
+                        prepareExport(request.changingFormat())
+                    }
+                    Button(ExportFailurePrompt.closeTitle, role: .cancel) {
+                        htmlExportNotice = nil
+                    }
+                case let .failure(context, _):
+                    Button(ExportFailurePrompt.retryTitle) {
+                        htmlExportNotice = nil
+                        retryExport(context)
+                    }
+                    Button(ExportFailurePrompt.chooseAnotherLocationTitle) {
+                        htmlExportNotice = nil
+                        chooseAnotherExportLocation(context)
+                    }
+                    Button(ExportFailurePrompt.closeTitle, role: .cancel) {
                         htmlExportNotice = nil
                     }
                 }
@@ -777,6 +940,13 @@ struct MarkdownEditorView: View {
             if let htmlExportNotice {
                 Text(htmlExportNotice.message)
             }
+        }
+        .alert(item: $exportIssueDetails) { details in
+            Alert(
+                title: Text("导出检查问题"),
+                message: Text(details.message),
+                dismissButton: .default(Text(ExportFailurePrompt.closeTitle))
+            )
         }
         .alert(item: $pendingExportConfirmation) { pending in
             Alert(
@@ -2216,84 +2386,47 @@ struct MarkdownEditorView: View {
     private func startHTMLExport() {
         guard !isExportingHTML, !isExportingPDF else { return }
         anonymousUsage?.record(feature: .export, command: .exportHTML)
-        let snapshot = HTMLExportSnapshot(
-            markdown: document.text,
-            documentDirectory: fileURL?.deletingLastPathComponent(),
-            appearance: preferences.previewConfiguration
-        )
-        let basename = fileURL?.deletingPathExtension().lastPathComponent ?? "未命名文档"
-        let suggestedFilename = "\(basename).html"
-        let worker = htmlExportWorker
-        let generation = beginExport(
-            format: .html,
-            documentVersion: snapshot.documentVersion,
-            isCancellable: true
-        )
-
-        exportTask = Task { @MainActor in
-            let preparation: HTMLExportPreparation
-            switch await worker.prepare(snapshot) {
-            case let .success(value):
-                preparation = value
-            case let .failure(error):
-                guard exportIsCurrent(generation) else { return }
-                finishExport(generation)
-                htmlExportNotice = .failure(
-                    format: .html,
-                    message: error.localizedDescription
-                )
-                return
-            }
-            guard exportIsCurrent(generation) else { return }
-
-            guard preparation.warnings.isEmpty else {
-                finishExport(generation)
-                pendingExportConfirmation = PendingExportConfirmation(
-                    format: .html,
-                    preparation: preparation,
-                    suggestedFilename: suggestedFilename,
-                    documentVersion: snapshot.documentVersion
-                )
-                return
-            }
-            finishExport(generation)
-            continuePreparedHTMLExport(
-                preparation,
-                suggestedFilename: suggestedFilename,
-                documentVersion: snapshot.documentVersion
-            )
-        }
+        prepareExport(makeFrozenExportRequest(format: .html))
     }
 
     private func startPDFExport() {
         guard !isExportingHTML, !isExportingPDF else { return }
         anonymousUsage?.record(feature: .export, command: .exportPDF)
+        prepareExport(makeFrozenExportRequest(format: .pdf))
+    }
+
+    private func makeFrozenExportRequest(format: ExportFormat) -> FrozenExportRequest {
         let snapshot = HTMLExportSnapshot(
             markdown: document.text,
             documentDirectory: fileURL?.deletingLastPathComponent(),
             appearance: preferences.previewConfiguration
         )
         let basename = fileURL?.deletingPathExtension().lastPathComponent ?? "未命名文档"
-        let suggestedFilename = "\(basename).pdf"
+        return FrozenExportRequest(
+            format: format,
+            snapshot: snapshot,
+            suggestedFilename: "\(basename).\(format.filenameExtension)"
+        )
+    }
+
+    private func prepareExport(_ request: FrozenExportRequest) {
+        guard !isExportingHTML, !isExportingPDF else { return }
         let worker = htmlExportWorker
         let generation = beginExport(
-            format: .pdf,
-            documentVersion: snapshot.documentVersion,
+            format: request.format,
+            documentVersion: request.snapshot.documentVersion,
             isCancellable: true
         )
 
         exportTask = Task { @MainActor in
             let preparation: HTMLExportPreparation
-            switch await worker.prepare(snapshot) {
+            switch await worker.prepare(request.snapshot) {
             case let .success(value):
                 preparation = value
             case let .failure(error):
                 guard exportIsCurrent(generation) else { return }
                 finishExport(generation)
-                htmlExportNotice = .failure(
-                    format: .pdf,
-                    message: error.localizedDescription
-                )
+                presentPreparationFailure(error, request: request)
                 return
             }
             guard exportIsCurrent(generation) else { return }
@@ -2301,82 +2434,119 @@ struct MarkdownEditorView: View {
             guard preparation.warnings.isEmpty else {
                 finishExport(generation)
                 pendingExportConfirmation = PendingExportConfirmation(
-                    format: .pdf,
-                    preparation: preparation,
-                    suggestedFilename: suggestedFilename,
-                    documentVersion: snapshot.documentVersion
+                    request: request,
+                    preparation: preparation
                 )
                 return
             }
             finishExport(generation)
-            continuePreparedPDFExport(
-                preparation,
-                suggestedFilename: suggestedFilename,
-                documentVersion: snapshot.documentVersion
+            continuePreparedExport(
+                PendingExportConfirmation(request: request, preparation: preparation)
             )
         }
     }
 
     private func continuePreparedExport(_ pending: PendingExportConfirmation) {
-        switch pending.format {
+        switch pending.request.format {
         case .html:
-            continuePreparedHTMLExport(
-                pending.preparation,
-                suggestedFilename: pending.suggestedFilename,
-                documentVersion: pending.documentVersion
+            deliver(
+                PreparedExportDelivery(
+                    request: pending.request,
+                    data: pending.preparation.data
+                ),
+                from: .chooseDestination
             )
         case .pdf:
-            continuePreparedPDFExport(
-                pending.preparation,
-                suggestedFilename: pending.suggestedFilename,
-                documentVersion: pending.documentVersion
+            generatePDFDelivery(pending)
+        }
+    }
+
+    private func generatePDFDelivery(_ pending: PendingExportConfirmation) {
+        guard !isExportingHTML, !isExportingPDF else { return }
+        let generation = beginExport(
+            format: .pdf,
+            documentVersion: pending.request.snapshot.documentVersion,
+            isCancellable: true
+        )
+        exportTask = Task { @MainActor in
+            let pdf: Data
+            do {
+                pdf = try await PDFExporter.generate(
+                    fromSelfContainedHTML: pending.preparation.data
+                )
+            } catch {
+                guard exportIsCurrent(generation) else { return }
+                finishExport(generation)
+                presentPDFFailure(error, request: pending.request)
+                return
+            }
+            guard exportIsCurrent(generation) else { return }
+            finishExport(generation)
+            deliver(
+                PreparedExportDelivery(request: pending.request, data: pdf),
+                from: .chooseDestination
             )
         }
     }
 
-    private func continuePreparedHTMLExport(
-        _ preparation: HTMLExportPreparation,
-        suggestedFilename: String,
-        documentVersion: String
+    private func deliver(
+        _ delivery: PreparedExportDelivery,
+        from step: ExportDeliveryStep
     ) {
         guard !isExportingHTML, !isExportingPDF else { return }
         let worker = htmlExportWorker
         let generation = beginExport(
-            format: .html,
-            documentVersion: documentVersion,
+            format: delivery.request.format,
+            documentVersion: delivery.request.snapshot.documentVersion,
             isCancellable: true
         )
         exportTask = Task { @MainActor in
-            guard let targetURL = await HTMLExportPanel.chooseDestination(
-                suggestedFilename: suggestedFilename
-            ), exportIsCurrent(generation) else {
-                finishExport(generation)
-                return
+            let targetURL: URL
+            switch step {
+            case .chooseDestination:
+                guard let selectedURL = await chooseExportDestination(for: delivery.request),
+                      exportIsCurrent(generation)
+                else {
+                    finishExport(generation)
+                    return
+                }
+                targetURL = selectedURL
+            case let .capture(url), let .write(url, _):
+                targetURL = url
             }
 
             let accessed = targetURL.startAccessingSecurityScopedResource()
-            defer { if accessed { targetURL.stopAccessingSecurityScopedResource() } }
+            defer {
+                if accessed { targetURL.stopAccessingSecurityScopedResource() }
+            }
+
             let targetSnapshot: HTMLExportTargetSnapshot
-            switch await worker.captureTarget(targetURL) {
-            case let .success(snapshot):
-                targetSnapshot = snapshot
-            case let .failure(error):
-                guard exportIsCurrent(generation) else { return }
-                finishExport(generation)
-                htmlExportNotice = .failure(
-                    format: .html,
-                    message: error.localizedDescription
-                )
-                return
+            switch step {
+            case let .write(_, expectedTarget):
+                targetSnapshot = expectedTarget
+            case .chooseDestination, .capture:
+                switch await worker.captureTarget(targetURL) {
+                case let .success(snapshot):
+                    targetSnapshot = snapshot
+                case let .failure(error):
+                    guard exportIsCurrent(generation) else { return }
+                    finishExport(generation)
+                    presentTargetFailure(
+                        error,
+                        context: .capture(delivery, targetURL)
+                    )
+                    return
+                }
             }
             guard exportIsCurrent(generation) else { return }
             activeExportProgress = ActiveExportProgress(
-                format: .html,
-                documentVersion: documentVersion,
+                format: delivery.request.format,
+                documentVersion: delivery.request.snapshot.documentVersion,
                 isCancellable: false
             )
+
             let result = await worker.write(
-                preparation.data,
+                delivery.data,
                 to: targetURL,
                 expectedTarget: targetSnapshot
             )
@@ -2385,93 +2555,114 @@ struct MarkdownEditorView: View {
             switch result {
             case .success:
                 htmlExportNotice = .success(
-                    format: .html,
+                    format: delivery.request.format,
                     url: targetURL,
-                    documentVersion: documentVersion
+                    documentVersion: delivery.request.snapshot.documentVersion
                 )
             case let .failure(error):
-                htmlExportNotice = .failure(
-                    format: .html,
-                    message: error.localizedDescription
+                presentTargetFailure(
+                    error,
+                    context: .write(delivery, targetURL, targetSnapshot)
                 )
             }
         }
     }
 
-    private func continuePreparedPDFExport(
-        _ preparation: HTMLExportPreparation,
-        suggestedFilename: String,
-        documentVersion: String
-    ) {
-        guard !isExportingHTML, !isExportingPDF else { return }
-        let worker = htmlExportWorker
-        let generation = beginExport(
-            format: .pdf,
-            documentVersion: documentVersion,
-            isCancellable: true
-        )
-        exportTask = Task { @MainActor in
-            let pdf: Data
-            do {
-                pdf = try await PDFExporter.generate(fromSelfContainedHTML: preparation.data)
-            } catch {
-                guard exportIsCurrent(generation) else { return }
-                finishExport(generation)
-                htmlExportNotice = .failure(
-                    format: .pdf,
-                    message: (error as? LocalizedError)?.errorDescription
-                        ?? PDFExportError.renderingFailed.localizedDescription
-                )
-                return
-            }
-            guard exportIsCurrent(generation) else { return }
-            guard let targetURL = await PDFExportPanel.chooseDestination(
-                suggestedFilename: suggestedFilename
-            ), exportIsCurrent(generation) else {
-                finishExport(generation)
-                return
-            }
-
-            let accessed = targetURL.startAccessingSecurityScopedResource()
-            defer {
-                if accessed { targetURL.stopAccessingSecurityScopedResource() }
-            }
-            let targetSnapshot: HTMLExportTargetSnapshot
-            switch await worker.captureTarget(targetURL) {
-            case let .success(snapshot):
-                targetSnapshot = snapshot
-            case let .failure(error):
-                guard exportIsCurrent(generation) else { return }
-                finishExport(generation)
-                htmlExportNotice = .failure(
-                    format: .pdf,
-                    message: error.localizedDescription
-                )
-                return
-            }
-            guard exportIsCurrent(generation) else { return }
-            activeExportProgress = ActiveExportProgress(
-                format: .pdf,
-                documentVersion: documentVersion,
-                isCancellable: false
+    @MainActor
+    private func chooseExportDestination(for request: FrozenExportRequest) async -> URL? {
+        switch request.format {
+        case .html:
+            await HTMLExportPanel.chooseDestination(
+                suggestedFilename: request.suggestedFilename
             )
+        case .pdf:
+            await PDFExportPanel.chooseDestination(
+                suggestedFilename: request.suggestedFilename
+            )
+        }
+    }
 
-            let result = await worker.write(pdf, to: targetURL, expectedTarget: targetSnapshot)
-            guard exportIsCurrent(generation) else { return }
-            finishExport(generation)
-            switch result {
-            case .success:
-                htmlExportNotice = .success(
-                    format: .pdf,
-                    url: targetURL,
-                    documentVersion: documentVersion
+    private func presentPreparationFailure(
+        _ error: HTMLExportError,
+        request: FrozenExportRequest
+    ) {
+        switch error {
+        case .outputTooLarge:
+            htmlExportNotice = HTMLExportNotice(outcome: .tooLarge(request))
+        case let .unsupportedContent(issues):
+            let details = issues.map { "• \($0.description)" }.joined(separator: "\n")
+            htmlExportNotice = HTMLExportNotice(
+                outcome: .checkFailed(request: request, details: details)
+            )
+        case .invalidUTF8, .unavailableResource:
+            htmlExportNotice = HTMLExportNotice(
+                outcome: .checkFailed(
+                    request: request,
+                    details: error.localizedDescription
                 )
-            case let .failure(error):
-                htmlExportNotice = .failure(
-                    format: .pdf,
-                    message: error.localizedDescription
+            )
+        case .coreFailure:
+            htmlExportNotice = HTMLExportNotice(
+                outcome: .failure(
+                    context: .prepare(request),
+                    reason: error.localizedDescription
                 )
+            )
+        }
+    }
+
+    private func presentPDFFailure(_ error: Error, request: FrozenExportRequest) {
+        if error as? PDFExportError == .invalidOutput {
+            htmlExportNotice = HTMLExportNotice(
+                outcome: .checkFailed(
+                    request: request,
+                    details: PDFExportError.invalidOutput.localizedDescription
+                )
+            )
+            return
+        }
+        let reason = (error as? LocalizedError)?.errorDescription
+            ?? PDFExportError.renderingFailed.localizedDescription
+        htmlExportNotice = HTMLExportNotice(
+            outcome: .failure(context: .prepare(request), reason: reason)
+        )
+    }
+
+    private func presentTargetFailure(
+        _ error: HTMLExportTargetError,
+        context: ExportRecoveryContext
+    ) {
+        if error == .targetChanged, let delivery = context.delivery {
+            let targetURL: URL = switch context {
+            case let .capture(_, url), let .write(_, url, _): url
+            case .prepare: preconditionFailure("A target change requires a delivery target")
             }
+            htmlExportNotice = HTMLExportNotice(
+                outcome: .targetChanged(delivery: delivery, targetURL: targetURL)
+            )
+        } else {
+            htmlExportNotice = HTMLExportNotice(
+                outcome: .failure(context: context, reason: error.localizedDescription)
+            )
+        }
+    }
+
+    private func retryExport(_ context: ExportRecoveryContext) {
+        switch context {
+        case let .prepare(request):
+            prepareExport(request)
+        case let .capture(delivery, targetURL):
+            deliver(delivery, from: .capture(targetURL))
+        case let .write(delivery, targetURL, expectedTarget):
+            deliver(delivery, from: .write(targetURL, expectedTarget))
+        }
+    }
+
+    private func chooseAnotherExportLocation(_ context: ExportRecoveryContext) {
+        if let delivery = context.delivery {
+            deliver(delivery, from: .chooseDestination)
+        } else {
+            prepareExport(context.request)
         }
     }
 
