@@ -8,6 +8,15 @@ enum RecoveryProtectionPrompt {
     static let continueTitle = "继续写作"
 }
 
+enum RecoveryOriginalChangePrompt {
+    static let title = "恢复内容不会覆盖原文件"
+    static let message = "原文件已经变化。请比较后将恢复内容作为未命名文档打开或另存。"
+    static let compareTitle = "查看差异…"
+    static let openTitle = "打开恢复文档"
+    static let saveAsTitle = "另存为…"
+    static let closeTitle = "关闭"
+}
+
 enum RecoveryDiskPreview: Equatable, Sendable {
     case unnamed
     case missing(URL)
@@ -32,6 +41,11 @@ enum RecoveryDiskPreview: Equatable, Sendable {
     var diskText: String? {
         guard case let .readable(_, text, _) = self else { return nil }
         return text
+    }
+
+    var originalHasChanged: Bool {
+        guard case .readable(_, _, false) = self else { return false }
+        return true
     }
 }
 
@@ -137,6 +151,8 @@ struct RecoveryCenterView: View {
     @State private var diskInspector = RecoveryDiskInspector()
     @State private var errorMessage: String?
     @State private var recordPendingDiscard: DocumentRecoveryRecord?
+    @State private var comparisonRecordID: DocumentRecoveryRecord.ID?
+    @State private var dismissedChangePromptRecordID: DocumentRecoveryRecord.ID?
 
     private var selectedRecord: DocumentRecoveryRecord? {
         coordinator.recoveredRecords.first { $0.id == selectedID }
@@ -193,6 +209,9 @@ struct RecoveryCenterView: View {
                 diskPreview = .unnamed
                 return
             }
+            comparisonRecordID = nil
+            dismissedChangePromptRecordID = nil
+            diskPreview = .unnamed
             diskPreview = await diskInspector.inspect(selectedRecord)
         }
         .alert(
@@ -260,14 +279,20 @@ struct RecoveryCenterView: View {
                     Button("放弃…", role: .destructive) {
                         recordPendingDiscard = record
                     }
-                    Button("另存所选…") {
-                        saveAs(record)
+                    if !showsOriginalChangePrompt(for: record) {
+                        Button("另存所选…") {
+                            saveAs(record)
+                        }
+                        .disabled(record.requiresLineEndingChoice)
+                        Button(RecoveryOriginalChangePrompt.openTitle) {
+                            restore(record)
+                        }
+                        .keyboardShortcut(.defaultAction)
                     }
-                    .disabled(record.requiresLineEndingChoice)
-                    Button("打开恢复文档") {
-                        restore(record)
-                    }
-                    .keyboardShortcut(.defaultAction)
+                }
+
+                if showsOriginalChangePrompt(for: record) {
+                    originalChangePrompt(for: record)
                 }
 
                 if record.requiresLineEndingChoice {
@@ -279,15 +304,17 @@ struct RecoveryCenterView: View {
                     .foregroundStyle(.orange)
                 }
 
-                HSplitView {
-                    sourcePreview(
-                        title: "未保存的恢复内容",
-                        text: record.text
-                    )
-                    sourcePreview(
-                        title: "当前磁盘内容",
-                        text: diskPreview.diskText
-                    )
+                if shouldShowComparison(for: record) {
+                    HSplitView {
+                        sourcePreview(
+                            title: "未保存的恢复内容",
+                            text: record.text
+                        )
+                        sourcePreview(
+                            title: "当前磁盘内容",
+                            text: diskPreview.diskText
+                        )
+                    }
                 }
 
                 HStack {
@@ -302,6 +329,49 @@ struct RecoveryCenterView: View {
             }
         }
         .padding(16)
+    }
+
+    private func showsOriginalChangePrompt(for record: DocumentRecoveryRecord) -> Bool {
+        diskPreview.originalHasChanged && dismissedChangePromptRecordID != record.id
+    }
+
+    private func shouldShowComparison(for record: DocumentRecoveryRecord) -> Bool {
+        !diskPreview.originalHasChanged || comparisonRecordID == record.id
+    }
+
+    private func originalChangePrompt(for record: DocumentRecoveryRecord) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(RecoveryOriginalChangePrompt.title, systemImage: "exclamationmark.triangle.fill")
+                .font(.headline)
+                .foregroundStyle(.orange)
+            Text(RecoveryOriginalChangePrompt.message)
+                .foregroundStyle(.secondary)
+            HStack {
+                Button(RecoveryOriginalChangePrompt.compareTitle) {
+                    comparisonRecordID = record.id
+                }
+                Button(RecoveryOriginalChangePrompt.openTitle) {
+                    restore(record)
+                }
+                .keyboardShortcut(.defaultAction)
+                Button(RecoveryOriginalChangePrompt.saveAsTitle) {
+                    saveAs(record)
+                }
+                .disabled(record.requiresLineEndingChoice)
+                Spacer()
+                Button(RecoveryOriginalChangePrompt.closeTitle) {
+                    dismissedChangePromptRecordID = record.id
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.orange.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.orange.opacity(0.45), lineWidth: 1)
+        }
+        .accessibilityElement(children: .contain)
     }
 
     private func sourcePreview(title: String, text: String?) -> some View {

@@ -4,6 +4,34 @@ import XCTest
 @testable import Inflow
 
 final class DocumentRecoveryTests: XCTestCase {
+    func testChangedOriginalRecoveryPromptUsesFrozenSafeActions() {
+        XCTAssertEqual(RecoveryOriginalChangePrompt.title, "恢复内容不会覆盖原文件")
+        XCTAssertEqual(
+            RecoveryOriginalChangePrompt.message,
+            "原文件已经变化。请比较后将恢复内容作为未命名文档打开或另存。"
+        )
+        XCTAssertEqual(RecoveryOriginalChangePrompt.compareTitle, "查看差异…")
+        XCTAssertEqual(RecoveryOriginalChangePrompt.openTitle, "打开恢复文档")
+        XCTAssertEqual(RecoveryOriginalChangePrompt.saveAsTitle, "另存为…")
+        XCTAssertEqual(RecoveryOriginalChangePrompt.closeTitle, "关闭")
+    }
+
+    func testOnlyReadableDifferentDiskContentIsClassifiedAsChangedOriginal() {
+        let url = URL(fileURLWithPath: "/tmp/note.md")
+
+        XCTAssertTrue(
+            RecoveryDiskPreview.readable(url, text: "disk", matchesRecovery: false)
+                .originalHasChanged
+        )
+        XCTAssertFalse(
+            RecoveryDiskPreview.readable(url, text: "same", matchesRecovery: true)
+                .originalHasChanged
+        )
+        XCTAssertFalse(RecoveryDiskPreview.missing(url).originalHasChanged)
+        XCTAssertFalse(RecoveryDiskPreview.unavailable(url).originalHasChanged)
+        XCTAssertFalse(RecoveryDiskPreview.unnamed.originalHasChanged)
+    }
+
     @MainActor
     func testRecoveryProtectionPromptUsesFrozenSafeExitCopy() {
         XCTAssertEqual(RecoveryProtectionPrompt.title, "恢复保护暂时不可用")
