@@ -11,9 +11,11 @@ ARCHIVE_PATH="$1"
 APP_PATH="${ARCHIVE_PATH}/Products/Applications/Inflow.app"
 BINARY_PATH="${APP_PATH}/Contents/MacOS/Inflow"
 INFO_PATH="${APP_PATH}/Contents/Info.plist"
+DSYM_PATH="${ARCHIVE_PATH}/dSYMs/Inflow.app.dSYM"
+DSYM_BINARY_PATH="${DSYM_PATH}/Contents/Resources/DWARF/Inflow"
 
-if [ ! -f "${BINARY_PATH}" ] || [ ! -f "${INFO_PATH}" ]; then
-  echo "error: archive does not contain the Inflow app" >&2
+if [ ! -f "${BINARY_PATH}" ] || [ ! -f "${INFO_PATH}" ] || [ ! -f "${DSYM_BINARY_PATH}" ]; then
+  echo "error: archive does not contain the Inflow app and its dSYM" >&2
   exit 1
 fi
 
@@ -36,6 +38,19 @@ if [ -z "${MARKETING_VERSION}" ] || [ -z "${BUILD_VERSION}" ]; then
   exit 1
 fi
 
+BINARY_DWARF_ID="$(
+  /usr/bin/xcrun dwarfdump --uuid "${BINARY_PATH}" \
+    | /usr/bin/awk '{ print $2 " " $3 }'
+)"
+DSYM_DWARF_ID="$(
+  /usr/bin/xcrun dwarfdump --uuid "${DSYM_PATH}" \
+    | /usr/bin/awk '{ print $2 " " $3 }'
+)"
+if [ -z "${BINARY_DWARF_ID}" ] || [ "${BINARY_DWARF_ID}" != "${DSYM_DWARF_ID}" ]; then
+  echo "error: archived app and dSYM UUIDs do not match" >&2
+  exit 1
+fi
+
 if /usr/bin/strings "${BINARY_PATH}" \
   | /usr/bin/grep -E '/Users/|/home/|/private/var/folders/|\.cargo/registry/' \
   >/dev/null
@@ -44,4 +59,4 @@ then
   exit 1
 fi
 
-echo "verified Inflow ${MARKETING_VERSION} (${BUILD_VERSION}), arm64, macOS ${MINIMUM_SYSTEM}+"
+echo "verified Inflow ${MARKETING_VERSION} (${BUILD_VERSION}), arm64, macOS ${MINIMUM_SYSTEM}+, dSYM ${BINARY_DWARF_ID}"

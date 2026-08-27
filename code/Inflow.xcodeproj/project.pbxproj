@@ -595,13 +595,6 @@
 					"$(BUILT_PRODUCTS_DIR)",
 				);
 				MARKETING_VERSION = 0.1.0;
-				OTHER_SWIFT_FLAGS = (
-					"$(inherited)",
-					"-debug-prefix-map",
-					"$(PROJECT_DIR)=inflow",
-					"-file-prefix-map",
-					"$(PROJECT_DIR)=inflow",
-				);
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-linflow_core",
