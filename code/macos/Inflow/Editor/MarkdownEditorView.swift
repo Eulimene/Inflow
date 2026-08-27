@@ -297,7 +297,7 @@ enum EditorStatisticMode: String, CaseIterable, Identifiable {
 enum EmptyMarkdownGuidance {
     static let title = "这份 Markdown 属于你"
     static let description =
-        "直接在源码编辑器中开始写作，或打开文件夹后从侧栏选择 Markdown。首次保存时由你选择文件名和位置，Inflow 不会把内容导入专有格式。"
+        "直接在源码编辑器中开始写作，或从 macOS 顶部“文件”菜单打开文件与文件夹。首次保存时由你选择文件名和位置，Inflow 不会把内容导入专有格式。"
 
     static func isVisible(markdown: String) -> Bool {
         markdown.isEmpty
@@ -392,8 +392,6 @@ struct DeferredImageInsertionQueue: Equatable {
 
 private struct EmptyMarkdownPreviewView: View {
     let onStartWriting: () -> Void
-    let onOpenFolder: () -> Void
-    let onOpenDocument: () -> Void
 
     var body: some View {
         ContentUnavailableView {
@@ -401,11 +399,7 @@ private struct EmptyMarkdownPreviewView: View {
         } description: {
             Text(EmptyMarkdownGuidance.description)
         } actions: {
-            VStack(spacing: 10) {
-                Button("在源码编辑器中开始", action: onStartWriting)
-                Button("打开文件夹…", action: onOpenFolder)
-                Button("打开现有 Markdown…", action: onOpenDocument)
-            }
+            Button("在源码编辑器中开始", action: onStartWriting)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
@@ -685,22 +679,6 @@ struct MarkdownEditorView: View {
         .focusedSceneValue(\.recoveryActions, recoveryCommandActions)
         .focusedSceneValue(\.documentSaveActions, documentSaveCommandActions)
         .toolbar {
-            ToolbarItem {
-                Button {
-                    folderBrowser.chooseFolder(
-                        attachedTo: sourceEditorSession.textView.window
-                            ?? NSApp.keyWindow
-                            ?? NSApp.mainWindow
-                    )
-                } label: {
-                    Label(
-                        folderBrowser.folderURL == nil ? "打开文件夹" : "更换文件夹",
-                        systemImage: "folder"
-                    )
-                }
-                .help(folderBrowser.folderURL == nil ? "打开文件夹" : "更换文件夹")
-            }
-
             ToolbarItem {
                 Button {
                     isOutlineVisible.toggle()
@@ -1283,16 +1261,6 @@ struct MarkdownEditorView: View {
                     EmptyMarkdownPreviewView(
                         onStartWriting: {
                             selectViewMode(viewMode == .preview ? .source : viewMode)
-                        },
-                        onOpenFolder: {
-                            folderBrowser.chooseFolder(
-                                attachedTo: sourceEditorSession.textView.window
-                                    ?? NSApp.keyWindow
-                                    ?? NSApp.mainWindow
-                            )
-                        },
-                        onOpenDocument: {
-                            recentDocuments?.chooseDocumentToOpen()
                         }
                     )
                 }

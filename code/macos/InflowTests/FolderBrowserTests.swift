@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import Inflow
 
@@ -182,6 +183,44 @@ final class FolderBrowserTests: XCTestCase {
         XCTAssertEqual(items.filter { $0.title == "打开文件夹…" }.count, 1)
     }
 
+    func testLaunchWorkspaceKeepsFileActionsInTheMacOSMenuBar() throws {
+        let folderBrowser = FolderBrowserController(
+            persistence: TestFolderBrowserPersistence(),
+            restoresSavedFolder: false
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 980, height: 640),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.animationBehavior = .none
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(
+            rootView: InflowMainView(
+                folderBrowser: folderBrowser,
+                onOpenDocument: { _ in }
+            )
+        )
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+
+        let workspaceButtonTitles = descendantButtons(
+            in: try XCTUnwrap(window.contentView)
+        ).map(\.title)
+        XCTAssertTrue(
+            Set(workspaceButtonTitles).isDisjoint(
+                with: Set(["新建 Markdown", "打开文件…", "打开文件夹…", "清除记录"])
+            )
+        )
+
+        let fileMenu = try XCTUnwrap(NSApp.mainMenu?.item(withTitle: "文件")?.submenu)
+        XCTAssertEqual(fileMenu.items.filter { $0.title == "打开…" }.count, 1)
+        XCTAssertEqual(fileMenu.items.filter { $0.title == "打开文件夹…" }.count, 1)
+        XCTAssertEqual(fileMenu.items.filter { $0.title == "打开最近" }.count, 1)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Inflow-FolderBrowser-\(UUID().uuidString)", isDirectory: true)
@@ -208,6 +247,11 @@ final class FolderBrowserTests: XCTestCase {
         menu.items.flatMap { item in
             [item] + (item.submenu.map(allMenuItems(in:)) ?? [])
         }
+    }
+
+    private func descendantButtons(in view: NSView) -> [NSButton] {
+        let current = (view as? NSButton).map { [$0] } ?? []
+        return current + view.subviews.flatMap(descendantButtons(in:))
     }
 }
 

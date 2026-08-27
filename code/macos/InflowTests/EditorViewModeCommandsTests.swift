@@ -32,6 +32,7 @@ final class EditorViewModeCommandsTests: XCTestCase {
         XCTAssertFalse(EmptyMarkdownGuidance.isVisible(markdown: "\n"))
         XCTAssertTrue(EmptyMarkdownGuidance.title.contains("属于你"))
         XCTAssertTrue(EmptyMarkdownGuidance.description.contains("源码编辑器"))
+        XCTAssertTrue(EmptyMarkdownGuidance.description.contains("顶部“文件”菜单"))
         XCTAssertTrue(EmptyMarkdownGuidance.description.contains("选择文件名和位置"))
         XCTAssertTrue(EmptyMarkdownGuidance.description.contains("不会把内容导入专有格式"))
     }

@@ -52,11 +52,8 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
         }
 
         let rootView = InflowMainView(
-            recentDocuments: recentDocuments,
             folderBrowser: folderBrowser,
-            onNewDocument: {
-                NSDocumentController.shared.newDocument(nil)
-            }
+            onOpenDocument: recentDocuments.openDocumentFromFolder
         )
         .frame(minWidth: 760, minHeight: 500)
 
