@@ -139,6 +139,8 @@ xcodebuild \
 scripts/verify-release-archive.sh build/Inflow.xcarchive
 ```
 
+脚本默认只接受带 hardened runtime、完整沙箱/文件/书签/网络权限且不是 ad-hoc 的有效分发签名。开发机没有发布证书时，可对 `CODE_SIGNING_ALLOWED=NO` 生成的临时归档使用 `scripts/verify-release-archive.sh --local …`；该模式只验证源码 entitlement 与其他归档事实，不代表签名、公证或分发验收通过。
+
 匿名使用数据接收地址不检入仓库。只有在发布构建中将 `INFLOW_ANONYMOUS_USAGE_ENDPOINT` 注入为受控的 HTTPS URL，并验证服务端不超过披露的用途与保留期后，客户端才会提供开启操作。
 
 ## 提交规则
