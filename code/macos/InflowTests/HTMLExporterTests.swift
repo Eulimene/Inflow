@@ -5,6 +5,42 @@ import XCTest
 @testable import Inflow
 
 final class HTMLExporterTests: XCTestCase {
+    func testExportProgressUsesFrozenCopyAndExactSnapshotVersion() {
+        let first = HTMLExportSnapshot(markdown: "e\u{301}")
+        let same = HTMLExportSnapshot(markdown: "e\u{301}")
+        let canonicallyEquivalentButByteDifferent = HTMLExportSnapshot(markdown: "é")
+
+        XCTAssertEqual(ExportProgressPrompt.title(format: "HTML"), "正在导出 HTML…")
+        XCTAssertEqual(ExportProgressPrompt.cancelTitle, "取消")
+        XCTAssertEqual(
+            ExportProgressPrompt.message(documentVersion: first.documentVersion),
+            "使用文档版本 \(first.documentVersion)。"
+        )
+        XCTAssertEqual(first.documentVersion, same.documentVersion)
+        XCTAssertNotEqual(
+            first.documentVersion,
+            canonicallyEquivalentButByteDifferent.documentVersion
+        )
+    }
+
+    @MainActor
+    func testCancelledPDFGenerationStopsBeforeCreatingOutput() async {
+        let task = Task { @MainActor in
+            await Task.yield()
+            return try await PDFExporter.generate(
+                fromSelfContainedHTML: Data("<!doctype html><p>cancel</p>".utf8)
+            )
+        }
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected PDF generation cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
     func testHTMLExportABILayoutMatchesRustContractOnArm64() {
         XCTAssertEqual(MemoryLayout<InflowHTMLExportResult>.size, 32)
         XCTAssertEqual(MemoryLayout<InflowHTMLExportResult>.alignment, 8)

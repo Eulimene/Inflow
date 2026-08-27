@@ -54,16 +54,75 @@ private enum HTMLExportNotice: Identifiable {
     }
 }
 
-private struct PendingExportConfirmation: Identifiable {
-    enum Format {
-        case html
-        case pdf
+private enum ExportFormat: String, Sendable {
+    case html = "HTML"
+    case pdf = "PDF"
+}
+
+enum ExportProgressPrompt {
+    static let cancelTitle = "取消"
+
+    static func title(format: String) -> String {
+        "正在导出 \(format)…"
     }
 
+    static func message(documentVersion: String) -> String {
+        "使用文档版本 \(documentVersion)。"
+    }
+}
+
+private struct ActiveExportProgress: Equatable {
+    let format: ExportFormat
+    let documentVersion: String
+    let isCancellable: Bool
+}
+
+private struct ExportProgressBanner: View {
+    let progress: ActiveExportProgress
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ExportProgressPrompt.title(format: progress.format.rawValue))
+                        .font(.headline)
+                    Text(
+                        ExportProgressPrompt.message(
+                            documentVersion: progress.documentVersion
+                        )
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 12)
+                if progress.isCancellable {
+                    Button(ExportProgressPrompt.cancelTitle, action: onCancel)
+                        .keyboardShortcut(.cancelAction)
+                } else {
+                    Text("正在安全完成写入")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.accentColor.opacity(0.08))
+            .accessibilityElement(children: .contain)
+            Divider()
+        }
+    }
+}
+
+private struct PendingExportConfirmation: Identifiable {
     let id = UUID()
-    let format: Format
+    let format: ExportFormat
     let preparation: HTMLExportPreparation
     let suggestedFilename: String
+    let documentVersion: String
 }
 
 enum EditorViewMode: String, CaseIterable, Identifiable {
@@ -235,6 +294,9 @@ struct MarkdownEditorView: View {
     @State private var isExportingHTML = false
     @State private var isExportingPDF = false
     @State private var htmlExportWorker = HTMLExportWorker()
+    @State private var exportTask: Task<Void, Never>?
+    @State private var exportGeneration = 0
+    @State private var activeExportProgress: ActiveExportProgress?
     @State private var htmlExportNotice: HTMLExportNotice?
     @State private var pendingExportConfirmation: PendingExportConfirmation?
     @State private var markdownFormatErrorMessage: String?
@@ -326,6 +388,13 @@ struct MarkdownEditorView: View {
                     )
                 }
             )
+
+            if let activeExportProgress {
+                ExportProgressBanner(
+                    progress: activeExportProgress,
+                    onCancel: cancelExport
+                )
+            }
 
             if document.properties.requiresLineEndingChoice {
                 lineEndingChoiceBanner
@@ -593,6 +662,7 @@ struct MarkdownEditorView: View {
             derivedContentTask?.cancel()
             previewLinkTask?.cancel()
             findSearchTask?.cancel()
+            abandonExportTracking()
             pendingFindNavigation.removeAll()
             findSession.cancelSearch()
             fileSafetySession.stopMonitoring()
@@ -2077,6 +2147,49 @@ struct MarkdownEditorView: View {
         }
     }
 
+    private func beginExport(
+        format: ExportFormat,
+        documentVersion: String,
+        isCancellable: Bool
+    ) -> Int {
+        exportTask?.cancel()
+        exportGeneration &+= 1
+        isExportingHTML = format == .html
+        isExportingPDF = format == .pdf
+        activeExportProgress = ActiveExportProgress(
+            format: format,
+            documentVersion: documentVersion,
+            isCancellable: isCancellable
+        )
+        return exportGeneration
+    }
+
+    private func exportIsCurrent(_ generation: Int) -> Bool {
+        generation == exportGeneration && !Task.isCancelled
+    }
+
+    private func finishExport(_ generation: Int) {
+        guard generation == exportGeneration else { return }
+        exportTask = nil
+        activeExportProgress = nil
+        isExportingHTML = false
+        isExportingPDF = false
+    }
+
+    private func cancelExport() {
+        guard activeExportProgress?.isCancellable == true else { return }
+        abandonExportTracking()
+    }
+
+    private func abandonExportTracking() {
+        exportGeneration &+= 1
+        exportTask?.cancel()
+        exportTask = nil
+        activeExportProgress = nil
+        isExportingHTML = false
+        isExportingPDF = false
+    }
+
     private func startHTMLExport() {
         guard !isExportingHTML, !isExportingPDF else { return }
         anonymousUsage?.record(feature: .export, command: .exportHTML)
@@ -2088,30 +2201,41 @@ struct MarkdownEditorView: View {
         let basename = fileURL?.deletingPathExtension().lastPathComponent ?? "未命名文档"
         let suggestedFilename = "\(basename).html"
         let worker = htmlExportWorker
-        isExportingHTML = true
+        let generation = beginExport(
+            format: .html,
+            documentVersion: snapshot.documentVersion,
+            isCancellable: true
+        )
 
-        Task { @MainActor in
+        exportTask = Task { @MainActor in
             let preparation: HTMLExportPreparation
             switch await worker.prepare(snapshot) {
             case let .success(value):
                 preparation = value
             case let .failure(error):
-                isExportingHTML = false
+                guard exportIsCurrent(generation) else { return }
+                finishExport(generation)
                 htmlExportNotice = .failure(error.localizedDescription)
                 return
             }
+            guard exportIsCurrent(generation) else { return }
 
             guard preparation.warnings.isEmpty else {
-                isExportingHTML = false
+                finishExport(generation)
                 pendingExportConfirmation = PendingExportConfirmation(
                     format: .html,
                     preparation: preparation,
-                    suggestedFilename: suggestedFilename
+                    suggestedFilename: suggestedFilename,
+                    documentVersion: snapshot.documentVersion
                 )
                 return
             }
-            isExportingHTML = false
-            continuePreparedHTMLExport(preparation, suggestedFilename: suggestedFilename)
+            finishExport(generation)
+            continuePreparedHTMLExport(
+                preparation,
+                suggestedFilename: suggestedFilename,
+                documentVersion: snapshot.documentVersion
+            )
         }
     }
 
@@ -2124,32 +2248,43 @@ struct MarkdownEditorView: View {
             appearance: preferences.previewConfiguration
         )
         let basename = fileURL?.deletingPathExtension().lastPathComponent ?? "未命名文档"
+        let suggestedFilename = "\(basename).pdf"
         let worker = htmlExportWorker
-        isExportingPDF = true
+        let generation = beginExport(
+            format: .pdf,
+            documentVersion: snapshot.documentVersion,
+            isCancellable: true
+        )
 
-        Task { @MainActor in
+        exportTask = Task { @MainActor in
             let preparation: HTMLExportPreparation
             switch await worker.prepare(snapshot) {
             case let .success(value):
                 preparation = value
             case let .failure(error):
-                isExportingPDF = false
+                guard exportIsCurrent(generation) else { return }
+                finishExport(generation)
                 htmlExportNotice = .pdfFailure(error.localizedDescription)
                 return
             }
+            guard exportIsCurrent(generation) else { return }
 
-            let suggestedFilename = "\(basename).pdf"
             guard preparation.warnings.isEmpty else {
-                isExportingPDF = false
+                finishExport(generation)
                 pendingExportConfirmation = PendingExportConfirmation(
                     format: .pdf,
                     preparation: preparation,
-                    suggestedFilename: suggestedFilename
+                    suggestedFilename: suggestedFilename,
+                    documentVersion: snapshot.documentVersion
                 )
                 return
             }
-            isExportingPDF = false
-            continuePreparedPDFExport(preparation, suggestedFilename: suggestedFilename)
+            finishExport(generation)
+            continuePreparedPDFExport(
+                preparation,
+                suggestedFilename: suggestedFilename,
+                documentVersion: snapshot.documentVersion
+            )
         }
     }
 
@@ -2158,46 +2293,64 @@ struct MarkdownEditorView: View {
         case .html:
             continuePreparedHTMLExport(
                 pending.preparation,
-                suggestedFilename: pending.suggestedFilename
+                suggestedFilename: pending.suggestedFilename,
+                documentVersion: pending.documentVersion
             )
         case .pdf:
             continuePreparedPDFExport(
                 pending.preparation,
-                suggestedFilename: pending.suggestedFilename
+                suggestedFilename: pending.suggestedFilename,
+                documentVersion: pending.documentVersion
             )
         }
     }
 
     private func continuePreparedHTMLExport(
         _ preparation: HTMLExportPreparation,
-        suggestedFilename: String
+        suggestedFilename: String,
+        documentVersion: String
     ) {
         guard !isExportingHTML, !isExportingPDF else { return }
         let worker = htmlExportWorker
-        isExportingHTML = true
-        Task { @MainActor in
-            defer { isExportingHTML = false }
+        let generation = beginExport(
+            format: .html,
+            documentVersion: documentVersion,
+            isCancellable: true
+        )
+        exportTask = Task { @MainActor in
             guard let targetURL = await HTMLExportPanel.chooseDestination(
                 suggestedFilename: suggestedFilename
-            ) else { return }
+            ), exportIsCurrent(generation) else {
+                finishExport(generation)
+                return
+            }
 
             let accessed = targetURL.startAccessingSecurityScopedResource()
             defer { if accessed { targetURL.stopAccessingSecurityScopedResource() } }
             let targetSnapshot: HTMLExportTargetSnapshot
-            do {
-                targetSnapshot = try HTMLExportTargetSnapshot.capture(targetURL)
-            } catch {
-                htmlExportNotice = .failure(
-                    (error as? LocalizedError)?.errorDescription
-                        ?? HTMLExportTargetError.cannotInspect.localizedDescription
-                )
+            switch await worker.captureTarget(targetURL) {
+            case let .success(snapshot):
+                targetSnapshot = snapshot
+            case let .failure(error):
+                guard exportIsCurrent(generation) else { return }
+                finishExport(generation)
+                htmlExportNotice = .failure(error.localizedDescription)
                 return
             }
-            switch await worker.write(
+            guard exportIsCurrent(generation) else { return }
+            activeExportProgress = ActiveExportProgress(
+                format: .html,
+                documentVersion: documentVersion,
+                isCancellable: false
+            )
+            let result = await worker.write(
                 preparation.data,
                 to: targetURL,
                 expectedTarget: targetSnapshot
-            ) {
+            )
+            guard exportIsCurrent(generation) else { return }
+            finishExport(generation)
+            switch result {
             case .success: htmlExportNotice = .success(targetURL)
             case let .failure(error): htmlExportNotice = .failure(error.localizedDescription)
             }
@@ -2206,43 +2359,62 @@ struct MarkdownEditorView: View {
 
     private func continuePreparedPDFExport(
         _ preparation: HTMLExportPreparation,
-        suggestedFilename: String
+        suggestedFilename: String,
+        documentVersion: String
     ) {
         guard !isExportingHTML, !isExportingPDF else { return }
         let worker = htmlExportWorker
-        isExportingPDF = true
-        Task { @MainActor in
-            defer { isExportingPDF = false }
+        let generation = beginExport(
+            format: .pdf,
+            documentVersion: documentVersion,
+            isCancellable: true
+        )
+        exportTask = Task { @MainActor in
             let pdf: Data
             do {
                 pdf = try await PDFExporter.generate(fromSelfContainedHTML: preparation.data)
             } catch {
+                guard exportIsCurrent(generation) else { return }
+                finishExport(generation)
                 htmlExportNotice = .pdfFailure(
                     (error as? LocalizedError)?.errorDescription
                         ?? PDFExportError.renderingFailed.localizedDescription
                 )
                 return
             }
+            guard exportIsCurrent(generation) else { return }
             guard let targetURL = await PDFExportPanel.chooseDestination(
                 suggestedFilename: suggestedFilename
-            ) else { return }
+            ), exportIsCurrent(generation) else {
+                finishExport(generation)
+                return
+            }
 
             let accessed = targetURL.startAccessingSecurityScopedResource()
             defer {
                 if accessed { targetURL.stopAccessingSecurityScopedResource() }
             }
             let targetSnapshot: HTMLExportTargetSnapshot
-            do {
-                targetSnapshot = try HTMLExportTargetSnapshot.capture(targetURL)
-            } catch {
-                htmlExportNotice = .pdfFailure(
-                    (error as? LocalizedError)?.errorDescription
-                        ?? HTMLExportTargetError.cannotInspect.localizedDescription
-                )
+            switch await worker.captureTarget(targetURL) {
+            case let .success(snapshot):
+                targetSnapshot = snapshot
+            case let .failure(error):
+                guard exportIsCurrent(generation) else { return }
+                finishExport(generation)
+                htmlExportNotice = .pdfFailure(error.localizedDescription)
                 return
             }
+            guard exportIsCurrent(generation) else { return }
+            activeExportProgress = ActiveExportProgress(
+                format: .pdf,
+                documentVersion: documentVersion,
+                isCancellable: false
+            )
 
-            switch await worker.write(pdf, to: targetURL, expectedTarget: targetSnapshot) {
+            let result = await worker.write(pdf, to: targetURL, expectedTarget: targetSnapshot)
+            guard exportIsCurrent(generation) else { return }
+            finishExport(generation)
+            switch result {
             case .success:
                 htmlExportNotice = .pdfSuccess(targetURL)
             case let .failure(error):

@@ -7,6 +7,7 @@ struct HTMLExportSnapshot: Sendable {
     let utf8: Data
     let documentDirectory: URL?
     let appearance: PreviewAppearanceConfiguration
+    let documentVersion: String
 
     init(
         markdown: String,
@@ -16,6 +17,16 @@ struct HTMLExportSnapshot: Sendable {
         utf8 = Data(markdown.utf8)
         self.documentDirectory = documentDirectory
         self.appearance = appearance
+        documentVersion = Self.versionLabel(for: utf8)
+    }
+
+    private static func versionLabel(for data: Data) -> String {
+        var hash = UInt64(0xcbf29ce484222325)
+        for byte in data {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+        return String(format: "UTF-8 %016llX", hash)
     }
 }
 
@@ -324,6 +335,16 @@ enum HTMLExportFileWriter {
 }
 
 actor HTMLExportWorker {
+    func captureTarget(_ targetURL: URL) -> Result<HTMLExportTargetSnapshot, HTMLExportTargetError> {
+        do {
+            return .success(try HTMLExportTargetSnapshot.capture(targetURL))
+        } catch let error as HTMLExportTargetError {
+            return .failure(error)
+        } catch {
+            return .failure(.cannotInspect)
+        }
+    }
+
     func prepare(_ snapshot: HTMLExportSnapshot) -> Result<HTMLExportPreparation, HTMLExportError> {
         do {
             return .success(try HTMLExporter.prepare(snapshot: snapshot))

@@ -31,6 +31,7 @@ enum PDFExporter {
     }
 
     static func generate(fromSelfContainedHTML html: Data) async throws -> Data {
+        try Task.checkCancellation()
         guard var htmlString = String(data: html, encoding: .utf8) else {
             throw PDFExportError.renderingFailed
         }
@@ -46,8 +47,10 @@ enum PDFExporter {
         let loader = PDFWebViewLoader()
         webView.navigationDelegate = loader
         try await loader.load(htmlString, in: webView)
+        try Task.checkCancellation()
 
         let contentHeight = try await measuredContentHeight(in: webView)
+        try Task.checkCancellation()
         var pageData: [Data] = []
         var pageOriginY = 0.0
         repeat {
@@ -64,9 +67,11 @@ enum PDFExporter {
             } catch {
                 throw PDFExportError.renderingFailed
             }
+            try Task.checkCancellation()
             pageOriginY += pageHeight
         } while pageOriginY < contentHeight
 
+        try Task.checkCancellation()
         let data = try composeA4Document(from: pageData)
         guard let document = PDFDocument(data: data), document.pageCount == pageData.count else {
             throw PDFExportError.renderingFailed
