@@ -2,54 +2,33 @@ import AppKit
 import SwiftUI
 
 private enum HTMLExportNotice: Identifiable {
-    case success(URL)
-    case failure(String)
-    case pdfSuccess(URL)
-    case pdfFailure(String)
+    case success(format: ExportFormat, url: URL, documentVersion: String)
+    case failure(format: ExportFormat, message: String)
 
     var id: String {
         switch self {
-        case let .success(url): "success:\(url.path)"
-        case let .failure(message): "failure:\(message)"
-        case let .pdfSuccess(url): "pdf-success:\(url.path)"
-        case let .pdfFailure(message): "pdf-failure:\(message)"
+        case let .success(format, url, documentVersion):
+            "success:\(format.rawValue):\(url.path):\(documentVersion)"
+        case let .failure(format, message):
+            "failure:\(format.rawValue):\(message)"
         }
     }
 
-    var alert: Alert {
+    var title: String {
         switch self {
-        case let .success(url):
-            Alert(
-                title: Text("HTML 导出完成"),
-                message: Text("已导出到：\n\(url.path)"),
-                primaryButton: .default(Text("在 Finder 中显示")) {
-                    NSWorkspace.shared.activateFileViewerSelecting([url])
-                },
-                secondaryButton: .cancel(Text("完成"))
-            )
-        case let .failure(message):
-            Alert(
-                title: Text("HTML 导出未完成"),
-                message: Text(message),
-                dismissButton: .default(Text("好"))
-            )
-        case let .pdfSuccess(url):
-            Alert(
-                title: Text("PDF 导出完成"),
-                message: Text("已导出到：\n\(url.path)"),
-                primaryButton: .default(Text("在 Finder 中显示")) {
-                    NSWorkspace.shared.activateFileViewerSelecting([url])
-                },
-                secondaryButton: .default(Text("打开 PDF")) {
-                    NSWorkspace.shared.open(url)
-                }
-            )
-        case let .pdfFailure(message):
-            Alert(
-                title: Text("PDF 导出未完成"),
-                message: Text(message),
-                dismissButton: .default(Text("好"))
-            )
+        case let .success(_, url, _):
+            ExportResultPrompt.successTitle(exportName: url.lastPathComponent)
+        case let .failure(format, _):
+            "\(format.rawValue) 导出未完成"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case let .success(_, _, documentVersion):
+            ExportResultPrompt.successMessage(documentVersion: documentVersion)
+        case let .failure(_, message):
+            message
         }
     }
 }
@@ -67,6 +46,20 @@ enum ExportProgressPrompt {
     }
 
     static func message(documentVersion: String) -> String {
+        "使用文档版本 \(documentVersion)。"
+    }
+}
+
+enum ExportResultPrompt {
+    static let showInFinderTitle = "在 Finder 中显示"
+    static let openTitle = "打开"
+    static let doneTitle = "完成"
+
+    static func successTitle(exportName: String) -> String {
+        "已导出「\(exportName)」"
+    }
+
+    static func successMessage(documentVersion: String) -> String {
         "使用文档版本 \(documentVersion)。"
     }
 }
@@ -752,8 +745,38 @@ struct MarkdownEditorView: View {
                 onConfirm: { await confirmDocumentRelocation(request) }
             )
         }
-        .alert(item: $htmlExportNotice) { notice in
-            notice.alert
+        .confirmationDialog(
+            htmlExportNotice?.title ?? "导出结果",
+            isPresented: Binding(
+                get: { htmlExportNotice != nil },
+                set: { if !$0 { htmlExportNotice = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let notice = htmlExportNotice {
+                switch notice {
+                case let .success(_, url, _):
+                    Button(ExportResultPrompt.showInFinderTitle) {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                        htmlExportNotice = nil
+                    }
+                    Button(ExportResultPrompt.openTitle) {
+                        NSWorkspace.shared.open(url)
+                        htmlExportNotice = nil
+                    }
+                    Button(ExportResultPrompt.doneTitle, role: .cancel) {
+                        htmlExportNotice = nil
+                    }
+                case .failure:
+                    Button("好", role: .cancel) {
+                        htmlExportNotice = nil
+                    }
+                }
+            }
+        } message: {
+            if let htmlExportNotice {
+                Text(htmlExportNotice.message)
+            }
         }
         .alert(item: $pendingExportConfirmation) { pending in
             Alert(
@@ -2215,7 +2238,10 @@ struct MarkdownEditorView: View {
             case let .failure(error):
                 guard exportIsCurrent(generation) else { return }
                 finishExport(generation)
-                htmlExportNotice = .failure(error.localizedDescription)
+                htmlExportNotice = .failure(
+                    format: .html,
+                    message: error.localizedDescription
+                )
                 return
             }
             guard exportIsCurrent(generation) else { return }
@@ -2264,7 +2290,10 @@ struct MarkdownEditorView: View {
             case let .failure(error):
                 guard exportIsCurrent(generation) else { return }
                 finishExport(generation)
-                htmlExportNotice = .pdfFailure(error.localizedDescription)
+                htmlExportNotice = .failure(
+                    format: .pdf,
+                    message: error.localizedDescription
+                )
                 return
             }
             guard exportIsCurrent(generation) else { return }
@@ -2334,7 +2363,10 @@ struct MarkdownEditorView: View {
             case let .failure(error):
                 guard exportIsCurrent(generation) else { return }
                 finishExport(generation)
-                htmlExportNotice = .failure(error.localizedDescription)
+                htmlExportNotice = .failure(
+                    format: .html,
+                    message: error.localizedDescription
+                )
                 return
             }
             guard exportIsCurrent(generation) else { return }
@@ -2351,8 +2383,17 @@ struct MarkdownEditorView: View {
             guard exportIsCurrent(generation) else { return }
             finishExport(generation)
             switch result {
-            case .success: htmlExportNotice = .success(targetURL)
-            case let .failure(error): htmlExportNotice = .failure(error.localizedDescription)
+            case .success:
+                htmlExportNotice = .success(
+                    format: .html,
+                    url: targetURL,
+                    documentVersion: documentVersion
+                )
+            case let .failure(error):
+                htmlExportNotice = .failure(
+                    format: .html,
+                    message: error.localizedDescription
+                )
             }
         }
     }
@@ -2376,8 +2417,9 @@ struct MarkdownEditorView: View {
             } catch {
                 guard exportIsCurrent(generation) else { return }
                 finishExport(generation)
-                htmlExportNotice = .pdfFailure(
-                    (error as? LocalizedError)?.errorDescription
+                htmlExportNotice = .failure(
+                    format: .pdf,
+                    message: (error as? LocalizedError)?.errorDescription
                         ?? PDFExportError.renderingFailed.localizedDescription
                 )
                 return
@@ -2401,7 +2443,10 @@ struct MarkdownEditorView: View {
             case let .failure(error):
                 guard exportIsCurrent(generation) else { return }
                 finishExport(generation)
-                htmlExportNotice = .pdfFailure(error.localizedDescription)
+                htmlExportNotice = .failure(
+                    format: .pdf,
+                    message: error.localizedDescription
+                )
                 return
             }
             guard exportIsCurrent(generation) else { return }
@@ -2416,9 +2461,16 @@ struct MarkdownEditorView: View {
             finishExport(generation)
             switch result {
             case .success:
-                htmlExportNotice = .pdfSuccess(targetURL)
+                htmlExportNotice = .success(
+                    format: .pdf,
+                    url: targetURL,
+                    documentVersion: documentVersion
+                )
             case let .failure(error):
-                htmlExportNotice = .pdfFailure(error.localizedDescription)
+                htmlExportNotice = .failure(
+                    format: .pdf,
+                    message: error.localizedDescription
+                )
             }
         }
     }

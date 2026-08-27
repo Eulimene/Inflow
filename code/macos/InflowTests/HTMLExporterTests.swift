@@ -21,6 +21,17 @@ final class HTMLExporterTests: XCTestCase {
             first.documentVersion,
             canonicallyEquivalentButByteDifferent.documentVersion
         )
+        XCTAssertEqual(
+            ExportResultPrompt.successTitle(exportName: "notes.html"),
+            "已导出「notes.html」"
+        )
+        XCTAssertEqual(
+            ExportResultPrompt.successMessage(documentVersion: first.documentVersion),
+            "使用文档版本 \(first.documentVersion)。"
+        )
+        XCTAssertEqual(ExportResultPrompt.showInFinderTitle, "在 Finder 中显示")
+        XCTAssertEqual(ExportResultPrompt.openTitle, "打开")
+        XCTAssertEqual(ExportResultPrompt.doneTitle, "完成")
     }
 
     @MainActor
