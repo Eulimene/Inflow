@@ -204,6 +204,7 @@ struct MarkdownEditorView: View {
     @SceneStorage("editorSplitFraction") private var editorSplitFraction =
         EditorSplitLayout.defaultFraction
     @State private var previewHTML = MarkdownRenderer.htmlDocument(for: "")
+    @State private var previewFailureMessage: String?
     @State private var analysisState = DocumentAnalysisState.updating(previous: .empty)
     @State private var derivedContentGeneration = 0
     @State private var derivedContentTask: Task<Void, Never>?
@@ -754,33 +755,67 @@ struct MarkdownEditorView: View {
     }
 
     private var preview: some View {
-        ZStack {
-            MarkdownPreviewView(
-                html: previewHTML,
-                baseURL: fileURL?.deletingLastPathComponent(),
-                scrollRequest: preferences.scrollSyncEnabled && !previewScrollPausedByUser
-                    ? previewScrollRequest
-                    : nil,
-                onHeadingActivated: activatePreviewHeading,
-                onLinkActivated: activatePreviewLink,
-                onManualScroll: {
-                    if preferences.scrollSyncEnabled {
-                        previewScrollPausedByUser = true
-                    }
-                }
-            )
+        VStack(spacing: 0) {
+            if previewFailureMessage != nil {
+                previewFailureBanner
+                Divider()
+            }
 
-            if EmptyMarkdownGuidance.isVisible(markdown: document.text) {
-                EmptyMarkdownPreviewView(
-                    onStartWriting: {
-                        selectViewMode(viewMode == .preview ? .source : viewMode)
-                    },
-                    onOpenDocument: {
-                        recentDocuments?.chooseDocumentToOpen()
+            ZStack {
+                MarkdownPreviewView(
+                    html: previewHTML,
+                    baseURL: fileURL?.deletingLastPathComponent(),
+                    scrollRequest: preferences.scrollSyncEnabled && !previewScrollPausedByUser
+                        ? previewScrollRequest
+                        : nil,
+                    onHeadingActivated: activatePreviewHeading,
+                    onLinkActivated: activatePreviewLink,
+                    onManualScroll: {
+                        if preferences.scrollSyncEnabled {
+                            previewScrollPausedByUser = true
+                        }
                     }
                 )
+
+                if previewFailureMessage == nil,
+                   EmptyMarkdownGuidance.isVisible(markdown: document.text)
+                {
+                    EmptyMarkdownPreviewView(
+                        onStartWriting: {
+                            selectViewMode(viewMode == .preview ? .source : viewMode)
+                        },
+                        onOpenDocument: {
+                            recentDocuments?.chooseDocumentToOpen()
+                        }
+                    )
+                }
             }
         }
+    }
+
+    private var previewFailureBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(PreviewFailurePrompt.title)
+                    .font(.headline)
+                Text(PreviewFailurePrompt.message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+            Button(PreviewFailurePrompt.retryTitle, action: retryPreview)
+            Button(PreviewFailurePrompt.hideTitle) {
+                selectViewMode(.source)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.08))
+        .accessibilityElement(children: .contain)
+        .help(previewFailureMessage ?? PreviewFailurePrompt.message)
     }
 
     private var statusBar: some View {
@@ -2422,6 +2457,7 @@ struct MarkdownEditorView: View {
 
             guard !Task.isCancelled, generation == derivedContentGeneration else { return }
             previewHTML = content.html
+            previewFailureMessage = content.previewFailureMessage
             _ = sourceEditorSession.applySyntaxHighlighting(
                 content.syntaxHighlighting,
                 source: markdown,
@@ -2438,6 +2474,17 @@ struct MarkdownEditorView: View {
                 )
             }
         }
+    }
+
+    private func retryPreview() {
+        scheduleDerivedContent(
+            for: document.text,
+            documentDirectory: fileURL?.deletingLastPathComponent(),
+            configuration: preferences.previewConfiguration,
+            headingNavigationEnabled: preferences.headingNavigationEnabled,
+            syntaxHighlightingEnabled: preferences.syntaxHighlightingEnabled,
+            delayNanoseconds: 0
+        )
     }
 
     @ViewBuilder
@@ -2518,6 +2565,7 @@ struct MarkdownEditorView: View {
 
 private struct DerivedDocumentContent: Sendable {
     let html: String
+    let previewFailureMessage: String?
     let analysis: DocumentAnalysisOutcome
     let syntaxHighlighting: [MarkdownSyntaxSpan]
 }
@@ -2559,7 +2607,7 @@ private actor DocumentContentDeriver {
         } else {
             headings = []
         }
-        let html = MarkdownRenderer.htmlDocument(
+        let previewDocument = MarkdownRenderer.previewDocument(
             for: markdown,
             documentDirectory: documentDirectory,
             configuration: configuration,
@@ -2567,7 +2615,8 @@ private actor DocumentContentDeriver {
         )
         guard !Task.isCancelled else { return nil }
         return DerivedDocumentContent(
-            html: html,
+            html: previewDocument.html,
+            previewFailureMessage: previewDocument.failureMessage,
             analysis: analysis,
             syntaxHighlighting: syntaxHighlighting
         )

@@ -5,6 +5,39 @@ import XCTest
 @testable import Inflow
 
 final class MarkdownRendererTests: XCTestCase {
+    func testPreviewFailureUsesFrozenSafeExitCopyAndKeepsDetailsOutOfHTML() {
+        XCTAssertEqual(PreviewFailurePrompt.title, "暂时无法更新预览")
+        XCTAssertEqual(PreviewFailurePrompt.message, "编辑和保存仍可用。")
+        XCTAssertEqual(PreviewFailurePrompt.retryTitle, "重试预览")
+        XCTAssertEqual(PreviewFailurePrompt.hideTitle, "隐藏预览")
+
+        let result = MarkdownRenderer.previewDocument(
+            for: "# private source",
+            documentDirectory: nil,
+            configuration: .default,
+            navigationHeadings: [],
+            fragmentRenderer: { _, _ in throw MarkdownRenderError.coreFailure }
+        )
+
+        XCTAssertEqual(
+            result.failureMessage,
+            MarkdownRenderError.coreFailure.localizedDescription
+        )
+        XCTAssertTrue(result.html.contains(PreviewFailurePrompt.title))
+        XCTAssertTrue(result.html.contains(PreviewFailurePrompt.message))
+        XCTAssertFalse(result.html.contains("private source"))
+        XCTAssertFalse(result.html.contains("Markdown 预览暂时无法更新"))
+        XCTAssertTrue(result.html.contains("default-src 'none'"))
+    }
+
+    func testSuccessfulPreviewDocumentDoesNotReportFailure() {
+        let result = MarkdownRenderer.previewDocument(for: "# Ready")
+
+        XCTAssertNil(result.failureMessage)
+        XCTAssertTrue(result.html.contains("<h1>Ready</h1>"))
+        XCTAssertFalse(result.html.contains(PreviewFailurePrompt.title))
+    }
+
     func testPreviewAddsSafeSelfContainedColorsForKnownCodeLanguages() throws {
         let fragment = try MarkdownRenderer.htmlFragment(
             for: "```rust\nfn main() { println!(\"<tag>你好</tag>\"); } // note\n```\n"

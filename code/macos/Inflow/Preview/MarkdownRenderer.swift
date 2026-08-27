@@ -1,6 +1,6 @@
 import Foundation
 
-enum MarkdownRenderError: Error, LocalizedError {
+enum MarkdownRenderError: Error, Equatable, LocalizedError {
     case invalidUTF8
     case coreFailure
 
@@ -12,6 +12,18 @@ enum MarkdownRenderError: Error, LocalizedError {
             "Markdown 预览暂时无法更新，但仍可继续编辑和保存。"
         }
     }
+}
+
+enum PreviewFailurePrompt {
+    static let title = "暂时无法更新预览"
+    static let message = "编辑和保存仍可用。"
+    static let retryTitle = "重试预览"
+    static let hideTitle = "隐藏预览"
+}
+
+struct MarkdownPreviewDocument: Equatable, Sendable {
+    let html: String
+    let failureMessage: String?
 }
 
 enum MarkdownRenderer {
@@ -52,9 +64,39 @@ enum MarkdownRenderer {
         configuration: PreviewAppearanceConfiguration = .default,
         navigationHeadings: [DocumentHeading] = []
     ) -> String {
+        previewDocument(
+            for: markdown,
+            documentDirectory: documentDirectory,
+            configuration: configuration,
+            navigationHeadings: navigationHeadings
+        ).html
+    }
+
+    static func previewDocument(
+        for markdown: String,
+        documentDirectory: URL? = nil,
+        configuration: PreviewAppearanceConfiguration = .default,
+        navigationHeadings: [DocumentHeading] = []
+    ) -> MarkdownPreviewDocument {
+        previewDocument(
+            for: markdown,
+            documentDirectory: documentDirectory,
+            configuration: configuration,
+            navigationHeadings: navigationHeadings,
+            fragmentRenderer: htmlFragment
+        )
+    }
+
+    static func previewDocument(
+        for markdown: String,
+        documentDirectory: URL?,
+        configuration: PreviewAppearanceConfiguration,
+        navigationHeadings: [DocumentHeading],
+        fragmentRenderer: (String, PreviewAppearanceConfiguration) throws -> String
+    ) -> MarkdownPreviewDocument {
         do {
             let headingFragment = PreviewNavigationMarkup.annotateHeadings(
-                in: try htmlFragment(for: markdown, configuration: configuration),
+                in: try fragmentRenderer(markdown, configuration),
                 headings: navigationHeadings
             )
             let linkTargets = try MarkdownReferenceScanner.references(in: markdown)
@@ -64,17 +106,23 @@ enum MarkdownRenderer {
                 in: headingFragment,
                 targets: linkTargets
             )
-            return document(
-                containing: LocalImageResolver.resolveSlots(
-                    in: fragment,
-                    documentDirectory: documentDirectory
+            return MarkdownPreviewDocument(
+                html: document(
+                    containing: LocalImageResolver.resolveSlots(
+                        in: fragment,
+                        documentDirectory: documentDirectory
+                    ),
+                    configuration: configuration
                 ),
-                configuration: configuration
+                failureMessage: nil
             )
         } catch {
             let message = (error as? LocalizedError)?.errorDescription
                 ?? MarkdownRenderError.coreFailure.localizedDescription
-            return errorDocument(message: message, configuration: configuration)
+            return MarkdownPreviewDocument(
+                html: errorDocument(configuration: configuration),
+                failureMessage: message
+            )
         }
     }
 
@@ -151,16 +199,14 @@ enum MarkdownRenderer {
         """
     }
 
-    private static func errorDocument(
-        message: String,
-        configuration: PreviewAppearanceConfiguration
-    ) -> String {
-        let escaped = message
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
+    private static func errorDocument(configuration: PreviewAppearanceConfiguration) -> String {
         return document(
-            containing: "<p class=\"preview-error\">\(escaped)</p>",
+            containing: """
+            <section class="preview-error" role="status">
+              <strong>\(PreviewFailurePrompt.title)</strong>
+              <p>\(PreviewFailurePrompt.message)</p>
+            </section>
+            """,
             configuration: configuration
         )
     }
