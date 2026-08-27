@@ -205,6 +205,9 @@ final class HTMLExporterTests: XCTestCase {
         XCTAssertTrue(html.contains("private-name.png"))
         XCTAssertFalse(html.contains("file:"))
         XCTAssertFalse(html.contains(FileManager.default.temporaryDirectory.path))
+        XCTAssertFalse(html.contains("data-inflow-image-source-start"))
+        XCTAssertFalse(html.contains("data-inflow-image-action"))
+        XCTAssertFalse(html.contains("选择替代文件"))
     }
 
     func testExportDoesNotMistakeCodeTextForImageFailureMarkup() throws {

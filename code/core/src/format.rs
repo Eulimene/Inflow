@@ -567,33 +567,44 @@ pub fn insert_image(
     {
         return Err(FormatError::InvalidSelection);
     }
-    if link_spans(source)
+    let parsed_image_spans = image_spans(source);
+    let existing = parsed_image_spans
         .iter()
-        .any(|span| ranges_overlap(&requested_selection, &span.full))
-        || image_spans(source)
+        .find(|span| span.full == requested_selection);
+    if (existing.is_none()
+        && link_spans(source)
             .iter()
-            .any(|span| ranges_overlap(&requested_selection, &span.full))
+            .any(|span| ranges_overlap(&requested_selection, &span.full)))
+        || parsed_image_spans.iter().any(|span| {
+            ranges_overlap(&requested_selection, &span.full) && span.full != requested_selection
+        })
     {
         return Err(FormatError::AmbiguousSelection);
     }
 
-    let raw_alternative = if requested_selection.is_empty() {
-        default_alternative
+    let (replace_range, alternative) = if let Some(span) = existing {
+        (
+            span.full.clone(),
+            source[span.alternative.clone()].to_owned(),
+        )
+    } else if requested_selection.is_empty() {
+        (requested_selection.clone(), default_alternative.to_owned())
     } else {
-        &source[requested_selection.clone()]
+        (
+            requested_selection.clone(),
+            escaped_link_label(&source[requested_selection.clone()]),
+        )
     };
-    if raw_alternative
+    if alternative
         .chars()
         .any(|character| matches!(character, '\n' | '\r'))
     {
         return Err(FormatError::AmbiguousSelection);
     }
-    let alternative = escaped_link_label(raw_alternative);
     let replacement = format!("![{alternative}](<{destination}>)");
-    let alternative_range =
-        requested_selection.start + 2..requested_selection.start + 2 + alternative.len();
-    let full_range = requested_selection.start..requested_selection.start + replacement.len();
-    let candidate = replacing(source, requested_selection.clone(), &replacement);
+    let alternative_range = replace_range.start + 2..replace_range.start + 2 + alternative.len();
+    let full_range = replace_range.start..replace_range.start + replacement.len();
+    let candidate = replacing(source, replace_range.clone(), &replacement);
     if !image_spans(&candidate)
         .iter()
         .any(|span| span.full == full_range && span.alternative == alternative_range)
@@ -602,7 +613,7 @@ pub fn insert_image(
     }
 
     Ok(MarkdownEdit {
-        replace_range: requested_selection,
+        replace_range,
         replacement,
         selection_range: alternative_range,
     })
@@ -2597,6 +2608,14 @@ mod tests {
         let empty = insert_image("", 0..0, "assets/photo.jpg", "photo").unwrap();
         assert_eq!(empty.replacement, "![photo](<assets/photo.jpg>)");
         assert_eq!(empty.selection_range, 2..7);
+
+        let existing = "前 ![旧图](<assets/old.png>) 后";
+        let start = "前 ".len();
+        let end = existing.len() - " 后".len();
+        let update = insert_image(existing, start..end, "assets/new image.png", "unused").unwrap();
+        assert_eq!(update.replace_range, start..end);
+        assert_eq!(update.replacement, "![旧图](<assets/new image.png>)");
+        assert_eq!(&update.replacement[2..8], "旧图");
     }
 
     #[test]

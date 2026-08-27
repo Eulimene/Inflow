@@ -112,6 +112,13 @@ final class MarkdownInsertionTests: XCTestCase {
 
     func testImagePlanRejectsPartialExistingImageAndUnsafeDestination() {
         let existing = "![old](<assets/old.png>)"
+        let update = try? MarkdownFormatter.imagePlan(
+            source: existing,
+            selectedUTF16Range: NSRange(location: 0, length: (existing as NSString).length),
+            destination: "assets/new.png",
+            defaultAlternative: "unused"
+        )
+        XCTAssertEqual(update?.resultingSource, "![old](<assets/new.png>)")
         XCTAssertThrowsError(
             try MarkdownFormatter.imagePlan(
                 source: existing,

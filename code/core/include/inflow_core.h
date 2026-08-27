@@ -117,6 +117,10 @@ typedef struct InflowOwnedSearchMatches {
 
 typedef struct InflowReference {
     uint8_t kind;
+    /// End-exclusive UTF-8 byte offsets into the Markdown input passed to
+    /// inflow_document_references. They cover the complete parsed reference.
+    uintptr_t source_start;
+    uintptr_t source_end;
     /// Start/length are UTF-8 byte offsets into target_text_utf8 in the same
     /// InflowReferenceResult.
     uintptr_t target_start;
@@ -188,7 +192,7 @@ static_assert(sizeof(InflowDocumentOpenResult) == 32, "InflowDocumentOpenResult 
 static_assert(sizeof(InflowAnalysisResult) == 64, "InflowAnalysisResult ABI layout changed");
 static_assert(sizeof(InflowSearchMatch) == 16, "InflowSearchMatch ABI layout changed");
 static_assert(sizeof(InflowSearchResult) == 24, "InflowSearchResult ABI layout changed");
-static_assert(sizeof(InflowReference) == 24, "InflowReference ABI layout changed");
+static_assert(sizeof(InflowReference) == 40, "InflowReference ABI layout changed");
 static_assert(sizeof(InflowReferenceResult) == 40, "InflowReferenceResult ABI layout changed");
 static_assert(sizeof(InflowHighlightSpan) == 24, "InflowHighlightSpan ABI layout changed");
 static_assert(sizeof(InflowHighlightResult) == 24, "InflowHighlightResult ABI layout changed");
@@ -200,7 +204,7 @@ _Static_assert(sizeof(InflowDocumentOpenResult) == 32, "InflowDocumentOpenResult
 _Static_assert(sizeof(InflowAnalysisResult) == 64, "InflowAnalysisResult ABI layout changed");
 _Static_assert(sizeof(InflowSearchMatch) == 16, "InflowSearchMatch ABI layout changed");
 _Static_assert(sizeof(InflowSearchResult) == 24, "InflowSearchResult ABI layout changed");
-_Static_assert(sizeof(InflowReference) == 24, "InflowReference ABI layout changed");
+_Static_assert(sizeof(InflowReference) == 40, "InflowReference ABI layout changed");
 _Static_assert(sizeof(InflowReferenceResult) == 40, "InflowReferenceResult ABI layout changed");
 _Static_assert(sizeof(InflowHighlightSpan) == 24, "InflowHighlightSpan ABI layout changed");
 _Static_assert(sizeof(InflowHighlightResult) == 24, "InflowHighlightResult ABI layout changed");

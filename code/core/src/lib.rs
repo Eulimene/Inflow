@@ -16,7 +16,7 @@ mod render;
 mod search;
 
 /// Current version of the C ABI exposed to platform clients.
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 /// Returns the version of the C ABI implemented by this library.
 #[unsafe(no_mangle)]

@@ -15,6 +15,8 @@ enum MarkdownReferenceKind: String, Sendable {
 struct MarkdownReference: Equatable, Sendable {
     let kind: MarkdownReferenceKind
     let target: String
+    /// End-exclusive UTF-8 byte range of the complete parsed reference.
+    let sourceUTF8Range: Range<Int>
 }
 
 enum MarkdownReferenceError: Error, LocalizedError {
@@ -78,17 +80,29 @@ enum MarkdownReferenceScanner {
             }
 
             guard let start = Int(exactly: raw.target_start),
-                  let length = Int(exactly: raw.target_length)
+                  let length = Int(exactly: raw.target_length),
+                  let sourceStart = Int(exactly: raw.source_start),
+                  let sourceEnd = Int(exactly: raw.source_end)
             else {
                 throw MarkdownReferenceError.invalidCoreResult
             }
             let (end, overflow) = start.addingReportingOverflow(length)
             guard !overflow, start >= 0, end <= targets.count,
+                  sourceStart >= 0, sourceStart <= sourceEnd,
+                  sourceEnd <= utf8.count,
+                  MarkdownSourceRange.navigationTarget(
+                      forUTF8Range: sourceStart..<sourceEnd,
+                      in: markdown
+                  ) != nil,
                   let target = String(data: targets[start..<end], encoding: .utf8)
             else {
                 throw MarkdownReferenceError.invalidCoreResult
             }
-            return MarkdownReference(kind: kind, target: target)
+            return MarkdownReference(
+                kind: kind,
+                target: target,
+                sourceUTF8Range: sourceStart..<sourceEnd
+            )
         }
     }
 }

@@ -10,7 +10,7 @@ enum InflowCoreBridge {
     }
 
     static var isCompatible: Bool {
-        abiVersion == 1
+        abiVersion == 2
     }
 
     static func copyAndFree(_ bytes: InflowOwnedBytes) throws -> Data {

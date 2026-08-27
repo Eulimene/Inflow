@@ -99,7 +99,8 @@ enum MarkdownRenderer {
                 in: try fragmentRenderer(markdown, configuration),
                 headings: navigationHeadings
             )
-            let linkTargets = try MarkdownReferenceScanner.references(in: markdown)
+            let references = try MarkdownReferenceScanner.references(in: markdown)
+            let linkTargets = references
                 .filter { $0.kind == .link }
                 .map(\.target)
             let fragment = PreviewNavigationMarkup.annotateLinks(
@@ -110,7 +111,8 @@ enum MarkdownRenderer {
                 html: document(
                     containing: LocalImageResolver.resolveSlots(
                         in: fragment,
-                        documentDirectory: documentDirectory
+                        documentDirectory: documentDirectory,
+                        imageReferences: references.filter { $0.kind == .image }
                     ),
                     configuration: configuration
                 ),
@@ -161,6 +163,8 @@ enum MarkdownRenderer {
             img { max-width: 100%; height: auto; }
             .image-warning { display: flex; flex-direction: column; gap: .2em; margin: 1em 0; padding: 12px 14px; border: 1px solid #d4a72c; border-radius: 8px; color: #9a6700; }
             .image-warning span { font-size: .9em; }
+            .image-warning-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+            .image-warning-actions button { font: inherit; color: inherit; border: 1px solid currentColor; border-radius: 6px; background: transparent; padding: 5px 9px; cursor: pointer; }
             hr { height: 1px; border: 0; background: #d8dee4; margin: 2em 0; }
             math { font-family: STIX Two Math, STIXGeneral, serif; }
             math[display="block"] { display: block; max-width: 100%; overflow-x: auto; margin: 1.2em 0; text-align: center; }

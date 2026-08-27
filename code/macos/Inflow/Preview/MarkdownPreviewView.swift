@@ -11,10 +11,22 @@ enum PreviewIssueAction: String, Equatable, Sendable {
     case retry
 }
 
+enum PreviewImageIssueAction: String, Equatable, Sendable {
+    case replace
+    case locate
+    case copyTarget
+    case ignore
+}
+
 enum PreviewNavigationMessage: Equatable {
     case heading(sourceUTF8Offset: Int)
     case link(target: String)
     case previewIssue(action: PreviewIssueAction, sourceUTF8Offset: Int)
+    case imageIssue(
+        action: PreviewImageIssueAction,
+        sourceUTF8Offset: Int,
+        target: String
+    )
     case manualScroll
 
     static func decode(_ body: Any) -> Self? {
@@ -47,6 +59,23 @@ enum PreviewNavigationMessage: Equatable {
                 return nil
             }
             return .previewIssue(action: action, sourceUTF8Offset: offset)
+        case "imageIssue":
+            guard let actionName = dictionary["action"] as? String,
+                  let action = PreviewImageIssueAction(rawValue: actionName),
+                  let offset = decodeSourceOffset(dictionary),
+                  let targetHex = dictionary["targetHex"] as? String,
+                  let target = decodeHexTarget(targetHex),
+                  !target.unicodeScalars.contains(where: { scalar in
+                      CharacterSet.controlCharacters.contains(scalar)
+                  })
+            else {
+                return nil
+            }
+            return .imageIssue(
+                action: action,
+                sourceUTF8Offset: offset,
+                target: target
+            )
         default:
             return nil
         }
@@ -102,6 +131,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
     let onHeadingActivated: (Int) -> Void
     let onLinkActivated: (String) -> Void
     let onPreviewIssueAction: (PreviewIssueAction, Int) -> Void
+    let onImageIssueAction: (PreviewImageIssueAction, Int, String) -> Void
     let onManualScroll: () -> Void
 
     init(
@@ -111,6 +141,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
         onHeadingActivated: @escaping (Int) -> Void = { _ in },
         onLinkActivated: @escaping (String) -> Void = { _ in },
         onPreviewIssueAction: @escaping (PreviewIssueAction, Int) -> Void = { _, _ in },
+        onImageIssueAction: @escaping (PreviewImageIssueAction, Int, String) -> Void = { _, _, _ in },
         onManualScroll: @escaping () -> Void = {}
     ) {
         self.html = html
@@ -119,6 +150,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
         self.onHeadingActivated = onHeadingActivated
         self.onLinkActivated = onLinkActivated
         self.onPreviewIssueAction = onPreviewIssueAction
+        self.onImageIssueAction = onImageIssueAction
         self.onManualScroll = onManualScroll
     }
 
@@ -152,6 +184,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
             onHeadingActivated: onHeadingActivated,
             onLinkActivated: onLinkActivated,
             onPreviewIssueAction: onPreviewIssueAction,
+            onImageIssueAction: onImageIssueAction,
             onManualScroll: onManualScroll,
             webView: webView
         )
@@ -164,6 +197,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
             onHeadingActivated: onHeadingActivated,
             onLinkActivated: onLinkActivated,
             onPreviewIssueAction: onPreviewIssueAction,
+            onImageIssueAction: onImageIssueAction,
             onManualScroll: onManualScroll,
             webView: webView
         )
@@ -204,6 +238,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
         private var onHeadingActivated: (Int) -> Void = { _ in }
         private var onLinkActivated: (String) -> Void = { _ in }
         private var onPreviewIssueAction: (PreviewIssueAction, Int) -> Void = { _, _ in }
+        private var onImageIssueAction: (PreviewImageIssueAction, Int, String) -> Void = { _, _, _ in }
         private var onManualScroll: () -> Void = {}
 
         func update(
@@ -211,6 +246,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
             onHeadingActivated: @escaping (Int) -> Void,
             onLinkActivated: @escaping (String) -> Void,
             onPreviewIssueAction: @escaping (PreviewIssueAction, Int) -> Void,
+            onImageIssueAction: @escaping (PreviewImageIssueAction, Int, String) -> Void = { _, _, _ in },
             onManualScroll: @escaping () -> Void,
             webView: WKWebView
         ) {
@@ -218,6 +254,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
             self.onHeadingActivated = onHeadingActivated
             self.onLinkActivated = onLinkActivated
             self.onPreviewIssueAction = onPreviewIssueAction
+            self.onImageIssueAction = onImageIssueAction
             self.onManualScroll = onManualScroll
             applyScrollIfPossible(to: webView)
         }
@@ -253,6 +290,8 @@ struct MarkdownPreviewView: NSViewRepresentable {
                 onLinkActivated(target)
             case let .previewIssue(action, sourceUTF8Offset):
                 onPreviewIssueAction(action, sourceUTF8Offset)
+            case let .imageIssue(action, sourceUTF8Offset, target):
+                onImageIssueAction(action, sourceUTF8Offset, target)
             case .manualScroll:
                 onManualScroll()
             }
@@ -324,6 +363,31 @@ struct MarkdownPreviewView: NSViewRepresentable {
       };
 
       document.addEventListener('click', (event) => {
+        const imageAction = event.target instanceof Element
+          ? event.target.closest('[data-inflow-image-action]')
+          : null;
+        if (imageAction) {
+          event.preventDefault();
+          const issue = imageAction.closest('[data-inflow-image-source-start]');
+          const sourceUTF8Offset = Number(issue?.dataset.inflowImageSourceStart);
+          const targetHex = issue?.dataset.inflowImageTargetHex;
+          const action = imageAction.dataset.inflowImageAction;
+          if (Number.isSafeInteger(sourceUTF8Offset)
+              && sourceUTF8Offset >= 0
+              && typeof targetHex === 'string'
+              && (action === 'replace'
+                  || action === 'locate'
+                  || action === 'copyTarget'
+                  || action === 'ignore')) {
+            handler.postMessage({
+              type: 'imageIssue', action, sourceUTF8Offset, targetHex
+            });
+            if (action === 'ignore') {
+              issue.hidden = true;
+            }
+          }
+          return;
+        }
         const issueAction = event.target instanceof Element
           ? event.target.closest('[data-inflow-preview-error-action]')
           : null;

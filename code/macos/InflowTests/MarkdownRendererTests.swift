@@ -215,6 +215,12 @@ final class MarkdownRendererTests: XCTestCase {
         )
         XCTAssertTrue(saved.contains("找不到资源"))
         XCTAssertTrue(saved.contains("assets/missing.png"), saved)
+        XCTAssertTrue(saved.contains("data-inflow-image-source-start=\"0\""))
+        XCTAssertTrue(saved.contains("data-inflow-image-target-hex=\"\(hex("assets/missing.png"))\""))
+        XCTAssertTrue(saved.contains("data-inflow-image-action=\"replace\""))
+        XCTAssertTrue(saved.contains("选择替代文件…"))
+        XCTAssertTrue(saved.contains("data-inflow-image-action=\"locate\""))
+        XCTAssertTrue(saved.contains("data-inflow-image-action=\"ignore\""))
 
         let unsaved = MarkdownRenderer.htmlDocument(
             for: "![封面](assets/missing.png)",
@@ -231,6 +237,8 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertTrue(remote.contains("远程图片未加载"))
         XCTAssertFalse(remote.contains("private.example"))
         XCTAssertFalse(remote.contains("src=\"https://"))
+        XCTAssertTrue(remote.contains("data-inflow-image-action=\"copyTarget\""))
+        XCTAssertFalse(remote.contains("data-inflow-image-action=\"replace\""))
 
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -251,6 +259,15 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertTrue(fragment.contains("class=\"inflow-image-slot\""))
         XCTAssertFalse(fragment.contains("<img"))
         XCTAssertFalse(fragment.contains("src="))
+
+        let mismatched = LocalImageResolver.resolveSlots(
+            in: fragment,
+            documentDirectory: FileManager.default.temporaryDirectory,
+            imageReferences: []
+        )
+        XCTAssertTrue(mismatched.contains("找不到资源"))
+        XCTAssertFalse(mismatched.contains("data-inflow-image-source-start"))
+        XCTAssertFalse(mismatched.contains("data-inflow-image-action"))
     }
 
     func testSplitViewIsTheDefaultMode() {
@@ -337,6 +354,19 @@ final class MarkdownRendererTests: XCTestCase {
         )
         XCTAssertEqual(
             PreviewNavigationMessage.decode([
+                "type": "imageIssue",
+                "action": "replace",
+                "sourceUTF8Offset": NSNumber(value: 23),
+                "targetHex": hex("assets/图.png"),
+            ]),
+            .imageIssue(
+                action: .replace,
+                sourceUTF8Offset: 23,
+                target: "assets/图.png"
+            )
+        )
+        XCTAssertEqual(
+            PreviewNavigationMessage.decode([
                 "type": "link",
                 "targetHex": hex("../资料/说明.md#标题"),
             ]),
@@ -368,6 +398,18 @@ final class MarkdownRendererTests: XCTestCase {
             "sourceUTF8Offset": NSNumber(value: 0),
         ]))
         XCTAssertNil(PreviewNavigationMessage.decode([
+            "type": "imageIssue",
+            "action": "open-file",
+            "sourceUTF8Offset": NSNumber(value: 0),
+            "targetHex": hex("private.png"),
+        ]))
+        XCTAssertNil(PreviewNavigationMessage.decode([
+            "type": "imageIssue",
+            "action": "locate",
+            "sourceUTF8Offset": NSNumber(value: true),
+            "targetHex": hex("private.png"),
+        ]))
+        XCTAssertNil(PreviewNavigationMessage.decode([
             "type": "unknown",
             "document": "must not cross bridge",
         ]))
@@ -380,12 +422,14 @@ final class MarkdownRendererTests: XCTestCase {
         var selectedOffset: Int?
         var selectedLink: String?
         var selectedIssue: (PreviewIssueAction, Int)?
+        var selectedImageIssue: (PreviewImageIssueAction, Int, String)?
         var manualScrollCount = 0
         coordinator.update(
             scrollRequest: PreviewScrollRequest(generation: 1, fraction: 0.5),
             onHeadingActivated: { selectedOffset = $0 },
             onLinkActivated: { selectedLink = $0 },
             onPreviewIssueAction: { selectedIssue = ($0, $1) },
+            onImageIssueAction: { selectedImageIssue = ($0, $1, $2) },
             onManualScroll: { manualScrollCount += 1 },
             webView: webView
         )
@@ -393,12 +437,20 @@ final class MarkdownRendererTests: XCTestCase {
         coordinator.handle(.heading(sourceUTF8Offset: 128))
         coordinator.handle(.link(target: "https://example.com"))
         coordinator.handle(.previewIssue(action: .retry, sourceUTF8Offset: 64))
+        coordinator.handle(.imageIssue(
+            action: .copyTarget,
+            sourceUTF8Offset: 72,
+            target: "https://example.com/image.png"
+        ))
         coordinator.handle(.manualScroll)
 
         XCTAssertEqual(selectedOffset, 128)
         XCTAssertEqual(selectedLink, "https://example.com")
         XCTAssertEqual(selectedIssue?.0, .retry)
         XCTAssertEqual(selectedIssue?.1, 64)
+        XCTAssertEqual(selectedImageIssue?.0, .copyTarget)
+        XCTAssertEqual(selectedImageIssue?.1, 72)
+        XCTAssertEqual(selectedImageIssue?.2, "https://example.com/image.png")
         XCTAssertEqual(manualScrollCount, 1)
     }
 
@@ -424,6 +476,34 @@ final class MarkdownRendererTests: XCTestCase {
             2,
             renderedSource: "e\u{301}",
             currentSource: "e\u{301}"
+        ))
+    }
+
+    func testImageIssueNavigationUsesExactDuplicateReferenceAndRejectsStaleContent() throws {
+        let markdown = "![第一张](missing.png)\n\n![第二张](missing.png)"
+        let references = try MarkdownReferenceScanner.references(in: markdown)
+        let second = try XCTUnwrap(references.last)
+
+        XCTAssertEqual(
+            PreviewImageIssueNavigation.validatedReference(
+                sourceUTF8Offset: second.sourceUTF8Range.lowerBound,
+                target: "missing.png",
+                renderedSource: markdown,
+                currentSource: markdown
+            ),
+            second
+        )
+        XCTAssertNil(PreviewImageIssueNavigation.validatedReference(
+            sourceUTF8Offset: references[0].sourceUTF8Range.lowerBound,
+            target: "other.png",
+            renderedSource: markdown,
+            currentSource: markdown
+        ))
+        XCTAssertNil(PreviewImageIssueNavigation.validatedReference(
+            sourceUTF8Offset: second.sourceUTF8Range.lowerBound,
+            target: "missing.png",
+            renderedSource: markdown,
+            currentSource: markdown + "\nchanged"
         ))
     }
 
@@ -852,6 +932,70 @@ final class MarkdownRendererTests: XCTestCase {
         await fulfillment(of: [received], timeout: 5)
         XCTAssertEqual(actions.map(\.0), [.locate, .retry])
         XCTAssertEqual(actions.map(\.1), [expectedOffset, expectedOffset])
+    }
+
+    @MainActor
+    func testMountedRemoteImageRoutesExactRecoveryActionsWithoutPageScripts() async throws {
+        let received = expectation(description: "image issue actions reported")
+        received.expectedFulfillmentCount = 3
+        let target = "https://private.example/图.png?token=secret"
+        var actions: [(PreviewImageIssueAction, Int, String)] = []
+        let root = MarkdownPreviewView(
+            html: MarkdownRenderer.htmlDocument(for: "![图](\(target))"),
+            baseURL: nil,
+            onImageIssueAction: { action, offset, reportedTarget in
+                actions.append((action, offset, reportedTarget))
+                received.fulfill()
+            }
+        )
+        let hosting = NSHostingView(rootView: root)
+        hosting.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
+        let window = NSWindow(
+            contentRect: hosting.frame,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.animationBehavior = .none
+        window.contentView = hosting
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        hosting.layoutSubtreeIfNeeded()
+
+        var webView: WKWebView?
+        var actionsAreReady = false
+        for _ in 0..<100 {
+            webView = descendants(of: hosting).compactMap { $0 as? WKWebView }.first
+            if let candidate = webView,
+               candidate.isLoading == false,
+               let isReady = try? await candidate.callAsyncJavaScript(
+                   "return document.querySelectorAll('[data-inflow-image-action]').length === 3;",
+                   arguments: [:],
+                   in: nil,
+                   contentWorld: .defaultClient
+               ) as? Bool,
+               isReady
+            {
+                actionsAreReady = true
+                break
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let mounted = try XCTUnwrap(webView)
+        XCTAssertTrue(actionsAreReady)
+        XCTAssertFalse(mounted.configuration.defaultWebpagePreferences.allowsContentJavaScript)
+        for action in ["locate", "copyTarget", "ignore"] {
+            _ = try await mounted.callAsyncJavaScript(
+                "document.querySelector(`[data-inflow-image-action='${action}']`).click(); return true;",
+                arguments: ["action": action],
+                in: nil,
+                contentWorld: .defaultClient
+            )
+        }
+        await fulfillment(of: [received], timeout: 5)
+        XCTAssertEqual(actions.map(\.0), [.locate, .copyTarget, .ignore])
+        XCTAssertEqual(actions.map(\.1), [0, 0, 0])
+        XCTAssertEqual(actions.map(\.2), [target, target, target])
     }
 
     private func temporaryDirectory() throws -> URL {

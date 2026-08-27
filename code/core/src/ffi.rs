@@ -153,6 +153,8 @@ impl InflowOwnedSearchMatches {
 #[derive(Clone, Copy)]
 pub struct InflowReference {
     pub kind: u8,
+    pub source_start: usize,
+    pub source_end: usize,
     pub target_start: usize,
     pub target_length: usize,
 }
@@ -1191,6 +1193,8 @@ pub unsafe extern "C" fn inflow_document_references(
                         ReferenceKind::Link => REFERENCE_KIND_LINK,
                         ReferenceKind::Image => REFERENCE_KIND_IMAGE,
                     },
+                    source_start: reference.source_range.start,
+                    source_end: reference.source_range.end,
                     target_start,
                     target_length: target.len(),
                 }
@@ -1579,7 +1583,7 @@ mod tests {
         assert_eq!(std::mem::align_of::<InflowSearchMatch>(), 8);
         assert_eq!(std::mem::size_of::<InflowOwnedSearchMatches>(), 16);
         assert_eq!(std::mem::size_of::<InflowSearchResult>(), 24);
-        assert_eq!(std::mem::size_of::<InflowReference>(), 24);
+        assert_eq!(std::mem::size_of::<InflowReference>(), 40);
         assert_eq!(std::mem::align_of::<InflowReference>(), 8);
         assert_eq!(std::mem::size_of::<InflowOwnedReferences>(), 16);
         assert_eq!(std::mem::size_of::<InflowReferenceResult>(), 40);
@@ -1634,6 +1638,14 @@ mod tests {
         assert_eq!(references.len(), 2);
         assert_eq!(references[0].kind, REFERENCE_KIND_LINK);
         assert_eq!(references[1].kind, REFERENCE_KIND_IMAGE);
+        assert_eq!(
+            &markdown[references[0].source_start..references[0].source_end],
+            "[文档](../notes/一.md#part)"
+        );
+        assert_eq!(
+            &markdown[references[1].source_start..references[1].source_end],
+            "![图片](assets/photo.png)"
+        );
         assert_eq!(
             std::str::from_utf8(
                 &targets[references[0].target_start

@@ -4,19 +4,24 @@ import XCTest
 
 final class DocumentRelocationTests: XCTestCase {
     func testReferenceABILayoutAndUnicodeExtractionMatchRustContract() throws {
-        XCTAssertEqual(MemoryLayout<InflowReference>.size, 24)
+        XCTAssertEqual(InflowCoreBridge.abiVersion, 2)
+        XCTAssertEqual(MemoryLayout<InflowReference>.size, 40)
         XCTAssertEqual(MemoryLayout<InflowReference>.alignment, 8)
         XCTAssertEqual(MemoryLayout<InflowReferenceResult>.size, 40)
 
-        let references = try MarkdownReferenceScanner.references(
-            in: "[文档][note] ![图](assets/图片%201.png) `![忽略](bad.png)`\n\n[note]: ../资料/说明.md#标题"
-        )
+        let markdown = "[文档][note] ![图](assets/图片%201.png) `![忽略](bad.png)`\n\n[note]: ../资料/说明.md#标题"
+        let references = try MarkdownReferenceScanner.references(in: markdown)
+        XCTAssertEqual(references.map(\.kind), [.link, .image])
+        XCTAssertEqual(references.map(\.target), [
+            "../资料/说明.md#标题",
+            "assets/图片%201.png",
+        ])
+        let markdownData = Data(markdown.utf8)
         XCTAssertEqual(
-            references,
-            [
-                MarkdownReference(kind: .link, target: "../资料/说明.md#标题"),
-                MarkdownReference(kind: .image, target: "assets/图片%201.png"),
-            ]
+            references.map {
+                String(decoding: markdownData[$0.sourceUTF8Range], as: UTF8.self)
+            },
+            ["[文档][note]", "![图](assets/图片%201.png)"]
         )
     }
 

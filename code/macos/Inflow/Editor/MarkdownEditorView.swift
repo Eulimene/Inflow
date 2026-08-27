@@ -1109,6 +1109,7 @@ struct MarkdownEditorView: View {
                     onHeadingActivated: activatePreviewHeading,
                     onLinkActivated: activatePreviewLink,
                     onPreviewIssueAction: activatePreviewIssue,
+                    onImageIssueAction: activatePreviewImageIssue,
                     onManualScroll: {
                         if preferences.scrollSyncEnabled {
                             previewScrollPausedByUser = true
@@ -1631,6 +1632,55 @@ struct MarkdownEditorView: View {
             )
         case .retry:
             retryPreview()
+        }
+    }
+
+    private func activatePreviewImageIssue(
+        action: PreviewImageIssueAction,
+        sourceUTF8Offset: Int,
+        target: String
+    ) {
+        guard let reference = PreviewImageIssueNavigation.validatedReference(
+            sourceUTF8Offset: sourceUTF8Offset,
+            target: target,
+            renderedSource: previewSourceSnapshot,
+            currentSource: document.text
+        ) else {
+            retryPreview()
+            return
+        }
+
+        switch action {
+        case .locate:
+            viewMode = viewMode.sourceVisible
+            sourceSelectionGeneration &+= 1
+            sourceSelectionRequest = SourceSelectionRequest(
+                generation: sourceSelectionGeneration,
+                utf8Range: reference.sourceUTF8Range,
+                style: .match
+            )
+        case .copyTarget:
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(reference.target, forType: .string)
+        case .ignore:
+            break
+        case .replace:
+            guard canEditDocument,
+                  let selection = MarkdownSourceRange.navigationTarget(
+                      forUTF8Range: reference.sourceUTF8Range,
+                      in: document.text
+                  )
+            else {
+                markdownFormatErrorMessage = canEditDocument
+                    ? "图片引用已变化，请重试。"
+                    : "文档为只读，无法替换图片引用。"
+                return
+            }
+            viewMode = viewMode.sourceVisible
+            sourceEditorSession.textView.setSelectedRange(selection.revealRange)
+            sourceEditorSession.textView.scrollRangeToVisible(selection.revealRange)
+            insertImage()
         }
     }
 
@@ -3297,5 +3347,25 @@ enum PreviewIssueNavigation {
             return nil
         }
         return offset
+    }
+}
+
+enum PreviewImageIssueNavigation {
+    static func validatedReference(
+        sourceUTF8Offset: Int,
+        target: String,
+        renderedSource: String,
+        currentSource: String
+    ) -> MarkdownReference? {
+        guard UTF8Text.isExactlyEqual(renderedSource, currentSource),
+              let references = try? MarkdownReferenceScanner.references(in: currentSource)
+        else {
+            return nil
+        }
+        return references.first { reference in
+            reference.kind == .image
+                && reference.sourceUTF8Range.lowerBound == sourceUTF8Offset
+                && UTF8Text.isExactlyEqual(reference.target, target)
+        }
     }
 }
