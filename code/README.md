@@ -126,6 +126,19 @@ xcodebuild \
 
 该门禁同时复核预览尾部、最后标题与超过 1 MiB 位置的语法结果，不允许用截断或降级换取时间。冷启动、视图切换和输入停顿仍需在附录 A 的 8 GB、最低支持 macOS 目标机上执行发布验收。
 
+可交付主程序必须从 Xcode Archive 获取，不能把未后处理的 Release 测试宿主当作交付物。归档会先保留 dSYM，再剥离主程序中的调试路径；验证脚本同时检查 arm64、macOS 14 最低版本、版本字段和开发机私有路径：
+
+```sh
+xcodebuild \
+  -project Inflow.xcodeproj \
+  -scheme Inflow \
+  -configuration Release \
+  -destination 'generic/platform=macOS' \
+  -archivePath build/Inflow.xcarchive \
+  archive
+scripts/verify-release-archive.sh build/Inflow.xcarchive
+```
+
 匿名使用数据接收地址不检入仓库。只有在发布构建中将 `INFLOW_ANONYMOUS_USAGE_ENDPOINT` 注入为受控的 HTTPS URL，并验证服务端不超过披露的用途与保留期后，客户端才会提供开启操作。
 
 ## 提交规则
