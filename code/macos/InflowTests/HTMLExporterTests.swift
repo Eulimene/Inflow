@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
+import ImageIO
 import PDFKit
+import UniformTypeIdentifiers
 import XCTest
 @testable import Inflow
 
@@ -175,6 +177,53 @@ final class HTMLExporterTests: XCTestCase {
             XCTAssertFalse(html.contains("inflow-image-slot"))
             XCTAssertFalse(html.contains(imageURL.path))
             XCTAssertFalse(html.contains("file:"))
+        }
+    }
+
+    func testExportRemovesPrivateMetadataFromPNGAndJPEG() throws {
+        try withTemporaryDirectory { directory in
+            for type in [UTType.png, .jpeg] {
+                let marker = "INFLOW-PRIVATE-\(type.identifier)"
+                let fileExtension = type == .png ? "png" : "jpg"
+                let imageURL = directory.appendingPathComponent("private.\(fileExtension)")
+                try privateImageData(type: type, marker: marker).write(to: imageURL)
+
+                let data = try HTMLExporter.generate(
+                    snapshot: HTMLExportSnapshot(
+                        markdown: "![private](\(imageURL.lastPathComponent))",
+                        documentDirectory: directory
+                    )
+                )
+                let html = try XCTUnwrap(String(data: data, encoding: .utf8))
+                let imageData = try embeddedImageData(
+                    in: html,
+                    mimeType: type == .png ? "image/png" : "image/jpeg"
+                )
+                XCTAssertNil(imageData.range(of: Data(marker.utf8)))
+
+                let source = try XCTUnwrap(
+                    CGImageSourceCreateWithData(imageData as CFData, nil)
+                )
+                let properties = try XCTUnwrap(
+                    CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                        as? [CFString: Any]
+                )
+                let tiff = properties[kCGImagePropertyTIFFDictionary]
+                    as? [CFString: Any]
+                let exif = properties[kCGImagePropertyExifDictionary]
+                    as? [CFString: Any]
+                let gps = properties[kCGImagePropertyGPSDictionary]
+                    as? [CFString: Any]
+                let png = properties[kCGImagePropertyPNGDictionary]
+                    as? [CFString: Any]
+                XCTAssertNil(tiff?[kCGImagePropertyTIFFMake])
+                XCTAssertNil(tiff?[kCGImagePropertyTIFFModel])
+                XCTAssertNil(exif?[kCGImagePropertyExifUserComment])
+                XCTAssertNil(gps)
+                XCTAssertNil(png?[kCGImagePropertyPNGAuthor])
+                XCTAssertNil(png?[kCGImagePropertyPNGDescription])
+                XCTAssertNil(png?[kCGImagePropertyPNGComment])
+            }
         }
     }
 
@@ -519,6 +568,73 @@ final class HTMLExporterTests: XCTestCase {
         pixels[2] = 220
         pixels[3] = 255
         return try XCTUnwrap(representation.representation(using: .png, properties: [:]))
+    }
+
+    private func privateImageData(type: UTType, marker: String) throws -> Data {
+        let representation = try XCTUnwrap(
+            NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: 2,
+                pixelsHigh: 1,
+                bitsPerSample: 8,
+                samplesPerPixel: 3,
+                hasAlpha: false,
+                isPlanar: false,
+                colorSpaceName: .deviceRGB,
+                bytesPerRow: 6,
+                bitsPerPixel: 24
+            )
+        )
+        let pixels = try XCTUnwrap(representation.bitmapData)
+        for index in 0..<6 {
+            pixels[index] = UInt8(30 + index * 20)
+        }
+        let image = try XCTUnwrap(representation.cgImage)
+        let output = NSMutableData()
+        let destination = try XCTUnwrap(
+            CGImageDestinationCreateWithData(
+                output,
+                type.identifier as CFString,
+                1,
+                nil
+            )
+        )
+        let properties: [CFString: Any]
+        if type == .png {
+            properties = [
+                kCGImagePropertyPNGDictionary: [
+                    kCGImagePropertyPNGAuthor: marker,
+                    kCGImagePropertyPNGDescription: marker,
+                    kCGImagePropertyPNGComment: marker,
+                ],
+            ]
+        } else {
+            properties = [
+                kCGImagePropertyTIFFDictionary: [
+                    kCGImagePropertyTIFFMake: marker,
+                    kCGImagePropertyTIFFModel: marker,
+                ],
+                kCGImagePropertyExifDictionary: [
+                    kCGImagePropertyExifUserComment: marker,
+                ],
+                kCGImagePropertyGPSDictionary: [
+                    kCGImagePropertyGPSLatitudeRef: "N",
+                    kCGImagePropertyGPSLatitude: 31.2304,
+                    kCGImagePropertyGPSLongitudeRef: "E",
+                    kCGImagePropertyGPSLongitude: 121.4737,
+                ],
+            ]
+        }
+        CGImageDestinationAddImage(destination, image, properties as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        return output as Data
+    }
+
+    private func embeddedImageData(in html: String, mimeType: String) throws -> Data {
+        let prefix = "src=\"data:\(mimeType);base64,"
+        let start = try XCTUnwrap(html.range(of: prefix)?.upperBound)
+        let end = try XCTUnwrap(html[start...].firstIndex(of: "\""))
+        return try XCTUnwrap(Data(base64Encoded: String(html[start..<end])))
     }
 
     @MainActor

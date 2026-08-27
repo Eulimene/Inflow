@@ -1,4 +1,6 @@
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 enum LocalImageResolver {
     struct ExportResolution: Sendable {
@@ -25,7 +27,8 @@ enum LocalImageResolver {
     private static func resolution(
         in fragment: String,
         documentDirectory: URL?,
-        imageReferences: [MarkdownReference] = []
+        imageReferences: [MarkdownReference] = [],
+        sanitizesImageMetadata: Bool = false
     ) -> (html: String, hasFailure: Bool) {
         let fullRange = NSRange(location: 0, length: (fragment as NSString).length)
         let matches = slotExpression.matches(in: fragment, range: fullRange)
@@ -69,7 +72,8 @@ enum LocalImageResolver {
                 target: target,
                 alternative: alternative,
                 documentDirectory: documentDirectory,
-                warningContext: warningContext
+                warningContext: warningContext,
+                sanitizesMetadata: sanitizesImageMetadata
             )
             if !replacement.hasPrefix("<img class=\"inflow-local-image\"") {
                 hasFailure = true
@@ -83,7 +87,11 @@ enum LocalImageResolver {
         in fragment: String,
         documentDirectory: URL?
     ) throws -> String {
-        let result = resolution(in: fragment, documentDirectory: documentDirectory)
+        let result = resolution(
+            in: fragment,
+            documentDirectory: documentDirectory,
+            sanitizesImageMetadata: true
+        )
         guard !result.hasFailure else {
             throw LocalImageExportError.unavailableResource
         }
@@ -94,7 +102,11 @@ enum LocalImageResolver {
         in fragment: String,
         documentDirectory: URL?
     ) -> ExportResolution {
-        let result = resolution(in: fragment, documentDirectory: documentDirectory)
+        let result = resolution(
+            in: fragment,
+            documentDirectory: documentDirectory,
+            sanitizesImageMetadata: true
+        )
         return ExportResolution(html: result.html, hasWarnings: result.hasFailure)
     }
 
@@ -102,7 +114,8 @@ enum LocalImageResolver {
         target: String,
         alternative: String,
         documentDirectory: URL?,
-        warningContext: WarningContext?
+        warningContext: WarningContext?,
+        sanitizesMetadata: Bool
     ) -> String {
         guard !target.isEmpty else {
             return warning(
@@ -134,7 +147,8 @@ enum LocalImageResolver {
                 at: absolute,
                 target: target,
                 alternative: alternative,
-                warningContext: warningContext
+                warningContext: warningContext,
+                sanitizesMetadata: sanitizesMetadata
             )
         }
 
@@ -160,7 +174,8 @@ enum LocalImageResolver {
             at: resolvedURL,
             target: target,
             alternative: alternative,
-            warningContext: warningContext
+            warningContext: warningContext,
+            sanitizesMetadata: sanitizesMetadata
         )
     }
 
@@ -168,7 +183,8 @@ enum LocalImageResolver {
         at url: URL,
         target: String,
         alternative: String,
-        warningContext: WarningContext?
+        warningContext: WarningContext?,
+        sanitizesMetadata: Bool
     ) -> String {
         let accessed = url.startAccessingSecurityScopedResource()
         defer {
@@ -210,8 +226,22 @@ enum LocalImageResolver {
             )
         }
 
+        let deliveryImage: ValidatedLocalImage
+        do {
+            deliveryImage = sanitizesMetadata
+                ? try LocalImageExportSanitizer.sanitize(image)
+                : image
+        } catch {
+            return warning(
+                title: "无法安全处理图片",
+                detail: "\(safeDisplayTarget(target)) 的私密元数据无法可靠移除。引用仍保留。",
+                kind: .local,
+                context: warningContext
+            )
+        }
+
         let label = alternative.isEmpty ? url.deletingPathExtension().lastPathComponent : alternative
-        return "<img class=\"inflow-local-image\" src=\"data:\(image.mimeType);base64,\(image.data.base64EncodedString())\" alt=\"\(escapeAttribute(label))\">"
+        return "<img class=\"inflow-local-image\" src=\"data:\(deliveryImage.mimeType);base64,\(deliveryImage.data.base64EncodedString())\" alt=\"\(escapeAttribute(label))\">"
     }
 
     private enum WarningKind {
@@ -288,6 +318,79 @@ enum LocalImageResolver {
         escapeText(text)
             .replacingOccurrences(of: "\"", with: "&quot;")
             .replacingOccurrences(of: "'", with: "&#39;")
+    }
+}
+
+/// Re-rasterizes an already validated static image before it becomes part of a
+/// delivery artifact. The new container carries pixels only: source EXIF, GPS,
+/// TIFF/IPTC fields, comments, filenames and device details are not copied.
+enum LocalImageExportSanitizer {
+    static func sanitize(_ image: ValidatedLocalImage) throws -> ValidatedLocalImage {
+        guard let source = CGImageSourceCreateWithData(
+            image.data as CFData,
+            [kCGImageSourceShouldCache: false] as CFDictionary
+        ), CGImageSourceGetCount(source) == 1,
+           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+            as? [CFString: Any],
+           let width = properties[kCGImagePropertyPixelWidth] as? Int,
+           let height = properties[kCGImagePropertyPixelHeight] as? Int,
+           width > 0,
+           height > 0
+        else {
+            throw LocalImageValidationError.unsafeOrUnsupported
+        }
+
+        let thumbnailOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(width, height),
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let raster = CGImageSourceCreateThumbnailAtIndex(
+            source,
+            0,
+            thumbnailOptions as CFDictionary
+        ) else {
+            throw LocalImageValidationError.unsafeOrUnsupported
+        }
+
+        let destinationType: UTType
+        let fileExtension: String
+        let destinationProperties: [CFString: Any]?
+        switch image.mimeType {
+        case "image/png":
+            destinationType = .png
+            fileExtension = "png"
+            destinationProperties = nil
+        case "image/jpeg":
+            destinationType = .jpeg
+            fileExtension = "jpg"
+            destinationProperties = [kCGImageDestinationLossyCompressionQuality: 1.0]
+        default:
+            throw LocalImageValidationError.unsafeOrUnsupported
+        }
+
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output,
+            destinationType.identifier as CFString,
+            1,
+            nil
+        ) else {
+            throw LocalImageValidationError.unsafeOrUnsupported
+        }
+        CGImageDestinationAddImage(
+            destination,
+            raster,
+            destinationProperties.map { $0 as CFDictionary }
+        )
+        guard CGImageDestinationFinalize(destination) else {
+            throw LocalImageValidationError.unsafeOrUnsupported
+        }
+        return try LocalImageValidator.validate(
+            data: output as Data,
+            fileExtension: fileExtension
+        )
     }
 }
 
