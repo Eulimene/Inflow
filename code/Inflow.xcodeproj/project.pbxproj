@@ -68,6 +68,7 @@
 		A1000000000000000000003B /* RecentDocumentsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000040 /* RecentDocumentsTests.swift */; };
 		A1000000000000000000003C /* PersistentSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000041 /* PersistentSplitView.swift */; };
 		A1000000000000000000003D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000042 /* Assets.xcassets */; };
+		A1000000000000000000003E /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000043 /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -147,6 +148,7 @@
 		A20000000000000000000040 /* RecentDocumentsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentDocumentsTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000041 /* PersistentSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/PersistentSplitView.swift; sourceTree = "<group>"; };
 		A20000000000000000000042 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
+		A20000000000000000000043 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Resources/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -225,6 +227,7 @@
 				A20000000000000000000008 /* Info.plist */,
 				A20000000000000000000009 /* Inflow.entitlements */,
 				A20000000000000000000042 /* Assets.xcassets */,
+				A20000000000000000000043 /* PrivacyInfo.xcprivacy */,
 			);
 			path = macos/Inflow;
 			sourceTree = "<group>";
@@ -347,6 +350,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000000000000000000003D /* Assets.xcassets in Resources */,
+				A1000000000000000000003E /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

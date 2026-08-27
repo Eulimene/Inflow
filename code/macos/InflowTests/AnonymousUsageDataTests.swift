@@ -39,6 +39,47 @@ final class AnonymousUsageDataTests: XCTestCase {
         "count",
     ]
 
+    func testBundledPrivacyManifestMatchesAnonymousUsageContract() throws {
+        let manifestURL = try XCTUnwrap(
+            Bundle.main.url(forResource: "PrivacyInfo", withExtension: "xcprivacy")
+        )
+        let data = try Data(contentsOf: manifestURL)
+        let manifest = try XCTUnwrap(
+            try PropertyListSerialization.propertyList(from: data, format: nil)
+                as? [String: Any]
+        )
+
+        XCTAssertEqual(manifest["NSPrivacyTracking"] as? Bool, false)
+        XCTAssertEqual(manifest["NSPrivacyTrackingDomains"] as? [String], [])
+        let accessedAPITypes = try XCTUnwrap(
+            manifest["NSPrivacyAccessedAPITypes"] as? [[String: Any]]
+        )
+        XCTAssertTrue(accessedAPITypes.isEmpty)
+
+        let declarations = try XCTUnwrap(
+            manifest["NSPrivacyCollectedDataTypes"] as? [[String: Any]]
+        )
+        XCTAssertEqual(declarations.count, 4)
+        XCTAssertEqual(
+            declarations.compactMap { $0["NSPrivacyCollectedDataType"] as? String },
+            [
+                "NSPrivacyCollectedDataTypeProductInteraction",
+                "NSPrivacyCollectedDataTypePerformanceData",
+                "NSPrivacyCollectedDataTypeOtherDiagnosticData",
+                "NSPrivacyCollectedDataTypeOtherDataTypes",
+            ]
+        )
+        for declaration in declarations {
+            XCTAssertEqual(declaration["NSPrivacyCollectedDataTypeLinked"] as? Bool, false)
+            XCTAssertEqual(declaration["NSPrivacyCollectedDataTypeTracking"] as? Bool, false)
+            XCTAssertEqual(
+                declaration["NSPrivacyCollectedDataTypePurposes"] as? [String],
+                ["NSPrivacyCollectedDataTypePurposeAnalytics"]
+            )
+            XCTAssertEqual(declaration.count, 4)
+        }
+    }
+
     func testDefaultsOffAndDoesNotRecordBeforeExplicitConsent() async throws {
         let fixture = try makeFixture(transportFails: false)
         defer { fixture.cleanup() }

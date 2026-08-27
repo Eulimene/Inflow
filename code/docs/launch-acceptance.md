@@ -35,7 +35,7 @@
 | A11Y-02 放大与高对比度 | 字号/缩放/宽度边界、四主题、深浅外观、增强对比和减少动态配置有测试 | 实现闭环，外部 UAT 待执行：macOS 放大、高对比和减少动态的候选包视觉走查 |
 | A11Y-03 辅助阅读 | 编辑器、预览、大纲、状态、错误、恢复、设置和隐私控件均提供明确辅助名称/值/层级 | 实现闭环，外部 UAT 待执行：VoiceOver 完整旅程，不以静态 label 代替 |
 | PREF-01 设置约束 | 默认值、范围、持久化、设置失败、分组/全部恢复默认和内容不变性有测试 | 自动化闭环；真实重启抽样 |
-| PRIVACY-01 匿名产品使用数据 | 默认关闭、查看后启用、闭集载荷、禁止内容无写入通道、30 天本地清理、关闭/清除和 HTTPS 无重定向有测试 | 外部阻断：发布配置需受控 HTTPS endpoint，并验证服务端单次事件 ≤30 天、不可回溯汇总 ≤12 个月；未验证前客户端保持不可开启 |
+| PRIVACY-01 匿名产品使用数据 | 默认关闭、查看后启用、闭集载荷、禁止内容无写入通道、30 天本地清理、关闭/清除和 HTTPS 无重定向有测试；候选 App 内置不关联身份、不跟踪且仅用于分析的 `PrivacyInfo.xcprivacy`，并由 XCTest 与 Archive 双重校验 | 外部阻断：发布配置需受控 HTTPS endpoint，并验证服务端单次事件 ≤30 天、不可回溯汇总 ≤12 个月；未验证前客户端保持不可开启 |
 
 ## 自动门禁
 
@@ -51,7 +51,7 @@ scripts/verify-launch.sh --local
 scripts/verify-launch.sh --signed-archive /path/to/Inflow.xcarchive
 ```
 
-门禁包含 Rust 格式/Clippy/150 项单测、非零且无跳过的 macOS 全量 XCTest、Analyze、Release 大文档性能测试，以及 Archive 的 arm64、macOS 14、版本、私有路径、dSYM、hardened runtime 和 entitlement 检查。
+门禁包含 Rust 格式/Clippy/150 项单测、非零且无跳过的 macOS 全量 XCTest、Analyze、Release 大文档性能测试，以及 Archive 的 arm64、macOS 14、版本、私有路径、dSYM、hardened runtime、entitlement 和隐私清单检查。
 
 ## 仍需外部完成的发布条件
 

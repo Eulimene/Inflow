@@ -18,11 +18,64 @@ SCRIPT_DIRECTORY="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 APP_PATH="${ARCHIVE_PATH}/Products/Applications/Inflow.app"
 BINARY_PATH="${APP_PATH}/Contents/MacOS/Inflow"
 INFO_PATH="${APP_PATH}/Contents/Info.plist"
+PRIVACY_MANIFEST_PATH="${APP_PATH}/Contents/Resources/PrivacyInfo.xcprivacy"
 DSYM_PATH="${ARCHIVE_PATH}/dSYMs/Inflow.app.dSYM"
 DSYM_BINARY_PATH="${DSYM_PATH}/Contents/Resources/DWARF/Inflow"
 
-if [ ! -f "${BINARY_PATH}" ] || [ ! -f "${INFO_PATH}" ] || [ ! -f "${DSYM_BINARY_PATH}" ]; then
-  echo "error: archive does not contain the Inflow app and its dSYM" >&2
+if [ ! -f "${BINARY_PATH}" ] || [ ! -f "${INFO_PATH}" ] \
+  || [ ! -f "${PRIVACY_MANIFEST_PATH}" ] || [ ! -f "${DSYM_BINARY_PATH}" ]
+then
+  echo "error: archive does not contain the Inflow app, privacy manifest, and dSYM" >&2
+  exit 1
+fi
+
+if ! /usr/bin/plutil -lint "${PRIVACY_MANIFEST_PATH}" >/dev/null; then
+  echo "error: archived privacy manifest is invalid" >&2
+  exit 1
+fi
+
+privacy_value() {
+  /usr/bin/plutil -extract "$1" raw "${PRIVACY_MANIFEST_PATH}" 2>/dev/null || true
+}
+
+if [ "$(privacy_value NSPrivacyTracking)" != "false" ]; then
+  echo "error: privacy manifest must disable tracking" >&2
+  exit 1
+fi
+if [ -n "$(privacy_value NSPrivacyTrackingDomains.0)" ]; then
+  echo "error: privacy manifest declares a tracking domain" >&2
+  exit 1
+fi
+if [ -n "$(privacy_value NSPrivacyAccessedAPITypes.0.NSPrivacyAccessedAPIType)" ]; then
+  echo "error: privacy manifest declares an unexpected accessed API type" >&2
+  exit 1
+fi
+
+EXPECTED_PRIVACY_TYPES="NSPrivacyCollectedDataTypeProductInteraction
+NSPrivacyCollectedDataTypePerformanceData
+NSPrivacyCollectedDataTypeOtherDiagnosticData
+NSPrivacyCollectedDataTypeOtherDataTypes"
+PRIVACY_INDEX=0
+echo "${EXPECTED_PRIVACY_TYPES}" | while IFS= read -r EXPECTED_PRIVACY_TYPE; do
+  PRIVACY_PREFIX="NSPrivacyCollectedDataTypes.${PRIVACY_INDEX}"
+  if [ "$(privacy_value "${PRIVACY_PREFIX}.NSPrivacyCollectedDataType")" \
+      != "${EXPECTED_PRIVACY_TYPE}" ] \
+    || [ "$(privacy_value "${PRIVACY_PREFIX}.NSPrivacyCollectedDataTypeLinked")" \
+      != "false" ] \
+    || [ "$(privacy_value "${PRIVACY_PREFIX}.NSPrivacyCollectedDataTypeTracking")" \
+      != "false" ] \
+    || [ "$(privacy_value "${PRIVACY_PREFIX}.NSPrivacyCollectedDataTypePurposes.0")" \
+      != "NSPrivacyCollectedDataTypePurposeAnalytics" ] \
+    || [ -n "$(privacy_value "${PRIVACY_PREFIX}.NSPrivacyCollectedDataTypePurposes.1")" ]
+  then
+    echo "error: privacy manifest collection contract does not match ${EXPECTED_PRIVACY_TYPE}" >&2
+    exit 1
+  fi
+  PRIVACY_INDEX=$((PRIVACY_INDEX + 1))
+done
+
+if [ -n "$(privacy_value NSPrivacyCollectedDataTypes.4.NSPrivacyCollectedDataType)" ]; then
+  echo "error: privacy manifest declares an unexpected collected data type" >&2
   exit 1
 fi
 
