@@ -247,6 +247,8 @@ struct MarkdownEditorView: View {
     @State private var didApplyRestorationState = false
     @StateObject private var fileSafetySession = DocumentFileSafetySession()
     @State private var isFileSafetyPresented = false
+    @State private var requestedConflictDecision: DocumentConflictDecision?
+    @State private var deferredFileSafetySnapshotID: DocumentFileConflictSnapshot.ID?
     @State private var fileSafetyNotice: DocumentFileSafetyNotice?
     @State private var relocationRequest: DocumentRelocationRequest?
     @State private var isRelocatingDocument = false
@@ -298,7 +300,24 @@ struct MarkdownEditorView: View {
 
             DocumentFileSafetyBanner(
                 state: displayedFileSafetyState,
-                onCompare: { isFileSafetyPresented = true },
+                deferredSnapshotID: deferredFileSafetySnapshotID,
+                onCompare: {
+                    requestedConflictDecision = nil
+                    isFileSafetyPresented = true
+                },
+                onReload: requestFileSafetyReload,
+                onOverwrite: { snapshot in
+                    presentFileSafetyReview(snapshot, decision: .overwrite)
+                },
+                onRecreate: { snapshot in
+                    presentFileSafetyReview(snapshot, decision: .recreate)
+                },
+                onDefer: { snapshot in
+                    deferredFileSafetySnapshotID = snapshot.id
+                },
+                onResume: {
+                    deferredFileSafetySnapshotID = nil
+                },
                 onSaveAs: { beginDocumentRelocation(.saveAs) },
                 onSaveCopy: { beginDocumentRelocation(.saveCopy) },
                 onClose: {
@@ -628,14 +647,21 @@ struct MarkdownEditorView: View {
             if let snapshot = fileSafetySession.state.conflictSnapshot {
                 DocumentConflictReviewView(
                     snapshot: snapshot,
+                    initialDecision: requestedConflictDecision,
                     onSaveCopy: saveCopyFromConflictReview,
                     onReload: { try await reloadFromDisk(snapshot) },
                     onOverwrite: {
                         try await overwriteDiskVersion(snapshot)
                     },
                     onRecreate: { try await recreateDeletedFile(snapshot) },
-                    onResolved: { isFileSafetyPresented = false },
-                    onClose: { isFileSafetyPresented = false }
+                    onResolved: {
+                        requestedConflictDecision = nil
+                        isFileSafetyPresented = false
+                    },
+                    onClose: {
+                        requestedConflictDecision = nil
+                        isFileSafetyPresented = false
+                    }
                 )
             } else {
                 ContentUnavailableView(
@@ -974,6 +1000,33 @@ struct MarkdownEditorView: View {
         sourceEditorSession.resetAfterExternalReload(result.decoded.text)
     }
 
+    private func requestFileSafetyReload(_ snapshot: DocumentFileConflictSnapshot) {
+        if snapshot.localHasChanges {
+            presentFileSafetyReview(snapshot, decision: .reload)
+            return
+        }
+        Task { @MainActor in
+            do {
+                try await reloadFromDisk(snapshot)
+                deferredFileSafetySnapshotID = nil
+            } catch {
+                presentFileOperationFailure(error)
+            }
+        }
+    }
+
+    private func presentFileSafetyReview(
+        _ snapshot: DocumentFileConflictSnapshot,
+        decision: DocumentConflictDecision? = nil
+    ) {
+        guard fileSafetySession.state.conflictSnapshot?.id == snapshot.id else {
+            presentFileOperationFailure(DocumentFileSafetyError.staleDecision)
+            return
+        }
+        requestedConflictDecision = decision
+        isFileSafetyPresented = true
+    }
+
     private func overwriteDiskVersion(_ snapshot: DocumentFileConflictSnapshot) async throws
         -> URL
     {
@@ -1178,6 +1231,7 @@ struct MarkdownEditorView: View {
     }
 
     private func saveCopyFromConflictReview() {
+        requestedConflictDecision = nil
         isFileSafetyPresented = false
         Task { @MainActor in
             await Task.yield()

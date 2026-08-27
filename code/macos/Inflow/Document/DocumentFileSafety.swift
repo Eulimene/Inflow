@@ -344,6 +344,14 @@ struct DocumentFileConflictSnapshot: Identifiable, Sendable {
         self.diskExists = diskExists
         localHasChanges = localData != baselineData
     }
+
+    func hasSameFacts(as other: DocumentFileConflictSnapshot) -> Bool {
+        url.standardizedFileURL == other.url.standardizedFileURL
+            && baselineData == other.baselineData
+            && localData == other.localData
+            && diskData == other.diskData
+            && diskExists == other.diskExists
+    }
 }
 
 enum DocumentFileSafetyState {
@@ -557,6 +565,11 @@ final class DocumentFileSafetySession: ObservableObject {
             diskText: diskText,
             diskExists: inspection.exists
         )
+        if let existing = state.conflictSnapshot,
+           existing.hasSameFacts(as: snapshot)
+        {
+            return
+        }
         state = inspection.exists ? .changed(snapshot) : .deleted(snapshot)
     }
 
