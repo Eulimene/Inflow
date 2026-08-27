@@ -67,6 +67,7 @@
 		A1000000000000000000003A /* RecentDocuments.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000003F /* RecentDocuments.swift */; };
 		A1000000000000000000003B /* RecentDocumentsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000040 /* RecentDocumentsTests.swift */; };
 		A1000000000000000000003C /* PersistentSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000041 /* PersistentSplitView.swift */; };
+		A1000000000000000000003D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000042 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -145,6 +146,7 @@
 		A2000000000000000000003F /* RecentDocuments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Document/RecentDocuments.swift; sourceTree = "<group>"; };
 		A20000000000000000000040 /* RecentDocumentsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentDocumentsTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000041 /* PersistentSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/PersistentSplitView.swift; sourceTree = "<group>"; };
+		A20000000000000000000042 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -222,6 +224,7 @@
 				A20000000000000000000004 /* Inflow-Bridging-Header.h */,
 				A20000000000000000000008 /* Info.plist */,
 				A20000000000000000000009 /* Inflow.entitlements */,
+				A20000000000000000000042 /* Assets.xcassets */,
 			);
 			path = macos/Inflow;
 			sourceTree = "<group>";
@@ -343,6 +346,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1000000000000000000003D /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -523,6 +527,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = macos/Inflow/Resources/Inflow.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -564,6 +569,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = macos/Inflow/Resources/Inflow.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
