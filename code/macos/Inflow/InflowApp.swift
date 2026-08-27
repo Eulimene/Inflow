@@ -14,6 +14,16 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     func application(_: NSApplication, open urls: [URL]) {
         recentDocuments.openExternalDocuments(urls)
     }
+
+    func applicationShouldOpenUntitledFile(_: NSApplication) -> Bool {
+        InflowLaunchPolicy.opensUntitledDocument
+    }
+
+    func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        InflowLaunchPolicy.openUntitledDocument {
+            NSDocumentController.shared.newDocument(sender)
+        }
+    }
 }
 
 private struct OutlineVisibilityFocusedKey: FocusedValueKey {
@@ -42,6 +52,29 @@ private struct OutlineCommands: Commands {
     }
 }
 
+private struct InflowPrimaryCommands: Commands {
+    let folderBrowser: FolderBrowserController
+
+    var body: some Commands {
+        DocumentSaveCommands()
+        FolderBrowserCommands(controller: folderBrowser)
+        EditorViewModeCommands()
+        PreviewZoomCommands()
+        OutlineCommands()
+        WritingModeCommands()
+    }
+}
+
+private struct InflowEditingCommands: Commands {
+    var body: some Commands {
+        DocumentFindCommands()
+        HTMLExportCommands()
+        MarkdownFormatCommands()
+        MarkdownInsertCommands()
+        InflowSupplementalCommands()
+    }
+}
+
 @main
 struct InflowApp: App {
     @NSApplicationDelegateAdaptor(InflowApplicationDelegate.self)
@@ -49,6 +82,7 @@ struct InflowApp: App {
     @StateObject private var recoveryCoordinator = DocumentRecoveryCoordinator()
     @StateObject private var preferences = AppPreferences()
     @StateObject private var anonymousUsage = AnonymousUsageDataController()
+    @StateObject private var folderBrowser = FolderBrowserController()
 
     var body: some Scene {
         DocumentGroup(newDocument: MarkdownDocument()) { configuration in
@@ -59,22 +93,15 @@ struct InflowApp: App {
                 recoveryCoordinator: recoveryCoordinator,
                 preferences: preferences,
                 anonymousUsage: anonymousUsage,
-                recentDocuments: applicationDelegate.recentDocuments
+                recentDocuments: applicationDelegate.recentDocuments,
+                folderBrowser: folderBrowser
             )
                 .frame(minWidth: 720, minHeight: 480)
         }
         .defaultSize(width: 1_080, height: 720)
         .commands {
-            DocumentSaveCommands()
-            EditorViewModeCommands()
-            PreviewZoomCommands()
-            OutlineCommands()
-            WritingModeCommands()
-            DocumentFindCommands()
-            HTMLExportCommands()
-            MarkdownFormatCommands()
-            MarkdownInsertCommands()
-            InflowSupplementalCommands()
+            InflowPrimaryCommands(folderBrowser: folderBrowser)
+            InflowEditingCommands()
         }
 
         Window("Inflow 帮助", id: InflowHelpWindow.identifier) {

@@ -12,7 +12,7 @@ enum InflowHelpContent {
             id: "start",
             title: "开始写作",
             paragraphs: [
-                "使用 ⌘N 新建空白 Markdown，或使用 ⌘O 直接打开 .md 和 .markdown 文件。Inflow 不会导入成专有格式。",
+                "Inflow 启动后直接进入空白写作主界面，也可随时用 ⌘N 新建空白 Markdown。使用“文件 > 打开文件夹…”可在侧栏浏览 .md 和 .markdown，也可用 ⌘O 直接打开单个文件。Inflow 不会导入成专有格式。",
                 "使用 ⌘1、⌘2 和 ⌘3 在源码编辑、实时预览和纯预览之间切换。三种视图始终使用同一份当前正文。",
             ]
         ),

@@ -321,14 +321,18 @@ enum UnsupportedEncodingRecoveryUI {
 
 @MainActor
 enum DocumentWindowReusePolicy {
+    static func reusableBlankDocument(from candidates: [NSDocument]) -> NSDocument? {
+        candidates.first { document in
+            document.fileURL == nil && !document.isDocumentEdited
+        }
+    }
+
     static func reusableBlankDocument(
         from candidates: [NSDocument],
         behavior: MarkdownOpenBehavior
     ) -> NSDocument? {
         guard behavior == .reuseBlankWindow else { return nil }
-        return candidates.first { document in
-            document.fileURL == nil && !document.isDocumentEdited
-        }
+        return reusableBlankDocument(from: candidates)
     }
 
     static var orderedDocumentCandidates: [NSDocument] {
@@ -460,6 +464,16 @@ final class RecentDocumentsController: NSObject, ObservableObject {
         for (index, url) in supportedURLs.enumerated() {
             open(url, reusableDocument: index == 0 ? reusableDocument : nil)
         }
+    }
+
+    func openDocumentFromFolder(_ url: URL) {
+        guard Self.supportedExternalDocumentURLs(from: [url]).count == 1 else { return }
+        open(
+            url,
+            reusableDocument: DocumentWindowReusePolicy.reusableBlankDocument(
+                from: DocumentWindowReusePolicy.orderedDocumentCandidates
+            )
+        )
     }
 
     static func supportedExternalDocumentURLs(from urls: [URL]) -> [URL] {

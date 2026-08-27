@@ -297,7 +297,7 @@ enum EditorStatisticMode: String, CaseIterable, Identifiable {
 enum EmptyMarkdownGuidance {
     static let title = "这份 Markdown 属于你"
     static let description =
-        "直接在源码编辑器中开始写作；首次保存时由你选择文件名和位置，Inflow 不会把内容导入专有格式。"
+        "直接在源码编辑器中开始写作，或打开文件夹后从侧栏选择 Markdown。首次保存时由你选择文件名和位置，Inflow 不会把内容导入专有格式。"
 
     static func isVisible(markdown: String) -> Bool {
         markdown.isEmpty
@@ -392,6 +392,7 @@ struct DeferredImageInsertionQueue: Equatable {
 
 private struct EmptyMarkdownPreviewView: View {
     let onStartWriting: () -> Void
+    let onOpenFolder: () -> Void
     let onOpenDocument: () -> Void
 
     var body: some View {
@@ -402,6 +403,7 @@ private struct EmptyMarkdownPreviewView: View {
         } actions: {
             VStack(spacing: 10) {
                 Button("在源码编辑器中开始", action: onStartWriting)
+                Button("打开文件夹…", action: onOpenFolder)
                 Button("打开现有 Markdown…", action: onOpenDocument)
             }
         }
@@ -420,6 +422,7 @@ struct MarkdownEditorView: View {
     @ObservedObject private var preferences: AppPreferences
     private let anonymousUsage: AnonymousUsageDataController?
     private let recentDocuments: RecentDocumentsController?
+    @ObservedObject private var folderBrowser: FolderBrowserController
 
     init(
         document: Binding<MarkdownDocument>,
@@ -428,7 +431,8 @@ struct MarkdownEditorView: View {
         recoveryCoordinator: DocumentRecoveryCoordinator? = nil,
         preferences: AppPreferences? = nil,
         anonymousUsage: AnonymousUsageDataController? = nil,
-        recentDocuments: RecentDocumentsController? = nil
+        recentDocuments: RecentDocumentsController? = nil,
+        folderBrowser: FolderBrowserController
     ) {
         _document = document
         self.fileURL = fileURL
@@ -437,6 +441,7 @@ struct MarkdownEditorView: View {
         _preferences = ObservedObject(wrappedValue: preferences ?? AppPreferences())
         self.anonymousUsage = anonymousUsage
         self.recentDocuments = recentDocuments
+        _folderBrowser = ObservedObject(wrappedValue: folderBrowser)
     }
 
     @SceneStorage("editorViewMode") private var storedViewMode = ""
@@ -566,6 +571,27 @@ struct MarkdownEditorView: View {
 
     var body: some View {
         presentationLayer
+            .alert(
+                "文件夹访问需要确认",
+                isPresented: Binding(
+                    get: { folderBrowser.restorationWarning != nil },
+                    set: { if !$0 { folderBrowser.dismissRestorationWarning() } }
+                )
+            ) {
+                Button("重新选择文件夹") {
+                    folderBrowser.dismissRestorationWarning()
+                    folderBrowser.chooseFolder(
+                        attachedTo: sourceEditorSession.textView.window
+                            ?? NSApp.keyWindow
+                            ?? NSApp.mainWindow
+                    )
+                }
+                Button("稍后", role: .cancel) {
+                    folderBrowser.dismissRestorationWarning()
+                }
+            } message: {
+                Text(folderBrowser.restorationWarning ?? "请重新选择文件夹。")
+            }
     }
 
     private var editorSurface: some View {
@@ -659,6 +685,22 @@ struct MarkdownEditorView: View {
         .focusedSceneValue(\.recoveryActions, recoveryCommandActions)
         .focusedSceneValue(\.documentSaveActions, documentSaveCommandActions)
         .toolbar {
+            ToolbarItem {
+                Button {
+                    folderBrowser.chooseFolder(
+                        attachedTo: sourceEditorSession.textView.window
+                            ?? NSApp.keyWindow
+                            ?? NSApp.mainWindow
+                    )
+                } label: {
+                    Label(
+                        folderBrowser.folderURL == nil ? "打开文件夹" : "更换文件夹",
+                        systemImage: "folder"
+                    )
+                }
+                .help(folderBrowser.folderURL == nil ? "打开文件夹" : "更换文件夹")
+            }
+
             ToolbarItem {
                 Button {
                     isOutlineVisible.toggle()
@@ -1141,6 +1183,27 @@ struct MarkdownEditorView: View {
 
     @ViewBuilder
     private var content: some View {
+        if folderBrowser.folderURL != nil {
+            HSplitView {
+                FolderBrowserSidebar(
+                    controller: folderBrowser,
+                    currentDocumentURL: fileURL,
+                    onOpenDocument: { url in
+                        recentDocuments?.openDocumentFromFolder(url)
+                    }
+                )
+                .frame(minWidth: 190, idealWidth: 230, maxWidth: 340)
+
+                documentContent
+                    .frame(minWidth: 520)
+            }
+        } else {
+            documentContent
+        }
+    }
+
+    @ViewBuilder
+    private var documentContent: some View {
         if isOutlineVisible {
             HSplitView {
                 DocumentOutlineView(
@@ -1220,6 +1283,13 @@ struct MarkdownEditorView: View {
                     EmptyMarkdownPreviewView(
                         onStartWriting: {
                             selectViewMode(viewMode == .preview ? .source : viewMode)
+                        },
+                        onOpenFolder: {
+                            folderBrowser.chooseFolder(
+                                attachedTo: sourceEditorSession.textView.window
+                                    ?? NSApp.keyWindow
+                                    ?? NSApp.mainWindow
+                            )
                         },
                         onOpenDocument: {
                             recentDocuments?.chooseDocumentToOpen()

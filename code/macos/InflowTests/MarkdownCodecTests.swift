@@ -142,12 +142,16 @@ private final class MarkdownDocumentHarness: ObservableObject {
 
 private struct MarkdownDocumentEditorHarness: View {
     @ObservedObject var model: MarkdownDocumentHarness
+    @StateObject private var folderBrowser = FolderBrowserController(
+        restoresSavedFolder: false
+    )
 
     var body: some View {
         MarkdownEditorView(
             document: $model.document,
             fileURL: nil,
-            isEditable: true
+            isEditable: true,
+            folderBrowser: folderBrowser
         )
     }
 }

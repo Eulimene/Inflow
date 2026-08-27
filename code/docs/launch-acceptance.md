@@ -12,7 +12,7 @@
 
 | UAT | 当前实现与自动化证据 | 状态 / 发布前补充 |
 | --- | --- | --- |
-| FILE-01 新建与首次保存 | `MarkdownCodecTests` 覆盖新文档 UTF-8/LF；`AppPreferencesTests` 直接实例化真实 DocumentGroup 文档类并验证原位自动保存；恢复快照保护未命名内容 | 自动化闭环；关闭窗口三按钮仍需候选包人工走查 |
+| FILE-01 新建与首次保存 | `FolderBrowserTests` 覆盖无参数启动直达未命名主窗口、文件夹精确书签、Markdown 扫描和空白窗口复用；`MarkdownCodecTests` 覆盖新文档 UTF-8/LF；`AppPreferencesTests` 直接实例化真实 DocumentGroup 文档类并验证原位自动保存；恢复快照保护未命名内容 | 自动化闭环；候选包人工确认启动无面板、文件夹侧栏点击和关闭窗口三按钮 |
 | FILE-02 已有文件日常保存 | UTF-8/BOM/LF/CRLF 往返、持久 AppKit undo、原生保存协调器与重新打开授权均有测试 | 自动化闭环；候选包人工保存/关闭/重开 |
 | FILE-03 保存失败与只读 | `DocumentFileSafetyTests`、`DocumentRelocationTests` 与冻结失败文案覆盖原文件保全、另存和复制退路 | 自动化闭环；真实只读卷/权限变化人工走查 |
 | FILE-04 外部变化 | 三方快照、外部修改/删除、重载、冲突副本、过期决定和目录授权均有失败关闭测试 | 自动化闭环；用另一编辑器完成候选包端到端走查 |

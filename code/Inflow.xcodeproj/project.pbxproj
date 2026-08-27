@@ -70,6 +70,8 @@
 		A1000000000000000000003D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000042 /* Assets.xcassets */; };
 		A1000000000000000000003E /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000043 /* PrivacyInfo.xcprivacy */; };
 		A1000000000000000000003F /* LaunchJourneyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000044 /* LaunchJourneyTests.swift */; };
+		A10000000000000000000040 /* FolderBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000045 /* FolderBrowser.swift */; };
+		A10000000000000000000041 /* FolderBrowserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000046 /* FolderBrowserTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -151,6 +153,8 @@
 		A20000000000000000000042 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
 		A20000000000000000000043 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Resources/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		A20000000000000000000044 /* LaunchJourneyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchJourneyTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000045 /* FolderBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Document/FolderBrowser.swift; sourceTree = "<group>"; };
+		A20000000000000000000046 /* FolderBrowserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderBrowserTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -202,6 +206,7 @@
 				A2000000000000000000002C /* DocumentRelocation.swift */,
 				A2000000000000000000002D /* DocumentSaveCommands.swift */,
 				A2000000000000000000003F /* RecentDocuments.swift */,
+				A20000000000000000000045 /* FolderBrowser.swift */,
 				A2000000000000000000002E /* DocumentRelocationView.swift */,
 				A20000000000000000000030 /* AppPreferences.swift */,
 				A20000000000000000000031 /* InflowSettingsView.swift */,
@@ -265,6 +270,7 @@
 				A2000000000000000000003E /* InflowHelpTests.swift */,
 				A20000000000000000000040 /* RecentDocumentsTests.swift */,
 				A20000000000000000000044 /* LaunchJourneyTests.swift */,
+				A20000000000000000000046 /* FolderBrowserTests.swift */,
 			);
 			path = macos/InflowTests;
 			sourceTree = "<group>";
@@ -447,6 +453,7 @@
 				A10000000000000000000027 /* DocumentRelocation.swift in Sources */,
 				A10000000000000000000028 /* DocumentSaveCommands.swift in Sources */,
 				A1000000000000000000003A /* RecentDocuments.swift in Sources */,
+				A10000000000000000000040 /* FolderBrowser.swift in Sources */,
 				A10000000000000000000029 /* DocumentRelocationView.swift in Sources */,
 				A1000000000000000000002B /* AppPreferences.swift in Sources */,
 				A1000000000000000000002C /* InflowSettingsView.swift in Sources */,
@@ -478,6 +485,7 @@
 				A10000000000000000000039 /* InflowHelpTests.swift in Sources */,
 				A1000000000000000000003B /* RecentDocumentsTests.swift in Sources */,
 				A1000000000000000000003F /* LaunchJourneyTests.swift in Sources */,
+				A10000000000000000000041 /* FolderBrowserTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
