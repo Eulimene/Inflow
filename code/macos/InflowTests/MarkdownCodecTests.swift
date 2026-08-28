@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
+import WebKit
 import XCTest
 @testable import Inflow
 
@@ -128,6 +129,55 @@ final class MarkdownCodecTests: XCTestCase {
         XCTAssertTrue(sourceEditor.isEditable)
     }
 
+    @MainActor
+    func testFreshUntitledDocumentMountsAndFocusesTheEditableSourceEditor() throws {
+        let model = MarkdownDocumentHarness(document: MarkdownDocument())
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.animationBehavior = .none
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(
+            rootView: MarkdownDocumentEditorHarness(model: model)
+        )
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+
+        for _ in 0 ..< 20 where !(window.firstResponder is WindowAwareTextView) {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+        }
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+
+        let contentView = try XCTUnwrap(window.contentView)
+        let sourceEditor = try XCTUnwrap(
+            descendantTextViews(in: contentView)
+                .compactMap { $0 as? WindowAwareTextView }
+                .first
+        )
+        XCTAssertTrue(sourceEditor.isEditable)
+        XCTAssertTrue(window.firstResponder === sourceEditor)
+        let visiblePreviewWebViews = descendantWebViews(in: contentView).filter { webView in
+            !hasHiddenAncestor(webView)
+                && !webView.convert(webView.bounds, to: contentView)
+                    .intersection(contentView.bounds).isEmpty
+        }
+        XCTAssertTrue(
+            visiblePreviewWebViews.isEmpty,
+            "A fresh untitled document must start in the source editor, not split preview"
+        )
+
+        sourceEditor.insertText("# 立即开始\n", replacementRange: sourceEditor.selectedRange())
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        XCTAssertEqual(model.document.text, "# 立即开始\n")
+        XCTAssertEqual(
+            try model.document.encodedFileData(),
+            Data("# 立即开始\n".utf8)
+        )
+    }
+
     func testMarkdownTypeCoversBothSupportedExtensions() {
         XCTAssertTrue(UTType.inflowMarkdown.conforms(to: .plainText))
         XCTAssertEqual(UTType(filenameExtension: "md"), .inflowMarkdown)
@@ -170,4 +220,26 @@ private func descendantTextViews(in view: NSView) -> [NSTextView] {
         result.append(contentsOf: descendantTextViews(in: subview))
     }
     return result
+}
+
+@MainActor
+private func descendantWebViews(in view: NSView) -> [WKWebView] {
+    var result: [WKWebView] = []
+    if let webView = view as? WKWebView {
+        result.append(webView)
+    }
+    for subview in view.subviews {
+        result.append(contentsOf: descendantWebViews(in: subview))
+    }
+    return result
+}
+
+@MainActor
+private func hasHiddenAncestor(_ view: NSView) -> Bool {
+    var current: NSView? = view
+    while let candidate = current {
+        if candidate.isHidden { return true }
+        current = candidate.superview
+    }
+    return false
 }

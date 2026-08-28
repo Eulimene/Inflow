@@ -436,6 +436,16 @@ struct MarkdownEditorView: View {
         self.anonymousUsage = anonymousUsage
         self.recentDocuments = recentDocuments
         _folderBrowser = ObservedObject(wrappedValue: folderBrowser)
+        let initialDocument = document.wrappedValue
+        _initialEditorModeOverride = State(
+            initialValue: InflowLaunchPolicy.shouldFocusFreshUntitledDocument(
+                fileURL: fileURL,
+                text: initialDocument.text,
+                hasRestorationState: initialDocument.restorationState != nil,
+                isEditable: isEditable
+                    && !initialDocument.properties.requiresLineEndingChoice
+            ) ? .source : nil
+        )
     }
 
     @SceneStorage("editorViewMode") private var storedViewMode = ""
@@ -499,6 +509,8 @@ struct MarkdownEditorView: View {
     @State private var recoveryRecordID = UUID()
     @State private var isRecoveryCenterPresented = false
     @State private var didApplyRestorationState = false
+    @State private var didPrepareFreshUntitledDocument = false
+    @State private var initialEditorModeOverride: EditorViewMode?
     @StateObject private var fileSafetySession = DocumentFileSafetySession()
     @State private var isFileSafetyPresented = false
     @State private var requestedConflictDecision: DocumentConflictDecision?
@@ -512,12 +524,18 @@ struct MarkdownEditorView: View {
 
     private var viewMode: EditorViewMode {
         get {
-            EditorViewMode.initialMode(
+            if let initialEditorModeOverride {
+                return initialEditorModeOverride
+            }
+            return EditorViewMode.initialMode(
                 storedValue: storedViewMode,
                 lastActiveMode: preferences.lastActiveEditorViewMode
             )
         }
-        nonmutating set { storedViewMode = newValue.rawValue }
+        nonmutating set {
+            initialEditorModeOverride = nil
+            storedViewMode = newValue.rawValue
+        }
     }
 
     private var statisticMode: EditorStatisticMode {
@@ -725,6 +743,7 @@ struct MarkdownEditorView: View {
             }
             applyRestorationStateIfNeeded()
             initializeViewModeIfNeeded()
+            prepareFreshUntitledDocumentForEditingIfNeeded()
             scheduleDerivedContent(
                 for: document.text,
                 documentDirectory: fileURL?.deletingLastPathComponent(),
@@ -1423,6 +1442,26 @@ struct MarkdownEditorView: View {
     private func initializeViewModeIfNeeded() {
         guard storedViewMode.isEmpty else { return }
         storedViewMode = preferences.lastActiveEditorViewMode.rawValue
+    }
+
+    private func prepareFreshUntitledDocumentForEditingIfNeeded() {
+        guard !didPrepareFreshUntitledDocument else { return }
+        didPrepareFreshUntitledDocument = true
+        guard InflowLaunchPolicy.shouldFocusFreshUntitledDocument(
+            fileURL: fileURL,
+            text: document.text,
+            hasRestorationState: document.restorationState != nil,
+            isEditable: canEditDocument
+        ) else {
+            return
+        }
+
+        initialEditorModeOverride = .source
+        storedViewMode = EditorViewMode.source.rawValue
+        Task { @MainActor in
+            await Task.yield()
+            _ = sourceEditorSession.focusEditor()
+        }
     }
 
     private func updateRecoveryProtection() {

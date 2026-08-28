@@ -12,7 +12,7 @@ enum InflowHelpContent {
             id: "start",
             title: "开始写作",
             paragraphs: [
-                "Inflow 启动后先显示应用主窗口，不自动弹出文件面板。文件操作集中在 macOS 顶部“文件”菜单：用 ⌘N 新建 Markdown，用 ⌘O 打开单个文件，或用“打开文件夹…”在侧栏浏览 .md 和 .markdown。Inflow 不会导入成专有格式。",
+                "Inflow 启动后直接打开一份可编辑的未命名 Markdown，不弹出文件面板。立即输入内容，第一次按 ⌘S 时再选择文件名和保存位置。其他文件操作集中在 macOS 顶部“文件”菜单：用 ⌘N 新建 Markdown，用 ⌘O 打开单个文件，或用“打开文件夹…”在侧栏浏览 .md 和 .markdown。",
                 "使用 ⌘1、⌘2 和 ⌘3 在源码编辑、实时预览和纯预览之间切换。三种视图始终使用同一份当前正文。",
             ]
         ),

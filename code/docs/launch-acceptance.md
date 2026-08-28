@@ -12,7 +12,7 @@
 
 | UAT | 当前实现与自动化证据 | 状态 / 发布前补充 |
 | --- | --- | --- |
-| FILE-01 新建与首次保存 | `FolderBrowserTests` 覆盖无参数启动先显示 Inflow 应用主窗口、不自动打开未命名文档、工作区不嵌入文件操作按钮、顶部“文件”菜单保留打开/打开文件夹/打开最近，以及文件夹精确书签与 Markdown 扫描；`MarkdownCodecTests` 覆盖新文档 UTF-8/LF；`AppPreferencesTests` 直接实例化真实 DocumentGroup 文档类并验证原位自动保存 | 自动化闭环；候选包人工确认启动工作区无文件操作按钮，并从顶部“文件”菜单走通新建、打开、文件夹与最近文档 |
+| FILE-01 新建与首次保存 | `FolderBrowserTests` 覆盖启动请求可编辑的未命名文档、新空白文档进入源码编辑视图、Dock 重开行为、顶部“文件”菜单保留打开/打开文件夹/打开最近，以及文件夹精确书签与 Markdown 扫描；`MarkdownCodecTests` 覆盖新文档 UTF-8/LF；`AppPreferencesTests` 验证真实 DocumentGroup 文档类支持原位保存 | 自动化闭环；候选包人工确认启动无 Finder 面板、光标直接进入编辑区，输入后第一次 ⌘S 弹出原生保存面板 |
 | FILE-02 已有文件日常保存 | UTF-8/BOM/LF/CRLF 往返、持久 AppKit undo、原生保存协调器与重新打开授权均有测试 | 自动化闭环；候选包人工保存/关闭/重开 |
 | FILE-03 保存失败与只读 | `DocumentFileSafetyTests`、`DocumentRelocationTests` 与冻结失败文案覆盖原文件保全、另存和复制退路 | 自动化闭环；真实只读卷/权限变化人工走查 |
 | FILE-04 外部变化 | 三方快照、外部修改/删除、重载、冲突副本、过期决定和目录授权均有失败关闭测试 | 自动化闭环；用另一编辑器完成候选包端到端走查 |

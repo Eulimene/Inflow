@@ -4,13 +4,22 @@ import Foundation
 import SwiftUI
 
 enum InflowLaunchPolicy {
-    /// A normal launch belongs to Inflow's workspace scene. The document
-    /// framework is entered only after an explicit New/Open action.
-    static let presentsApplicationWindowFirst = true
-    static let automaticallyOpensUntitledDocument = false
-    static var isRunningUnderXCTest: Bool {
-        NSClassFromString("XCTestCase") != nil
-            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    /// Launch directly into an editable untitled Markdown document. Creating
+    /// the document does not present a file panel; the user chooses a path on
+    /// the first explicit save.
+    static let presentsEditableDocumentFirst = true
+    static let automaticallyOpensUntitledDocument = true
+
+    static func shouldFocusFreshUntitledDocument(
+        fileURL: URL?,
+        text: String,
+        hasRestorationState: Bool,
+        isEditable: Bool
+    ) -> Bool {
+        fileURL == nil
+            && text.isEmpty
+            && !hasRestorationState
+            && isEditable
     }
 }
 

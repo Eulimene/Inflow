@@ -4,19 +4,21 @@ import SwiftUI
 final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     let recentDocuments: RecentDocumentsController
     let folderBrowser: FolderBrowserController
-    private var mainWindowController: NSWindowController?
+    private let createUntitledDocument: (Any?) -> Void
 
-    override init() {
+    override convenience init() {
+        self.init { sender in
+            NSDocumentController.shared.newDocument(sender)
+        }
+    }
+
+    init(createUntitledDocument: @escaping (Any?) -> Void) {
         let controller = RecentDocumentsController()
         controller.installMenuIntegration()
         recentDocuments = controller
         folderBrowser = FolderBrowserController()
+        self.createUntitledDocument = createUntitledDocument
         super.init()
-    }
-
-    func applicationDidFinishLaunching(_: Notification) {
-        guard !InflowLaunchPolicy.isRunningUnderXCTest else { return }
-        presentMainWindow()
     }
 
     func application(_: NSApplication, open urls: [URL]) {
@@ -24,13 +26,11 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldOpenUntitledFile(_: NSApplication) -> Bool {
-        InflowLaunchPolicy.isRunningUnderXCTest
-            || InflowLaunchPolicy.automaticallyOpensUntitledDocument
+        InflowLaunchPolicy.automaticallyOpensUntitledDocument
     }
 
     func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
-        guard InflowLaunchPolicy.isRunningUnderXCTest else { return false }
-        NSDocumentController.shared.newDocument(sender)
+        createUntitledDocument(sender)
         return true
     }
 
@@ -38,37 +38,9 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
         _: NSApplication,
         hasVisibleWindows: Bool
     ) -> Bool {
-        guard !InflowLaunchPolicy.isRunningUnderXCTest else { return false }
         guard !hasVisibleWindows else { return true }
-        presentMainWindow()
+        createUntitledDocument(nil)
         return true
-    }
-
-    private func presentMainWindow() {
-        if let mainWindowController {
-            mainWindowController.showWindow(nil)
-            mainWindowController.window?.makeKeyAndOrderFront(nil)
-            return
-        }
-
-        let rootView = InflowMainView(
-            folderBrowser: folderBrowser,
-            onOpenDocument: recentDocuments.openDocumentFromFolder
-        )
-        .frame(minWidth: 760, minHeight: 500)
-
-        let hostingController = NSHostingController(rootView: rootView)
-        let window = NSWindow(contentViewController: hostingController)
-        window.title = InflowMainWindow.title
-        window.setContentSize(NSSize(width: 980, height: 640))
-        window.minSize = NSSize(width: 760, height: 500)
-        window.styleMask.insert([.resizable, .miniaturizable, .closable, .titled])
-        window.center()
-        window.isReleasedWhenClosed = false
-        let controller = NSWindowController(window: window)
-        mainWindowController = controller
-        controller.showWindow(nil)
-        window.makeKeyAndOrderFront(nil)
     }
 }
 
