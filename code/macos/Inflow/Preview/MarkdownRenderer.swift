@@ -62,12 +62,14 @@ enum MarkdownRenderer {
     static func htmlDocument(
         for markdown: String,
         documentDirectory: URL? = nil,
+        projectRoot: URL? = nil,
         configuration: PreviewAppearanceConfiguration = .default,
         navigationHeadings: [DocumentHeading] = []
     ) -> String {
         previewDocument(
             for: markdown,
             documentDirectory: documentDirectory,
+            projectRoot: projectRoot,
             configuration: configuration,
             navigationHeadings: navigationHeadings
         ).html
@@ -76,12 +78,14 @@ enum MarkdownRenderer {
     static func previewDocument(
         for markdown: String,
         documentDirectory: URL? = nil,
+        projectRoot: URL? = nil,
         configuration: PreviewAppearanceConfiguration = .default,
         navigationHeadings: [DocumentHeading] = []
     ) -> MarkdownPreviewDocument {
         previewDocument(
             for: markdown,
             documentDirectory: documentDirectory,
+            projectRoot: projectRoot,
             configuration: configuration,
             navigationHeadings: navigationHeadings,
             fragmentRenderer: htmlFragment
@@ -91,6 +95,7 @@ enum MarkdownRenderer {
     static func previewDocument(
         for markdown: String,
         documentDirectory: URL?,
+        projectRoot: URL? = nil,
         configuration: PreviewAppearanceConfiguration,
         navigationHeadings: [DocumentHeading],
         fragmentRenderer: (String, PreviewAppearanceConfiguration) throws -> String
@@ -113,7 +118,8 @@ enum MarkdownRenderer {
                     containing: LocalImageResolver.resolveSlots(
                         in: fragment,
                         documentDirectory: documentDirectory,
-                        imageReferences: references.filter { $0.kind == .image }
+                        imageReferences: references.filter { $0.kind == .image },
+                        projectRoot: projectRoot
                     ),
                     configuration: configuration
                 ),
@@ -255,11 +261,12 @@ enum PreviewNavigationMarkup {
             }
         }
 
+        let identifiers = HeadingIdentifier.identifiers(for: headings)
         let result = NSMutableString(string: fragment)
-        for (match, heading) in zip(matches, headings).reversed() {
+        for ((match, heading), identifier) in zip(zip(matches, headings), identifiers).reversed() {
             result.replaceCharacters(
                 in: match.range,
-                with: "<h\(heading.level) data-inflow-source-start=\"\(heading.sourceUTF8Range.lowerBound)\" tabindex=\"0\" title=\"在源码中定位\">"
+                with: "<h\(heading.level) id=\"\(escapeHTMLAttribute(identifier))\" data-inflow-source-start=\"\(heading.sourceUTF8Range.lowerBound)\" tabindex=\"0\" title=\"在源码中定位\">"
             )
         }
         return result as String

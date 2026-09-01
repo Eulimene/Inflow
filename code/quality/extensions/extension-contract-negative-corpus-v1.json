@@ -1,0 +1,437 @@
+{
+  "schema_version": 1,
+  "contract": "extension-cross-field-invariants-v1",
+  "contract_status": "frozen",
+  "execution_evidence": "open",
+  "positive_cases": [
+    {
+      "id": "EXT-POS-001",
+      "rule_id": "reverse-domain",
+      "input": { "value": "org.example.notes" },
+      "expected": { "outcome": "accept" }
+    },
+    {
+      "id": "EXT-POS-002",
+      "rule_id": "semver-2.0.0",
+      "input": { "value": "1.2.3-rc.1+build.7" },
+      "expected": { "outcome": "accept" }
+    },
+    {
+      "id": "EXT-POS-003",
+      "rule_id": "attribute-policy",
+      "input": {
+        "properties": {
+          "count": { "kind": "number", "minimum": 1, "maximum": 3, "allowedValues": [1, 2] },
+          "tone": { "kind": "string", "minLength": 1, "maxLength": 8, "allowedValues": ["info", "warn"] }
+        },
+        "requiredProperties": ["tone"]
+      },
+      "expected": { "outcome": "accept" }
+    },
+    {
+      "id": "EXT-POS-004",
+      "rule_id": "namespace-policy-binding",
+      "input": {
+        "syntaxNamespaces": ["inflow:org.example.notes:card"],
+        "attributeSchemas": [
+          {
+            "namespace": "inflow:org.example.notes:card",
+            "path": "components/card-policy.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 128
+          }
+        ],
+        "components": [
+          {
+            "path": "components/card-policy.json",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 128
+          }
+        ],
+        "policiesByPath": {
+          "components/card-policy.json": {
+            "namespace": "inflow:org.example.notes:card"
+          }
+        }
+      },
+      "expected": { "outcome": "accept" }
+    },
+    {
+      "id": "EXT-POS-005",
+      "rule_id": "capability-set",
+      "input": {
+        "capabilitySet": {
+          "schemaVersion": 1,
+          "requiredCapabilities": ["selected-text.read"],
+          "optionalCapabilities": [],
+          "componentCapabilities": [
+            {
+              "componentID": "command",
+              "kind": "wasm-command",
+              "imports": ["host.log.redacted"],
+              "syntaxNamespaces": [],
+              "attributePolicies": []
+            }
+          ]
+        },
+        "claimedSHA256": "1c085ae0bd344f49631968225520611fa217dccc7e6cd7ed06b5d10af75653aa"
+      },
+      "expected": { "outcome": "accept" }
+    },
+    {
+      "id": "EXT-POS-006",
+      "rule_id": "domain-resolution",
+      "input": {
+        "resolutionInput": {
+          "hostVersion": "1.0.0",
+          "apiVersion": "1.0",
+          "catalogSnapshotSHA256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "solverPolicyVersion": "exact-components-v1",
+          "requestedComponents": [
+            {
+              "extensionID": "org.example.math",
+              "componentID": "renderer",
+              "allowedVersions": ["1.0.0", "1.1.0"]
+            }
+          ]
+        },
+        "resolutionInputSHA256": "8c2d5a2d9a8a8a3787dd955cec4af147bdd9e3a201278ef1b920dbb084d6aeb2",
+        "resolvedComponents": [
+          {
+            "extensionID": "org.example.math",
+            "componentID": "renderer",
+            "extensionVersion": "1.1.0",
+            "apiVersion": "1.0"
+          }
+        ]
+      },
+      "expected": { "outcome": "accept" }
+    },
+    {
+      "id": "EXT-POS-007",
+      "rule_id": "revocation-update",
+      "input": {
+        "target": {
+          "extensionID": "org.example.notes",
+          "extensionVersion": "1.0.0",
+          "replacementVersion": "1.1.0",
+          "replacementReleaseRecordSHA256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "requiredAction": "update-required"
+        },
+        "targetReleaseSequence": 4,
+        "replacementRecord": {
+          "extensionID": "org.example.notes",
+          "extensionVersion": "1.1.0",
+          "recordSHA256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "releaseSequence": 5,
+          "revoked": false
+        }
+      },
+      "expected": { "outcome": "accept" }
+    },
+    {
+      "id": "EXT-POS-008",
+      "rule_id": "market-component-binding",
+      "input": {
+        "manifestComponents": [
+          { "componentID": "command", "kind": "wasm-command", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size": 128 }
+        ],
+        "resolvedComponents": [
+          { "componentID": "command", "kind": "wasm-command", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size": 128 }
+        ]
+      },
+      "expected": { "outcome": "accept" }
+    },
+    {
+      "id": "EXT-POS-009",
+      "rule_id": "host-release-version",
+      "input": { "value": "14.0.0" },
+      "expected": { "outcome": "accept" }
+    }
+  ],
+  "negative_cases": [
+    {
+      "id": "EXT-NEG-001",
+      "rule_id": "reverse-domain",
+      "input": { "value": "foo-bar" },
+      "expected": { "outcome": "reject", "error_code": "EXT_ID_INVALID_REVERSE_DOMAIN" }
+    },
+    {
+      "id": "EXT-NEG-002",
+      "rule_id": "semver-2.0.0",
+      "input": { "value": "1.2.3-01" },
+      "expected": { "outcome": "reject", "error_code": "EXT_SEMVER_INVALID" }
+    },
+    {
+      "id": "EXT-NEG-003",
+      "rule_id": "semver-2.0.0",
+      "input": { "value": "1.2.3-alpha..1" },
+      "expected": { "outcome": "reject", "error_code": "EXT_SEMVER_INVALID" }
+    },
+    {
+      "id": "EXT-NEG-004",
+      "rule_id": "component-id-uniqueness",
+      "input": {
+        "components": [
+          { "componentID": "command", "kind": "wasm-command" },
+          { "componentID": "command", "kind": "asset" }
+        ]
+      },
+      "expected": { "outcome": "reject", "error_code": "EXT_COMPONENT_ID_DUPLICATE" }
+    },
+    {
+      "id": "EXT-NEG-005",
+      "rule_id": "namespace-policy-binding",
+      "input": {
+        "syntaxNamespaces": ["inflow:org.example.notes:card"],
+        "attributeSchemas": [],
+        "components": [],
+        "policiesByPath": {}
+      },
+      "expected": { "outcome": "reject", "error_code": "EXT_NAMESPACE_POLICY_SET_MISMATCH" }
+    },
+    {
+      "id": "EXT-NEG-006",
+      "rule_id": "namespace-policy-binding",
+      "input": {
+        "syntaxNamespaces": ["inflow:org.example.notes:card"],
+        "attributeSchemas": [
+          { "namespace": "inflow:org.example.notes:card", "path": "components/a.json", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size": 10 },
+          { "namespace": "inflow:org.example.notes:card", "path": "components/b.json", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "size": 10 }
+        ],
+        "components": [],
+        "policiesByPath": {}
+      },
+      "expected": { "outcome": "reject", "error_code": "EXT_NAMESPACE_POLICY_DUPLICATE" }
+    },
+    {
+      "id": "EXT-NEG-007",
+      "rule_id": "attribute-policy",
+      "input": {
+        "properties": {
+          "tone": { "kind": "string", "minLength": 1, "maxLength": 8 }
+        },
+        "requiredProperties": ["missing"]
+      },
+      "expected": { "outcome": "reject", "error_code": "EXT_ATTRIBUTE_REQUIRED_UNDECLARED" }
+    },
+    {
+      "id": "EXT-NEG-008",
+      "rule_id": "attribute-policy",
+      "input": {
+        "properties": {
+          "tone": { "kind": "string", "minLength": 9, "maxLength": 8 }
+        },
+        "requiredProperties": []
+      },
+      "expected": { "outcome": "reject", "error_code": "EXT_ATTRIBUTE_BOUNDS_INCOHERENT" }
+    },
+    {
+      "id": "EXT-NEG-009",
+      "rule_id": "attribute-policy",
+      "input": {
+        "properties": {
+          "count": { "kind": "number", "minimum": 1, "maximum": 3, "allowedValues": [4] }
+        },
+        "requiredProperties": []
+      },
+      "expected": { "outcome": "reject", "error_code": "EXT_ATTRIBUTE_ALLOWED_VALUE_OUT_OF_RANGE" }
+    },
+    {
+      "id": "EXT-NEG-010",
+      "rule_id": "namespace-policy-binding",
+      "input": {
+        "syntaxNamespaces": ["inflow:org.example.notes:card"],
+        "attributeSchemas": [
+          { "namespace": "inflow:org.example.notes:card", "path": "components/card-policy.json", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size": 128 }
+        ],
+        "components": [
+          { "path": "components/card-policy.json", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "size": 128 }
+        ],
+        "policiesByPath": {
+          "components/card-policy.json": { "namespace": "inflow:org.example.notes:card" }
+        }
+      },
+      "expected": { "outcome": "reject", "error_code": "EXT_ATTRIBUTE_BINDING_MISMATCH" }
+    },
+    {
+      "id": "EXT-NEG-011",
+      "rule_id": "capability-set",
+      "input": {
+        "capabilitySet": {
+          "schemaVersion": 1,
+          "requiredCapabilities": ["selected-text.read"],
+          "optionalCapabilities": [],
+          "componentCapabilities": [
+            { "componentID": "command", "kind": "wasm-command", "imports": ["host.log.redacted"], "syntaxNamespaces": [], "attributePolicies": [] }
+          ]
+        },
+        "claimedSHA256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "expected": { "outcome": "reject", "error_code": "EXT_CAPABILITY_SET_HASH_MISMATCH" }
+    },
+    {
+      "id": "EXT-NEG-012",
+      "rule_id": "capability-set",
+      "input": {
+        "capabilitySet": {
+          "schemaVersion": 1,
+          "requiredCapabilities": ["selected-text.read"],
+          "optionalCapabilities": [],
+          "componentCapabilities": [
+            { "componentID": "z-command", "kind": "wasm-command", "imports": [], "syntaxNamespaces": [], "attributePolicies": [] },
+            { "componentID": "a-command", "kind": "wasm-command", "imports": [], "syntaxNamespaces": [], "attributePolicies": [] }
+          ]
+        },
+        "claimedSHA256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "expected": { "outcome": "reject", "error_code": "EXT_CAPABILITY_SET_NONCANONICAL" }
+    },
+    {
+      "id": "EXT-NEG-013",
+      "rule_id": "domain-resolution",
+      "input": {
+        "resolutionInput": {
+          "hostVersion": "1.0.0",
+          "apiVersion": "1.0",
+          "catalogSnapshotSHA256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "solverPolicyVersion": "exact-components-v1",
+          "requestedComponents": [
+            { "extensionID": "org.example.math", "componentID": "renderer", "allowedVersions": ["1.0.0", "1.1.0"] }
+          ]
+        },
+        "resolutionInputSHA256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "resolvedComponents": [
+          { "extensionID": "org.example.math", "componentID": "renderer", "extensionVersion": "1.1.0", "apiVersion": "1.0" }
+        ]
+      },
+      "expected": { "outcome": "reject", "error_code": "EXT_DOMAIN_INPUT_HASH_MISMATCH" }
+    },
+    {
+      "id": "EXT-NEG-014",
+      "rule_id": "domain-resolution",
+      "input": {
+        "resolutionInput": {
+          "hostVersion": "1.0.0",
+          "apiVersion": "1.0",
+          "catalogSnapshotSHA256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "solverPolicyVersion": "exact-components-v1",
+          "requestedComponents": [
+            { "extensionID": "org.example.math", "componentID": "renderer", "allowedVersions": ["1.0.0", "1.1.0"] },
+            { "extensionID": "org.example.notes", "componentID": "card", "allowedVersions": ["1.0.0"] }
+          ]
+        },
+        "resolutionInputSHA256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "resolvedComponents": [
+          { "extensionID": "org.example.math", "componentID": "renderer", "extensionVersion": "1.1.0", "apiVersion": "1.0" }
+        ]
+      },
+      "expected": { "outcome": "reject", "error_code": "EXT_DOMAIN_RESOLUTION_SET_MISMATCH" }
+    },
+    {
+      "id": "EXT-NEG-015",
+      "rule_id": "domain-resolution",
+      "input": {
+        "resolutionInput": {
+          "hostVersion": "1.0.0",
+          "apiVersion": "1.0",
+          "catalogSnapshotSHA256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "solverPolicyVersion": "exact-components-v1",
+          "requestedComponents": [
+            { "extensionID": "org.example.math", "componentID": "renderer", "allowedVersions": ["1.0.0", "1.1.0"] }
+          ]
+        },
+        "resolutionInputSHA256": "8c2d5a2d9a8a8a3787dd955cec4af147bdd9e3a201278ef1b920dbb084d6aeb2",
+        "resolvedComponents": [
+          { "extensionID": "org.example.math", "componentID": "renderer", "extensionVersion": "2.0.0", "apiVersion": "1.0" }
+        ]
+      },
+      "expected": { "outcome": "reject", "error_code": "EXT_DOMAIN_RESOLUTION_VERSION_DISALLOWED" }
+    },
+    {
+      "id": "EXT-NEG-016",
+      "rule_id": "revocation-update",
+      "input": {
+        "target": {
+          "extensionID": "org.example.notes",
+          "extensionVersion": "1.0.0",
+          "replacementVersion": null,
+          "replacementReleaseRecordSHA256": null,
+          "requiredAction": "update-required"
+        },
+        "targetReleaseSequence": 4,
+        "replacementRecord": null
+      },
+      "expected": { "outcome": "reject", "error_code": "EXT_REVOKE_REPLACEMENT_INVALID" }
+    },
+    {
+      "id": "EXT-NEG-017",
+      "rule_id": "revocation-update",
+      "input": {
+        "target": {
+          "extensionID": "org.example.notes",
+          "extensionVersion": "1.0.0",
+          "replacementVersion": "1.0.0",
+          "replacementReleaseRecordSHA256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "requiredAction": "update-required"
+        },
+        "targetReleaseSequence": 4,
+        "replacementRecord": {
+          "extensionID": "org.example.notes",
+          "extensionVersion": "1.0.0",
+          "recordSHA256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "releaseSequence": 5,
+          "revoked": false
+        }
+      },
+      "expected": { "outcome": "reject", "error_code": "EXT_REVOKE_REPLACEMENT_INVALID" }
+    },
+    {
+      "id": "EXT-NEG-018",
+      "rule_id": "revocation-update",
+      "input": {
+        "target": {
+          "extensionID": "org.example.notes",
+          "extensionVersion": "1.0.0",
+          "replacementVersion": "1.1.0",
+          "replacementReleaseRecordSHA256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "requiredAction": "update-required"
+        },
+        "targetReleaseSequence": 4,
+        "replacementRecord": {
+          "extensionID": "org.example.notes",
+          "extensionVersion": "1.1.0",
+          "recordSHA256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "releaseSequence": 3,
+          "revoked": true
+        }
+      },
+      "expected": { "outcome": "reject", "error_code": "EXT_REVOKE_REPLACEMENT_INVALID" }
+    },
+    {
+      "id": "EXT-NEG-019",
+      "rule_id": "market-component-binding",
+      "input": {
+        "manifestComponents": [
+          { "componentID": "command", "kind": "wasm-command", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size": 128 }
+        ],
+        "resolvedComponents": [
+          { "componentID": "command", "kind": "wasm-command", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size": 127 }
+        ]
+      },
+      "expected": { "outcome": "reject", "error_code": "EXT_MARKET_COMPONENT_SET_MISMATCH" }
+    },
+    {
+      "id": "EXT-NEG-020",
+      "rule_id": "host-release-version",
+      "input": { "value": "14.0.0-rc.1" },
+      "expected": { "outcome": "reject", "error_code": "EXT_HOST_RELEASE_VERSION_INVALID" }
+    },
+    {
+      "id": "EXT-NEG-021",
+      "rule_id": "host-release-version",
+      "input": { "value": "14.0.0+build.7" },
+      "expected": { "outcome": "reject", "error_code": "EXT_HOST_RELEASE_VERSION_INVALID" }
+    }
+  ]
+}

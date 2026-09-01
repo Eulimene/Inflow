@@ -127,13 +127,11 @@ final class WritingModeTests: XCTestCase {
     }
 
     @MainActor
-    func testAppMenuExposesWritingModesWithoutUndocumentedShortcuts() throws {
+    func testLaunchMenuDoesNotExposeGrowthWritingModes() throws {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
         let items = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu))
         for title in ["专注模式", "打字机模式"] {
-            let matching = items.filter { $0.title == title }
-            XCTAssertEqual(matching.count, 1)
-            XCTAssertEqual(try XCTUnwrap(matching.first).keyEquivalent, "")
+            XCTAssertTrue(items.filter { $0.title == title }.isEmpty)
         }
     }
 

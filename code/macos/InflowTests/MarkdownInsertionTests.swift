@@ -629,7 +629,7 @@ final class MarkdownInsertionTests: XCTestCase {
         ))
     }
 
-    func testClipboardImagesAreValidatedAndTIFFIsNormalizedToPNG() async throws {
+    func testClipboardImagesAcceptPNGAndJPEGButRejectTIFF() async throws {
         let worker = ImageAssetWorker()
         let png = try testPNGData()
         let validatedPNG = try await worker.prepareClipboardImage(
@@ -638,13 +638,23 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertEqual(validatedPNG.mimeType, "image/png")
         XCTAssertEqual(validatedPNG.data, png)
 
+        let jpeg = try testJPEGData()
+        let validatedJPEG = try await worker.prepareClipboardImage(
+            ClipboardImagePayload(data: jpeg, kind: .jpeg)
+        )
+        XCTAssertEqual(validatedJPEG.mimeType, "image/jpeg")
+        XCTAssertEqual(validatedJPEG.data, jpeg)
+
         let image = try XCTUnwrap(NSImage(data: png))
         let tiff = try XCTUnwrap(image.tiffRepresentation)
-        let normalized = try await worker.prepareClipboardImage(
-            ClipboardImagePayload(data: tiff, kind: .tiff)
+        await XCTAssertThrowsErrorAsync {
+            _ = try await worker.prepareClipboardImage(
+                ClipboardImagePayload(data: tiff, kind: .tiff)
+            )
+        }
+        XCTAssertThrowsError(
+            try LocalImageValidator.validate(data: tiff, fileExtension: "tiff")
         )
-        XCTAssertEqual(normalized.mimeType, "image/png")
-        XCTAssertNotNil(NSImage(data: normalized.data))
         await XCTAssertThrowsErrorAsync {
             _ = try await worker.prepareClipboardImage(
                 ClipboardImagePayload(data: Data("not an image".utf8), kind: .png)
@@ -681,7 +691,7 @@ final class MarkdownInsertionTests: XCTestCase {
     }
 
     @MainActor
-    func testImageInsertionUndoAndRedoOwnBothMarkdownAndCreatedResource() async throws {
+    func testImageInsertionUndoAndRedoOnlyChangeMarkdownReference() async throws {
         let root = try temporaryImageDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let sourceURL = root.appendingPathComponent("photo.png")
@@ -723,7 +733,7 @@ final class MarkdownInsertionTests: XCTestCase {
 
         session.textView.undoManager?.undo()
         XCTAssertEqual(session.textView.string, "Before ")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: asset.destinationURL.path))
+        XCTAssertEqual(try Data(contentsOf: asset.destinationURL), image.data)
         XCTAssertNil(resourceError)
 
         session.textView.undoManager?.redo()
@@ -733,7 +743,7 @@ final class MarkdownInsertionTests: XCTestCase {
     }
 
     @MainActor
-    func testImageUndoNeverOverwritesExternallyChangedResource() async throws {
+    func testImageUndoLeavesExternallyChangedResourceUntouched() async throws {
         let root = try temporaryImageDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let sourceURL = root.appendingPathComponent("photo.png")
@@ -773,7 +783,7 @@ final class MarkdownInsertionTests: XCTestCase {
         try externalChange.write(to: asset.destinationURL, options: .atomic)
         session.textView.undoManager?.undo()
         XCTAssertEqual(try Data(contentsOf: asset.destinationURL), externalChange)
-        XCTAssertNotNil(resourceError)
+        XCTAssertNil(resourceError)
     }
 
     func testTablePlanCreatesThreeByThreeTemplateAndEscapesSelection() throws {
@@ -1013,7 +1023,7 @@ final class MarkdownInsertionTests: XCTestCase {
     }
 
     @MainActor
-    func testInsertActionsAreSceneScopedAndMenuHasCommandK() throws {
+    func testInsertMenuExposesPersonalCommandsAndHidesDeferredCommands() throws {
         var firstCount = 0
         var firstImageCount = 0
         var secondCount = 0
@@ -1085,26 +1095,22 @@ final class MarkdownInsertionTests: XCTestCase {
         let horizontalRuleItems = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu)).filter {
             $0.title == "分隔线"
         }
-        XCTAssertEqual(horizontalRuleItems.count, 1)
-        XCTAssertEqual(horizontalRuleItems.first?.keyEquivalent, "")
+        XCTAssertTrue(horizontalRuleItems.isEmpty)
 
         let footnoteItems = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu)).filter {
             $0.title == "脚注"
         }
-        XCTAssertEqual(footnoteItems.count, 1)
-        XCTAssertEqual(footnoteItems.first?.keyEquivalent, "")
+        XCTAssertTrue(footnoteItems.isEmpty)
 
         let formulaItems = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu)).filter {
             $0.title == "公式"
         }
-        XCTAssertEqual(formulaItems.count, 1)
-        XCTAssertEqual(formulaItems.first?.keyEquivalent, "")
+        XCTAssertTrue(formulaItems.isEmpty)
 
         let diagramItems = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu)).filter {
             $0.title == "图表"
         }
-        XCTAssertEqual(diagramItems.count, 1)
-        XCTAssertEqual(diagramItems.first?.keyEquivalent, "")
+        XCTAssertTrue(diagramItems.isEmpty)
     }
 
     @MainActor
@@ -1170,6 +1176,18 @@ final class MarkdownInsertionTests: XCTestCase {
         pixels[2] = 220
         pixels[3] = 255
         return try XCTUnwrap(representation.representation(using: .png, properties: [:]))
+    }
+
+    private func testJPEGData() throws -> Data {
+        let image = try XCTUnwrap(NSImage(data: testPNGData()))
+        let tiff = try XCTUnwrap(image.tiffRepresentation)
+        let representation = try XCTUnwrap(NSBitmapImageRep(data: tiff))
+        return try XCTUnwrap(
+            representation.representation(
+                using: .jpeg,
+                properties: [.compressionFactor: 0.9]
+            )
+        )
     }
 
     private func XCTAssertThrowsErrorAsync(

@@ -34,7 +34,6 @@ final class DocumentSaveCommandActions {
     let canSave: Bool
     let save: () -> Void
     let saveAs: () -> Void
-    let saveCopy: () -> Void
     let showInFinder: (() -> Void)?
 
     init(
@@ -42,14 +41,12 @@ final class DocumentSaveCommandActions {
         canSave: Bool = true,
         save: @escaping () -> Void,
         saveAs: @escaping () -> Void,
-        saveCopy: @escaping () -> Void,
         showInFinder: (() -> Void)?
     ) {
         self.isBusy = isBusy
         self.canSave = canSave
         self.save = save
         self.saveAs = saveAs
-        self.saveCopy = saveCopy
         self.showInFinder = showInFinder
     }
 }
@@ -78,9 +75,6 @@ struct DocumentSaveCommands: Commands {
 
             Button("另存为…") { actions?.saveAs() }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
-                .disabled(actions == nil || actions?.isBusy == true)
-
-            Button("保存副本…") { actions?.saveCopy() }
                 .disabled(actions == nil || actions?.isBusy == true)
 
             Divider()
@@ -141,6 +135,15 @@ enum NativeDocumentSaveCoordinator {
 
     static func saveCurrent(document: NSDocument, to targetURL: URL) async throws {
         try await save(document: document, to: targetURL, operation: .saveOperation)
+    }
+
+    /// Revert stays on AppKit's document lifecycle path so its change count and
+    /// undo ownership are updated by the same document that owns the window.
+    static func revert(document: NSDocument, from sourceURL: URL) throws {
+        try document.revert(
+            toContentsOf: sourceURL,
+            ofType: document.fileType ?? UTType.inflowMarkdown.identifier
+        )
     }
 
     private static func save(

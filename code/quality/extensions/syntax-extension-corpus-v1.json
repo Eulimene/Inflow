@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "contract": "syntax-extension-v1",
+  "contract_status": "frozen",
+  "execution_evidence": "open",
+  "cases": [
+    {
+      "id": "SYN-V1-001",
+      "source": "```inflow:org.example.notes:card\nhello\n```\n",
+      "expected": { "status": "recognized", "kind": "fenced-block", "namespace": "inflow:org.example.notes:card" }
+    },
+    {
+      "id": "SYN-V1-002",
+      "source": ":::inflow:org.example.notes:card {\"tone\":\"info\",\"compact\":true}\nhello\n:::\n",
+      "expected": { "status": "recognized", "kind": "block-directive", "namespace": "inflow:org.example.notes:card" }
+    },
+    {
+      "id": "SYN-V1-003",
+      "source": "    :::inflow:org.example.notes:card\nindented\n    :::\n",
+      "expected": { "status": "commonmark-code", "reason": "four-space indentation wins" }
+    },
+    {
+      "id": "SYN-V1-004",
+      "source": ":::inflow:org.example.notes:card {\"tone\":\"info\",\"tone\":\"warn\"}\nhello\n:::\n",
+      "expected": { "status": "preserve-source", "reason": "duplicate attribute" }
+    },
+    {
+      "id": "SYN-V1-005",
+      "source": ":::inflow:org.example.notes:outer\n:::inflow:org.example.notes:inner\ntext\n:::\n:::\n",
+      "expected": { "status": "preserve-source", "reason": "nested directive is not v1" }
+    },
+    {
+      "id": "SYN-V1-006",
+      "source": ":::inflow:org.example.notes:card\nunclosed\n",
+      "expected": { "status": "preserve-source", "reason": "unclosed directive" }
+    },
+    {
+      "id": "SYN-V1-007",
+      "source": "`:::inflow:org.example.notes:card`\n",
+      "expected": { "status": "commonmark-code", "reason": "inline code exclusion" }
+    },
+    {
+      "id": "SYN-V1-008",
+      "source": ":::inflow:org.example.notes:card {\"unknown\":1}\nhello\n:::\n",
+      "expected": { "status": "provider-schema-dependent", "reason": "Core accepts only a provider-declared attribute key" }
+    }
+  ]
+}

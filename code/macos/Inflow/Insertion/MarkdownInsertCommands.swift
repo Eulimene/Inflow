@@ -64,25 +64,6 @@ struct MarkdownInsertCommands: Commands {
             }
             .disabled(actions?.canInsert != true)
 
-            Button("分隔线") {
-                actions?.insertHorizontalRule()
-            }
-            .disabled(actions?.canInsert != true)
-
-            Button("脚注") {
-                actions?.insertFootnote()
-            }
-            .disabled(actions?.canInsert != true)
-
-            Button("公式") {
-                actions?.insertFormula()
-            }
-            .disabled(actions?.canInsert != true)
-
-            Button("图表") {
-                actions?.insertDiagram()
-            }
-            .disabled(actions?.canInsert != true)
         }
     }
 }

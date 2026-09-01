@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.inflow.app/market/revocation-manifest/v1",
+  "title": "Inflow Revocation Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "manifestType",
+    "sequence",
+    "previousManifestSHA256",
+    "generatedAtUTC",
+    "validFromUTC",
+    "expiresAtUTC",
+    "minimumSecureClientVersion",
+    "marketKeyID",
+    "signatureAlgorithm",
+    "targets",
+    "criticalFields"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "manifestType": { "const": "extension-revocations" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "previousManifestSHA256": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/sha256" }
+      ]
+    },
+    "generatedAtUTC": { "type": "string", "format": "date-time" },
+    "validFromUTC": { "type": "string", "format": "date-time" },
+    "expiresAtUTC": { "type": "string", "format": "date-time" },
+    "minimumSecureClientVersion": { "$ref": "#/$defs/semver" },
+    "marketKeyID": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "signatureAlgorithm": { "const": "market-ed25519-jcs-v1" },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "extensionID",
+          "extensionVersion",
+          "contentRootSHA256",
+          "reason",
+          "impact",
+          "replacementVersion",
+          "replacementReleaseRecordSHA256",
+          "requiredAction"
+        ],
+        "properties": {
+          "extensionID": { "$ref": "#/$defs/reverseDomainID" },
+          "extensionVersion": { "$ref": "#/$defs/semver" },
+          "contentRootSHA256": { "$ref": "#/$defs/sha256" },
+          "reason": {
+            "enum": [
+              "malware",
+              "credential-compromise",
+              "data-exfiltration",
+              "signature-compromise",
+              "critical-policy-violation"
+            ]
+          },
+          "impact": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "replacementVersion": {
+            "oneOf": [
+              { "type": "null" },
+              { "$ref": "#/$defs/semver" }
+            ]
+          },
+          "replacementReleaseRecordSHA256": {
+            "oneOf": [
+              { "type": "null" },
+              { "$ref": "#/$defs/sha256" }
+            ]
+          },
+          "requiredAction": { "enum": ["disable", "remove", "update-required"] }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "requiredAction": { "const": "update-required" } },
+              "required": ["requiredAction"]
+            },
+            "then": {
+              "properties": {
+                "replacementVersion": { "$ref": "#/$defs/semver" },
+                "replacementReleaseRecordSHA256": { "$ref": "#/$defs/sha256" }
+              }
+            },
+            "else": {
+              "properties": {
+                "replacementVersion": { "type": "null" },
+                "replacementReleaseRecordSHA256": { "type": "null" }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "criticalFields": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "sequence",
+          "previousManifestSHA256",
+          "validFromUTC",
+          "expiresAtUTC",
+          "minimumSecureClientVersion",
+          "marketKeyID",
+          "signatureAlgorithm",
+          "targets"
+        ]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "sequence": { "const": 1 } } },
+      "then": { "properties": { "previousManifestSHA256": { "type": "null" } } },
+      "else": { "properties": { "previousManifestSHA256": { "$ref": "#/$defs/sha256" } } }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+    },
+    "reverseDomainID": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$",
+      "maxLength": 160
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$",
+      "maxLength": 128
+    }
+  }
+}

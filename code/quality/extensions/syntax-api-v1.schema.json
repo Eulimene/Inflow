@@ -1,0 +1,272 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.inflow.app/extensions/syntax-api/v1",
+  "title": "Inflow Syntax Extension API v1 Message",
+  "oneOf": [
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/success" },
+    { "$ref": "#/$defs/unsupported" },
+    { "$ref": "#/$defs/diagnosticFailure" },
+    { "$ref": "#/$defs/cancelled" }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+    },
+    "sourceRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startByte", "endByte"],
+      "properties": {
+        "startByte": { "type": "integer", "minimum": 0 },
+        "endByte": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "base": {
+      "type": "object",
+      "required": [
+        "apiVersion",
+        "providerID",
+        "contributionID",
+        "documentVersion",
+        "generation",
+        "sourceRange",
+        "sourceRangeSHA256",
+        "namespace"
+      ],
+      "properties": {
+        "apiVersion": { "const": "1.0" },
+        "providerID": {
+          "type": "string",
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+/[a-z][a-z0-9-]{0,63}$",
+          "maxLength": 225
+        },
+        "contributionID": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "documentVersion": { "type": "integer", "minimum": 0 },
+        "generation": { "type": "integer", "minimum": 0 },
+        "sourceRange": { "$ref": "#/$defs/sourceRange" },
+        "sourceRangeSHA256": { "$ref": "#/$defs/sha256" },
+        "namespace": {
+          "type": "string",
+          "pattern": "^inflow:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+:[a-z][a-z0-9-]{0,63}$",
+          "maxLength": 232
+        }
+      }
+    },
+    "attributeValue": {
+      "oneOf": [
+        { "type": "string", "maxLength": 4096 },
+        { "type": "number", "minimum": -1000000000, "maximum": 1000000000 },
+        { "type": "boolean" },
+        {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "maxLength": 4096 }
+        }
+      ]
+    },
+    "request": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": [
+            "messageType",
+            "kind",
+            "name",
+            "attributes",
+            "body",
+            "requestedProducts"
+          ],
+          "properties": {
+            "messageType": { "const": "request" },
+            "kind": { "enum": ["fenced-block", "block-directive"] },
+            "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+            "attributes": {
+              "type": "object",
+              "maxProperties": 32,
+              "propertyNames": { "pattern": "^[a-z][a-z0-9-]{0,63}$" },
+              "additionalProperties": { "$ref": "#/$defs/attributeValue" }
+            },
+            "body": { "type": "string", "maxLength": 2097152 },
+            "requestedProducts": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 6,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "diagnostics",
+                  "highlights",
+                  "outline",
+                  "references",
+                  "content-tree",
+                  "export-tree"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "ruleID", "message", "range"],
+      "properties": {
+        "severity": { "enum": ["information", "warning", "error"] },
+        "ruleID": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{0,127}$" },
+        "message": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "range": { "$ref": "#/$defs/sourceRange" },
+        "suggestedText": { "type": "string", "maxLength": 262144 }
+      }
+    },
+    "highlight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token", "range"],
+      "properties": {
+        "token": {
+          "enum": ["keyword", "type", "property", "value", "label", "reference", "warning", "error"]
+        },
+        "range": { "$ref": "#/$defs/sourceRange" }
+      }
+    },
+    "outlineItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "level", "range"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "level": { "type": "integer", "minimum": 1, "maximum": 6 },
+        "range": { "$ref": "#/$defs/sourceRange" }
+      }
+    },
+    "referenceBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "canonicalIdentifier", "definitionRange", "referenceRanges", "target"],
+      "properties": {
+        "kind": { "enum": ["label", "citation", "bibliography"] },
+        "canonicalIdentifier": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "definitionRange": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/sourceRange" }
+          ]
+        },
+        "referenceRanges": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": { "$ref": "#/$defs/sourceRange" }
+        },
+        "target": {
+          "type": ["string", "null"],
+          "maxLength": 1024
+        }
+      }
+    },
+    "products": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "diagnostics": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": { "$ref": "#/$defs/diagnostic" }
+        },
+        "highlights": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": { "$ref": "#/$defs/highlight" }
+        },
+        "outline": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": { "$ref": "#/$defs/outlineItem" }
+        },
+        "references": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": { "$ref": "#/$defs/referenceBinding" }
+        },
+        "contentTree": { "$ref": "https://schemas.inflow.app/extensions/content-tree/v1" },
+        "exportTree": { "$ref": "https://schemas.inflow.app/extensions/content-tree/v1" }
+      }
+    },
+    "success": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["messageType", "status", "products", "inputNodeCount", "outputNodeCount"],
+          "properties": {
+            "messageType": { "const": "response" },
+            "status": { "const": "success" },
+            "products": { "$ref": "#/$defs/products" },
+            "inputNodeCount": { "type": "integer", "minimum": 1, "maximum": 10000 },
+            "outputNodeCount": { "type": "integer", "minimum": 0, "maximum": 10000 }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "unsupported": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["messageType", "status", "reasonCode"],
+          "properties": {
+            "messageType": { "const": "response" },
+            "status": { "const": "unsupported" },
+            "reasonCode": {
+              "enum": ["unknown-name", "unsupported-attributes", "unsupported-body", "provider-policy"]
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "diagnosticFailure": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["messageType", "status", "diagnostics"],
+          "properties": {
+            "messageType": { "const": "response" },
+            "status": { "const": "diagnostic-failure" },
+            "diagnostics": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000,
+              "items": { "$ref": "#/$defs/diagnostic" }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "cancelled": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["messageType", "status"],
+          "properties": {
+            "messageType": { "const": "response" },
+            "status": { "const": "cancelled" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

@@ -168,6 +168,101 @@ actor MarkdownOpenPreflightWorker {
     }
 }
 
+enum DocumentOpenError: Error, LocalizedError {
+    case unsupportedTarget
+    case unsupportedEncoding
+    case cancelled
+    case timedOut
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedTarget:
+            "只能在 Inflow 中编辑 .md 或 .markdown 文件。"
+        case .unsupportedEncoding:
+            "这个文件不是可编辑的 UTF-8 Markdown。"
+        case .cancelled:
+            "已取消切换。"
+        case .timedOut:
+            "打开文档等待超时，已取消本次项目切换。"
+        }
+    }
+}
+
+@MainActor
+struct OpenedDocumentResult {
+    let document: NSDocument
+    let wasAlreadyOpen: Bool
+}
+
+/// Uses AppKit's native Save / Don't Save / Cancel close review without closing
+/// the document until the caller has successfully opened its replacement.
+@MainActor
+final class DocumentCloseAuthorization: NSObject {
+    private static var pending: [ObjectIdentifier: DocumentCloseAuthorization] = [:]
+
+    static var hasPendingRequests: Bool {
+        removeReleasedRequests()
+        return !pending.isEmpty
+    }
+
+    private weak var document: NSDocument?
+    private let completion: (Bool) -> Void
+
+    private init(document: NSDocument, completion: @escaping (Bool) -> Void) {
+        self.document = document
+        self.completion = completion
+    }
+
+    static func request(
+        for document: NSDocument?,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard let document else {
+            completion(true)
+            return
+        }
+
+        removeReleasedRequests()
+        let documentID = ObjectIdentifier(document)
+        guard pending[documentID] == nil else {
+            // A native close review is already attached to this document. A
+            // second project click must not replace its delegate/completion and
+            // accidentally allow two switches after one decision.
+            completion(false)
+            return
+        }
+
+        guard document.isDocumentEdited else {
+            completion(true)
+            return
+        }
+
+        let authorization = DocumentCloseAuthorization(
+            document: document,
+            completion: completion
+        )
+        pending[documentID] = authorization
+        document.canClose(
+            withDelegate: authorization,
+            shouldClose: #selector(document(_:shouldClose:contextInfo:)),
+            contextInfo: nil
+        )
+    }
+
+    private static func removeReleasedRequests() {
+        pending = pending.filter { $0.value.document != nil }
+    }
+
+    @objc private func document(
+        _ document: NSDocument,
+        shouldClose: Bool,
+        contextInfo _: UnsafeMutableRawPointer?
+    ) {
+        Self.pending.removeValue(forKey: ObjectIdentifier(document))
+        completion(shouldClose)
+    }
+}
+
 enum UnsupportedEncodingRecoveryCopyError: Error, Equatable, LocalizedError {
     case sourceDestinationConflict
     case targetChanged
@@ -344,6 +439,199 @@ enum DocumentWindowReusePolicy {
     }
 }
 
+enum DocumentOpenTargetKind: Equatable, Sendable {
+    case markdownFile
+    case projectDirectory
+}
+
+enum DocumentOpenRouteBlankToken: Equatable, Sendable {
+    case reusableBlankWindow
+}
+
+enum DocumentOpenRouteAction: Equatable, Sendable {
+    case focusExistingFile(URL)
+    case openFile(URL, reuseBlank: DocumentOpenRouteBlankToken?)
+    case focusExistingProject(URL)
+    case openProject(URL, reuseBlank: DocumentOpenRouteBlankToken?)
+
+    var url: URL {
+        switch self {
+        case let .focusExistingFile(url),
+             let .openFile(url, _),
+             let .focusExistingProject(url),
+             let .openProject(url, _):
+            url
+        }
+    }
+
+    var reuseBlank: DocumentOpenRouteBlankToken? {
+        switch self {
+        case let .openFile(_, token), let .openProject(_, token): token
+        case .focusExistingFile, .focusExistingProject: nil
+        }
+    }
+}
+
+enum DocumentOpenRouteRejectionReason: Equatable, Sendable {
+    case unsupportedTarget
+    case mixedFilesAndDirectories
+    case multipleDirectories
+}
+
+struct DocumentOpenRouteRejection: Equatable, Sendable {
+    let url: URL
+    let reason: DocumentOpenRouteRejectionReason
+}
+
+struct DocumentOpenRoutePlan: Equatable, Sendable {
+    let actions: [DocumentOpenRouteAction]
+    let rejections: [DocumentOpenRouteRejection]
+}
+
+enum DocumentOpenRouter {
+    typealias TargetClassifier = (URL) -> DocumentOpenTargetKind?
+
+    static func plan(
+        inputURLs: [URL],
+        openedDocumentURLs: [URL],
+        openedProjectURLs: [URL],
+        hasReusableBlankWindow: Bool,
+        classifyTarget: TargetClassifier = { supportedTargetKind(for: $0) }
+    ) -> DocumentOpenRoutePlan {
+        struct Candidate {
+            let inputIndex: Int
+            let url: URL
+            let kind: DocumentOpenTargetKind
+        }
+        enum InputIdentity: Hashable {
+            case filePath(String)
+            case other(String)
+        }
+
+        var seenInputs = Set<InputIdentity>()
+        var candidates: [Candidate] = []
+        var indexedRejections: [(Int, DocumentOpenRouteRejection)] = []
+
+        for (index, inputURL) in inputURLs.enumerated() {
+            guard inputURL.isFileURL else {
+                let identity = InputIdentity.other(inputURL.absoluteString)
+                guard seenInputs.insert(identity).inserted else { continue }
+                indexedRejections.append((
+                    index,
+                    DocumentOpenRouteRejection(
+                        url: inputURL,
+                        reason: .unsupportedTarget
+                    )
+                ))
+                continue
+            }
+
+            let url = normalizedFileURL(inputURL)
+            guard seenInputs.insert(.filePath(url.path)).inserted else { continue }
+            guard let kind = classifyTarget(url) else {
+                indexedRejections.append((
+                    index,
+                    DocumentOpenRouteRejection(
+                        url: url,
+                        reason: .unsupportedTarget
+                    )
+                ))
+                continue
+            }
+            candidates.append(Candidate(inputIndex: index, url: url, kind: kind))
+        }
+
+        let files = candidates.filter { $0.kind == .markdownFile }
+        let directories = candidates.filter { $0.kind == .projectDirectory }
+        let supportedCandidates: [Candidate]
+        if !files.isEmpty, !directories.isEmpty {
+            supportedCandidates = files
+            indexedRejections.append(contentsOf: directories.map {
+                (
+                    $0.inputIndex,
+                    DocumentOpenRouteRejection(
+                        url: $0.url,
+                        reason: .mixedFilesAndDirectories
+                    )
+                )
+            })
+        } else if directories.count > 1 {
+            supportedCandidates = []
+            indexedRejections.append(contentsOf: directories.map {
+                (
+                    $0.inputIndex,
+                    DocumentOpenRouteRejection(
+                        url: $0.url,
+                        reason: .multipleDirectories
+                    )
+                )
+            })
+        } else {
+            supportedCandidates = candidates
+        }
+
+        let openedDocuments = normalizedPathSet(openedDocumentURLs)
+        let openedProjects = normalizedPathSet(openedProjectURLs)
+        var blankTokenIsAvailable = hasReusableBlankWindow
+        var actions: [DocumentOpenRouteAction] = []
+        actions.reserveCapacity(supportedCandidates.count)
+
+        for candidate in supportedCandidates {
+            switch candidate.kind {
+            case .markdownFile where openedDocuments.contains(candidate.url.path):
+                actions.append(.focusExistingFile(candidate.url))
+            case .projectDirectory where openedProjects.contains(candidate.url.path):
+                actions.append(.focusExistingProject(candidate.url))
+            case .markdownFile:
+                let token: DocumentOpenRouteBlankToken? = blankTokenIsAvailable
+                    ? .reusableBlankWindow
+                    : nil
+                blankTokenIsAvailable = false
+                actions.append(.openFile(candidate.url, reuseBlank: token))
+            case .projectDirectory:
+                let token: DocumentOpenRouteBlankToken? = blankTokenIsAvailable
+                    ? .reusableBlankWindow
+                    : nil
+                blankTokenIsAvailable = false
+                actions.append(.openProject(candidate.url, reuseBlank: token))
+            }
+        }
+
+        return DocumentOpenRoutePlan(
+            actions: actions,
+            rejections: indexedRejections
+                .sorted { $0.0 < $1.0 }
+                .map(\.1)
+        )
+    }
+
+    static func normalizedFileURL(_ url: URL) -> URL {
+        url.standardizedFileURL
+    }
+
+    static func supportedTargetKind(for url: URL) -> DocumentOpenTargetKind? {
+        guard url.isFileURL else { return nil }
+
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+           isDirectory.boolValue
+        {
+            return .projectDirectory
+        }
+        if url.hasDirectoryPath {
+            return .projectDirectory
+        }
+        switch url.pathExtension.lowercased() {
+        case "md", "markdown": return .markdownFile
+        default: return nil
+        }
+    }
+
+    private static func normalizedPathSet(_ urls: [URL]) -> Set<String> {
+        Set(urls.lazy.filter(\.isFileURL).map { normalizedFileURL($0).path })
+    }
+}
+
 @MainActor
 final class RecentDocumentsController: NSObject, ObservableObject {
     @Published private(set) var entries: [RecentDocumentEntry] = []
@@ -354,6 +642,12 @@ final class RecentDocumentsController: NSObject, ObservableObject {
     private let openBehavior: () -> MarkdownOpenBehavior
     private let bookmarkData: (URL) -> Data?
     private let systemSynchronizer: ([RecentDocumentEntry]) -> Void
+    private let recordsOpenedDocuments: Bool
+    private let reusableBlankDocumentFilter: (NSDocument) -> Bool
+    private let failureRecorder: (LocalFailureCategory, LocalFailureCode) -> Void
+    private let openedProjectURLs: @MainActor () -> [URL]
+    private let focusExistingProject: @MainActor (URL) -> Void
+    private let openProject: @MainActor (URL, NSDocument?) -> Void
     private let openPreflightWorker = MarkdownOpenPreflightWorker()
     private var applicationObservers: [AnyCancellable] = []
     private var isMenuIntegrationInstalled = false
@@ -372,13 +666,25 @@ final class RecentDocumentsController: NSObject, ObservableObject {
             for entry in entries.reversed() where entry.isAvailable {
                 NSDocumentController.shared.noteNewRecentDocumentURL(entry.url)
             }
-        }
+        },
+        recordsOpenedDocuments: Bool = true,
+        reusableBlankDocumentFilter: @escaping (NSDocument) -> Bool = { _ in true },
+        failureRecorder: @escaping (LocalFailureCategory, LocalFailureCode) -> Void = { _, _ in },
+        openedProjectURLs: @escaping @MainActor () -> [URL] = { [] },
+        focusExistingProject: @escaping @MainActor (URL) -> Void = { _ in },
+        openProject: @escaping @MainActor (URL, NSDocument?) -> Void = { _, _ in }
     ) {
         self.persistence = persistence
         self.capacity = capacity
         self.openBehavior = openBehavior
         self.bookmarkData = bookmarkData
         self.systemSynchronizer = systemSynchronizer
+        self.recordsOpenedDocuments = recordsOpenedDocuments
+        self.reusableBlankDocumentFilter = reusableBlankDocumentFilter
+        self.failureRecorder = failureRecorder
+        self.openedProjectURLs = openedProjectURLs
+        self.focusExistingProject = focusExistingProject
+        self.openProject = openProject
         super.init()
         replaceStoredRecords(with: persistence.load(), synchronizeSystem: false)
     }
@@ -402,6 +708,7 @@ final class RecentDocumentsController: NSObject, ObservableObject {
     }
 
     func note(_ url: URL) {
+        guard recordsOpenedDocuments else { return }
         guard url.isFileURL else { return }
         let exactURL = url.standardizedFileURL
         let identity = RecentDocumentEntry.identity(for: exactURL)
@@ -419,6 +726,10 @@ final class RecentDocumentsController: NSObject, ObservableObject {
     }
 
     func applyCapacity() {
+        storedRecords = Array(
+            storedRecords.prefix(RecentDocumentPolicy.clampCapacity(capacity()))
+        )
+        persistence.save(storedRecords)
         publishVisibleEntries(synchronizeSystem: true)
     }
 
@@ -441,7 +752,7 @@ final class RecentDocumentsController: NSObject, ObservableObject {
             configureFileMenu()
             return
         }
-        open(url, reusableDocument: reusableBlankDocument())
+        openExternalDocuments([url])
     }
 
     @objc private func openDocumentMenuItem(_: Any?) {
@@ -449,30 +760,90 @@ final class RecentDocumentsController: NSObject, ObservableObject {
     }
 
     func chooseDocumentToOpen() {
-        let reusableDocument = reusableBlankDocument()
         NSDocumentController.shared.beginOpenPanel { [weak self] urls in
             guard let self, let urls else { return }
-            for (index, url) in urls.enumerated() {
-                self.open(url, reusableDocument: index == 0 ? reusableDocument : nil)
-            }
+            self.openExternalDocuments(urls)
         }
     }
 
-    func openExternalDocuments(_ urls: [URL]) {
-        let supportedURLs = Self.supportedExternalDocumentURLs(from: urls)
-        let reusableDocument = reusableBlankDocument()
-        for (index, url) in supportedURLs.enumerated() {
-            open(url, reusableDocument: index == 0 ? reusableDocument : nil)
+    func chooseProjectToOpen(
+        attachedTo window: NSWindow? = NSApp.keyWindow ?? NSApp.mainWindow
+    ) {
+        let panel = NSOpenPanel()
+        panel.title = "打开项目"
+        panel.message = "选择一个普通文件夹。Inflow 不会导入、复制或重组其中内容。"
+        panel.prompt = "打开"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.resolvesAliases = true
+
+        let handle: (NSApplication.ModalResponse) -> Void = { [weak self, weak panel] response in
+            guard response == .OK, let url = panel?.url else { return }
+            self?.openExternalDocuments([url])
         }
+        if let window {
+            panel.beginSheetModal(for: window, completionHandler: handle)
+        } else {
+            handle(panel.runModal())
+        }
+    }
+
+    @discardableResult
+    func openExternalDocuments(_ urls: [URL]) -> DocumentOpenRoutePlan {
+        let reusableDocument = reusableBlankDocument()
+        let plan = DocumentOpenRouter.plan(
+            inputURLs: urls,
+            openedDocumentURLs: NSDocumentController.shared.documents.compactMap(\.fileURL),
+            openedProjectURLs: openedProjectURLs(),
+            hasReusableBlankWindow: reusableDocument != nil
+        )
+        for action in plan.actions {
+            switch action {
+            case let .focusExistingFile(url):
+                focusExistingDocument(at: url)
+            case let .openFile(url, token):
+                open(
+                    url,
+                    reusableDocument: token == nil ? nil : reusableDocument
+                )
+            case let .focusExistingProject(url):
+                focusExistingProject(url)
+            case let .openProject(url, token):
+                openProject(url, token == nil ? nil : reusableDocument)
+            }
+        }
+        return plan
     }
 
     func openDocumentFromFolder(_ url: URL) {
-        guard Self.supportedExternalDocumentURLs(from: [url]).count == 1 else { return }
+        openDocumentFromFolder(url) { _ in }
+    }
+
+    func openDocumentFromFolder(
+        _ url: URL,
+        completion: @escaping @MainActor (Result<Void, Error>) -> Void
+    ) {
+        openDocumentFromFolderDetailed(url) { result in
+            completion(result.map { _ in () })
+        }
+    }
+
+    func openDocumentFromFolderDetailed(
+        _ url: URL,
+        display: Bool = true,
+        completion: @escaping @MainActor (Result<OpenedDocumentResult, Error>) -> Void
+    ) {
+        guard Self.supportedExternalDocumentURLs(from: [url]).count == 1 else {
+            completion(.failure(DocumentOpenError.unsupportedTarget))
+            return
+        }
         open(
             url,
-            reusableDocument: DocumentWindowReusePolicy.reusableBlankDocument(
-                from: DocumentWindowReusePolicy.orderedDocumentCandidates
-            )
+            reusableDocument: nil,
+            display: display,
+            completion: completion
         )
     }
 
@@ -498,6 +869,11 @@ final class RecentDocumentsController: NSObject, ObservableObject {
             openItem.target = self
             openItem.action = #selector(openDocumentMenuItem(_:))
         }
+
+        // The personal milestone routes Open through Inflow's deduplicating
+        // open router, but deliberately leaves macOS's own Open Recent menu
+        // alone instead of presenting an Inflow-managed history.
+        guard recordsOpenedDocuments else { return }
 
         let recentItem = locateRecentItem(in: fileMenu) ?? insertRecentItem(in: fileMenu)
         recentItem.title = "打开最近"
@@ -569,7 +945,12 @@ final class RecentDocumentsController: NSObject, ObservableObject {
         Self.exactResolvedURL(for: record)
     }
 
-    private func open(_ url: URL, reusableDocument: NSDocument?) {
+    private func open(
+        _ url: URL,
+        reusableDocument: NSDocument?,
+        display: Bool = true,
+        completion: @escaping @MainActor (Result<OpenedDocumentResult, Error>) -> Void = { _ in }
+    ) {
         let accessed = url.startAccessingSecurityScopedResource()
         Task { @MainActor [weak self] in
             guard let self else {
@@ -582,10 +963,14 @@ final class RecentDocumentsController: NSObject, ObservableObject {
                     openVerifiedDocument(
                         url,
                         reusableDocument: reusableDocument,
-                        securityScopeIsActive: accessed
+                        display: display,
+                        securityScopeIsActive: accessed,
+                        completion: completion
                     )
                 case let .unsupportedEncoding(originalData):
                     if accessed { url.stopAccessingSecurityScopedResource() }
+                    failureRecorder(.opening, .unsupportedEncoding)
+                    completion(.failure(DocumentOpenError.unsupportedEncoding))
                     await UnsupportedEncodingRecoveryUI.present(
                         sourceURL: url,
                         originalData: originalData,
@@ -594,6 +979,8 @@ final class RecentDocumentsController: NSObject, ObservableObject {
                 }
             } catch {
                 if accessed { url.stopAccessingSecurityScopedResource() }
+                failureRecorder(.opening, .fileUnavailable)
+                completion(.failure(error))
                 NSDocumentController.shared.presentError(error)
             }
         }
@@ -602,19 +989,25 @@ final class RecentDocumentsController: NSObject, ObservableObject {
     private func openVerifiedDocument(
         _ url: URL,
         reusableDocument: NSDocument?,
-        securityScopeIsActive: Bool
+        display: Bool,
+        securityScopeIsActive: Bool,
+        completion: @escaping @MainActor (Result<OpenedDocumentResult, Error>) -> Void
     ) {
         NSDocumentController.shared.openDocument(
             withContentsOf: url,
-            display: true
+            display: display
         ) { [weak self] document, wasAlreadyOpen, error in
             if let error {
                 if securityScopeIsActive { url.stopAccessingSecurityScopedResource() }
+                self?.failureRecorder(.opening, .fileUnavailable)
+                completion(.failure(error))
                 NSDocumentController.shared.presentError(error)
                 return
             }
             guard let self, let document else {
                 if securityScopeIsActive { url.stopAccessingSecurityScopedResource() }
+                self?.failureRecorder(.opening, .fileUnavailable)
+                completion(.failure(DocumentOpenError.unsupportedTarget))
                 return
             }
             if securityScopeIsActive {
@@ -626,18 +1019,46 @@ final class RecentDocumentsController: NSObject, ObservableObject {
             self.note(url)
             if !wasAlreadyOpen,
                let reusableDocument,
-               reusableDocument !== document
+               reusableDocument !== document,
+               // The preflight and native open are asynchronous. Consume the
+               // originally selected blank only if it is *still* the one that
+               // satisfies the complete reuse policy at commit time; the user
+               // may have edited, saved, closed, or attached it to a project.
+               self.reusableBlankDocument() === reusableDocument
             {
                 reusableDocument.close()
             }
+            completion(
+                .success(
+                    OpenedDocumentResult(
+                        document: document,
+                        wasAlreadyOpen: wasAlreadyOpen
+                    )
+                )
+            )
         }
     }
 
     private func reusableBlankDocument() -> NSDocument? {
         DocumentWindowReusePolicy.reusableBlankDocument(
-            from: DocumentWindowReusePolicy.orderedDocumentCandidates,
+            from: DocumentWindowReusePolicy.orderedDocumentCandidates.filter(
+                reusableBlankDocumentFilter
+            ),
             behavior: openBehavior()
         )
+    }
+
+    private func focusExistingDocument(at url: URL) {
+        let identity = DocumentOpenRouter.normalizedFileURL(url).path
+        guard let document = NSDocumentController.shared.documents.first(where: {
+            guard let fileURL = $0.fileURL else { return false }
+            return DocumentOpenRouter.normalizedFileURL(fileURL).path == identity
+        }) else {
+            return
+        }
+        document.showWindows()
+        document.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func replaceStoredRecords(
@@ -645,7 +1066,7 @@ final class RecentDocumentsController: NSObject, ObservableObject {
         synchronizeSystem: Bool
     ) {
         storedRecords = Array(
-            normalized(records).prefix(RecentDocumentPolicy.capacityRange.upperBound)
+            normalized(records).prefix(RecentDocumentPolicy.clampCapacity(capacity()))
         )
         persistence.save(storedRecords)
         publishVisibleEntries(synchronizeSystem: synchronizeSystem)
@@ -665,10 +1086,17 @@ final class RecentDocumentsController: NSObject, ObservableObject {
     }
 
     private func normalized(_ records: [RecentDocumentRecord]) -> [RecentDocumentRecord] {
-        var identities = Set<String>()
+        enum Identity: Hashable {
+            case resource(DocumentResourceIdentity)
+            case path(String)
+        }
+        var identities = Set<Identity>()
         return records.compactMap { record in
             let path = URL(fileURLWithPath: record.exactPath).standardizedFileURL.path
-            guard identities.insert(path).inserted else { return nil }
+            let url = URL(fileURLWithPath: path)
+            let identity = DocumentResourceIdentity.capture(url)
+                .map(Identity.resource) ?? .path(path)
+            guard identities.insert(identity).inserted else { return nil }
             return RecentDocumentRecord(exactPath: path, bookmark: record.bookmark)
         }
     }

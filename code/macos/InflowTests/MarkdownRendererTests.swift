@@ -1,21 +1,26 @@
 import AppKit
+import CryptoKit
 import SwiftUI
 import WebKit
 import XCTest
 @testable import Inflow
 
 final class MarkdownRendererTests: XCTestCase {
-    func testMegabyteDocumentDerivesCompletePreviewWithinUpdateBudget() throws {
-        let paragraph = String(repeating: "alpha beta gamma delta ", count: 5)
-        var lines = (0..<10_000).map { index in
-            index.isMultiple(of: 100)
-                ? "## Section \(index) \(paragraph)"
-                : "Paragraph \(index) \(paragraph)"
-        }
-        lines.append("## FINAL-PREVIEW-MARKER")
-        let source = lines.joined(separator: "\n")
-        XCTAssertGreaterThan(source.utf8.count, 1_000_000)
-        XCTAssertGreaterThanOrEqual(source.filter(\.isNewline).count, 10_000)
+    func testLocalMarkdownPromptFreezesSafeCopySemantics() {
+        XCTAssertEqual(PreviewLocalMarkdownPrompt.confirmTitle, "打开安全副本")
+        XCTAssertEqual(
+            PreviewLocalMarkdownPrompt.message,
+            "Inflow 会读取当前已确认的文件内容，并以未命名安全副本打开；"
+                + "这个副本不会继续关联或写回原文件。有标题片段时会精确定位。"
+        )
+        XCTAssertFalse(PreviewLocalMarkdownPrompt.message.contains("文件描述符"))
+    }
+
+    func testMiBDocumentDerivesCompletePreviewWithinUpdateBudget() throws {
+        let source = Self.largePerformanceFixture()
+        XCTAssertEqual(source.utf8.count, 1_048_576)
+        XCTAssertEqual(source.filter(\.isNewline).count, 9_999)
+        XCTAssertEqual(source.split(separator: "\n", omittingEmptySubsequences: false).count, 10_000)
 
         let analysisStarted = ProcessInfo.processInfo.systemUptime
         let analysis = try MarkdownAnalyzer.analyze(source)
@@ -33,13 +38,217 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertNil(preview.failureMessage)
         XCTAssertTrue(preview.html.contains("FINAL-PREVIEW-MARKER"))
         XCTAssertEqual(analysis.headings.last?.title, "FINAL-PREVIEW-MARKER")
-        XCTAssertTrue(highlighting.contains { $0.utf8Range.upperBound > 1_000_000 })
+        XCTAssertTrue(highlighting.contains { $0.utf8Range.upperBound == source.utf8.count })
         let elapsed = analysisElapsed + highlightingElapsed + previewElapsed
         #if DEBUG
         XCTAssertLessThan(elapsed, 1.0, "Debug pipeline took \(elapsed) seconds")
         #else
         XCTAssertLessThan(elapsed, 0.3, "Release pipeline took \(elapsed) seconds")
         #endif
+    }
+
+    func testPerformanceManifestPinsTargetFixtureAndMeasurementProtocol() throws {
+        struct Manifest: Decodable {
+            struct Target: Decodable {
+                let model_identifier: String
+                let soc: String
+                let physical_memory_bytes: UInt64
+                let operating_system_version: String
+            }
+            struct Fixture: Decodable {
+                struct LocalImages: Decodable {
+                    let status: String
+                    let required_count: Int
+                    let required_total_bytes: Int
+                    let corpus_sha256: String?
+                }
+
+                let full_fixture_status: String
+                let expected_bytes: Int
+                let expected_lines: Int
+                let expected_line_feeds: Int
+                let sha256: String
+                let local_images: LocalImages
+            }
+            struct Measurement: Decodable {
+                struct SessionPreparation: Decodable {
+                    let device_restart_required: Bool
+                    let post_restart_wait_seconds: Int
+                    let close_other_user_foreground_apps: Bool
+                }
+
+                struct ColdDefinition: Decodable {
+                    let inflow_exited: Bool
+                    let minimum_not_running_seconds: Int
+                    let start_event: String
+                }
+
+                struct WarmDefinition: Decodable {
+                    let inflow_state: String
+                    let idle_seconds: Int
+                    let start_event: String
+                }
+
+                struct ContinuousInput: Decodable {
+                    let duration_seconds: Int
+                    let characters_per_second: Int
+                }
+
+                let warmup_runs: Int
+                let measured_runs: Int
+                let statistics: [String]
+                let resource_sample_window_seconds: Int
+                let continuous_input: ContinuousInput
+                let measurement_session_preparation: SessionPreparation
+                let cold_definition: ColdDefinition
+                let warm_definition: WarmDefinition
+            }
+            struct RepositoryGate: Decodable {
+                let status: String
+                let authoritative_for_target_device: Bool
+            }
+
+            let schema_version: Int
+            let authoritative_target: Target
+            let fixture: Fixture
+            let measurement: Measurement
+            let repository_gate: RepositoryGate
+        }
+
+        let testDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let manifestURL = testDirectory
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("quality/performance-manifest.json")
+        let manifest = try JSONDecoder().decode(
+            Manifest.self,
+            from: Data(contentsOf: manifestURL)
+        )
+        let source = Self.largePerformanceFixture()
+        let digest = SHA256.hash(data: Data(source.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+
+        XCTAssertEqual(manifest.schema_version, 1)
+        XCTAssertEqual(manifest.authoritative_target.model_identifier, "MacBookAir10,1")
+        XCTAssertEqual(manifest.authoritative_target.soc, "Apple M1")
+        XCTAssertEqual(manifest.authoritative_target.physical_memory_bytes, 8 * 1_024 * 1_024 * 1_024)
+        XCTAssertEqual(manifest.authoritative_target.operating_system_version, "14.0")
+        XCTAssertEqual(manifest.fixture.expected_bytes, source.utf8.count)
+        XCTAssertEqual(manifest.fixture.expected_lines, 10_000)
+        XCTAssertEqual(manifest.fixture.expected_line_feeds, source.filter(\.isNewline).count)
+        XCTAssertEqual(manifest.fixture.sha256, digest)
+        XCTAssertEqual(manifest.fixture.full_fixture_status, "open")
+        XCTAssertEqual(manifest.fixture.local_images.status, "open")
+        XCTAssertEqual(manifest.fixture.local_images.required_count, 20)
+        XCTAssertEqual(manifest.fixture.local_images.required_total_bytes, 16 * 1_024 * 1_024)
+        XCTAssertNil(manifest.fixture.local_images.corpus_sha256)
+        XCTAssertEqual(manifest.measurement.warmup_runs, 3)
+        XCTAssertEqual(manifest.measurement.measured_runs, 30)
+        XCTAssertEqual(manifest.measurement.statistics, ["median", "p95", "maximum"])
+        XCTAssertEqual(manifest.measurement.resource_sample_window_seconds, 30)
+        XCTAssertEqual(manifest.measurement.continuous_input.duration_seconds, 60)
+        XCTAssertEqual(manifest.measurement.continuous_input.characters_per_second, 10)
+        XCTAssertTrue(
+            manifest.measurement.measurement_session_preparation.device_restart_required
+        )
+        XCTAssertEqual(
+            manifest.measurement.measurement_session_preparation.post_restart_wait_seconds,
+            300
+        )
+        XCTAssertTrue(
+            manifest.measurement.measurement_session_preparation
+                .close_other_user_foreground_apps
+        )
+        XCTAssertTrue(manifest.measurement.cold_definition.inflow_exited)
+        XCTAssertEqual(manifest.measurement.cold_definition.minimum_not_running_seconds, 30)
+        XCTAssertEqual(
+            manifest.measurement.cold_definition.start_event,
+            "finder-open-request-for-benchmark-document"
+        )
+        XCTAssertEqual(manifest.measurement.warm_definition.inflow_state, "one-blank-window")
+        XCTAssertEqual(manifest.measurement.warm_definition.idle_seconds, 10)
+        XCTAssertEqual(
+            manifest.measurement.warm_definition.start_event,
+            "user-confirms-open-file"
+        )
+        XCTAssertEqual(manifest.repository_gate.status, "component-smoke-only")
+        XCTAssertFalse(manifest.repository_gate.authoritative_for_target_device)
+    }
+
+    @MainActor
+    func testExactMiBTextCanTraverseTextKitRecoveryAndMountedWebKit() async throws {
+        let source = Self.largePerformanceFixture()
+
+        let editor = MarkdownSourceEditorSession()
+        editor.textView.isEditable = true
+        editor.textView.string = source
+        editor.textView.layoutManager?.ensureLayout(for: editor.textView.textContainer!)
+        XCTAssertEqual(editor.textView.string.utf8.count, source.utf8.count)
+
+        let recoveryRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Inflow-Performance-Recovery-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: recoveryRoot) }
+        let recoveryKeyProvider = FixedDocumentRecoveryKeyProvider(
+            keyData: Data(repeating: 0x5C, count: 32)
+        )
+        let recoveryStore = DocumentRecoveryStore(
+            rootURL: recoveryRoot,
+            keyProvider: recoveryKeyProvider
+        )
+        let recoveryRecord = DocumentRecoveryRecord(
+            id: UUID(),
+            document: MarkdownDocument(text: source),
+            originalURL: nil,
+            selectedUTF16Range: NSRange(location: 0, length: 0),
+            viewMode: .split,
+            verticalScrollOffset: 0
+        )
+        let reconcileOutcome = try await recoveryStore.reconcile(recoveryRecord)
+        let recoveredText = try await recoveryStore.load().records.first?.text
+        XCTAssertEqual(reconcileOutcome, .stored)
+        XCTAssertEqual(recoveredText, source)
+        try await recoveryStore.removeAll()
+
+        let configuration = WKWebViewConfiguration()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        configuration.websiteDataStore = .nonPersistent()
+        let webView = WKWebView(
+            frame: NSRect(x: 0, y: 0, width: 900, height: 700),
+            configuration: configuration
+        )
+        let loaded = expectation(description: "exact MiB text preview mounted")
+        let delegate = PreviewTestLoadDelegate { loaded.fulfill() }
+        webView.navigationDelegate = delegate
+        webView.loadHTMLString(MarkdownRenderer.htmlDocument(for: source), baseURL: nil)
+        await fulfillment(of: [loaded], timeout: 20)
+        let containsMarker = try await webView.evaluateJavaScript(
+            "document.body.innerText.includes('FINAL-PREVIEW-MARKER')"
+        ) as? Bool
+        XCTAssertEqual(containsMarker, true)
+    }
+
+    private static func largePerformanceFixture() -> String {
+        let exactByteCount = 1_048_576
+        let paragraph = String(repeating: "alpha beta gamma delta ", count: 3)
+        var lines = (0..<9_999).map { index in
+            index.isMultiple(of: 100)
+                ? "## Section \(index) \(paragraph)"
+                : "Paragraph \(index) \(paragraph)"
+        }
+        lines.append("## FINAL-PREVIEW-MARKER")
+        let unpadded = lines.joined(separator: "\n")
+        let missingBytes = exactByteCount - unpadded.utf8.count
+        precondition(missingBytes >= 0)
+        let padding = missingBytes.quotientAndRemainder(dividingBy: 9_999)
+        for index in 0..<9_999 {
+            lines[index].append(
+                String(repeating: "x", count: padding.quotient + (index < padding.remainder ? 1 : 0))
+            )
+        }
+        let source = lines.joined(separator: "\n")
+        precondition(source.utf8.count == exactByteCount)
+        return source
     }
 
     func testPreviewFailureUsesFrozenSafeExitCopyAndKeepsDetailsOutOfHTML() {
@@ -143,6 +352,119 @@ final class MarkdownRendererTests: XCTestCase {
             PreviewAppearanceConfiguration.default.coreRenderOptions,
             INFLOW_RENDER_OPTIONS_DEFAULT
         )
+    }
+
+    func testVersionedDialectCorpusExecutesVerifiedCasesAndKeepsOpenGapsVisible() throws {
+        struct Corpus: Decodable {
+            struct Case: Decodable {
+                let id: String
+                let status: String
+                let operation: String
+                let source: String
+                let expected_identifiers: [String]?
+                let target: String?
+                let expected_fragment: String?
+                let expected_exact_match: Bool?
+                let contains: [String]?
+                let excludes: [String]?
+                let reason: String?
+            }
+
+            struct CrossToolCompatibility: Decodable {
+                let status: String
+                let reference_tool_builds: [String]
+                let result_artifacts: [String]
+                let reason: String
+            }
+
+            let schema_version: Int
+            let dialect: String
+            let product_contract: String
+            let candidate_status: String
+            let candidate_blocker: String
+            let cases: [Case]
+            let cross_tool_compatibility: CrossToolCompatibility
+        }
+
+        let testDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let corpusURL = testDirectory
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("quality/markdown-dialect-corpus.json")
+        let corpus = try JSONDecoder().decode(
+            Corpus.self,
+            from: Data(contentsOf: corpusURL)
+        )
+
+        XCTAssertEqual(corpus.schema_version, 1)
+        XCTAssertEqual(corpus.dialect, "Inflow Markdown 1.0")
+        XCTAssertEqual(corpus.product_contract, "APP-DIALECT-001 v1.1")
+        XCTAssertEqual(corpus.candidate_status, "open")
+        XCTAssertFalse(corpus.candidate_blocker.isEmpty)
+        XCTAssertEqual(
+            Set(corpus.cases.prefix(7).map(\.id)),
+            Set((1 ... 7).map { String(format: "DIALECT-1.0-%03d", $0) })
+        )
+        XCTAssertEqual(corpus.cross_tool_compatibility.status, "open")
+        XCTAssertTrue(corpus.cross_tool_compatibility.reference_tool_builds.isEmpty)
+        XCTAssertTrue(corpus.cross_tool_compatibility.result_artifacts.isEmpty)
+        XCTAssertFalse(corpus.cross_tool_compatibility.reason.isEmpty)
+
+        var verifiedCaseCount = 0
+        for testCase in corpus.cases {
+            if testCase.status == "open" {
+                XCTAssertFalse(testCase.reason?.isEmpty ?? true, testCase.id)
+                continue
+            }
+            XCTAssertEqual(testCase.status, "verified", testCase.id)
+            verifiedCaseCount += 1
+
+            switch testCase.operation {
+            case "heading_identifiers":
+                let analysis = try MarkdownAnalyzer.analyze(testCase.source)
+                XCTAssertEqual(
+                    HeadingIdentifier.identifiers(for: analysis.headings),
+                    try XCTUnwrap(testCase.expected_identifiers),
+                    testCase.id
+                )
+
+            case "fragment":
+                let target = try XCTUnwrap(testCase.target)
+                let expectedFragment = try XCTUnwrap(testCase.expected_fragment)
+                let plan = PreviewLinkPlanner.plan(
+                    markdown: testCase.source,
+                    target: target,
+                    documentURL: nil
+                )
+                guard case let .currentDocument(fragment) = plan.destination else {
+                    XCTFail("\(testCase.id) did not produce current-document navigation")
+                    continue
+                }
+                XCTAssertEqual(fragment, expectedFragment, testCase.id)
+                let headings = try MarkdownAnalyzer.analyze(testCase.source).headings
+                XCTAssertEqual(
+                    PreviewHeadingAnchorResolver.heading(
+                        for: expectedFragment,
+                        in: headings
+                    ) != nil,
+                    try XCTUnwrap(testCase.expected_exact_match),
+                    testCase.id
+                )
+
+            case "render":
+                let html = try MarkdownRenderer.htmlFragment(for: testCase.source)
+                for marker in testCase.contains ?? [] {
+                    XCTAssertTrue(html.contains(marker), "\(testCase.id) missing \(marker)")
+                }
+                for marker in testCase.excludes ?? [] {
+                    XCTAssertFalse(html.contains(marker), "\(testCase.id) exposed \(marker)")
+                }
+
+            default:
+                XCTFail("unknown corpus operation \(testCase.operation) for \(testCase.id)")
+            }
+        }
+        XCTAssertGreaterThanOrEqual(verifiedCaseCount, 8)
     }
 
     func testRendersCommonMarkdownAndExtensions() throws {
@@ -257,6 +579,52 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertFalse(html.contains(imageURL.path))
     }
 
+    func testProjectImageBoundaryBlocksNormalizedAndDirectorySymlinkEscapes() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let project = directory.appendingPathComponent("project", isDirectory: true)
+        let notes = project.appendingPathComponent("notes", isDirectory: true)
+        let assets = project.appendingPathComponent("assets", isDirectory: true)
+        let outside = directory.appendingPathComponent("outside", isDirectory: true)
+        for target in [notes, assets, outside] {
+            try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        }
+
+        let outsideImage = outside.appendingPathComponent("private.png")
+        try pngData().write(to: outsideImage)
+        let outsideDirectoryLink = project.appendingPathComponent(
+            "linked-outside",
+            isDirectory: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: outsideDirectoryLink,
+            withDestinationURL: outside
+        )
+
+        for target in ["../../outside/private.png", "../linked-outside/private.png"] {
+            let html = MarkdownRenderer.htmlDocument(
+                for: "![private](\(target))",
+                documentDirectory: notes,
+                projectRoot: project
+            )
+            XCTAssertTrue(html.contains("无法读取项目外图片"), html)
+            XCTAssertTrue(html.contains("原引用已保留"), html)
+            XCTAssertFalse(html.contains("class=\"inflow-local-image\""), html)
+            XCTAssertFalse(html.contains("src=\"data:image/png;base64,"), html)
+            XCTAssertFalse(html.contains(outsideImage.path), html)
+        }
+
+        let insideImage = assets.appendingPathComponent("inside.png")
+        try pngData().write(to: insideImage)
+        let insideHTML = MarkdownRenderer.htmlDocument(
+            for: "![inside](../assets/inside.png)",
+            documentDirectory: notes,
+            projectRoot: project
+        )
+        XCTAssertTrue(insideHTML.contains("class=\"inflow-local-image\""), insideHTML)
+        XCTAssertTrue(insideHTML.contains("src=\"data:image/png;base64,"), insideHTML)
+    }
+
     func testMissingAndUnsavedRelativeImagesShowSpecificLocalPlaceholders() {
         let saved = MarkdownRenderer.htmlDocument(
             for: "![封面](assets/missing.png)",
@@ -332,19 +700,20 @@ final class MarkdownRendererTests: XCTestCase {
             navigationHeadings: analysis.headings
         )
 
-        XCTAssertEqual(enabled.components(separatedBy: "<h1 data-inflow-source-start").count - 1, 1)
-        XCTAssertEqual(enabled.components(separatedBy: "<h2 data-inflow-source-start").count - 1, 1)
+        XCTAssertEqual(enabled.components(separatedBy: "<h1 id=\"重复\" data-inflow-source-start").count - 1, 1)
+        XCTAssertEqual(enabled.components(separatedBy: "<h2 id=\"重复-1\" data-inflow-source-start").count - 1, 1)
         XCTAssertTrue(enabled.contains(
-            "<h1 data-inflow-source-start=\"\(analysis.headings[0].sourceUTF8Range.lowerBound)\" tabindex=\"0\""
+            "<h1 id=\"重复\" data-inflow-source-start=\"\(analysis.headings[0].sourceUTF8Range.lowerBound)\" tabindex=\"0\""
         ))
         XCTAssertTrue(enabled.contains(
-            "<h2 data-inflow-source-start=\"\(analysis.headings[1].sourceUTF8Range.lowerBound)\" tabindex=\"0\""
+            "<h2 id=\"重复-1\" data-inflow-source-start=\"\(analysis.headings[1].sourceUTF8Range.lowerBound)\" tabindex=\"0\""
         ))
         XCTAssertFalse(enabled.contains("<script"))
 
         let disabled = MarkdownRenderer.htmlDocument(for: markdown)
         XCTAssertFalse(disabled.contains("<h1 data-inflow-source-start"))
-        XCTAssertFalse(disabled.contains("<h2 data-inflow-source-start"))
+        XCTAssertFalse(disabled.contains("<h1 id="))
+        XCTAssertFalse(disabled.contains("id=\"重复\""))
     }
 
     func testHeadingAnnotationFailsClosedWhenAnalysisDoesNotMatchRenderedHeadings() {
@@ -358,6 +727,37 @@ final class MarkdownRendererTests: XCTestCase {
             PreviewNavigationMarkup.annotateHeadings(in: fragment, headings: mismatched),
             fragment
         )
+    }
+
+    func testHeadingIdentifiersUseOneStableNormalizedContract() {
+        let headings = [
+            DocumentHeading(level: 1, title: "Cafe\u{301}", sourceUTF8Range: 0..<1),
+            DocumentHeading(level: 2, title: "  A \t -- B  ", sourceUTF8Range: 1..<2),
+            DocumentHeading(level: 3, title: "!!!", sourceUTF8Range: 2..<3),
+            DocumentHeading(level: 4, title: "!!!", sourceUTF8Range: 3..<4),
+        ]
+
+        XCTAssertEqual(
+            HeadingIdentifier.identifiers(for: headings),
+            ["café", "a-b", "section", "section-1"]
+        )
+        XCTAssertEqual(HeadingIdentifier.base(for: "  --hello---world--  "), "hello-world")
+        XCTAssertEqual(HeadingIdentifier.base(for: "中文 _ 42"), "中文-_-42")
+    }
+
+    func testHeadingAnnotationWritesOnlyEscapedGeneratedDOMIdentifiers() {
+        let heading = DocumentHeading(
+            level: 1,
+            title: "\"&<>",
+            sourceUTF8Range: 0..<4
+        )
+        let annotated = PreviewNavigationMarkup.annotateHeadings(
+            in: "<h1>unsafe</h1>",
+            headings: [heading]
+        )
+
+        XCTAssertTrue(annotated.contains("<h1 id=\"section\" data-inflow-source-start=\"0\""))
+        XCTAssertFalse(annotated.contains("id=\"\"&<>"))
     }
 
     func testLinkAnnotationCarriesExactParsedTargetAndFailsClosedOnCountDrift() throws {
@@ -556,7 +956,7 @@ final class MarkdownRendererTests: XCTestCase {
         ))
     }
 
-    func testLinkPlannerRequiresAnExactParsedCurrentReferenceAndSafeScheme() {
+    func testLinkPlannerRequiresAnExactParsedCurrentReferenceAndOnlyHTTPSchemes() {
         let markdown = "[web](https://example.com/path) [mail](mailto:writer@example.com)"
         let web = PreviewLinkPlanner.plan(
             markdown: markdown,
@@ -610,7 +1010,102 @@ final class MarkdownRendererTests: XCTestCase {
                 target: "mailto:writer@example.com?body=private",
                 documentURL: nil
             )),
-            .invalidTarget
+            .unsupportedScheme
+        )
+
+        let disallowedSchemes = [
+            "mailto:writer@example.com",
+            "file:///tmp/private.md",
+            "ftp://example.com/archive.zip",
+            "inflow-script:run",
+        ]
+        for target in disallowedSchemes {
+            XCTAssertEqual(
+                blockedReason(PreviewLinkPlanner.plan(
+                    markdown: "[target](\(target))",
+                    target: target,
+                    documentURL: nil
+                )),
+                .unsupportedScheme,
+                target
+            )
+        }
+    }
+
+    func testProjectLinkPlannerKeepsNormalizedAndSymlinkResolvedTargetsInsideRoot() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        let project = container.appendingPathComponent("project", isDirectory: true)
+        let notes = project.appendingPathComponent("notes", isDirectory: true)
+        let guides = project.appendingPathComponent("guides", isDirectory: true)
+        let outside = container.appendingPathComponent("outside", isDirectory: true)
+        for directory in [notes, guides, outside] {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+        }
+
+        let sourceURL = notes.appendingPathComponent("source.md")
+        let insideURL = guides.appendingPathComponent("inside.md")
+        let outsideURL = outside.appendingPathComponent("outside.md")
+        try Data("# Source\n".utf8).write(to: sourceURL)
+        try Data("# Inside\n".utf8).write(to: insideURL)
+        try Data("# Outside\n".utf8).write(to: outsideURL)
+
+        let insideTarget = "../guides/./inside.md"
+        let insidePlan = PreviewLinkPlanner.plan(
+            markdown: "[inside](\(insideTarget))",
+            target: insideTarget,
+            documentURL: sourceURL,
+            projectRoot: project
+        )
+        guard case let .local(insideLink) = insidePlan.destination else {
+            return XCTFail("expected a project-local link")
+        }
+        XCTAssertEqual(insideLink.url.standardizedFileURL, insideURL.standardizedFileURL)
+        XCTAssertEqual(
+            insideLink.projectRoot,
+            try FolderProjectPathBoundary.normalizedProjectRoot(project)
+        )
+
+        let escapingTarget = "../../outside/outside.md"
+        XCTAssertEqual(
+            blockedReason(PreviewLinkPlanner.plan(
+                markdown: "[outside](\(escapingTarget))",
+                target: escapingTarget,
+                documentURL: sourceURL,
+                projectRoot: project
+            )),
+            .outsideProject
+        )
+
+        let escapingLink = notes.appendingPathComponent("escape", isDirectory: true)
+        try FileManager.default.createSymbolicLink(
+            at: escapingLink,
+            withDestinationURL: outside
+        )
+        let symlinkTarget = "escape/outside.md"
+        XCTAssertEqual(
+            blockedReason(PreviewLinkPlanner.plan(
+                markdown: "[symlink](\(symlinkTarget))",
+                target: symlinkTarget,
+                documentURL: sourceURL,
+                projectRoot: project
+            )),
+            .outsideProject
+        )
+
+        let absoluteTarget = outsideURL.path
+        XCTAssertEqual(
+            blockedReason(PreviewLinkPlanner.plan(
+                markdown: "[absolute](\(absoluteTarget))",
+                target: absoluteTarget,
+                documentURL: sourceURL,
+                projectRoot: project
+            )),
+            .outsideProject
         )
     }
 
@@ -629,12 +1124,42 @@ final class MarkdownRendererTests: XCTestCase {
         )
         XCTAssertEqual(
             PreviewHeadingAnchorResolver.heading(
-                for: "%E4%B8%AD%E6%96%87-%E6%A0%87%E9%A2%98",
+                for: "中文-标题",
                 in: analysis.headings
             ),
             analysis.headings[2]
         )
+        XCTAssertNil(
+            PreviewHeadingAnchorResolver.heading(
+                for: "%E4%B8%AD%E6%96%87-%E6%A0%87%E9%A2%98",
+                in: analysis.headings
+            )
+        )
         XCTAssertNil(PreviewHeadingAnchorResolver.heading(for: "missing", in: analysis.headings))
+    }
+
+    func testHeadingFragmentsDecodeExactlyOnceBeforeExactDOMIdentifierMatch() throws {
+        let markdown = "# foo bar\n\n[once](#foo%20bar) [twice](#foo%2520bar)"
+        let analysis = try MarkdownAnalyzer.analyze(markdown)
+        let once = PreviewLinkPlanner.plan(
+            markdown: markdown,
+            target: "#foo%20bar",
+            documentURL: nil
+        )
+        let twice = PreviewLinkPlanner.plan(
+            markdown: markdown,
+            target: "#foo%2520bar",
+            documentURL: nil
+        )
+
+        XCTAssertEqual(once.destination, .currentDocument(fragment: "foo bar"))
+        XCTAssertEqual(twice.destination, .currentDocument(fragment: "foo%20bar"))
+        XCTAssertNil(PreviewHeadingAnchorResolver.heading(for: "foo bar", in: analysis.headings))
+        XCTAssertNil(PreviewHeadingAnchorResolver.heading(for: "foo%20bar", in: analysis.headings))
+        XCTAssertEqual(
+            PreviewHeadingAnchorResolver.heading(for: "foo-bar", in: analysis.headings),
+            analysis.headings[0]
+        )
     }
 
     func testLinkPlannerClassifiesLocalTargetsAndInvalidatesChangedSnapshots() throws {
@@ -750,53 +1275,99 @@ final class MarkdownRendererTests: XCTestCase {
     }
 
     @MainActor
-    func testDocumentNavigationBrokerScopesRoutesAndConsumesPendingOnce() {
-        let broker = PreviewDocumentNavigationBroker()
-        let firstURL = URL(fileURLWithPath: "/tmp/inflow-first.md")
-        let secondURL = URL(fileURLWithPath: "/tmp/inflow-second.md")
-        let firstID = UUID()
-        var firstFragments: [String?] = []
-        var secondFragments: [String?] = []
-        broker.register(id: firstID, url: firstURL) { firstFragments.append($0) }
+    func testSafePreviewMaintenanceCleansExpiredManagedCopiesAtStartupSafely() throws {
+        let root = try temporaryDirectory().appendingPathComponent(
+            "SafeOpen",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
-        XCTAssertTrue(broker.routeIfOpen(to: firstURL, fragment: "one"))
-        XCTAssertFalse(broker.routeIfOpen(to: secondURL, fragment: "two"))
-        XCTAssertEqual(firstFragments.count, 1)
-        XCTAssertEqual(firstFragments[0], "one")
-
-        _ = broker.enqueue(url: secondURL, fragment: "queued")
-        let secondID = UUID()
-        broker.register(id: secondID, url: secondURL) { secondFragments.append($0) }
-        broker.register(id: secondID, url: secondURL) { secondFragments.append($0) }
-        XCTAssertEqual(secondFragments.count, 1)
-        XCTAssertEqual(secondFragments[0], "queued")
-
-        let cancelledURL = URL(fileURLWithPath: "/tmp/inflow-cancelled.md")
-        let superseded = broker.enqueue(url: cancelledURL, fragment: "old")
-        let current = broker.enqueue(url: cancelledURL, fragment: "new")
-        XCTAssertNotEqual(superseded, current)
-        broker.cancelPending(url: cancelledURL, token: superseded)
-        var cancelledFragments: [String?] = []
-        let cancelledID = UUID()
-        broker.register(id: cancelledID, url: cancelledURL) {
-            cancelledFragments.append($0)
-        }
-        XCTAssertEqual(cancelledFragments.count, 1)
-        XCTAssertEqual(cancelledFragments[0], "new")
-
-        let removedURL = URL(fileURLWithPath: "/tmp/inflow-removed.md")
-        let removed = broker.enqueue(url: removedURL, fragment: "removed")
-        broker.cancelPending(url: removedURL, token: removed)
-        let removedID = UUID()
-        broker.register(id: removedID, url: removedURL) { _ in
-            XCTFail("cancelled navigation must not be delivered")
+        let expired = root.appendingPathComponent("\(UUID().uuidString).png")
+        let unmanaged = root.appendingPathComponent("keep.pdf")
+        let directory = root.appendingPathComponent("\(UUID().uuidString).pdf", isDirectory: true)
+        let symlink = root.appendingPathComponent("\(UUID().uuidString).jpg")
+        try Data("expired".utf8).write(to: expired)
+        try Data("keep".utf8).write(to: unmanaged)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: unmanaged)
+        let oldDate = Date().addingTimeInterval(-120)
+        for url in [expired, unmanaged, directory] {
+            try FileManager.default.setAttributes(
+                [.modificationDate: oldDate],
+                ofItemAtPath: url.path
+            )
         }
 
-        broker.unregister(id: firstID)
-        broker.unregister(id: secondID)
-        broker.unregister(id: cancelledID)
-        broker.unregister(id: removedID)
-        XCTAssertFalse(broker.routeIfOpen(to: firstURL, fragment: nil))
+        let maintenance = SafePreviewOpenMaintenance(
+            rootURL: root,
+            retentionInterval: 60,
+            intervalNanoseconds: 60_000_000_000
+        )
+        maintenance.start()
+        defer { maintenance.stop() }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: expired.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unmanaged.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: symlink.path))
+        let permissions = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: root.path)[.posixPermissions]
+                as? NSNumber
+        )
+        XCTAssertEqual(permissions.intValue & 0o777, 0o700)
+    }
+
+    @MainActor
+    func testSafePreviewMaintenanceRepeatsStopsAndDoesNotRetainItsOwner() async throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        let root = container.appendingPathComponent("SafeOpen", isDirectory: true)
+        let maintenance = SafePreviewOpenMaintenance(
+            rootURL: root,
+            retentionInterval: 60,
+            intervalNanoseconds: 5_000_000
+        )
+        maintenance.start()
+        maintenance.start()
+        XCTAssertTrue(maintenance.isRunning)
+
+        let periodicallyExpired = root.appendingPathComponent("\(UUID().uuidString).pdf")
+        try Data("periodic".utf8).write(to: periodicallyExpired)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-120)],
+            ofItemAtPath: periodicallyExpired.path
+        )
+        for _ in 0 ..< 100
+        where FileManager.default.fileExists(atPath: periodicallyExpired.path) {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: periodicallyExpired.path))
+
+        maintenance.stop()
+        XCTAssertFalse(maintenance.isRunning)
+        let retainedAfterStop = root.appendingPathComponent("\(UUID().uuidString).png")
+        try Data("stopped".utf8).write(to: retainedAfterStop)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-120)],
+            ofItemAtPath: retainedAfterStop.path
+        )
+        try await Task.sleep(for: .milliseconds(25))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: retainedAfterStop.path))
+
+        let lifecycleRoot = container.appendingPathComponent("Lifecycle", isDirectory: true)
+        weak var weakMaintenance: SafePreviewOpenMaintenance?
+        do {
+            let shortLived = SafePreviewOpenMaintenance(
+                rootURL: lifecycleRoot,
+                retentionInterval: 60,
+                intervalNanoseconds: 5_000_000
+            )
+            weakMaintenance = shortLived
+            shortLived.start()
+        }
+        await Task.yield()
+        XCTAssertNil(weakMaintenance)
     }
 
     @MainActor

@@ -36,18 +36,16 @@ final class HTMLExporterTests: XCTestCase {
         XCTAssertEqual(ExportResultPrompt.doneTitle, "完成")
     }
 
-    func testExportFailurePromptsAndFormatChangeKeepTheFrozenSnapshot() {
+    func testExportFailurePromptsExposePDFOnlyRecoveryCopy() {
         let request = FrozenExportRequest(
-            format: .html,
+            format: .pdf,
             snapshot: HTMLExportSnapshot(markdown: "# 冻结版本\n\ne\u{301}"),
-            suggestedFilename: "draft.notes.html"
+            suggestedFilename: "draft.notes.pdf"
         )
-        let alternate = request.changingFormat()
 
-        XCTAssertEqual(alternate.format, .pdf)
-        XCTAssertEqual(alternate.suggestedFilename, "draft.notes.pdf")
-        XCTAssertEqual(alternate.snapshot.utf8, request.snapshot.utf8)
-        XCTAssertEqual(alternate.snapshot.documentVersion, request.snapshot.documentVersion)
+        XCTAssertEqual(request.format, .pdf)
+        XCTAssertEqual(request.suggestedFilename, "draft.notes.pdf")
+        XCTAssertEqual(request.snapshot.utf8, Data("# 冻结版本\n\ne\u{301}".utf8))
 
         XCTAssertEqual(ExportFailurePrompt.targetChangedTitle, "导出目标已变化")
         XCTAssertEqual(
@@ -63,7 +61,6 @@ final class HTMLExporterTests: XCTestCase {
             "预计交付物超出100 MiB，未写入目标。"
         )
         XCTAssertEqual(ExportFailurePrompt.returnToAdjustTitle, "返回调整")
-        XCTAssertEqual(ExportFailurePrompt.changeFormatTitle, "更换格式…")
         XCTAssertEqual(ExportFailurePrompt.checkFailedTitle, "导出结果未通过检查")
         XCTAssertEqual(
             ExportFailurePrompt.checkFailedMessage,
@@ -73,13 +70,14 @@ final class HTMLExporterTests: XCTestCase {
         XCTAssertEqual(ExportFailurePrompt.closeTitle, "关闭")
         XCTAssertEqual(ExportFailurePrompt.retryTitle, "重试")
         XCTAssertEqual(
-            ExportFailurePrompt.failureTitle(fileName: "draft.notes.html"),
-            "未能导出「draft.notes.html」"
+            ExportFailurePrompt.failureTitle(fileName: "draft.notes.pdf"),
+            "未能导出「draft.notes.pdf」"
         )
         XCTAssertEqual(
-            ExportFailurePrompt.failureMessage(reason: "无法完成原子写入。"),
-            "无法完成原子写入。Markdown 文档未改变，也没有留下残缺目标。"
+            ExportFailurePrompt.failureMessage(reason: "未能完成交付。"),
+            "未能完成交付。Markdown 文档未改变；请重新确认目标文件的状态。"
         )
+        XCTAssertEqual(HTMLExportTargetError.cannotWrite.errorDescription, "未能完成交付")
     }
 
     @MainActor
@@ -177,6 +175,53 @@ final class HTMLExporterTests: XCTestCase {
             XCTAssertFalse(html.contains("inflow-image-slot"))
             XCTAssertFalse(html.contains(imageURL.path))
             XCTAssertFalse(html.contains("file:"))
+        }
+    }
+
+    func testPreparedExportWarnsAndDoesNotReadImageOutsideProjectBoundary() throws {
+        try withTemporaryDirectory { directory in
+            let project = directory.appendingPathComponent("project", isDirectory: true)
+            let notes = project.appendingPathComponent("notes", isDirectory: true)
+            let outside = directory.appendingPathComponent("outside", isDirectory: true)
+            for target in [notes, outside] {
+                try FileManager.default.createDirectory(
+                    at: target,
+                    withIntermediateDirectories: true
+                )
+            }
+            let outsideImage = outside.appendingPathComponent("private.png")
+            try testPNGData().write(to: outsideImage)
+            let outsideDirectoryLink = project.appendingPathComponent(
+                "linked-outside",
+                isDirectory: true
+            )
+            try FileManager.default.createSymbolicLink(
+                at: outsideDirectoryLink,
+                withDestinationURL: outside
+            )
+
+            let preparation = try HTMLExporter.prepare(
+                snapshot: HTMLExportSnapshot(
+                    markdown: """
+                    ![traversal](../../outside/private.png)
+
+                    ![symlink](../linked-outside/private.png)
+                    """,
+                    documentDirectory: notes,
+                    projectRoot: project
+                )
+            )
+            let html = try XCTUnwrap(String(data: preparation.data, encoding: .utf8))
+
+            XCTAssertTrue(preparation.warnings.contains(.image))
+            XCTAssertTrue(html.contains("无法读取项目外图片"), html)
+            XCTAssertEqual(
+                html.components(separatedBy: "class=\"image-warning\"").count - 1,
+                2,
+                html
+            )
+            XCTAssertFalse(html.contains("src=\"data:image/png;base64,"), html)
+            XCTAssertFalse(html.contains(outsideImage.path), html)
         }
     }
 
@@ -312,12 +357,187 @@ final class HTMLExporterTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testPDFKeepsOnlySafeWebLinksClickable() async throws {
+        let preparation = try HTMLExporter.prepare(
+            snapshot: HTMLExportSnapshot(
+                markdown: "[HTTPS](https://example.com/guide) [file](file:///Users/alice/private.md) [custom](inflow-script:run)"
+            )
+        )
+        XCTAssertEqual(
+            preparation.warnings.map(\.rawValue),
+            [HTMLExportIssue.localLink.rawValue, HTMLExportIssue.unsafeLink.rawValue]
+        )
+        let data = try await PDFExporter.generate(fromSelfContainedHTML: preparation.data)
+        let document = try XCTUnwrap(PDFDocument(data: data))
+        let actions = (0..<document.pageCount).flatMap { index in
+            document.page(at: index)?.annotations.compactMap {
+                ($0.action as? PDFActionURL)?.url
+            } ?? []
+        }
+
+        XCTAssertEqual(actions.map(\.absoluteString), ["https://example.com/guide"])
+        try PDFDeliveryPostflight.validate(data)
+    }
+
+    @MainActor
+    func testDarkPDFPaintsTheEntireMediaBoxIncludingEveryPageCorner() async throws {
+        let darkAppearance = PreviewAppearanceConfiguration(
+            contentWidth: 760,
+            zoom: 1,
+            colorScheme: .dark,
+            theme: .standard,
+            increasedContrast: false,
+            reduceMotion: false
+        )
+        let html = try HTMLExporter.generate(
+            snapshot: HTMLExportSnapshot(
+                markdown: "# Dark delivery\n\nThe page edge must use the selected theme.",
+                appearance: darkAppearance
+            )
+        )
+        let data = try await PDFExporter.generate(fromSelfContainedHTML: html)
+        let page = try XCTUnwrap(PDFDocument(data: data)?.page(at: 0))
+        let thumbnail = page.thumbnail(of: NSSize(width: 160, height: 226), for: .mediaBox)
+        let tiff = try XCTUnwrap(thumbnail.tiffRepresentation)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: tiff))
+        let points = [
+            (1, 1),
+            (bitmap.pixelsWide - 2, 1),
+            (1, bitmap.pixelsHigh - 2),
+            (bitmap.pixelsWide - 2, bitmap.pixelsHigh - 2),
+        ]
+        for (x, y) in points {
+            let color = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+            XCTAssertEqual(color.redComponent, 0x10 / 255.0, accuracy: 0.04)
+            XCTAssertEqual(color.greenComponent, 0x12 / 255.0, accuracy: 0.04)
+            XCTAssertEqual(color.blueComponent, 0x14 / 255.0, accuracy: 0.04)
+            XCTAssertEqual(color.alphaComponent, 1, accuracy: 0.01)
+        }
+    }
+
+    @MainActor
+    func testPDFPageBackgroundParserRejectsTransparentOrNonRGBValues() throws {
+        let color = try PDFExporter.pageBackgroundColor(fromCSS: "rgb(16, 18, 20)")
+        let components = try XCTUnwrap(color.components)
+        XCTAssertEqual(components[0], CGFloat(16.0 / 255.0), accuracy: 0.001)
+        XCTAssertThrowsError(
+            try PDFExporter.pageBackgroundColor(fromCSS: "rgba(16, 18, 20, 0.5)")
+        )
+        XCTAssertThrowsError(
+            try PDFExporter.pageBackgroundColor(fromCSS: "transparent")
+        )
+    }
+
     func testPDFMetadataSanitizerFailsClosedForUnknownContainer() {
         XCTAssertThrowsError(
             try PDFContainerPrivacySanitizer.sanitize(Data("%PDF-1.7\n%%EOF".utf8))
         ) { error in
             XCTAssertEqual(error as? PDFExportError, .invalidOutput)
         }
+    }
+
+    func testVersionedPDFPostflightNegativeCorpus() throws {
+        let corpus = try loadPDFPostflightCorpus()
+        XCTAssertEqual(corpus.schemaVersion, 1)
+        XCTAssertEqual(corpus.policyID, "inflow-pdf-delivery-postflight-v1")
+        XCTAssertEqual(corpus.candidateStatus, "pending")
+        XCTAssertEqual(corpus.cases.count, 13)
+
+        for fixture in corpus.cases {
+            let input = try makePDFPostflightFixture(fixture)
+            let rawInput = try XCTUnwrap(String(data: input, encoding: .isoLatin1))
+            XCTAssertNotNil(PDFDocument(data: input), fixture.id)
+            for marker in fixture.forbiddenMarkers {
+                XCTAssertTrue(rawInput.contains(marker), "\(fixture.id): \(marker)")
+            }
+
+            switch fixture.expectedOutcome {
+            case "reject":
+                XCTAssertThrowsError(
+                    try PDFDeliveryPostflight.validate(input),
+                    fixture.id
+                ) { error in
+                    XCTAssertEqual(error as? PDFExportError, .invalidOutput, fixture.id)
+                }
+                XCTAssertThrowsError(
+                    try PDFContainerPrivacySanitizer.sanitize(input),
+                    fixture.id
+                ) { error in
+                    XCTAssertEqual(error as? PDFExportError, .invalidOutput, fixture.id)
+                }
+
+            case "sanitize":
+                XCTAssertThrowsError(
+                    try PDFDeliveryPostflight.validate(input),
+                    fixture.id
+                )
+                let output = try PDFContainerPrivacySanitizer.sanitize(input)
+                try PDFDeliveryPostflight.validate(output)
+                let rawOutput = try XCTUnwrap(String(data: output, encoding: .isoLatin1))
+                for marker in fixture.forbiddenMarkers {
+                    XCTAssertFalse(rawOutput.contains(marker), "\(fixture.id): \(marker)")
+                }
+                XCTAssertTrue(
+                    (try XCTUnwrap(PDFDocument(data: output)).documentAttributes ?? [:]).isEmpty,
+                    fixture.id
+                )
+
+            case "accept":
+                try PDFDeliveryPostflight.validate(input)
+                let output = try PDFContainerPrivacySanitizer.sanitize(input)
+                try PDFDeliveryPostflight.validate(output)
+
+            default:
+                XCTFail("Unknown expected outcome for \(fixture.id)")
+            }
+        }
+    }
+
+    @MainActor
+    func testPDFPostflightDoesNotTreatVisiblePageTextAsContainerMetadata() async throws {
+        let html = try HTMLExporter.generate(
+            snapshot: HTMLExportSnapshot(
+                markdown: "```text\n/OpenAction /AA /EmbeddedFiles /Metadata /Users/alice/draft.md\n```"
+            )
+        )
+        let data = try await PDFExporter.generate(fromSelfContainedHTML: html)
+        try PDFDeliveryPostflight.validate(data)
+
+        let text = try XCTUnwrap(PDFDocument(data: data)?.string)
+        XCTAssertTrue(text.contains("/OpenAction"))
+        XCTAssertTrue(text.contains("/Users/alice/draft.md"))
+    }
+
+    func testExportDoesNotReportSuccessWhenTargetChangesAfterReplacement() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "InflowExportPostCommit-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let target = directory.appendingPathComponent("delivery.html")
+        let expected = try HTMLExportTargetSnapshot.capture(target)
+        let delivered = Data("expected delivery".utf8)
+        let concurrent = Data("concurrent writer".utf8)
+
+        XCTAssertThrowsError(
+            try HTMLExportFileWriter.write(
+                delivered,
+                to: target,
+                expectedTarget: expected,
+                afterCommit: {
+                    try? concurrent.write(to: target)
+                }
+            )
+        ) { error in
+            XCTAssertEqual(error as? HTMLExportTargetError, .targetChanged)
+        }
+        XCTAssertEqual(try Data(contentsOf: target), concurrent)
     }
 
     @MainActor
@@ -586,6 +806,45 @@ final class HTMLExporterTests: XCTestCase {
         }
     }
 
+    func testTargetSnapshotReadsBytesAndSHA256FromOneNoFollowDescriptor() throws {
+        try withTemporaryDirectory { directory in
+            let activeDirectory = directory.appendingPathComponent("active", isDirectory: true)
+            let movedDirectory = directory.appendingPathComponent("opened", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: activeDirectory,
+                withIntermediateDirectories: false
+            )
+            let target = activeDirectory.appendingPathComponent("document.html")
+            let original = Data("opened descriptor bytes".utf8)
+            let replacement = Data("replacement pathname bytes".utf8)
+            try original.write(to: target)
+
+            let captured = try HTMLExportTargetSnapshot.captureContents(
+                target,
+                afterOpeningDescriptor: {
+                    try FileManager.default.moveItem(
+                        at: activeDirectory,
+                        to: movedDirectory
+                    )
+                    try FileManager.default.createDirectory(
+                        at: activeDirectory,
+                        withIntermediateDirectories: false
+                    )
+                    try replacement.write(to: target)
+                }
+            )
+
+            XCTAssertEqual(captured.data, original)
+            XCTAssertTrue(captured.snapshot.hasContents(original))
+            XCTAssertFalse(captured.snapshot.hasContents(replacement))
+            XCTAssertNotEqual(
+                captured.snapshot,
+                try HTMLExportTargetSnapshot.capture(target)
+            )
+            XCTAssertEqual(try Data(contentsOf: target), replacement)
+        }
+    }
+
     func testTargetSnapshotRejectsSymlinksAndDirectories() throws {
         try withTemporaryDirectory { directory in
             let realFile = directory.appendingPathComponent("real.html")
@@ -607,16 +866,11 @@ final class HTMLExporterTests: XCTestCase {
     }
 
     @MainActor
-    func testFileMenuHasOneHTMLExportCommand() throws {
+    func testFileMenuHasOnePDFExportCommandAndNoHTMLEntry() throws {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
         let items = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu))
-        let exportMenus = items.filter { $0.title == "导出…" }
-        XCTAssertEqual(exportMenus.count, 1)
-        XCTAssertEqual(
-            try XCTUnwrap(exportMenus.first?.submenu).items.map(\.title),
-            ["导出 HTML…", "导出 PDF…"]
-        )
-        XCTAssertEqual(items.filter { $0.title == "导出 HTML…" }.count, 1)
+        XCTAssertEqual(items.filter { $0.title == "导出…" }.count, 0)
+        XCTAssertEqual(items.filter { $0.title == "导出 HTML…" }.count, 0)
         XCTAssertEqual(items.filter { $0.title == "导出 PDF…" }.count, 1)
     }
 
@@ -633,6 +887,68 @@ final class HTMLExporterTests: XCTestCase {
     private func temporaryExportFiles(in directory: URL) throws -> [String] {
         try FileManager.default.contentsOfDirectory(atPath: directory.path)
             .filter { $0.hasPrefix(".inflow-export-") }
+    }
+
+    private func loadPDFPostflightCorpus() throws -> PDFPostflightCorpus {
+        let sourceFile = URL(fileURLWithPath: #filePath)
+        let codeDirectory = sourceFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let corpusURL = codeDirectory
+            .appendingPathComponent("quality", isDirectory: true)
+            .appendingPathComponent("pdf-postflight-negative-corpus-v1.json")
+        return try JSONDecoder().decode(
+            PDFPostflightCorpus.self,
+            from: Data(contentsOf: corpusURL)
+        )
+    }
+
+    private func makePDFPostflightFixture(_ fixture: PDFPostflightFixture) throws -> Data {
+        var objects: [Int: String] = [
+            1: "<< /Type /Catalog /Pages 2 0 R \(fixture.catalogFragment) >>",
+            2: "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            3: "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << >> /Contents 4 0 R \(fixture.pageFragment) >>",
+            4: "<< /Length 0 >>\nstream\n\nendstream",
+            5: "<< \(fixture.infoFragment) >>",
+        ]
+        for extra in fixture.extraObjects {
+            guard objects[extra.number] == nil else {
+                throw PDFPostflightFixtureError.duplicateObject(extra.number)
+            }
+            if let stream = extra.stream {
+                objects[extra.number] = "<< \(extra.dictionary) /Length \(Data(stream.utf8).count) >>\nstream\n\(stream)\nendstream"
+            } else {
+                objects[extra.number] = "<< \(extra.dictionary) >>"
+            }
+        }
+
+        let highestObjectNumber = try XCTUnwrap(objects.keys.max())
+        var output = Data("%PDF-1.7\n%\u{00E2}\u{00E3}\u{00CF}\u{00D3}\n".utf8)
+        var offsets: [Int: Int] = [:]
+        for objectNumber in objects.keys.sorted() {
+            offsets[objectNumber] = output.count
+            output.append(
+                Data("\(objectNumber) 0 obj\n\(objects[objectNumber]!)\nendobj\n".utf8)
+            )
+        }
+
+        let crossReferenceOffset = output.count
+        output.append(Data("xref\n0 \(highestObjectNumber + 1)\n".utf8))
+        output.append(Data("0000000000 65535 f \n".utf8))
+        for objectNumber in 1 ... highestObjectNumber {
+            if let offset = offsets[objectNumber] {
+                output.append(Data(String(format: "%010d 00000 n \n", offset).utf8))
+            } else {
+                output.append(Data("0000000000 00000 f \n".utf8))
+            }
+        }
+        output.append(
+            Data(
+                "trailer\n<< /Size \(highestObjectNumber + 1) /Root 1 0 R /Info 5 0 R >>\nstartxref\n\(crossReferenceOffset)\n%%EOF\n".utf8
+            )
+        )
+        return output
     }
 
     private func testPNGData() throws -> Data {
@@ -731,4 +1047,48 @@ final class HTMLExporterTests: XCTestCase {
             [item] + (item.submenu.map(allMenuItems) ?? [])
         }
     }
+}
+
+private struct PDFPostflightCorpus: Decodable {
+    let schemaVersion: Int
+    let policyID: String
+    let candidateStatus: String
+    let cases: [PDFPostflightFixture]
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case policyID = "policy_id"
+        case candidateStatus = "candidate_status"
+        case cases
+    }
+}
+
+private struct PDFPostflightFixture: Decodable {
+    let id: String
+    let expectedOutcome: String
+    let catalogFragment: String
+    let pageFragment: String
+    let infoFragment: String
+    let extraObjects: [PDFPostflightExtraObject]
+    let forbiddenMarkers: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case expectedOutcome = "expected_outcome"
+        case catalogFragment = "catalog_fragment"
+        case pageFragment = "page_fragment"
+        case infoFragment = "info_fragment"
+        case extraObjects = "extra_objects"
+        case forbiddenMarkers = "forbidden_markers"
+    }
+}
+
+private struct PDFPostflightExtraObject: Decodable {
+    let number: Int
+    let dictionary: String
+    let stream: String?
+}
+
+private enum PDFPostflightFixtureError: Error {
+    case duplicateObject(Int)
 }

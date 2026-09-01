@@ -43,13 +43,9 @@ pub fn svg(source: &str) -> Result<String, MermaidError> {
         .filter(|line| !line.is_empty() && !line.starts_with("%%"));
     let header = logical_lines.next().ok_or(MermaidError::InvalidSyntax)?;
     let lines: Vec<&str> = logical_lines.collect();
-    let diagram = if header.starts_with("flowchart ") || header.starts_with("graph ") {
+    let diagram = if header.starts_with("flowchart ") {
         parse_flowchart(header, &lines)?
-    } else if header == "sequenceDiagram" {
-        parse_sequence(&lines)?
-    } else if header == "classDiagram" {
-        parse_class(&lines)?
-    } else if matches!(header, "stateDiagram" | "stateDiagram-v2") {
+    } else if header == "stateDiagram-v2" {
         parse_state(&lines)?
     } else {
         return Err(MermaidError::UnsupportedType);
@@ -84,70 +80,6 @@ fn parse_flowchart(header: &str, lines: &[&str]) -> Result<Diagram, MermaidError
             to,
             label,
             dashed: operator == "-.->",
-        });
-    }
-    require_content(diagram)
-}
-
-fn parse_sequence(lines: &[&str]) -> Result<Diagram, MermaidError> {
-    let mut diagram = Diagram {
-        kind: "时序图",
-        direction: Direction::Horizontal,
-        nodes: Vec::new(),
-        edges: Vec::new(),
-    };
-    for line in lines {
-        if let Some(declaration) = line
-            .strip_prefix("participant ")
-            .or_else(|| line.strip_prefix("actor "))
-        {
-            let (id, label) = declaration
-                .split_once(" as ")
-                .map_or((declaration, declaration), |(id, label)| (id, label));
-            add_node(&mut diagram, id.trim(), label.trim())?;
-            continue;
-        }
-        let (left, operator, right) =
-            split_relation(line, &["-->>", "->>", "-->", "->", "-x", "--x"])?;
-        let (right, label) = split_label(right);
-        let from = add_node_spec(&mut diagram, left)?;
-        let to = add_node_spec(&mut diagram, right)?;
-        diagram.edges.push(Edge {
-            from,
-            to,
-            label,
-            dashed: operator.starts_with("--"),
-        });
-    }
-    require_content(diagram)
-}
-
-fn parse_class(lines: &[&str]) -> Result<Diagram, MermaidError> {
-    let mut diagram = Diagram {
-        kind: "类图",
-        direction: Direction::Horizontal,
-        nodes: Vec::new(),
-        edges: Vec::new(),
-    };
-    for line in lines {
-        if let Some(name) = line.strip_prefix("class ") {
-            let name = name.split_ascii_whitespace().next().unwrap_or_default();
-            add_node(&mut diagram, name, name)?;
-            continue;
-        }
-        if line.starts_with(['+', '-', '#', '~']) || line.contains(':') && !line.contains("--") {
-            continue;
-        }
-        let (left, operator, right) =
-            split_relation(line, &["<|--", "--|>", "*--", "o--", "..>", "-->", "--"])?;
-        let (right, label) = split_label(right);
-        let from = add_node_spec(&mut diagram, left)?;
-        let to = add_node_spec(&mut diagram, right)?;
-        diagram.edges.push(Edge {
-            from,
-            to,
-            label,
-            dashed: operator.starts_with(".."),
         });
     }
     require_content(diagram)
@@ -409,17 +341,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn renders_four_launch_scope_diagram_types() {
+    fn renders_two_personal_milestone_diagram_types() {
         for source in [
             "flowchart TD\nA[开始] -->|继续| B[结束]",
-            "sequenceDiagram\nAlice->>Bob: 你好",
-            "classDiagram\nAnimal <|-- Duck",
             "stateDiagram-v2\n[*] --> Ready\nReady --> [*]",
         ] {
             let output = svg(source).expect("supported diagram");
             assert!(output.contains("<svg"));
             assert!(output.contains("marker-end"));
             assert!(!output.contains("<script"));
+        }
+    }
+
+    #[test]
+    fn rejects_mermaid_types_outside_the_personal_milestone() {
+        for source in [
+            "graph LR\nA --> B",
+            "stateDiagram\n[*] --> Ready",
+            "sequenceDiagram\nAlice->>Bob: 你好",
+            "classDiagram\nAnimal <|-- Duck",
+            "pie\ntitle Values",
+        ] {
+            assert_eq!(svg(source), Err(MermaidError::UnsupportedType));
         }
     }
 

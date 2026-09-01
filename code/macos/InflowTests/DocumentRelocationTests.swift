@@ -233,10 +233,6 @@ final class DocumentRelocationTests: XCTestCase {
                 DocumentRelocationOperation.saveAs.nativeOperation,
                 .saveAsOperation
             )
-            XCTAssertEqual(
-                DocumentRelocationOperation.saveCopy.nativeOperation,
-                .saveToOperation
-            )
         }
     }
 
@@ -283,8 +279,27 @@ final class DocumentRelocationTests: XCTestCase {
         }
     }
 
+    func testDocumentIdentityTreatsHardLinksAsTheSameOpenDocument() throws {
+        try withTemporaryDirectory { directory in
+            let original = directory.appendingPathComponent("original.md")
+            let hardLink = directory.appendingPathComponent("alias.md")
+            try Data("one inode\n".utf8).write(to: original)
+            try FileManager.default.linkItem(at: original, to: hardLink)
+
+            XCTAssertNotEqual(
+                original.standardizedFileURL.path,
+                hardLink.standardizedFileURL.path
+            )
+            XCTAssertEqual(
+                DocumentResourceIdentity.capture(original),
+                DocumentResourceIdentity.capture(hardLink)
+            )
+            XCTAssertTrue(DocumentRelocationAnalyzer.isSameFile(original, hardLink))
+        }
+    }
+
     @MainActor
-    func testNativeCoordinatorForwardsSaveAsAndSaveCopyOperations() async throws {
+    func testNativeCoordinatorForwardsSaveAsAndCurrentSaveOperations() async throws {
         let document = RecordingDocument()
         let firstURL = URL(fileURLWithPath: "/tmp/inflow-save-as.md")
         try await NativeDocumentSaveCoordinator.save(
@@ -294,15 +309,6 @@ final class DocumentRelocationTests: XCTestCase {
         )
         XCTAssertEqual(document.lastURL, firstURL)
         XCTAssertEqual(document.lastOperation, .saveAsOperation)
-
-        let copyURL = URL(fileURLWithPath: "/tmp/inflow-save-copy.md")
-        try await NativeDocumentSaveCoordinator.save(
-            document: document,
-            to: copyURL,
-            operation: .saveCopy
-        )
-        XCTAssertEqual(document.lastURL, copyURL)
-        XCTAssertEqual(document.lastOperation, .saveToOperation)
 
         let currentURL = URL(fileURLWithPath: "/tmp/inflow-current.md")
         try await NativeDocumentSaveCoordinator.saveCurrent(
@@ -325,7 +331,21 @@ final class DocumentRelocationTests: XCTestCase {
     }
 
     @MainActor
-    func testFileMenuExposesOneSaveAsAndSaveCopyCommand() throws {
+    func testNativeCoordinatorRetainsDeferredSaveCopyOperation() async throws {
+        let document = RecordingDocument()
+        let copyURL = URL(fileURLWithPath: "/tmp/inflow-save-copy.md")
+        try await NativeDocumentSaveCoordinator.save(
+            document: document,
+            to: copyURL,
+            operation: .saveCopy
+        )
+        XCTAssertEqual(document.lastURL, copyURL)
+        XCTAssertEqual(document.lastOperation, .saveToOperation)
+        XCTAssertEqual(DocumentRelocationOperation.saveCopy.nativeOperation, .saveToOperation)
+    }
+
+    @MainActor
+    func testFileMenuExposesSaveAsWithoutDeferredSaveCopyCommand() throws {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
         let items = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu))
         let saveAsItems = items.filter { $0.title == "另存为…" }
@@ -336,7 +356,7 @@ final class DocumentRelocationTests: XCTestCase {
             saveAs.keyEquivalentModifierMask.intersection([.command, .option, .shift]),
             [.command, .shift]
         )
-        XCTAssertEqual(items.filter { $0.title == "保存副本…" }.count, 1)
+        XCTAssertEqual(items.filter { $0.title == "保存副本…" }.count, 0)
         XCTAssertEqual(items.filter { $0.title == "在 Finder 中显示" }.count, 1)
     }
 
@@ -384,23 +404,20 @@ final class DocumentRelocationTests: XCTestCase {
             canSave: false,
             save: { firstEvents.append("save") },
             saveAs: { firstEvents.append("saveAs") },
-            saveCopy: { firstEvents.append("copy") },
             showInFinder: nil
         )
         let second = DocumentSaveCommandActions(
             isBusy: true,
             save: { secondEvents.append("save") },
             saveAs: { secondEvents.append("saveAs") },
-            saveCopy: { secondEvents.append("copy") },
             showInFinder: { secondEvents.append("finder") }
         )
 
         first.save()
         first.saveAs()
-        first.saveCopy()
         second.showInFinder?()
 
-        XCTAssertEqual(firstEvents, ["save", "saveAs", "copy"])
+        XCTAssertEqual(firstEvents, ["save", "saveAs"])
         XCTAssertEqual(secondEvents, ["finder"])
         XCTAssertFalse(first.isBusy)
         XCTAssertFalse(first.canSave)

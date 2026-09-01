@@ -1,5 +1,4 @@
 import AppKit
-import UniformTypeIdentifiers
 import XCTest
 @testable import Inflow
 
@@ -22,21 +21,22 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.previewZoom, 1)
             XCTAssertEqual(preferences.previewColorScheme, .system)
             XCTAssertEqual(preferences.previewTheme, .standard)
-            XCTAssertTrue(preferences.mathRenderingEnabled)
+            XCTAssertFalse(preferences.mathRenderingEnabled)
             XCTAssertTrue(preferences.mermaidRenderingEnabled)
             XCTAssertEqual(preferences.increasedContrast, .followSystem)
             XCTAssertEqual(preferences.reduceMotion, .followSystem)
             XCTAssertEqual(preferences.lastActiveEditorViewMode, .split)
+            XCTAssertEqual(preferences.defaultSplitFraction, 0.5)
             XCTAssertEqual(preferences.recentDocumentCapacity, 20)
             XCTAssertEqual(preferences.markdownOpenBehavior, .newWindow)
-            XCTAssertTrue(preferences.autosaveEnabled)
+            XCTAssertFalse(preferences.autosaveEnabled)
             XCTAssertEqual(preferences.autosaveDelay, .oneSecond)
             XCTAssertEqual(preferences.existingImagePlacement, .copyToAssets)
-            XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 1)
+            XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
         }
     }
 
-    func testPreferencesPersistAcrossInstancesAndClampSupportedRanges() {
+    func testVisibleLaunchPreferencesPersistWhileHiddenGrowthValuesReturnToFixedContract() {
         withDefaults { defaults in
             let first = AppPreferences(defaults: defaults)
             first.editorFontSize = 24
@@ -56,6 +56,7 @@ final class AppPreferencesTests: XCTestCase {
             first.increasedContrast = .enabled
             first.reduceMotion = .disabled
             first.recordActiveEditorViewMode(.preview)
+            first.defaultSplitFraction = 0.65
             first.recentDocumentCapacity = 42
             first.markdownOpenBehavior = .reuseBlankWindow
             first.autosaveEnabled = false
@@ -65,46 +66,50 @@ final class AppPreferencesTests: XCTestCase {
             let second = AppPreferences(defaults: defaults)
             second.applyAutosavePolicy()
             XCTAssertEqual(second.editorFontSize, 24)
-            XCTAssertEqual(second.editorLineHeight, 1.9)
+            XCTAssertEqual(second.editorLineHeight, 1.6)
             XCTAssertFalse(second.syntaxHighlightingEnabled)
-            XCTAssertFalse(second.spellingEnabled)
-            XCTAssertFalse(second.wrapsLines)
-            XCTAssertTrue(second.showsLineNumbers)
+            XCTAssertTrue(second.spellingEnabled)
+            XCTAssertTrue(second.wrapsLines)
+            XCTAssertFalse(second.showsLineNumbers)
             XCTAssertFalse(second.scrollSyncEnabled)
             XCTAssertFalse(second.headingNavigationEnabled)
             XCTAssertEqual(second.previewContentWidth, 1_040)
-            XCTAssertEqual(second.previewZoom, 1.65)
+            XCTAssertEqual(second.previewZoom, 1)
             XCTAssertEqual(second.previewColorScheme, .dark)
-            XCTAssertEqual(second.previewTheme, .longform)
+            XCTAssertEqual(second.previewTheme, .standard)
             XCTAssertFalse(second.mathRenderingEnabled)
-            XCTAssertFalse(second.mermaidRenderingEnabled)
-            XCTAssertEqual(second.increasedContrast, .enabled)
-            XCTAssertEqual(second.reduceMotion, .disabled)
+            XCTAssertTrue(second.mermaidRenderingEnabled)
+            XCTAssertEqual(second.increasedContrast, .followSystem)
+            XCTAssertEqual(second.reduceMotion, .followSystem)
             XCTAssertEqual(second.lastActiveEditorViewMode, .preview)
-            XCTAssertEqual(second.recentDocumentCapacity, 42)
-            XCTAssertEqual(second.markdownOpenBehavior, .reuseBlankWindow)
+            XCTAssertEqual(second.defaultSplitFraction, 0.65)
+            XCTAssertEqual(second.recentDocumentCapacity, 20)
+            XCTAssertEqual(second.markdownOpenBehavior, .newWindow)
             XCTAssertFalse(second.autosaveEnabled)
-            XCTAssertEqual(second.autosaveDelay, .fiveSeconds)
-            XCTAssertEqual(second.existingImagePlacement, .copyToRelativeDirectory)
+            XCTAssertEqual(second.autosaveDelay, .oneSecond)
+            XCTAssertEqual(second.existingImagePlacement, .copyToAssets)
             XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
 
             second.editorFontSize = 100
             second.editorLineHeight = -4
             second.previewContentWidth = 50
             second.previewZoom = 9
+            second.defaultSplitFraction = 0.9
             second.recentDocumentCapacity = 500
             XCTAssertEqual(second.editorFontSize, 28)
             XCTAssertEqual(second.editorLineHeight, 1.2)
             XCTAssertEqual(second.previewContentWidth, 600)
             XCTAssertEqual(second.previewZoom, 2)
+            XCTAssertEqual(second.defaultSplitFraction, 0.75)
             XCTAssertEqual(second.recentDocumentCapacity, 50)
 
             let third = AppPreferences(defaults: defaults)
             XCTAssertEqual(third.editorFontSize, 28)
-            XCTAssertEqual(third.editorLineHeight, 1.2)
+            XCTAssertEqual(third.editorLineHeight, 1.6)
             XCTAssertEqual(third.previewContentWidth, 600)
-            XCTAssertEqual(third.previewZoom, 2)
-            XCTAssertEqual(third.recentDocumentCapacity, 50)
+            XCTAssertEqual(third.previewZoom, 1)
+            XCTAssertEqual(third.defaultSplitFraction, 0.75)
+            XCTAssertEqual(third.recentDocumentCapacity, 20)
         }
     }
 
@@ -115,6 +120,7 @@ final class AppPreferencesTests: XCTestCase {
             defaults.set(5_000, forKey: "preferences.preview.contentWidth")
             defaults.set("retired-theme", forKey: "preferences.preview.theme")
             defaults.set("retired-view", forKey: "preferences.window.lastActiveEditorViewMode")
+            defaults.set(Double.nan, forKey: "preferences.preview.defaultSplitFraction")
             defaults.set(-40, forKey: RecentDocumentPolicy.capacityKey)
             defaults.set("retired-open", forKey: RecentDocumentPolicy.openBehaviorKey)
             defaults.set("retired-delay", forKey: "preferences.documents.autosaveDelay")
@@ -126,11 +132,12 @@ final class AppPreferencesTests: XCTestCase {
 
             let preferences = AppPreferences(defaults: defaults)
             XCTAssertEqual(preferences.editorFontSize, 15)
-            XCTAssertEqual(preferences.editorLineHeight, 1.2)
+            XCTAssertEqual(preferences.editorLineHeight, 1.6)
             XCTAssertEqual(preferences.previewContentWidth, 1_200)
             XCTAssertEqual(preferences.previewTheme, .standard)
             XCTAssertEqual(preferences.lastActiveEditorViewMode, .split)
-            XCTAssertEqual(preferences.recentDocumentCapacity, 5)
+            XCTAssertEqual(preferences.defaultSplitFraction, 0.5)
+            XCTAssertEqual(preferences.recentDocumentCapacity, 20)
             XCTAssertEqual(preferences.markdownOpenBehavior, .newWindow)
             XCTAssertEqual(preferences.autosaveDelay, .oneSecond)
             XCTAssertEqual(preferences.existingImagePlacement, .copyToAssets)
@@ -148,6 +155,7 @@ final class AppPreferencesTests: XCTestCase {
             preferences.scrollSyncEnabled = false
             preferences.increasedContrast = .enabled
             preferences.recordActiveEditorViewMode(.source)
+            preferences.defaultSplitFraction = 0.7
             preferences.recentDocumentCapacity = 31
             preferences.markdownOpenBehavior = .reuseBlankWindow
             preferences.autosaveEnabled = false
@@ -162,6 +170,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertFalse(preferences.scrollSyncEnabled)
             XCTAssertEqual(preferences.increasedContrast, .enabled)
             XCTAssertEqual(preferences.lastActiveEditorViewMode, .source)
+            XCTAssertEqual(preferences.defaultSplitFraction, 0.7)
             XCTAssertEqual(preferences.recentDocumentCapacity, 31)
             XCTAssertEqual(preferences.markdownOpenBehavior, .reuseBlankWindow)
             XCTAssertFalse(preferences.autosaveEnabled)
@@ -194,6 +203,7 @@ final class AppPreferencesTests: XCTestCase {
             preferences.increasedContrast = .enabled
             preferences.reduceMotion = .disabled
             preferences.recordActiveEditorViewMode(.source)
+            preferences.defaultSplitFraction = 0.7
             preferences.recentDocumentCapacity = 31
             preferences.markdownOpenBehavior = .reuseBlankWindow
             preferences.autosaveEnabled = false
@@ -214,17 +224,18 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.previewZoom, 1)
             XCTAssertEqual(preferences.previewColorScheme, .system)
             XCTAssertEqual(preferences.previewTheme, .standard)
-            XCTAssertTrue(preferences.mathRenderingEnabled)
+            XCTAssertFalse(preferences.mathRenderingEnabled)
             XCTAssertTrue(preferences.mermaidRenderingEnabled)
             XCTAssertEqual(preferences.increasedContrast, .followSystem)
             XCTAssertEqual(preferences.reduceMotion, .followSystem)
             XCTAssertEqual(preferences.lastActiveEditorViewMode, .split)
+            XCTAssertEqual(preferences.defaultSplitFraction, 0.5)
             XCTAssertEqual(preferences.recentDocumentCapacity, 20)
             XCTAssertEqual(preferences.markdownOpenBehavior, .newWindow)
-            XCTAssertTrue(preferences.autosaveEnabled)
+            XCTAssertFalse(preferences.autosaveEnabled)
             XCTAssertEqual(preferences.autosaveDelay, .oneSecond)
             XCTAssertEqual(preferences.existingImagePlacement, .copyToAssets)
-            XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 1)
+            XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
             XCTAssertEqual(defaults.string(forKey: "document.recovery.record"), "recovery-sentinel")
             XCTAssertEqual(defaults.string(forKey: RecentDocumentPolicy.recordsKey), "recent-sentinel")
         }
@@ -239,12 +250,37 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertEqual(SettingsResetPrompt.confirmTitle, "恢复默认")
         XCTAssertEqual(SettingsResetPrompt.cancelTitle, "取消")
         XCTAssertEqual(
-            SettingsResetScope.current(.resources).menuTitle,
-            "恢复“资源”默认设置…"
+            SettingsResetScope.current(.writing).menuTitle,
+            "恢复“写作”默认设置…"
         )
         XCTAssertEqual(SettingsResetScope.all.menuTitle, "恢复全部默认设置…")
-        XCTAssertNil(InflowSettingsSection.privacy.preferenceGroup)
         XCTAssertEqual(InflowSettingsSection.preview.preferenceGroup, .preview)
+        XCTAssertEqual(InflowSettingsSection.allCases, [.general, .writing, .preview])
+    }
+
+    func testVersionedSettingsRegistryKeepsKnownKeysButLaunchProfileOverridesHiddenValue() {
+        withDefaults { defaults in
+            defaults.set(1.7, forKey: "preferences.preview.zoom")
+            defaults.set("keep-me", forKey: "unrelated.document-state")
+
+            let preferences = AppPreferences(defaults: defaults)
+
+            XCTAssertEqual(preferences.previewZoom, 1)
+            XCTAssertEqual(defaults.double(forKey: "preferences.preview.zoom"), 1)
+            XCTAssertEqual(
+                defaults.integer(forKey: AppPreferences.Registry.schemaVersionKey),
+                AppPreferences.Registry.currentSchemaVersion
+            )
+            XCTAssertTrue(
+                AppPreferences.Registry.knownKeys.contains("preferences.preview.zoom")
+            )
+            XCTAssertTrue(
+                AppPreferences.Registry.knownKeys.contains(
+                    "preferences.preview.defaultSplitFraction"
+                )
+            )
+            XCTAssertEqual(defaults.string(forKey: "unrelated.document-state"), "keep-me")
+        }
     }
 
     func testSettingsPersistenceFailureKeepsSessionValuesAndSupportsRetry() {
@@ -255,13 +291,13 @@ final class AppPreferencesTests: XCTestCase {
                 persistence: persistence
             )
             XCTAssertNil(preferences.persistenceFailure)
-            XCTAssertEqual(defaults.double(forKey: "preferences.preview.zoom"), 1)
+            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 760)
 
             persistence.shouldFail = true
-            preferences.previewZoom = 1.55
+            preferences.previewContentWidth = 900
 
-            XCTAssertEqual(preferences.previewZoom, 1.55)
-            XCTAssertEqual(defaults.double(forKey: "preferences.preview.zoom"), 1)
+            XCTAssertEqual(preferences.previewContentWidth, 900)
+            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 760)
             XCTAssertNotNil(preferences.persistenceFailure)
             XCTAssertEqual(SettingsPersistencePrompt.title, "暂时无法保存设置")
             XCTAssertEqual(
@@ -273,9 +309,9 @@ final class AppPreferencesTests: XCTestCase {
 
             preferences.continueUsingSessionPreferences()
             XCTAssertNil(preferences.persistenceFailure)
-            XCTAssertEqual(preferences.previewZoom, 1.55)
+            XCTAssertEqual(preferences.previewContentWidth, 900)
 
-            preferences.previewTheme = .code
+            preferences.previewColorScheme = .dark
             XCTAssertNotNil(preferences.persistenceFailure)
             preferences.retryPersistence()
             XCTAssertNotNil(preferences.persistenceFailure)
@@ -284,23 +320,21 @@ final class AppPreferencesTests: XCTestCase {
             preferences.retryPersistence()
 
             XCTAssertNil(preferences.persistenceFailure)
-            XCTAssertEqual(defaults.double(forKey: "preferences.preview.zoom"), 1.55)
+            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 900)
             XCTAssertEqual(
-                defaults.string(forKey: "preferences.preview.theme"),
-                PreviewTheme.code.rawValue
+                defaults.string(forKey: "preferences.preview.colorScheme"),
+                PreviewColorScheme.dark.rawValue
             )
         }
     }
 
-    func testAutosavePolicySupportsEveryContractDelayAndKeepsManualSaveAvailable() {
+    func testPersonalMilestoneKeepsPeriodicAutosaveDisabledAndManualSaveAvailable() {
         withDefaults { defaults in
             let preferences = AppPreferences(defaults: defaults)
 
-            for delay in AutosaveDelay.allCases {
-                preferences.autosaveDelay = delay
-                preferences.autosaveEnabled = true
-                XCTAssertEqual(NSDocumentController.shared.autosavingDelay, delay.seconds)
-            }
+            preferences.autosaveEnabled = true
+            XCTAssertEqual(preferences.autosaveDelay, .oneSecond)
+            XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
 
             preferences.autosaveEnabled = false
             XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
@@ -308,16 +342,89 @@ final class AppPreferencesTests: XCTestCase {
         }
     }
 
-    func testDocumentGroupDocumentClassSupportsInPlaceAutosave() throws {
-        let document = try NSDocumentController.shared.makeUntitledDocument(
-            ofType: UTType.inflowMarkdown.identifier
+    @MainActor
+    func testManualSaveGateRegistryRequiresEveryOwnerToReleaseWindow() {
+        let registry = ManualSaveDocumentGateRegistry()
+        let window = NSWindow()
+        let document = NSDocument()
+        let resolverOwner = UUID()
+        let gateOwner = UUID()
+
+        registry.block(window, document: nil, owner: resolverOwner)
+        registry.block(window, document: document, owner: gateOwner)
+        XCTAssertTrue(registry.hasBlockedDocumentGates)
+
+        registry.unblock(window, owner: resolverOwner)
+        XCTAssertTrue(registry.hasBlockedDocumentGates)
+
+        registry.unblock(window, owner: gateOwner)
+        XCTAssertFalse(registry.hasBlockedDocumentGates)
+    }
+
+    func testPersonalMilestoneDisablesDocumentGroupHostAutosavePolicies() throws {
+        let document = AutosavingDocumentHostProbe()
+
+        XCTAssertFalse(
+            ManualSaveDocumentHostPolicy.hasManualSaveFlags(type(of: document))
         )
-        defer { document.close() }
+        try ManualSaveDocumentHostPolicy.applyForTesting(to: document)
+        XCTAssertTrue(
+            ManualSaveDocumentHostPolicy.hasManualSaveFlags(type(of: document))
+        )
+
+        // Applying the policy again is an idempotent no-op for later windows
+        // backed by the same concrete SwiftUI document host class.
+        try ManualSaveDocumentHostPolicy.applyForTesting(to: document)
+        XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
+    }
+
+    func testManualSaveHostPolicyNeverMutatesNSDocumentGlobally() throws {
+        let baseBefore = try XCTUnwrap(
+            ManualSaveDocumentHostPolicy.runtimeAutomaticSaveFlags(NSDocument.self)
+        )
+
+        try ManualSaveDocumentHostPolicy.applyForTesting(
+            to: IsolatedAutosavingDocumentHostProbe()
+        )
+
+        let baseAfter = try XCTUnwrap(
+            ManualSaveDocumentHostPolicy.runtimeAutomaticSaveFlags(NSDocument.self)
+        )
+        XCTAssertEqual(baseAfter.inPlace, baseBefore.inPlace)
+        XCTAssertEqual(baseAfter.drafts, baseBefore.drafts)
+        XCTAssertEqual(baseAfter.versions, baseBefore.versions)
+    }
+
+    func testManualSaveHostPolicyAddsOnlyToConcreteInheritedHost() throws {
+        let parentBefore = try XCTUnwrap(
+            ManualSaveDocumentHostPolicy.runtimeAutomaticSaveFlags(
+                InheritedAutosavingDocumentHostParent.self
+            )
+        )
+        let baseBefore = try XCTUnwrap(
+            ManualSaveDocumentHostPolicy.runtimeAutomaticSaveFlags(NSDocument.self)
+        )
+        let document = InheritedAutosavingDocumentHostProbe()
+
+        try ManualSaveDocumentHostPolicy.applyForTesting(to: document)
 
         XCTAssertTrue(
-            type(of: document).autosavesInPlace,
-            "The autosave delay is ineffective unless the actual document class opts into in-place autosave"
+            ManualSaveDocumentHostPolicy.hasManualSaveFlags(type(of: document))
         )
+        let parentAfter = try XCTUnwrap(
+            ManualSaveDocumentHostPolicy.runtimeAutomaticSaveFlags(
+                InheritedAutosavingDocumentHostParent.self
+            )
+        )
+        let baseAfter = try XCTUnwrap(
+            ManualSaveDocumentHostPolicy.runtimeAutomaticSaveFlags(NSDocument.self)
+        )
+        XCTAssertEqual(parentAfter.inPlace, parentBefore.inPlace)
+        XCTAssertEqual(parentAfter.drafts, parentBefore.drafts)
+        XCTAssertEqual(parentAfter.versions, parentBefore.versions)
+        XCTAssertEqual(baseAfter.inPlace, baseBefore.inPlace)
+        XCTAssertEqual(baseAfter.drafts, baseBefore.drafts)
+        XCTAssertEqual(baseAfter.versions, baseBefore.versions)
     }
 
     func testExistingImagePlacementPreferenceKeepsPromptAsAnExplicitChoice() {
@@ -476,6 +583,32 @@ final class AppPreferencesTests: XCTestCase {
         try body(defaults)
     }
 }
+
+private class AutosavingDocumentHostProbeParent: NSDocument {
+    override class var autosavesInPlace: Bool { true }
+    override class var autosavesDrafts: Bool { true }
+    override class var preservesVersions: Bool { true }
+}
+
+private final class AutosavingDocumentHostProbe: AutosavingDocumentHostProbeParent {}
+
+private class IsolatedAutosavingDocumentHostProbeParent: NSDocument {
+    override class var autosavesInPlace: Bool { true }
+    override class var autosavesDrafts: Bool { true }
+    override class var preservesVersions: Bool { true }
+}
+
+private final class IsolatedAutosavingDocumentHostProbe:
+    IsolatedAutosavingDocumentHostProbeParent {}
+
+private class InheritedAutosavingDocumentHostParent: NSDocument {
+    override class var autosavesInPlace: Bool { true }
+    override class var autosavesDrafts: Bool { true }
+    override class var preservesVersions: Bool { true }
+}
+
+private final class InheritedAutosavingDocumentHostProbe:
+    InheritedAutosavingDocumentHostParent {}
 
 @MainActor
 private final class ControlledPreferencePersistence: AppPreferencePersistence {

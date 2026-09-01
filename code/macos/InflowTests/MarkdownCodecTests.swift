@@ -42,6 +42,32 @@ final class MarkdownCodecTests: XCTestCase {
         }
     }
 
+    func testPersonalMilestoneDoesNotInventFixedDocumentSizeTiers() throws {
+        for byteCount in [0, 1_024 * 1_024, 11 * 1_024 * 1_024] {
+            XCTAssertEqual(
+                try MarkdownDocumentSizePolicy.validatedTierForOpening(byteCount: byteCount),
+                .full
+            )
+        }
+    }
+
+    func testLargerInvalidUTF8StillUsesTheEncodingFailure() {
+        let invalid = Data(repeating: 0xFF, count: 2 * 1_024 * 1_024)
+        XCTAssertThrowsError(try MarkdownDocument(fileData: invalid)) { error in
+            XCTAssertEqual(error as? MarkdownCodecError, .invalidUTF8)
+        }
+    }
+
+    func testLargerDocumentOpensCompleteTextWithoutAHiddenNumericTier() throws {
+        let source = Data(repeating: 0x61, count: 2 * 1_024 * 1_024)
+        var document = try MarkdownDocument(fileData: source)
+
+        XCTAssertEqual(document.capabilityTier, .full)
+        XCTAssertEqual(document.text.utf8.count, source.count)
+        document.text = "small again"
+        XCTAssertEqual(document.capabilityTier, .full)
+    }
+
     func testMixedLineEndingsOpenReadOnlyUntilUserChoosesCRLF() throws {
         let bom = Data([0xEF, 0xBB, 0xBF])
         let source = bom + Data("one\r\ntwo\n".utf8)

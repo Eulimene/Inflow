@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum MarkdownWriteGuardError: Error, Equatable, LocalizedError, Sendable {
@@ -20,7 +21,81 @@ enum MarkdownWriteGuardError: Error, Equatable, LocalizedError, Sendable {
     }
 }
 
+/// Immutable bytes and expectations for one native document save request.
+///
+/// `FileDocument` creates a FileWrapper; it does not own AppKit's eventual safe-write
+/// transaction.  This envelope therefore freezes what Inflow asked AppKit to save and
+/// lets the completion path acknowledge only those exact bytes.  It deliberately does
+/// not claim control over AppKit's final replacement operation.
+struct SaveEnvelope: Equatable, Sendable {
+    enum Operation: String, Equatable, Sendable {
+        case automatic
+        case save
+        case saveAs
+        case saveCopy
+    }
+
+    enum TargetExpectation: Equatable, Sendable {
+        case absent
+        case exact(HTMLExportTargetSnapshot)
+
+        static func capture(_ url: URL) throws -> Self {
+            let snapshot = try HTMLExportTargetSnapshot.capture(url)
+            return snapshot.isExistingTarget ? .exact(snapshot) : .absent
+        }
+
+        func isCurrent(at url: URL) -> Bool {
+            guard let current = try? HTMLExportTargetSnapshot.capture(url) else {
+                return false
+            }
+            switch self {
+            case .absent:
+                return !current.isExistingTarget
+            case let .exact(expected):
+                return current == expected
+            }
+        }
+    }
+
+    let nonce: UUID
+    let revision: UInt64
+    let bytes: Data
+    let contentHash: Data
+    let sourceURL: URL?
+    let targetURL: URL
+    let targetExpectation: TargetExpectation
+    let operation: Operation
+
+    init(
+        nonce: UUID = UUID(),
+        revision: UInt64,
+        bytes: Data,
+        sourceURL: URL?,
+        targetURL: URL,
+        targetExpectation: TargetExpectation,
+        operation: Operation
+    ) {
+        self.nonce = nonce
+        self.revision = revision
+        self.bytes = bytes
+        contentHash = Data(SHA256.hash(data: bytes))
+        self.sourceURL = sourceURL?.standardizedFileURL
+        self.targetURL = targetURL.standardizedFileURL
+        self.targetExpectation = targetExpectation
+        self.operation = operation
+    }
+
+    var hasValidHash: Bool {
+        contentHash == Data(SHA256.hash(data: bytes))
+    }
+}
+
 final class MarkdownWriteGuard: @unchecked Sendable {
+    struct Observation {
+        let baselineData: Data?
+        let committedAutomaticEnvelope: SaveEnvelope?
+    }
+
     private struct RelocationAuthorization {
         let targetURL: URL
         let targetSnapshot: HTMLExportTargetSnapshot
@@ -32,16 +107,78 @@ final class MarkdownWriteGuard: @unchecked Sendable {
     private let lock = NSLock()
     private var currentURL: URL?
     private var baselineData: Data?
-    private var pendingWriteData: Data?
+    private var preparedEnvelope: SaveEnvelope?
+    private var pendingEnvelopes: [UUID: SaveEnvelope] = [:]
+    private var confirmedAutomaticEnvelopeAwaitingObservation: SaveEnvelope?
+    private var lastObservedAutomaticRevision: UInt64 = 0
+    private var committedRelocationBaselines: [URL: Data] = [:]
+    private var nextAutomaticRevision: UInt64 = 1
     private var relocationAuthorization: RelocationAuthorization?
 
     func configure(url: URL?, baselineData: Data?) {
         lock.lock()
-        currentURL = url?.standardizedFileURL
+        let normalizedURL = url?.standardizedFileURL
+        let isExpectedRelocation = normalizedURL.map { target in
+            preparedEnvelope?.targetURL == target
+                || pendingEnvelopes.values.contains { $0.targetURL == target }
+                || committedRelocationBaselines[target] != nil
+        } ?? false
+        currentURL = normalizedURL
         self.baselineData = baselineData
-        pendingWriteData = nil
+        if let normalizedURL, isExpectedRelocation {
+            if preparedEnvelope?.targetURL != normalizedURL {
+                preparedEnvelope = nil
+            }
+            pendingEnvelopes = pendingEnvelopes.filter {
+                $0.value.targetURL == normalizedURL
+            }
+            if confirmedAutomaticEnvelopeAwaitingObservation?.targetURL != normalizedURL {
+                confirmedAutomaticEnvelopeAwaitingObservation = nil
+            }
+            committedRelocationBaselines.removeValue(forKey: normalizedURL)
+        } else {
+            preparedEnvelope = nil
+            pendingEnvelopes.removeAll()
+            confirmedAutomaticEnvelopeAwaitingObservation = nil
+            lastObservedAutomaticRevision = 0
+            committedRelocationBaselines.removeAll()
+        }
         relocationAuthorization = nil
         lock.unlock()
+    }
+
+    func prepare(_ envelope: SaveEnvelope) throws {
+        guard envelope.hasValidHash,
+              envelope.targetExpectation.isCurrent(at: envelope.targetURL)
+        else {
+            throw MarkdownWriteGuardError.targetChanged
+        }
+        lock.lock()
+        preparedEnvelope = envelope
+        nextAutomaticRevision = max(nextAutomaticRevision, envelope.revision &+ 1)
+        lock.unlock()
+    }
+
+    func cancel(_ nonce: UUID) {
+        lock.lock()
+        if preparedEnvelope?.nonce == nonce {
+            preparedEnvelope = nil
+        }
+        pendingEnvelopes.removeValue(forKey: nonce)
+        lock.unlock()
+    }
+
+    /// Returns the bytes frozen for the native save currently in flight.  A
+    /// `FileDocument` value can continue changing while AppKit asks an older save
+    /// operation for its wrapper, so serialization must not re-read that value.
+    func fileDocumentSerializationData(fallback currentData: Data) throws -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let preparedEnvelope else { return currentData }
+        guard preparedEnvelope.hasValidHash else {
+            throw MarkdownWriteGuardError.targetChanged
+        }
+        return preparedEnvelope.bytes
     }
 
     func authorizeRelocation(
@@ -50,15 +187,8 @@ final class MarkdownWriteGuard: @unchecked Sendable {
         proposedData: Data,
         additionalValidation: @escaping @Sendable () -> Bool = { true }
     ) throws {
-        guard try HTMLExportTargetSnapshot.capture(targetURL) == targetSnapshot,
-              additionalValidation()
-        else {
-            throw MarkdownWriteGuardError.targetChanged
-        }
-        let targetData = targetSnapshot.isExistingTarget
-            ? try Data(contentsOf: targetURL, options: [.mappedIfSafe])
-            : nil
-        guard try HTMLExportTargetSnapshot.capture(targetURL) == targetSnapshot,
+        let capturedTarget = try HTMLExportTargetSnapshot.captureContents(targetURL)
+        guard capturedTarget.snapshot == targetSnapshot,
               additionalValidation()
         else {
             throw MarkdownWriteGuardError.targetChanged
@@ -67,7 +197,7 @@ final class MarkdownWriteGuard: @unchecked Sendable {
         relocationAuthorization = RelocationAuthorization(
             targetURL: targetURL.standardizedFileURL,
             targetSnapshot: targetSnapshot,
-            targetData: targetData,
+            targetData: capturedTarget.data,
             proposedData: proposedData,
             additionalValidation: additionalValidation
         )
@@ -97,15 +227,19 @@ final class MarkdownWriteGuard: @unchecked Sendable {
                 relocationAuthorization = nil
                 throw MarkdownWriteGuardError.targetChanged
             }
+            try stageEnvelope(
+                proposedData: proposedData,
+                targetURL: authorization.targetURL,
+                operation: preparedEnvelope?.operation ?? .saveAs
+            )
             return
         }
 
         guard let currentURL, let baselineData else { return }
 
-        let diskData = try? Data(contentsOf: currentURL, options: [.mappedIfSafe])
-        if let pendingWriteData, diskData == pendingWriteData {
-            self.baselineData = pendingWriteData
-            self.pendingWriteData = nil
+        let diskData = try? HTMLExportTargetSnapshot.captureContents(currentURL).data
+        if let committed = adoptPendingAutomaticEnvelopeMatching(diskData) {
+            rememberConfirmedAutomaticEnvelope(committed)
         }
         let effectiveBaseline = self.baselineData ?? baselineData
         // FileDocument may provide either the coordinated current bytes or its
@@ -115,7 +249,7 @@ final class MarkdownWriteGuard: @unchecked Sendable {
 
         if diskData == proposedData {
             self.baselineData = proposedData
-            pendingWriteData = nil
+            pendingEnvelopes.removeAll()
             return
         }
 
@@ -126,7 +260,11 @@ final class MarkdownWriteGuard: @unchecked Sendable {
                 throw MarkdownWriteGuardError.readOnlyTarget
             }
             if isNormalSave {
-                pendingWriteData = proposedData
+                try stageEnvelope(
+                    proposedData: proposedData,
+                    targetURL: currentURL,
+                    operation: .automatic
+                )
             }
             return
         }
@@ -145,21 +283,140 @@ final class MarkdownWriteGuard: @unchecked Sendable {
         throw MarkdownWriteGuardError.externalChange
     }
 
-    func observe(diskData: Data?) -> Data? {
+    func observe(diskData: Data?) -> Observation {
         lock.lock()
         defer { lock.unlock() }
-        if let pendingWriteData, diskData == pendingWriteData {
-            baselineData = pendingWriteData
-            self.pendingWriteData = nil
+        if let committed = adoptPendingAutomaticEnvelopeMatching(diskData) {
+            rememberConfirmedAutomaticEnvelope(committed)
         }
-        return baselineData
+        let committed = confirmedAutomaticEnvelopeAwaitingObservation
+        if let committed {
+            lastObservedAutomaticRevision = max(
+                lastObservedAutomaticRevision,
+                committed.revision
+            )
+            confirmedAutomaticEnvelopeAwaitingObservation = nil
+        }
+        return Observation(
+            baselineData: baselineData,
+            committedAutomaticEnvelope: committed
+        )
+    }
+
+    func commit(_ envelope: SaveEnvelope, diskData: Data?) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard envelope.hasValidHash,
+              diskData == envelope.bytes,
+              pendingEnvelopes[envelope.nonce] == envelope
+                    || preparedEnvelope == envelope
+        else {
+            return false
+        }
+        if currentURL == envelope.targetURL {
+            baselineData = envelope.bytes
+        } else if envelope.operation == .saveAs {
+            committedRelocationBaselines[envelope.targetURL] = envelope.bytes
+        }
+        pendingEnvelopes = pendingEnvelopes.filter { $0.value.revision > envelope.revision }
+        if preparedEnvelope?.nonce == envelope.nonce {
+            preparedEnvelope = nil
+        }
+        if let unobserved = confirmedAutomaticEnvelopeAwaitingObservation,
+           unobserved.targetURL == envelope.targetURL,
+           unobserved.revision <= envelope.revision
+        {
+            confirmedAutomaticEnvelopeAwaitingObservation = nil
+        }
+        return true
+    }
+
+    func candidateBaseline(for url: URL) -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        let normalized = url.standardizedFileURL
+        if let committed = committedRelocationBaselines[normalized] {
+            return committed
+        }
+        if let preparedEnvelope, preparedEnvelope.targetURL == normalized {
+            return preparedEnvelope.bytes
+        }
+        return pendingEnvelopes.values
+            .filter { $0.targetURL == normalized }
+            .max(by: { $0.revision < $1.revision })?
+            .bytes
     }
 
     func adopt(_ data: Data) {
         lock.lock()
         baselineData = data
-        pendingWriteData = nil
+        pendingEnvelopes.removeAll()
+        preparedEnvelope = nil
+        confirmedAutomaticEnvelopeAwaitingObservation = nil
         lock.unlock()
+    }
+
+    private func stageEnvelope(
+        proposedData: Data,
+        targetURL: URL,
+        operation: SaveEnvelope.Operation
+    ) throws {
+        let envelope: SaveEnvelope
+        if let preparedEnvelope {
+            guard preparedEnvelope.bytes == proposedData,
+                  preparedEnvelope.targetURL == targetURL.standardizedFileURL,
+                  preparedEnvelope.targetExpectation.isCurrent(at: targetURL)
+            else {
+                throw MarkdownWriteGuardError.targetChanged
+            }
+            envelope = preparedEnvelope
+        } else {
+            envelope = SaveEnvelope(
+                revision: nextAutomaticRevision,
+                bytes: proposedData,
+                sourceURL: currentURL,
+                targetURL: targetURL,
+                targetExpectation: try .capture(targetURL),
+                operation: operation
+            )
+            nextAutomaticRevision &+= 1
+        }
+        pendingEnvelopes[envelope.nonce] = envelope
+    }
+
+    @discardableResult
+    private func adoptPendingAutomaticEnvelopeMatching(_ diskData: Data?) -> SaveEnvelope? {
+        guard let diskData,
+              let committed = pendingEnvelopes.values
+                .filter({
+                    $0.operation == .automatic
+                        && $0.bytes == diskData
+                        && $0.hasValidHash
+                })
+                .max(by: { $0.revision < $1.revision })
+        else {
+            return nil
+        }
+        baselineData = committed.bytes
+        pendingEnvelopes = pendingEnvelopes.filter { $0.value.revision > committed.revision }
+        if preparedEnvelope?.nonce == committed.nonce {
+            preparedEnvelope = nil
+        }
+        return committed
+    }
+
+    private func rememberConfirmedAutomaticEnvelope(_ envelope: SaveEnvelope) {
+        guard envelope.operation == .automatic,
+              envelope.revision > lastObservedAutomaticRevision
+        else {
+            return
+        }
+        if let awaiting = confirmedAutomaticEnvelopeAwaitingObservation,
+           awaiting.revision >= envelope.revision
+        {
+            return
+        }
+        confirmedAutomaticEnvelopeAwaitingObservation = envelope
     }
 }
 
@@ -169,17 +426,35 @@ struct DocumentDiskInspection: Sendable {
     let isWritable: Bool
 }
 
+struct DocumentReloadEnvelope: Sendable {
+    let nonce: UUID
+    let url: URL
+    let sourceLocalData: Data
+    let diskData: Data
+    let decoded: DecodedMarkdown
+}
+
 actor DocumentFileSafetyWorker {
     func inspect(_ url: URL) -> DocumentDiskInspection {
         let fileManager = FileManager.default
-        var isDirectory: ObjCBool = false
-        let exists = fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory)
-            && !isDirectory.boolValue
-        guard exists else {
+        guard let captured = try? HTMLExportTargetSnapshot.captureContents(url),
+              captured.snapshot.isExistingTarget,
+              let data = captured.data
+        else {
+            var isDirectory: ObjCBool = false
+            let exists = fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory)
+                && !isDirectory.boolValue
+            if exists {
+                return DocumentDiskInspection(
+                    data: nil,
+                    exists: true,
+                    isWritable: fileManager.isWritableFile(atPath: url.path)
+                )
+            }
             return DocumentDiskInspection(data: nil, exists: false, isWritable: false)
         }
         return DocumentDiskInspection(
-            data: try? Data(contentsOf: url, options: [.mappedIfSafe]),
+            data: data,
             exists: true,
             isWritable: fileManager.isWritableFile(atPath: url.path)
         )
@@ -191,66 +466,6 @@ actor DocumentFileSafetyWorker {
             throw DocumentFileSafetyError.staleDecision
         }
         return inspection
-    }
-
-    func overwrite(
-        snapshot: DocumentFileConflictSnapshot,
-        with localData: Data,
-        now: Date = Date()
-    ) throws -> URL {
-        guard let diskData = snapshot.diskData else {
-            throw DocumentFileSafetyError.diskUnavailable
-        }
-        _ = try verify(diskData, at: snapshot.url)
-
-        let conflictURL = try availableConflictCopyURL(for: snapshot.url, now: now)
-        let absentConflictTarget = try HTMLExportTargetSnapshot.capture(conflictURL)
-        guard !absentConflictTarget.isExistingTarget else {
-            throw DocumentFileSafetyError.staleDecision
-        }
-        try HTMLExportFileWriter.write(
-            diskData,
-            to: conflictURL,
-            expectedTarget: absentConflictTarget
-        )
-
-        do {
-            let currentTarget = try HTMLExportTargetSnapshot.capture(snapshot.url)
-            guard currentTarget.isExistingTarget,
-                  inspect(snapshot.url).data == diskData
-            else {
-                throw DocumentFileSafetyError.staleDecision
-            }
-            try HTMLExportFileWriter.write(
-                localData,
-                to: snapshot.url,
-                expectedTarget: currentTarget
-            )
-        } catch {
-            throw DocumentFileSafetyError.overwriteFailed(conflictCopy: conflictURL)
-        }
-        return conflictURL
-    }
-
-    func recreate(
-        snapshot: DocumentFileConflictSnapshot,
-        with localData: Data
-    ) throws {
-        let inspection = inspect(snapshot.url)
-        guard !inspection.exists else {
-            throw DocumentFileSafetyError.staleDecision
-        }
-        let expectedTarget = try HTMLExportTargetSnapshot.capture(snapshot.url)
-        guard !expectedTarget.isExistingTarget,
-              !inspect(snapshot.url).exists
-        else {
-            throw DocumentFileSafetyError.staleDecision
-        }
-        try HTMLExportFileWriter.write(
-            localData,
-            to: snapshot.url,
-            expectedTarget: expectedTarget
-        )
     }
 
     func saveCopy(
@@ -265,48 +480,21 @@ actor DocumentFileSafetyWorker {
         )
     }
 
-    private func availableConflictCopyURL(for originalURL: URL, now: Date) throws -> URL {
-        let folder = originalURL.deletingLastPathComponent()
-        let extensionName = originalURL.pathExtension
-        let stem = originalURL.deletingPathExtension().lastPathComponent
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd HH-mm-ss"
-        let base = "\(stem) (冲突副本 \(formatter.string(from: now)))"
-
-        for index in 0..<10_000 {
-            let suffix = index == 0 ? "" : "-\(index + 1)"
-            var candidate = folder.appendingPathComponent(base + suffix)
-            if !extensionName.isEmpty {
-                candidate.appendPathExtension(extensionName)
-            }
-            if !FileManager.default.fileExists(atPath: candidate.path) {
-                return candidate
-            }
-        }
-        throw DocumentFileSafetyError.cannotCreateConflictCopy
-    }
 }
 
 enum DocumentFileSafetyError: Error, Equatable, LocalizedError, Sendable {
     case staleDecision
-    case diskUnavailable
+    case saveCompletionMismatch
     case invalidDiskDocument
-    case cannotCreateConflictCopy
-    case overwriteFailed(conflictCopy: URL)
 
     var errorDescription: String? {
         switch self {
         case .staleDecision:
             "文档或磁盘内容已再次变化。之前的确认已失效，请重新比较。"
-        case .diskUnavailable:
-            "当前磁盘版本无法读取，因此没有执行任何覆盖。"
+        case .saveCompletionMismatch:
+            "系统报告保存完成，但磁盘字节与本次保存快照不一致。当前编辑仍保持未保存状态。"
         case .invalidDiskDocument:
             "当前磁盘版本不是可验证的 UTF-8 Markdown，因此无法重新载入。"
-        case .cannotCreateConflictCopy:
-            "无法为磁盘当前版本选择安全的冲突副本名称。"
-        case let .overwriteFailed(conflictCopy):
-            "已将磁盘当前版本保存为「\(conflictCopy.lastPathComponent)」，但写回当前编辑失败；原目标未被破坏。"
         }
     }
 }
@@ -389,6 +577,7 @@ enum DocumentFileSafetyState {
 @MainActor
 final class DocumentFileSafetySession: ObservableObject {
     @Published private(set) var state: DocumentFileSafetyState = .safe
+    @Published private(set) var automaticSaveCommit: SaveEnvelope?
 
     private let worker: DocumentFileSafetyWorker
     private let intervalNanoseconds: UInt64
@@ -397,10 +586,15 @@ final class DocumentFileSafetySession: ObservableObject {
     private var baselineText = ""
     private var currentData: Data?
     private var currentText = ""
+    private var observedRevisionData: Data?
+    private var currentRevision: UInt64 = 0
     private var writeGuard: MarkdownWriteGuard?
-    private var hasConfiguredNamedDocument = false
     private var monitorTask: Task<Void, Never>?
     private var inspectionGeneration = 0
+
+    var hasUncommittedChanges: Bool {
+        currentData != baselineData
+    }
 
     init(
         worker: DocumentFileSafetyWorker = DocumentFileSafetyWorker(),
@@ -413,6 +607,10 @@ final class DocumentFileSafetySession: ObservableObject {
     func update(document: MarkdownDocument, fileURL: URL?) {
         currentText = document.text
         currentData = try? document.encodedFileData()
+        if currentData != observedRevisionData {
+            currentRevision &+= 1
+            observedRevisionData = currentData
+        }
         writeGuard = document.writeGuard
 
         let normalizedURL = fileURL?.standardizedFileURL
@@ -427,13 +625,13 @@ final class DocumentFileSafetySession: ObservableObject {
                 return
             }
 
-            let initialData: Data?
-            if hasConfiguredNamedDocument {
-                initialData = currentData
-            } else {
-                initialData = document.openedFileData ?? currentData
-            }
-            hasConfiguredNamedDocument = true
+            // A first Save As may publish its new fileURL before AppKit invokes
+            // completion. Prefer the prepared envelope even for the first named
+            // URL so edits made while the panel/save is in flight never become the
+            // committed baseline by accident.
+            let initialData = document.writeGuard.candidateBaseline(for: normalizedURL)
+                ?? document.openedFileData
+                ?? currentData
             baselineData = initialData
             baselineText = initialData.flatMap { try? MarkdownCodec.decode($0).text }
                 ?? document.text
@@ -453,8 +651,24 @@ final class DocumentFileSafetySession: ObservableObject {
         inspectionGeneration &+= 1
     }
 
-    func reload(_ snapshot: DocumentFileConflictSnapshot) async throws
-        -> (data: Data, decoded: DecodedMarkdown)
+    /// Performs the same observation used by the periodic monitor and is also the
+    /// synchronization point for callers that must immediately consume a native
+    /// automatic-save completion.
+    func inspectNow() async {
+        guard let url = configuredURL else { return }
+        inspectionGeneration &+= 1
+        let generation = inspectionGeneration
+        let inspection = await worker.inspect(url)
+        guard generation == inspectionGeneration,
+              url == configuredURL
+        else {
+            return
+        }
+        apply(inspection, at: url)
+    }
+
+    func prepareReload(_ snapshot: DocumentFileConflictSnapshot) async throws
+        -> DocumentReloadEnvelope
     {
         _ = try requireCurrentData(matching: snapshot)
         let inspection = try await worker.verify(snapshot.diskData, at: snapshot.url)
@@ -465,26 +679,35 @@ final class DocumentFileSafetySession: ObservableObject {
         else {
             throw DocumentFileSafetyError.invalidDiskDocument
         }
-        adoptBaseline(data, text: decoded.text)
-        scheduleInspection()
-        return (data, decoded)
+        return DocumentReloadEnvelope(
+            nonce: UUID(),
+            url: snapshot.url,
+            sourceLocalData: snapshot.localData,
+            diskData: data,
+            decoded: decoded
+        )
     }
 
-    func overwrite(_ snapshot: DocumentFileConflictSnapshot) async throws -> URL {
-        let localData = try requireCurrentData(matching: snapshot)
-        let conflictURL = try await worker.overwrite(snapshot: snapshot, with: localData)
-        _ = try requireCurrentData(matching: snapshot)
-        adoptBaseline(localData, text: currentText)
+    func commitReload(_ envelope: DocumentReloadEnvelope) async throws
+        -> (data: Data, decoded: DecodedMarkdown)
+    {
+        let inspection = try await worker.verify(envelope.diskData, at: envelope.url)
+        guard configuredURL == envelope.url.standardizedFileURL,
+              inspection.exists,
+              currentData == envelope.sourceLocalData || currentData == envelope.diskData
+        else {
+            throw DocumentFileSafetyError.staleDecision
+        }
+        adoptBaseline(envelope.diskData, text: envelope.decoded.text)
         scheduleInspection()
-        return conflictURL
+        return (envelope.diskData, envelope.decoded)
     }
 
-    func recreate(_ snapshot: DocumentFileConflictSnapshot) async throws {
-        let localData = try requireCurrentData(matching: snapshot)
-        try await worker.recreate(snapshot: snapshot, with: localData)
-        _ = try requireCurrentData(matching: snapshot)
-        adoptBaseline(localData, text: currentText)
-        scheduleInspection()
+    func reload(_ snapshot: DocumentFileConflictSnapshot) async throws
+        -> (data: Data, decoded: DecodedMarkdown)
+    {
+        let envelope = try await prepareReload(snapshot)
+        return try await commitReload(envelope)
     }
 
     func saveCopy(
@@ -500,6 +723,78 @@ final class DocumentFileSafetySession: ObservableObject {
             to: targetURL,
             expectedTarget: expectedTarget
         )
+    }
+
+    func prepareSave(
+        document: MarkdownDocument,
+        sourceURL: URL?,
+        targetURL: URL,
+        targetExpectation: SaveEnvelope.TargetExpectation,
+        operation: SaveEnvelope.Operation
+    ) throws -> SaveEnvelope {
+        guard let data = try? document.encodedFileData(),
+              data == currentData
+        else {
+            throw DocumentFileSafetyError.staleDecision
+        }
+        let envelope = SaveEnvelope(
+            revision: currentRevision,
+            bytes: data,
+            sourceURL: sourceURL,
+            targetURL: targetURL,
+            targetExpectation: targetExpectation,
+            operation: operation
+        )
+        try document.writeGuard.prepare(envelope)
+        return envelope
+    }
+
+    func prepareConfirmedOverwrite(
+        document: MarkdownDocument,
+        snapshot: DocumentFileConflictSnapshot
+    ) async throws -> SaveEnvelope {
+        _ = try requireCurrentData(matching: snapshot)
+        let inspection = try await worker.verify(snapshot.diskData, at: snapshot.url)
+        _ = try requireCurrentData(matching: snapshot)
+        guard inspection.exists else {
+            throw DocumentFileSafetyError.staleDecision
+        }
+        let targetSnapshot = try HTMLExportTargetSnapshot.capture(snapshot.url)
+        guard targetSnapshot.isExistingTarget else {
+            throw DocumentFileSafetyError.staleDecision
+        }
+        _ = try await worker.verify(snapshot.diskData, at: snapshot.url)
+        return try prepareSave(
+            document: document,
+            sourceURL: snapshot.url,
+            targetURL: snapshot.url,
+            targetExpectation: .exact(targetSnapshot),
+            operation: .save
+        )
+    }
+
+    func cancelSave(_ envelope: SaveEnvelope) {
+        writeGuard?.cancel(envelope.nonce)
+    }
+
+    func commitSave(_ envelope: SaveEnvelope) async throws {
+        let inspection = await worker.inspect(envelope.targetURL)
+        guard inspection.exists, inspection.data == envelope.bytes else {
+            throw DocumentFileSafetyError.saveCompletionMismatch
+        }
+        guard envelope.operation == .save || envelope.operation == .saveAs else {
+            writeGuard?.cancel(envelope.nonce)
+            return
+        }
+        guard writeGuard?.commit(envelope, diskData: inspection.data) == true else {
+            throw DocumentFileSafetyError.saveCompletionMismatch
+        }
+        if configuredURL == envelope.targetURL {
+            baselineData = envelope.bytes
+            baselineText = (try? MarkdownCodec.decode(envelope.bytes).text) ?? baselineText
+            state = inspection.isWritable ? .safe : .readOnly(envelope.targetURL)
+        }
+        scheduleInspection()
     }
 
     private func requireCurrentData(matching snapshot: DocumentFileConflictSnapshot) throws
@@ -546,11 +841,18 @@ final class DocumentFileSafetySession: ObservableObject {
     }
 
     private func apply(_ inspection: DocumentDiskInspection, at url: URL) {
-        if let observedBaseline = writeGuard?.observe(diskData: inspection.data),
-           observedBaseline != baselineData
-        {
-            baselineData = observedBaseline
-            baselineText = (try? MarkdownCodec.decode(observedBaseline).text) ?? baselineText
+        if let observation = writeGuard?.observe(diskData: inspection.data) {
+            if let observedBaseline = observation.baselineData,
+               observedBaseline != baselineData
+            {
+                baselineData = observedBaseline
+                baselineText = (try? MarkdownCodec.decode(observedBaseline).text) ?? baselineText
+            }
+            if let committed = observation.committedAutomaticEnvelope,
+               committed.nonce != automaticSaveCommit?.nonce
+            {
+                automaticSaveCommit = committed
+            }
         }
         guard let baselineData, let currentData else {
             state = inspection.exists && !inspection.isWritable ? .readOnly(url) : .safe

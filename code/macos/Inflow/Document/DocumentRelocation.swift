@@ -236,6 +236,21 @@ enum DocumentRelocationError: Error, LocalizedError {
     }
 }
 
+struct DocumentResourceIdentity: Hashable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+
+    static func capture(_ url: URL) -> Self? {
+        var metadata = stat()
+        let status: Int32 = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return -1 }
+            return stat(path, &metadata)
+        }
+        guard status == 0, metadata.st_mode & S_IFMT == S_IFREG else { return nil }
+        return Self(device: UInt64(metadata.st_dev), inode: UInt64(metadata.st_ino))
+    }
+}
+
 enum DocumentRelocationAnalyzer {
     static func plan(
         markdown: String,
@@ -323,7 +338,12 @@ enum DocumentRelocationAnalyzer {
     }
 
     static func isSameFile(_ lhs: URL, _ rhs: URL) -> Bool {
-        lhs.standardizedFileURL.resolvingSymlinksInPath()
+        if let leftIdentity = DocumentResourceIdentity.capture(lhs),
+           let rightIdentity = DocumentResourceIdentity.capture(rhs)
+        {
+            return leftIdentity == rightIdentity
+        }
+        return lhs.standardizedFileURL.resolvingSymlinksInPath()
             == rhs.standardizedFileURL.resolvingSymlinksInPath()
     }
 

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "status": "open",
+  "channel": "stable-direct",
+  "distribution_profile": "developer-id-notarized-zip",
+  "bundle_id": "com.inflow.desktop",
+  "team_id": null,
+  "signing_certificate_sha256": null,
+  "minimum_release_sequence": null,
+  "reason": "No production Developer ID release identity or independently published latest-sequence anchor has been approved. Public release verification must fail closed."
+}

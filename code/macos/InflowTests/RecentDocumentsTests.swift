@@ -87,18 +87,18 @@ final class RecentDocumentsTests: XCTestCase {
         controller.note(gammaURL)
         let gamma = record(gammaURL.path, bookmark: Data([3]))
         XCTAssertEqual(controller.entries.map(\.record), [gamma, alpha, beta, delta, epsilon])
-        XCTAssertEqual(persistence.records, [gamma, alpha, beta, delta, epsilon, zeta])
+        XCTAssertEqual(persistence.records, [gamma, alpha, beta, delta, epsilon])
 
         capacity = 6
         controller.applyCapacity()
         XCTAssertEqual(
             controller.entries.map(\.record),
-            [gamma, alpha, beta, delta, epsilon, zeta]
+            [gamma, alpha, beta, delta, epsilon]
         )
 
         controller.remove(try XCTUnwrap(controller.entries.first))
-        XCTAssertEqual(controller.entries.map(\.record), [alpha, beta, delta, epsilon, zeta])
-        XCTAssertEqual(persistence.records, [alpha, beta, delta, epsilon, zeta])
+        XCTAssertEqual(controller.entries.map(\.record), [alpha, beta, delta, epsilon])
+        XCTAssertEqual(persistence.records, [alpha, beta, delta, epsilon])
 
         controller.note(URL(fileURLWithPath: zeta.exactPath))
         XCTAssertEqual(
@@ -110,6 +110,26 @@ final class RecentDocumentsTests: XCTestCase {
         controller.clear()
         XCTAssertTrue(controller.entries.isEmpty)
         XCTAssertTrue(persistence.records.isEmpty)
+    }
+
+    func testRecentDocumentsPhysicallyDeduplicateHardLinks() throws {
+        try withTemporaryDirectory { directory in
+            let original = directory.appendingPathComponent("original.md")
+            let alias = directory.appendingPathComponent("alias.md")
+            try Data("same inode".utf8).write(to: original)
+            try FileManager.default.linkItem(at: original, to: alias)
+            let first = record(original.path, bookmark: Data([1]))
+            let second = record(alias.path, bookmark: Data([2]))
+            let persistence = TestRecentDocumentPersistence(records: [first, second])
+            let controller = RecentDocumentsController(
+                persistence: persistence,
+                capacity: { 20 },
+                systemSynchronizer: { _ in }
+            )
+
+            XCTAssertEqual(controller.entries.map(\.record), [first])
+            XCTAssertEqual(persistence.records, [first])
+        }
     }
 
     func testMissingOrMovedBookmarkNeverSearchesForAnAlternateLocation() {
@@ -168,6 +188,53 @@ final class RecentDocumentsTests: XCTestCase {
         )
     }
 
+    func testCloseAuthorizationIsSingleFlightPerDocument() throws {
+        let document = DeferredCloseAuthorizationDocument()
+        document.updateChangeCount(.changeDone)
+        var firstResults: [Bool] = []
+        var secondResults: [Bool] = []
+
+        DocumentCloseAuthorization.request(for: document) {
+            firstResults.append($0)
+        }
+        DocumentCloseAuthorization.request(for: document) {
+            secondResults.append($0)
+        }
+
+        XCTAssertTrue(DocumentCloseAuthorization.hasPendingRequests)
+        XCTAssertEqual(document.requestCount, 1)
+        XCTAssertTrue(firstResults.isEmpty)
+        XCTAssertEqual(secondResults, [false])
+
+        try document.finishRequest(shouldClose: true)
+        XCTAssertEqual(firstResults, [true])
+        XCTAssertFalse(DocumentCloseAuthorization.hasPendingRequests)
+    }
+
+    func testCloseAuthorizationRemainsSingleFlightAfterSaveClearsEditedState() throws {
+        let document = DeferredCloseAuthorizationDocument()
+        document.updateChangeCount(.changeDone)
+        var firstResults: [Bool] = []
+        var secondResults: [Bool] = []
+
+        DocumentCloseAuthorization.request(for: document) {
+            firstResults.append($0)
+        }
+        document.updateChangeCount(.changeCleared)
+        DocumentCloseAuthorization.request(for: document) {
+            secondResults.append($0)
+        }
+
+        XCTAssertTrue(DocumentCloseAuthorization.hasPendingRequests)
+        XCTAssertEqual(document.requestCount, 1)
+        XCTAssertTrue(firstResults.isEmpty)
+        XCTAssertEqual(secondResults, [false])
+
+        try document.finishRequest(shouldClose: true)
+        XCTAssertEqual(firstResults, [true])
+        XCTAssertFalse(DocumentCloseAuthorization.hasPendingRequests)
+    }
+
     func testOpenPreflightAcceptsUTF8AndPreservesUnsupportedOriginalBytes() throws {
         XCTAssertEqual(
             try MarkdownOpenPreflight.inspect(Data("# 你好\n".utf8)),
@@ -192,6 +259,233 @@ final class RecentDocumentsTests: XCTestCase {
                 from: [markdown, longExtension, text, remote]
             ),
             [markdown, longExtension]
+        )
+    }
+
+    func testOpenRouteDeduplicatesBeforeGivingBlankToFirstNewFile() {
+        let root = URL(fileURLWithPath: "/tmp/inflow-open-router", isDirectory: true)
+        let existing = root.appendingPathComponent("existing.md")
+        let equivalentExisting = URL(
+            fileURLWithPath: root.appendingPathComponent("nested/../existing.md").path
+        )
+        let firstNew = root.appendingPathComponent("first-new.markdown")
+        let secondNew = root.appendingPathComponent("second-new.md")
+
+        let plan = DocumentOpenRouter.plan(
+            inputURLs: [
+                equivalentExisting,
+                existing,
+                firstNew,
+                firstNew,
+                secondNew,
+            ],
+            openedDocumentURLs: [existing, equivalentExisting, existing],
+            openedProjectURLs: [],
+            hasReusableBlankWindow: true
+        )
+
+        XCTAssertEqual(
+            plan.actions,
+            [
+                .focusExistingFile(existing.standardizedFileURL),
+                .openFile(
+                    firstNew.standardizedFileURL,
+                    reuseBlank: .reusableBlankWindow
+                ),
+                .openFile(secondNew.standardizedFileURL, reuseBlank: nil),
+            ]
+        )
+        XCTAssertTrue(plan.rejections.isEmpty)
+    }
+
+    func testOpenRouteDoesNotReuseDraftWindow() {
+        let draft = NSDocument()
+        draft.updateChangeCount(.changeDone)
+        let reusableDraft = DocumentWindowReusePolicy.reusableBlankDocument(
+            from: [draft]
+        )
+        let url = URL(fileURLWithPath: "/tmp/inflow-open-router/draft-safe.md")
+
+        let plan = DocumentOpenRouter.plan(
+            inputURLs: [url],
+            openedDocumentURLs: [],
+            openedProjectURLs: [],
+            hasReusableBlankWindow: reusableDraft != nil
+        )
+
+        XCTAssertNil(reusableDraft)
+        XCTAssertEqual(
+            plan.actions,
+            [.openFile(url.standardizedFileURL, reuseBlank: nil)]
+        )
+    }
+
+    func testOpenRouteFocusesExistingProjectWithoutConsumingBlank() {
+        let existingProject = URL(
+            fileURLWithPath: "/tmp/inflow-open-router/project",
+            isDirectory: true
+        )
+        let equivalentProject = URL(
+            fileURLWithPath: "/tmp/inflow-open-router/child/../project",
+            isDirectory: true
+        )
+
+        let focusPlan = DocumentOpenRouter.plan(
+            inputURLs: [equivalentProject, existingProject],
+            openedDocumentURLs: [],
+            openedProjectURLs: [existingProject, equivalentProject, existingProject],
+            hasReusableBlankWindow: true,
+            classifyTarget: { _ in .projectDirectory }
+        )
+        XCTAssertEqual(
+            focusPlan.actions,
+            [.focusExistingProject(existingProject.standardizedFileURL)]
+        )
+
+        let newProject = URL(
+            fileURLWithPath: "/tmp/inflow-open-router/new-project",
+            isDirectory: true
+        )
+        let projectPlan = DocumentOpenRouter.plan(
+            inputURLs: [newProject],
+            openedDocumentURLs: [],
+            openedProjectURLs: [],
+            hasReusableBlankWindow: true
+        )
+        XCTAssertEqual(
+            projectPlan.actions,
+            [
+                .openProject(
+                    newProject.standardizedFileURL,
+                    reuseBlank: .reusableBlankWindow
+                ),
+            ]
+        )
+
+        let newFile = URL(fileURLWithPath: "/tmp/inflow-open-router/after-project.md")
+        let filePlan = DocumentOpenRouter.plan(
+            inputURLs: [newFile],
+            openedDocumentURLs: [],
+            openedProjectURLs: [],
+            hasReusableBlankWindow: true
+        )
+        XCTAssertEqual(
+            filePlan.actions,
+            [
+                .openFile(
+                    newFile.standardizedFileURL,
+                    reuseBlank: .reusableBlankWindow
+                ),
+            ]
+        )
+    }
+
+    func testOpenRouteSafelyRejectsOutOfScopeDirectoryBatches() {
+        let firstDirectory = URL(
+            fileURLWithPath: "/tmp/inflow-open-router/first-project",
+            isDirectory: true
+        )
+        let secondDirectory = URL(
+            fileURLWithPath: "/tmp/inflow-open-router/second-project",
+            isDirectory: true
+        )
+        let markdown = URL(fileURLWithPath: "/tmp/inflow-open-router/kept.md")
+
+        let mixedPlan = DocumentOpenRouter.plan(
+            inputURLs: [firstDirectory, markdown],
+            openedDocumentURLs: [],
+            openedProjectURLs: [],
+            hasReusableBlankWindow: true
+        )
+        XCTAssertEqual(
+            mixedPlan.actions,
+            [
+                .openFile(
+                    markdown.standardizedFileURL,
+                    reuseBlank: .reusableBlankWindow
+                ),
+            ]
+        )
+        XCTAssertEqual(
+            mixedPlan.rejections,
+            [
+                DocumentOpenRouteRejection(
+                    url: firstDirectory.standardizedFileURL,
+                    reason: .mixedFilesAndDirectories
+                ),
+            ]
+        )
+
+        let multipleDirectoryPlan = DocumentOpenRouter.plan(
+            inputURLs: [firstDirectory, secondDirectory],
+            openedDocumentURLs: [],
+            openedProjectURLs: [],
+            hasReusableBlankWindow: true
+        )
+        XCTAssertTrue(multipleDirectoryPlan.actions.isEmpty)
+        XCTAssertEqual(
+            multipleDirectoryPlan.rejections.map(\.reason),
+            [.multipleDirectories, .multipleDirectories]
+        )
+    }
+
+    func testOpenRouteDoesNotPhysicallyDeduplicateHardLinks() throws {
+        try withTemporaryDirectory { directory in
+            let original = directory.appendingPathComponent("original.md")
+            let hardLink = directory.appendingPathComponent("hard-link.md")
+            try Data("same inode".utf8).write(to: original)
+            try FileManager.default.linkItem(at: original, to: hardLink)
+
+            let plan = DocumentOpenRouter.plan(
+                inputURLs: [original, hardLink],
+                openedDocumentURLs: [],
+                openedProjectURLs: [],
+                hasReusableBlankWindow: true
+            )
+
+            XCTAssertEqual(
+                plan.actions,
+                [
+                    .openFile(original, reuseBlank: .reusableBlankWindow),
+                    .openFile(hardLink, reuseBlank: nil),
+                ]
+            )
+        }
+    }
+
+    func testControllerDelegatesProjectFocusAndOpenThroughCallbacks() {
+        let existingProject = URL(
+            fileURLWithPath: "/tmp/inflow-open-router/existing-project",
+            isDirectory: true
+        )
+        let newProject = URL(
+            fileURLWithPath: "/tmp/inflow-open-router/new-project",
+            isDirectory: true
+        )
+        var focused: [URL] = []
+        var opened: [(URL, NSDocument?)] = []
+        let controller = RecentDocumentsController(
+            persistence: TestRecentDocumentPersistence(records: []),
+            openBehavior: { .newWindow },
+            systemSynchronizer: { _ in },
+            openedProjectURLs: { [existingProject, existingProject] },
+            focusExistingProject: { focused.append($0) },
+            openProject: { opened.append(($0, $1)) }
+        )
+
+        let focusPlan = controller.openExternalDocuments([existingProject])
+        let openPlan = controller.openExternalDocuments([newProject])
+
+        XCTAssertEqual(focused, [existingProject.standardizedFileURL])
+        XCTAssertEqual(opened.map(\.0), [newProject.standardizedFileURL])
+        XCTAssertNil(opened.first?.1)
+        XCTAssertEqual(
+            focusPlan.actions,
+            [.focusExistingProject(existingProject.standardizedFileURL)]
+        )
+        XCTAssertEqual(
+            openPlan.actions,
+            [.openProject(newProject.standardizedFileURL, reuseBlank: nil)]
         )
     }
 
@@ -285,20 +579,19 @@ final class RecentDocumentsTests: XCTestCase {
     }
 
     @MainActor
-    func testFileMenuUsesProductRecentDocumentLabelsWithoutRemovingOpen() throws {
+    func testFileMenuRoutesOpenWithoutInstallingManagedRecentDocuments() throws {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
         let fileMenu = try XCTUnwrap(NSApp.mainMenu?.item(withTitle: "文件")?.submenu)
         let openItems = fileMenu.items.filter { $0.title == "打开…" }
-        let recentItems = fileMenu.items.filter { $0.title == "打开最近" }
         XCTAssertEqual(openItems.count, 1)
         XCTAssertEqual(openItems.first?.keyEquivalent, "o")
         XCTAssertTrue(openItems.first?.target is RecentDocumentsController)
-        XCTAssertEqual(recentItems.count, 1)
-        let clearItems = try XCTUnwrap(recentItems.first?.submenu).items.filter {
-            $0.title == "清除最近记录"
+        let managedRecentItems = fileMenu.items.flatMap { item in
+            [item] + (item.submenu?.items ?? [])
+        }.filter {
+            $0.target is RecentDocumentsController && $0.title != "打开…"
         }
-        XCTAssertEqual(clearItems.count, 1)
-        XCTAssertTrue(clearItems.first?.target is RecentDocumentsController)
+        XCTAssertTrue(managedRecentItems.isEmpty)
     }
 
     private func record(_ path: String, bookmark: Data?) -> RecentDocumentRecord {
@@ -319,6 +612,42 @@ final class RecentDocumentsTests: XCTestCase {
         )
         defer { try? FileManager.default.removeItem(at: directory) }
         try body(directory)
+    }
+}
+
+private final class DeferredCloseAuthorizationDocument: NSDocument {
+    private var callbackDelegate: AnyObject?
+    private var callbackSelector: Selector?
+    private var callbackContext: UnsafeMutableRawPointer?
+    private(set) var requestCount = 0
+
+    override func canClose(
+        withDelegate delegate: Any,
+        shouldClose shouldCloseSelector: Selector?,
+        contextInfo: UnsafeMutableRawPointer?
+    ) {
+        requestCount += 1
+        callbackDelegate = delegate as AnyObject
+        callbackSelector = shouldCloseSelector
+        callbackContext = contextInfo
+    }
+
+    func finishRequest(shouldClose: Bool) throws {
+        let delegate = try XCTUnwrap(callbackDelegate)
+        let selector = try XCTUnwrap(callbackSelector)
+        let method = try XCTUnwrap(class_getInstanceMethod(type(of: delegate), selector))
+        typealias Callback = @convention(c) (
+            AnyObject,
+            Selector,
+            NSDocument,
+            Bool,
+            UnsafeMutableRawPointer?
+        ) -> Void
+        let callback = unsafeBitCast(method_getImplementation(method), to: Callback.self)
+        callback(delegate, selector, self, shouldClose, callbackContext)
+        callbackDelegate = nil
+        callbackSelector = nil
+        callbackContext = nil
     }
 }
 

@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.inflow.app/market/release-record/v1",
+  "title": "Inflow Market Release Record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "recordType",
+    "extensionID",
+    "extensionVersion",
+    "publisherID",
+    "publisherKeyID",
+    "publisherCertificateSHA256",
+    "manifestSHA256",
+    "packageSHA256",
+    "contentRootSHA256",
+    "capabilitySetAlgorithm",
+    "capabilitySet",
+    "capabilitySetSHA256",
+    "minimumHostVersion",
+    "auditPolicyVersion",
+    "auditLevel",
+    "channel",
+    "releaseSequence",
+    "previousRecordSHA256",
+    "resolvedComponents",
+    "signatureAlgorithm",
+    "publishedAtUTC",
+    "criticalFields"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "recordType": { "const": "extension-release" },
+    "extensionID": { "$ref": "#/$defs/reverseDomainID" },
+    "extensionVersion": { "$ref": "#/$defs/semver" },
+    "publisherID": { "$ref": "#/$defs/reverseDomainID" },
+    "publisherKeyID": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "publisherCertificateSHA256": { "$ref": "#/$defs/sha256" },
+    "manifestSHA256": { "$ref": "#/$defs/sha256" },
+    "packageSHA256": { "$ref": "#/$defs/sha256" },
+    "contentRootSHA256": { "$ref": "#/$defs/sha256" },
+    "capabilitySetAlgorithm": { "const": "manifest-capability-set-v1" },
+    "capabilitySet": {
+      "$ref": "https://schemas.inflow.app/extensions/capability-set/v1"
+    },
+    "capabilitySetSHA256": { "$ref": "#/$defs/sha256" },
+    "minimumHostVersion": { "$ref": "#/$defs/hostVersion" },
+    "auditPolicyVersion": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "auditLevel": {
+      "enum": ["official", "verified", "community", "development-preview"]
+    },
+    "channel": { "enum": ["official", "public-free", "development-preview"] },
+    "releaseSequence": { "type": "integer", "minimum": 1 },
+    "previousRecordSHA256": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/sha256" }
+      ]
+    },
+    "resolvedComponents": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["componentID", "kind", "sha256", "size"],
+        "properties": {
+          "componentID": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "kind": {
+            "enum": ["wasm-command", "syntax-provider", "declarative-view", "asset"]
+          },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "size": { "type": "integer", "minimum": 1, "maximum": 67108864 }
+        }
+      }
+    },
+    "signatureAlgorithm": { "const": "market-ed25519-jcs-v1" },
+    "publishedAtUTC": { "type": "string", "format": "date-time" },
+    "criticalFields": {
+      "type": "array",
+      "minItems": 13,
+      "maxItems": 13,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "publisherCertificateSHA256",
+          "manifestSHA256",
+          "packageSHA256",
+          "contentRootSHA256",
+          "capabilitySetAlgorithm",
+          "capabilitySet",
+          "capabilitySetSHA256",
+          "auditPolicyVersion",
+          "auditLevel",
+          "channel",
+          "releaseSequence",
+          "previousRecordSHA256",
+          "resolvedComponents"
+        ]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "releaseSequence": { "const": 1 } } },
+      "then": { "properties": { "previousRecordSHA256": { "type": "null" } } },
+      "else": { "properties": { "previousRecordSHA256": { "$ref": "#/$defs/sha256" } } }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+    },
+    "reverseDomainID": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$",
+      "maxLength": 160
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$",
+      "maxLength": 128
+    },
+    "hostVersion": {
+      "type": "string",
+      "description": "Host compatibility release version: exactly major.minor.patch; prerelease and build metadata are not accepted.",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "maxLength": 64
+    }
+  }
+}

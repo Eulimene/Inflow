@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Darwin
 import Foundation
 import UniformTypeIdentifiers
@@ -6,16 +7,19 @@ import UniformTypeIdentifiers
 struct HTMLExportSnapshot: Sendable {
     let utf8: Data
     let documentDirectory: URL?
+    let projectRoot: URL?
     let appearance: PreviewAppearanceConfiguration
     let documentVersion: String
 
     init(
         markdown: String,
         documentDirectory: URL? = nil,
+        projectRoot: URL? = nil,
         appearance: PreviewAppearanceConfiguration = .default
     ) {
         utf8 = Data(markdown.utf8)
         self.documentDirectory = documentDirectory
+        self.projectRoot = projectRoot
         self.appearance = appearance
         documentVersion = Self.versionLabel(for: utf8)
     }
@@ -114,7 +118,8 @@ enum HTMLExporter {
                 }
                 let resolved = LocalImageResolver.resolveSlotsForPreparedExport(
                     in: coreHTML,
-                    documentDirectory: snapshot.documentDirectory
+                    documentDirectory: snapshot.documentDirectory,
+                    projectRoot: snapshot.projectRoot
                 )
                 let themed = PreviewAppearanceCSS.applying(snapshot.appearance, to: resolved.html)
                 let output = Data(themed.utf8)
@@ -163,16 +168,47 @@ enum HTMLExportTargetError: Error, Equatable, LocalizedError, Sendable {
         case .unsupportedTarget:
             "导出目标不是可安全替换的普通文件，请选择其他位置。"
         case .targetChanged:
-            "确认后，目标文件已被其他程序创建或修改。为避免覆盖新内容，本次未写入；请重新导出并确认。"
+            "确认后，目标文件已被其他程序创建或修改。旧确认已失效；请检查当前文件并重新导出。"
         case .cannotInspect:
             "无法确认导出目标的当前状态，未写入文件。"
         case .cannotWrite:
-            "无法完成原子写入，未留下残缺的交付文件。"
+            "未能完成交付"
         }
     }
 }
 
 struct HTMLExportTargetSnapshot: Equatable, Sendable {
+    struct CapturedContents: Equatable, Sendable {
+        let snapshot: HTMLExportTargetSnapshot
+        let data: Data?
+    }
+
+    private struct DescriptorMetadata: Equatable {
+        let device: UInt64
+        let inode: UInt64
+        let generation: UInt32
+        let birthSeconds: Int64
+        let birthNanoseconds: Int64
+        let changeSeconds: Int64
+        let changeNanoseconds: Int64
+        let size: Int64
+        let modificationSeconds: Int64
+        let modificationNanoseconds: Int64
+
+        init(_ metadata: stat) {
+            device = UInt64(metadata.st_dev)
+            inode = metadata.st_ino
+            generation = metadata.st_gen
+            birthSeconds = Int64(metadata.st_birthtimespec.tv_sec)
+            birthNanoseconds = Int64(metadata.st_birthtimespec.tv_nsec)
+            changeSeconds = Int64(metadata.st_ctimespec.tv_sec)
+            changeNanoseconds = Int64(metadata.st_ctimespec.tv_nsec)
+            size = metadata.st_size
+            modificationSeconds = Int64(metadata.st_mtimespec.tv_sec)
+            modificationNanoseconds = Int64(metadata.st_mtimespec.tv_nsec)
+        }
+    }
+
     fileprivate enum State: Equatable, Sendable {
         case missing
         case existing(
@@ -186,44 +222,144 @@ struct HTMLExportTargetSnapshot: Equatable, Sendable {
             size: Int64,
             modificationSeconds: Int64,
             modificationNanoseconds: Int64,
-            contentHash: UInt64
+            contentSHA256: Data
         )
     }
 
     fileprivate let state: State
 
-    static func capture(_ url: URL, fileManager: FileManager = .default) throws -> Self {
-        var metadata = stat()
+    static func capture(_ url: URL, fileManager _: FileManager = .default) throws -> Self {
+        try captureOpened(url, includeContents: false).snapshot
+    }
+
+    /// Opens an existing path exactly once and derives both bytes and identity from
+    /// that descriptor.  The hook is used only by race regression tests to replace
+    /// the pathname after `open`; production callers leave it `nil`.
+    static func captureContents(
+        _ url: URL,
+        afterOpeningDescriptor: (() throws -> Void)? = nil
+    ) throws -> CapturedContents {
+        try captureOpened(
+            url,
+            includeContents: true,
+            afterOpeningDescriptor: afterOpeningDescriptor
+        )
+    }
+
+    private static func captureOpened(
+        _ url: URL,
+        includeContents: Bool,
+        afterOpeningDescriptor: (() throws -> Void)? = nil
+    ) throws -> CapturedContents {
         errno = 0
-        let status: Int32 = url.withUnsafeFileSystemRepresentation { path in
+        let descriptor: Int32 = url.withUnsafeFileSystemRepresentation { path in
             guard let path else { return Int32(-1) }
-            return lstat(path, &metadata)
+            return open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
         }
-        guard status == 0 else {
-            if errno == ENOENT || !fileManager.fileExists(atPath: url.path) {
-                return Self(state: .missing)
+        guard descriptor >= 0 else {
+            switch errno {
+            case ENOENT:
+                return CapturedContents(
+                    snapshot: Self(state: .missing),
+                    data: nil
+                )
+            case ELOOP:
+                throw HTMLExportTargetError.unsupportedTarget
+            default:
+                throw HTMLExportTargetError.cannotInspect
             }
+        }
+        defer { close(descriptor) }
+
+        var beforeStat = stat()
+        guard fstat(descriptor, &beforeStat) == 0 else {
             throw HTMLExportTargetError.cannotInspect
         }
-        guard metadata.st_mode & S_IFMT == S_IFREG else {
+        guard beforeStat.st_mode & S_IFMT == S_IFREG else {
             throw HTMLExportTargetError.unsupportedTarget
         }
+        guard beforeStat.st_size >= 0 else {
+            throw HTMLExportTargetError.cannotInspect
+        }
+        let before = DescriptorMetadata(beforeStat)
 
-        return Self(
-            state: .existing(
-                device: UInt64(metadata.st_dev),
-                inode: metadata.st_ino,
-                generation: metadata.st_gen,
-                birthSeconds: Int64(metadata.st_birthtimespec.tv_sec),
-                birthNanoseconds: Int64(metadata.st_birthtimespec.tv_nsec),
-                changeSeconds: Int64(metadata.st_ctimespec.tv_sec),
-                changeNanoseconds: Int64(metadata.st_ctimespec.tv_nsec),
-                size: metadata.st_size,
-                modificationSeconds: Int64(metadata.st_mtimespec.tv_sec),
-                modificationNanoseconds: Int64(metadata.st_mtimespec.tv_nsec),
-                contentHash: try contentHash(of: url)
-            )
+        do {
+            try afterOpeningDescriptor?()
+        } catch let error as HTMLExportTargetError {
+            throw error
+        } catch {
+            throw HTMLExportTargetError.cannotInspect
+        }
+
+        var hasher = SHA256()
+        var contents: Data? = includeContents ? Data() : nil
+        if includeContents, let capacity = Int(exactly: before.size) {
+            contents?.reserveCapacity(capacity)
+        }
+        var totalBytes: Int64 = 0
+        var buffer = [UInt8](repeating: 0, count: 1_048_576)
+        while true {
+            let count = buffer.withUnsafeMutableBytes { rawBuffer in
+                Darwin.read(descriptor, rawBuffer.baseAddress, rawBuffer.count)
+            }
+            if count == 0 { break }
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw HTMLExportTargetError.cannotInspect
+            }
+            let chunk = Data(buffer.prefix(count))
+            hasher.update(data: chunk)
+            contents?.append(chunk)
+            let (newTotal, overflow) = totalBytes.addingReportingOverflow(Int64(count))
+            guard !overflow else {
+                throw HTMLExportTargetError.cannotInspect
+            }
+            totalBytes = newTotal
+        }
+
+        var afterStat = stat()
+        guard fstat(descriptor, &afterStat) == 0,
+              afterStat.st_mode & S_IFMT == S_IFREG,
+              DescriptorMetadata(afterStat) == before,
+              totalBytes == before.size
+        else {
+            throw HTMLExportTargetError.targetChanged
+        }
+
+        return CapturedContents(
+            snapshot: Self(
+                state: .existing(
+                    device: before.device,
+                    inode: before.inode,
+                    generation: before.generation,
+                    birthSeconds: before.birthSeconds,
+                    birthNanoseconds: before.birthNanoseconds,
+                    changeSeconds: before.changeSeconds,
+                    changeNanoseconds: before.changeNanoseconds,
+                    size: before.size,
+                    modificationSeconds: before.modificationSeconds,
+                    modificationNanoseconds: before.modificationNanoseconds,
+                    contentSHA256: Data(hasher.finalize())
+                )
+            ),
+            data: contents
         )
+    }
+
+    var contentSHA256: Data? {
+        switch state {
+        case .missing:
+            nil
+        case let .existing(
+            _, _, _, _, _, _, _, _, _, _, contentSHA256
+        ):
+            contentSHA256
+        }
+    }
+
+    func hasContents(_ data: Data) -> Bool {
+        guard isExistingTarget else { return false }
+        return contentSHA256 == Data(SHA256.hash(data: data))
     }
 
     fileprivate var exists: Bool {
@@ -231,30 +367,6 @@ struct HTMLExportTargetSnapshot: Equatable, Sendable {
     }
 
     var isExistingTarget: Bool { exists }
-
-    private static func contentHash(of url: URL) throws -> UInt64 {
-        let handle: FileHandle
-        do {
-            handle = try FileHandle(forReadingFrom: url)
-        } catch {
-            throw HTMLExportTargetError.cannotInspect
-        }
-        defer { try? handle.close() }
-
-        var hash = UInt64(0xcbf29ce484222325)
-        do {
-            while let chunk = try handle.read(upToCount: 1_048_576), !chunk.isEmpty {
-                for byte in chunk {
-                    hash ^= UInt64(byte)
-                    hash &*= 0x100000001b3
-                }
-            }
-        } catch {
-            throw HTMLExportTargetError.cannotInspect
-        }
-        return hash
-    }
-
 }
 
 enum HTMLExportFileWriter {
@@ -263,7 +375,8 @@ enum HTMLExportFileWriter {
         to targetURL: URL,
         expectedTarget: HTMLExportTargetSnapshot,
         fileManager: FileManager = .default,
-        beforeCommit: (() throws -> Void)? = nil
+        beforeCommit: (() throws -> Void)? = nil,
+        afterCommit: (() -> Void)? = nil
     ) throws {
         let directory = targetURL.deletingLastPathComponent()
         let temporaryURL = directory.appendingPathComponent(
@@ -317,6 +430,11 @@ enum HTMLExportFileWriter {
                     try fileManager.moveItem(at: temporaryURL, to: coordinatedURL)
                 }
                 temporaryExists = false
+                afterCommit?()
+                let delivered = try HTMLExportTargetSnapshot.capture(coordinatedURL)
+                guard delivered.hasContents(data) else {
+                    throw HTMLExportTargetError.targetChanged
+                }
             } catch {
                 commitError = error
             }

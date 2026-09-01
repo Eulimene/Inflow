@@ -2823,22 +2823,28 @@ mod tests {
 
     #[test]
     fn mermaid_wraps_supported_selection_and_rejects_invalid_diagram() {
-        let source = "before sequenceDiagram\nAlice->>Bob: Hi after";
+        let source = "before stateDiagram-v2\n[*] --> Ready after";
         let start = "before ".len();
         let end = source.find(" after").unwrap();
         let edit = insert_mermaid(source, start..end).unwrap();
         assert!(
             edit.replacement
-                .starts_with("\n\n```mermaid\nsequenceDiagram")
+                .starts_with("\n\n```mermaid\nstateDiagram-v2")
         );
         assert!(edit.replacement.ends_with("```\n\n"));
         let formatted = replacing(source, edit.replace_range, &edit.replacement);
-        assert!(render::html_fragment(&formatted).contains("时序图"));
+        assert!(render::html_fragment(&formatted).contains("状态图"));
 
-        assert_eq!(
-            insert_mermaid("pie\ntitle Values", 0.."pie\ntitle Values".len()),
-            Err(FormatError::AmbiguousSelection)
-        );
+        for unsupported in [
+            "pie\ntitle Values",
+            "sequenceDiagram\nAlice->>Bob: Hi",
+            "classDiagram\nAnimal <|-- Duck",
+        ] {
+            assert_eq!(
+                insert_mermaid(unsupported, 0..unsupported.len()),
+                Err(FormatError::AmbiguousSelection)
+            );
+        }
         assert_eq!(
             insert_mermaid("```mermaid\nflowchart TD\nA-->B\n```", 15..15),
             Err(FormatError::AmbiguousSelection)

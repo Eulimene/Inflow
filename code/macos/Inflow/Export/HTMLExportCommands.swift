@@ -2,20 +2,17 @@ import SwiftUI
 
 @MainActor
 final class HTMLExportCommandActions {
-    let isExportingHTML: Bool
     let isExportingPDF: Bool
-    let startHTML: () -> Void
+    let canExportPDF: Bool
     let startPDF: () -> Void
 
     init(
-        isExportingHTML: Bool,
         isExportingPDF: Bool,
-        startHTML: @escaping () -> Void,
+        canExportPDF: Bool,
         startPDF: @escaping () -> Void
     ) {
-        self.isExportingHTML = isExportingHTML
         self.isExportingPDF = isExportingPDF
-        self.startHTML = startHTML
+        self.canExportPDF = canExportPDF
         self.startPDF = startPDF
     }
 }
@@ -37,26 +34,14 @@ struct HTMLExportCommands: Commands {
     var body: some Commands {
         CommandGroup(after: .saveItem) {
             Divider()
-            Menu("导出…") {
-                Button("导出 HTML…") {
-                    actions?.startHTML()
-                }
-                .disabled(
-                    actions == nil
-                        || actions?.isExportingHTML == true
-                        || actions?.isExportingPDF == true
-                )
-
-                Button("导出 PDF…") {
-                    actions?.startPDF()
-                }
-                .disabled(
-                    actions == nil
-                        || actions?.isExportingHTML == true
-                        || actions?.isExportingPDF == true
-                )
+            Button("导出 PDF…") {
+                actions?.startPDF()
             }
-            .disabled(actions == nil)
+            .disabled(
+                actions == nil
+                    || actions?.canExportPDF != true
+                    || actions?.isExportingPDF == true
+            )
         }
     }
 }

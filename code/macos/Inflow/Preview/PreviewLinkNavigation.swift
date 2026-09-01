@@ -11,6 +11,45 @@ enum PreviewLocalLinkKind: String, Equatable, Sendable {
     case attachment
 }
 
+enum PreviewLocalMarkdownPrompt {
+    static let safeCopyMessage =
+        "Inflow 会读取当前已确认的文件内容，并以未命名安全副本打开；"
+        + "这个副本不会继续关联或写回原文件。有标题片段时会精确定位。"
+    static let projectMessage =
+        "确认后将在当前项目中切换到这份 Markdown 原文件，修改可由你手动保存回原路径。"
+        + "当前文档有未保存修改时，切换前会询问保存、不保存或取消。"
+    static let message = safeCopyMessage
+    static let confirmTitle = "打开安全副本"
+
+    static func message(for link: PreviewLocalLink) -> String {
+        link.projectRoot == nil ? safeCopyMessage : projectMessage
+    }
+
+    static func confirmTitle(for link: PreviewLocalLink) -> String {
+        link.projectRoot == nil ? "打开安全副本" : "在项目中打开"
+    }
+}
+
+@MainActor
+enum LinkedHeadingNavigationBroker {
+    static let didRequestNavigation = Notification.Name(
+        "Inflow.LinkedHeadingNavigationRequested"
+    )
+
+    private static var pendingFragments: [String: String] = [:]
+
+    static func request(documentURL: URL, fragment: String?) {
+        guard let fragment, !fragment.isEmpty else { return }
+        let path = documentURL.standardizedFileURL.path
+        pendingFragments[path] = fragment
+        NotificationCenter.default.post(name: didRequestNavigation, object: path)
+    }
+
+    static func consume(for documentURL: URL) -> String? {
+        pendingFragments.removeValue(forKey: documentURL.standardizedFileURL.path)
+    }
+}
+
 struct PreviewLocalFileSnapshot: Equatable, Sendable {
     let device: UInt64
     let inode: UInt64
@@ -37,16 +76,18 @@ struct PreviewLocalFileSnapshot: Equatable, Sendable {
         guard metadata.st_mode & S_IFMT == S_IFREG else {
             throw PreviewLocalFileError.notRegularFile
         }
-        return Self(
-            device: UInt64(metadata.st_dev),
-            inode: metadata.st_ino,
-            generation: metadata.st_gen,
-            changeSeconds: Int64(metadata.st_ctimespec.tv_sec),
-            changeNanoseconds: Int64(metadata.st_ctimespec.tv_nsec),
-            size: metadata.st_size,
-            modificationSeconds: Int64(metadata.st_mtimespec.tv_sec),
-            modificationNanoseconds: Int64(metadata.st_mtimespec.tv_nsec)
-        )
+        return Self(metadata: metadata)
+    }
+
+    fileprivate init(metadata: stat) {
+        device = UInt64(metadata.st_dev)
+        inode = metadata.st_ino
+        generation = metadata.st_gen
+        changeSeconds = Int64(metadata.st_ctimespec.tv_sec)
+        changeNanoseconds = Int64(metadata.st_ctimespec.tv_nsec)
+        size = metadata.st_size
+        modificationSeconds = Int64(metadata.st_mtimespec.tv_sec)
+        modificationNanoseconds = Int64(metadata.st_mtimespec.tv_nsec)
     }
 }
 
@@ -55,6 +96,249 @@ enum PreviewLocalFileError: Error, Equatable, Sendable {
     case unavailable
     case notRegularFile
     case unsafeContent
+    case changedDuringRead
+    case tooLarge
+}
+
+struct FrozenPreviewLocalFile: Equatable, Sendable {
+    let data: Data
+    let snapshot: PreviewLocalFileSnapshot
+}
+
+enum PreviewLocalFileReader {
+    static let maximumBytes = 256 * 1_024 * 1_024
+
+    static func read(
+        _ url: URL,
+        expected: PreviewLocalFileSnapshot,
+        maximumBytes: Int = maximumBytes
+    ) throws -> FrozenPreviewLocalFile {
+        let descriptor: Int32 = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return -1 }
+            return open(path, O_RDONLY | O_NOFOLLOW)
+        }
+        guard descriptor >= 0 else { throw PreviewLocalFileError.unavailable }
+        defer { close(descriptor) }
+
+        var before = stat()
+        guard fstat(descriptor, &before) == 0,
+              before.st_mode & S_IFMT == S_IFREG,
+              PreviewLocalFileSnapshot(metadata: before) == expected,
+              before.st_size >= 0,
+              before.st_size <= maximumBytes
+        else {
+            throw before.st_size > maximumBytes
+                ? PreviewLocalFileError.tooLarge
+                : PreviewLocalFileError.changedDuringRead
+        }
+
+        var result = Data()
+        result.reserveCapacity(Int(before.st_size))
+        var buffer = [UInt8](repeating: 0, count: 1_048_576)
+        while true {
+            let count = buffer.withUnsafeMutableBytes { rawBuffer in
+                Darwin.read(descriptor, rawBuffer.baseAddress, rawBuffer.count)
+            }
+            if count == 0 { break }
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw PreviewLocalFileError.unavailable
+            }
+            guard result.count <= maximumBytes - count else {
+                throw PreviewLocalFileError.tooLarge
+            }
+            result.append(contentsOf: buffer.prefix(count))
+        }
+
+        var after = stat()
+        guard fstat(descriptor, &after) == 0,
+              PreviewLocalFileSnapshot(metadata: after) == expected,
+              result.count == Int(after.st_size)
+        else {
+            throw PreviewLocalFileError.changedDuringRead
+        }
+        return FrozenPreviewLocalFile(data: result, snapshot: expected)
+    }
+}
+
+enum FrozenPreviewMarkdownDocument {
+    static func make(data: Data, headingFragment: String?) throws -> MarkdownDocument {
+        var document = try MarkdownDocument(fileData: data)
+        document.openedFileData = nil
+        document.initialHeadingFragment = headingFragment
+        return document
+    }
+}
+
+@MainActor
+enum SafePreviewOpenStore {
+    nonisolated static let retentionInterval: TimeInterval = 60 * 60
+    nonisolated static let cleanupIntervalNanoseconds: UInt64 = 15 * 60 * 1_000_000_000
+
+    private static let maintenance = SafePreviewOpenMaintenance()
+
+    static func startMaintenance() {
+        maintenance.start()
+    }
+
+    static func materialize(_ file: FrozenPreviewLocalFile, extension pathExtension: String)
+        throws -> URL
+    {
+        startMaintenance()
+        let root = try defaultRootURL()
+        try prepareRoot(root)
+
+        var target = root.appendingPathComponent(UUID().uuidString)
+        if !pathExtension.isEmpty { target.appendPathExtension(pathExtension) }
+        do {
+            try file.data.write(to: target, options: .withoutOverwriting)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o400],
+                ofItemAtPath: target.path
+            )
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            var mutableTarget = target
+            try mutableTarget.setResourceValues(values)
+            return target
+        } catch {
+            unlinkManagedCopy(at: target)
+            throw error
+        }
+    }
+
+    fileprivate static func defaultRootURL() throws -> URL {
+        try FileManager.default.url(
+            for: .cachesDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        .appendingPathComponent("Inflow", isDirectory: true)
+        .appendingPathComponent("SafeOpen", isDirectory: true)
+    }
+
+    fileprivate static func prepareRoot(_ root: URL) throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        var metadata = stat()
+        let status = root.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return lstat(path, &metadata)
+        }
+        guard status == 0, metadata.st_mode & S_IFMT == S_IFDIR else {
+            throw PreviewLocalFileError.unavailable
+        }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: root.path
+        )
+    }
+
+    @discardableResult
+    fileprivate static func cleanupExpiredCopies(
+        in root: URL,
+        now: Date = Date(),
+        retentionInterval: TimeInterval = retentionInterval
+    ) -> Int {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: nil
+        ) else {
+            return 0
+        }
+
+        var removedCount = 0
+        for url in urls {
+            let stem = url.deletingPathExtension().lastPathComponent
+            guard UUID(uuidString: stem) != nil else { continue }
+
+            var metadata = stat()
+            let status = url.withUnsafeFileSystemRepresentation { path in
+                guard let path else { return Int32(-1) }
+                return lstat(path, &metadata)
+            }
+            guard status == 0, metadata.st_mode & S_IFMT == S_IFREG else { continue }
+
+            let modificationTime = Date(
+                timeIntervalSince1970: TimeInterval(metadata.st_mtimespec.tv_sec)
+                    + TimeInterval(metadata.st_mtimespec.tv_nsec) / 1_000_000_000
+            )
+            guard now.timeIntervalSince(modificationTime) > retentionInterval else { continue }
+            if unlinkManagedCopy(at: url) {
+                removedCount += 1
+            }
+        }
+        return removedCount
+    }
+
+    @discardableResult
+    private static func unlinkManagedCopy(at url: URL) -> Bool {
+        url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return false }
+            return Darwin.unlink(path) == 0
+        }
+    }
+}
+
+@MainActor
+final class SafePreviewOpenMaintenance {
+    private let rootURL: URL?
+    private let retentionInterval: TimeInterval
+    private let intervalNanoseconds: UInt64
+    private var task: Task<Void, Never>?
+
+    var isRunning: Bool { task != nil }
+
+    init(
+        rootURL: URL? = nil,
+        retentionInterval: TimeInterval = SafePreviewOpenStore.retentionInterval,
+        intervalNanoseconds: UInt64 = SafePreviewOpenStore.cleanupIntervalNanoseconds
+    ) {
+        self.rootURL = rootURL
+        self.retentionInterval = retentionInterval
+        self.intervalNanoseconds = intervalNanoseconds
+    }
+
+    func start() {
+        guard task == nil else { return }
+        cleanupNow()
+
+        let intervalNanoseconds = max(intervalNanoseconds, 1)
+        task = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: intervalNanoseconds)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                self?.cleanupNow()
+            }
+        }
+    }
+
+    func stop() {
+        task?.cancel()
+        task = nil
+    }
+
+    deinit {
+        task?.cancel()
+    }
+
+    private func cleanupNow() {
+        do {
+            let root = try rootURL ?? SafePreviewOpenStore.defaultRootURL()
+            try SafePreviewOpenStore.prepareRoot(root)
+            SafePreviewOpenStore.cleanupExpiredCopies(
+                in: root,
+                retentionInterval: retentionInterval
+            )
+        } catch {
+            // Maintenance is best effort. A later period or materialization retries it.
+        }
+    }
 }
 
 struct PreviewExternalLink: Equatable, Sendable {
@@ -67,6 +351,7 @@ struct PreviewLocalLink: Equatable, Sendable {
     let fragment: String?
     let kind: PreviewLocalLinkKind
     let snapshot: PreviewLocalFileSnapshot
+    let projectRoot: URL?
 }
 
 enum PreviewLinkFailureReason: Equatable, Sendable {
@@ -74,6 +359,7 @@ enum PreviewLinkFailureReason: Equatable, Sendable {
     case invalidTarget
     case unsupportedScheme
     case relativeTargetNeedsSavedDocument
+    case outsideProject
     case missingHeading
     case missingLocalTarget
     case unavailableLocalTarget
@@ -109,15 +395,30 @@ struct PreviewLinkPlan: Identifiable, Equatable, Sendable {
 }
 
 actor PreviewLinkWorker {
-    func plan(markdown: String, target: String, documentURL: URL?) -> PreviewLinkPlan {
-        PreviewLinkPlanner.plan(markdown: markdown, target: target, documentURL: documentURL)
+    func plan(
+        markdown: String,
+        target: String,
+        documentURL: URL?,
+        projectRoot: URL? = nil
+    ) -> PreviewLinkPlan {
+        PreviewLinkPlanner.plan(
+            markdown: markdown,
+            target: target,
+            documentURL: documentURL,
+            projectRoot: projectRoot
+        )
     }
 }
 
 enum PreviewLinkPlanner {
     private static let maximumTargetBytes = 16 * 1_024
 
-    static func plan(markdown: String, target: String, documentURL: URL?) -> PreviewLinkPlan {
+    static func plan(
+        markdown: String,
+        target: String,
+        documentURL: URL?,
+        projectRoot: URL? = nil
+    ) -> PreviewLinkPlan {
         let sourceUTF8 = Data(markdown.utf8)
         let safeTarget = safeDisplayTarget(target)
         let decodedTarget = target.removingPercentEncoding
@@ -196,66 +497,6 @@ enum PreviewLinkPlanner {
                         )
                     )
                 )
-            case "mailto":
-                guard components.query == nil,
-                      components.fragment == nil,
-                      !components.path.isEmpty,
-                      let url = components.url,
-                      decodedComponent(components.path, permitsEmpty: false) != nil
-                else {
-                    return blocked(
-                        sourceUTF8: sourceUTF8,
-                        target: target,
-                        reason: .invalidTarget,
-                        safeTarget: safeTarget
-                    )
-                }
-                return PreviewLinkPlan(
-                    sourceUTF8: sourceUTF8,
-                    target: target,
-                    destination: .external(
-                        PreviewExternalLink(url: url, displayDestination: "默认邮件应用")
-                    )
-                )
-            case "file":
-                var fileComponents = components
-                fileComponents.fragment = nil
-                let fragment: String?
-                if let encodedFragment = components.percentEncodedFragment {
-                    guard let decoded = decodedComponent(encodedFragment) else {
-                        return blocked(
-                            sourceUTF8: sourceUTF8,
-                            target: target,
-                            reason: .invalidTarget,
-                            safeTarget: safeTarget
-                        )
-                    }
-                    fragment = decoded.isEmpty ? nil : decoded
-                } else {
-                    fragment = nil
-                }
-                guard components.query == nil,
-                      components.user == nil,
-                      components.password == nil,
-                      components.host == nil || components.host?.isEmpty == true
-                          || components.host?.lowercased() == "localhost",
-                      let url = fileComponents.url,
-                      url.isFileURL
-                else {
-                    return blocked(
-                        sourceUTF8: sourceUTF8,
-                        target: target,
-                        reason: .invalidTarget,
-                        safeTarget: safeTarget
-                    )
-                }
-                return localPlan(
-                    sourceUTF8: sourceUTF8,
-                    target: target,
-                    url: url.standardizedFileURL,
-                    fragment: fragment,
-                    documentURL: documentURL
-                )
             default:
                 return blocked(
                     sourceUTF8: sourceUTF8,
@@ -294,12 +535,50 @@ enum PreviewLinkPlanner {
                 relativeTo: documentURL.deletingLastPathComponent()
             ).standardizedFileURL
         }
+        let normalizedProjectRoot: URL?
+        if let projectRoot {
+            do {
+                normalizedProjectRoot = try FolderProjectPathBoundary.normalizedProjectRoot(
+                    projectRoot
+                )
+            } catch {
+                return blocked(
+                    sourceUTF8: sourceUTF8,
+                    target: target,
+                    reason: .outsideProject,
+                    safeTarget: safeTarget
+                )
+            }
+            guard let normalizedProjectRoot,
+                  FolderProjectPathBoundary.resolvedURL(
+                      url,
+                      within: normalizedProjectRoot
+                  ) != nil,
+                  documentURL.map({
+                      FolderProjectPathBoundary.resolvedURL(
+                          $0,
+                          within: normalizedProjectRoot
+                      ) != nil
+                  }) ?? true
+            else {
+                return blocked(
+                    sourceUTF8: sourceUTF8,
+                    target: target,
+                    reason: .outsideProject,
+                    safeTarget: safeTarget
+                )
+            }
+        } else {
+            normalizedProjectRoot = nil
+        }
+
         return localPlan(
             sourceUTF8: sourceUTF8,
             target: target,
             url: url,
             fragment: parts.fragment,
-            documentURL: documentURL
+            documentURL: documentURL,
+            projectRoot: normalizedProjectRoot
         )
     }
 
@@ -309,7 +588,12 @@ enum PreviewLinkPlanner {
     }
 
     static func localTargetIsCurrent(_ link: PreviewLocalLink) -> Bool {
-        (try? PreviewLocalFileSnapshot.capture(link.url)) == link.snapshot
+        if let projectRoot = link.projectRoot,
+           FolderProjectPathBoundary.resolvedURL(link.url, within: projectRoot) == nil
+        {
+            return false
+        }
+        return (try? PreviewLocalFileSnapshot.capture(link.url)) == link.snapshot
     }
 
     private static func localPlan(
@@ -317,7 +601,8 @@ enum PreviewLinkPlanner {
         target: String,
         url: URL,
         fragment: String?,
-        documentURL: URL?
+        documentURL: URL?,
+        projectRoot: URL?
     ) -> PreviewLinkPlan {
         if let documentURL,
            url.standardizedFileURL.path == documentURL.standardizedFileURL.path
@@ -365,6 +650,14 @@ enum PreviewLinkPlanner {
         }
 
         let kind = localKind(for: url)
+        if projectRoot != nil, kind == .attachment {
+            return blocked(
+                sourceUTF8: sourceUTF8,
+                target: target,
+                reason: .unsupportedScheme,
+                safeTarget: safeTarget
+            )
+        }
         do {
             switch kind {
             case .image:
@@ -399,7 +692,8 @@ enum PreviewLinkPlanner {
                     url: url,
                     fragment: fragment,
                     kind: kind,
-                    snapshot: snapshot
+                    snapshot: snapshot,
+                    projectRoot: projectRoot
                 )
             )
         )
@@ -462,7 +756,7 @@ enum PreviewLinkPlanner {
         else {
             return nil
         }
-        return decoded
+        return decoded.precomposedStringWithCanonicalMapping
     }
 
     private static func safeDisplayTarget(_ target: String) -> String {
@@ -503,97 +797,50 @@ enum PreviewLinkPlanner {
     }
 }
 
-enum PreviewHeadingAnchorResolver {
-    static func heading(for fragment: String, in headings: [DocumentHeading]) -> DocumentHeading? {
-        let requested = fragment.removingPercentEncoding ?? fragment
+enum HeadingIdentifier {
+    static func base(for headingText: String) -> String {
+        let normalized = headingText
+            .precomposedStringWithCanonicalMapping
+            .lowercased()
+            .precomposedStringWithCanonicalMapping
+        var identifier = ""
+
+        for scalar in normalized.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) || scalar == "_" {
+                identifier.unicodeScalars.append(scalar)
+            } else if scalar == "-" || CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                guard !identifier.isEmpty, identifier.last != "-" else { continue }
+                identifier.append("-")
+            }
+        }
+
+        while identifier.last == "-" {
+            identifier.removeLast()
+        }
+        return identifier.isEmpty ? "section" : identifier
+    }
+
+    static func identifiers(for headings: [DocumentHeading]) -> [String] {
         var duplicateCounts: [String: Int] = [:]
-        for heading in headings {
-            let base = slug(heading.title)
+        return headings.map { heading in
+            let base = base(for: heading.title)
             let duplicate = duplicateCounts[base, default: 0]
             duplicateCounts[base] = duplicate + 1
-            let identifier = duplicate == 0 ? base : "\(base)-\(duplicate)"
-            if identifier == requested.lowercased()
-                || UTF8Text.isExactlyEqual(heading.title, requested)
-            {
+            return duplicate == 0 ? base : "\(base)-\(duplicate)"
+        }
+    }
+}
+
+enum PreviewHeadingAnchorResolver {
+    static func heading(for fragment: String, in headings: [DocumentHeading]) -> DocumentHeading? {
+        // URL policy decodes the raw fragment exactly once. This resolver accepts
+        // only that decoded value and performs an exact match against generated IDs.
+        for (heading, identifier) in zip(headings, HeadingIdentifier.identifiers(for: headings)) {
+            if identifier == fragment {
                 return heading
             }
         }
         return nil
-    }
-
-    private static func slug(_ title: String) -> String {
-        var result = ""
-        for scalar in title.lowercased().unicodeScalars {
-            if CharacterSet.alphanumerics.contains(scalar)
-                || CharacterSet.nonBaseCharacters.contains(scalar)
-                || scalar == "_" || scalar == "-"
-            {
-                result.unicodeScalars.append(scalar)
-            } else if CharacterSet.whitespacesAndNewlines.contains(scalar) {
-                result.append("-")
-            }
-        }
-        return result
-    }
-}
-
-@MainActor
-final class PreviewDocumentNavigationBroker {
-    static let shared = PreviewDocumentNavigationBroker()
-
-    private struct Registration {
-        let url: URL
-        let navigate: (String?) -> Void
-    }
-
-    private struct PendingNavigation {
-        let token: UUID
-        let fragment: String?
-    }
-
-    private var registrations: [UUID: Registration] = [:]
-    private var pending: [String: PendingNavigation] = [:]
-
-    func register(id: UUID, url: URL?, navigate: @escaping (String?) -> Void) {
-        registrations[id] = nil
-        guard let url else { return }
-        let key = canonicalKey(url)
-        registrations[id] = Registration(url: url, navigate: navigate)
-        if let request = pending.removeValue(forKey: key) {
-            navigate(request.fragment)
-        }
-    }
-
-    func unregister(id: UUID) {
-        registrations[id] = nil
-    }
-
-    func routeIfOpen(to url: URL, fragment: String?) -> Bool {
-        let key = canonicalKey(url)
-        guard let registration = registrations.values.first(where: {
-            canonicalKey($0.url) == key
-        }) else {
-            return false
-        }
-        registration.navigate(fragment)
-        return true
-    }
-
-    @discardableResult
-    func enqueue(url: URL, fragment: String?) -> UUID {
-        let token = UUID()
-        pending[canonicalKey(url)] = PendingNavigation(token: token, fragment: fragment)
-        return token
-    }
-
-    func cancelPending(url: URL, token: UUID) {
-        let key = canonicalKey(url)
-        guard pending[key]?.token == token else { return }
-        pending[key] = nil
-    }
-
-    private func canonicalKey(_ url: URL) -> String {
-        url.standardizedFileURL.path
     }
 }
 
@@ -680,6 +927,7 @@ struct PreviewLinkDecisionView: View {
                 Button("重新授权…") { onReauthorize(url) }
             } else if failure.reason == .unsupportedScheme
                 || failure.reason == .invalidTarget
+                || failure.reason == .outsideProject
                 || failure.reason == .unsafeLocalTarget
                 || failure.reason == .cannotOpen
             {
@@ -702,7 +950,7 @@ struct PreviewLinkDecisionView: View {
                 "找不到链接目标"
             case .noLongerInDocument: "预览链接已过期"
             case .invalidTarget, .unsupportedScheme, .unsafeLocalTarget, .cannotOpen,
-                 .relativeTargetNeedsSavedDocument:
+                 .relativeTargetNeedsSavedDocument, .outsideProject:
                 "为安全起见，未打开这个链接"
             }
         }
@@ -730,7 +978,7 @@ struct PreviewLinkDecisionView: View {
         case let .local(link):
             switch link.kind {
             case .markdown:
-                "将在 Inflow 中打开已校验的 Markdown 文件，并在有标题片段时定位到对应源文本。"
+                PreviewLocalMarkdownPrompt.message(for: link)
             case .image, .pdf:
                 "目标已校验为受支持的本地文件。确认后将交给系统默认应用。"
             case .attachment:
@@ -746,6 +994,8 @@ struct PreviewLinkDecisionView: View {
                 "链接类型不受支持或无法安全确认。"
             case .relativeTargetNeedsSavedDocument:
                 "未命名文档没有可用于解析相对链接的目录。请先保存文档。"
+            case .outsideProject:
+                "链接目标在规范化并解析符号链接后不位于当前项目中，因此未读取或打开。"
             case .missingHeading:
                 "当前目标文档中没有与\(failure.safeTarget)匹配的标题，因此未移动编辑位置。"
             case .missingLocalTarget:
@@ -779,7 +1029,8 @@ struct PreviewLinkDecisionView: View {
 
     private var confirmTitle: String {
         switch plan.destination {
-        case let .local(link) where link.kind == .markdown: "在 Inflow 中打开"
+        case let .local(link) where link.kind == .markdown:
+            PreviewLocalMarkdownPrompt.confirmTitle(for: link)
         case .external: "继续打开"
         default: "打开"
         }

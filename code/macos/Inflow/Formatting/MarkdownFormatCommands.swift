@@ -45,11 +45,6 @@ struct MarkdownFormatCommands: Commands {
             .keyboardShortcut("i", modifiers: .command)
             .disabled(actions?.canFormat != true)
 
-            Button(MarkdownInlineFormat.strikethrough.label) {
-                actions?.apply(.inline(.strikethrough))
-            }
-            .disabled(actions?.canFormat != true)
-
             Menu("标题") {
                 ForEach(MarkdownHeadingLevel.allCases) { level in
                     Button(level.label) {
@@ -78,17 +73,6 @@ struct MarkdownFormatCommands: Commands {
             }
             .disabled(actions?.canFormat != true)
 
-            Button("代码块") {
-                actions?.apply(.codeBlock)
-            }
-            .disabled(actions?.canFormat != true)
-
-            Divider()
-
-            Button("清除格式标记") {
-                actions?.apply(.clear)
-            }
-            .disabled(actions?.canClearFormat != true)
         }
     }
 }

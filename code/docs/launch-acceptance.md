@@ -1,73 +1,87 @@
-# macOS 首发验收矩阵
+# Inflow 个人首版内部验收矩阵
 
-本表把产品文档中的首发 UAT 映射到可重复证据。它只记录代码与候选构建事实，不替代产品负责人批准，也不把当前开发机结果冒充最低支持环境、真实辅助技术或线上服务验收。
+> 适用范围：[个人首版（内部验证版）范围](../../文档/01-产品设计/06-版本规划/02-首发版本范围.md)
+>
+> 人工步骤：[产品验收标准](../../文档/01-产品设计/06-版本规划/03-产品验收标准.md)
+>
+> 当前结论：UAT-PERSONAL-01 至 10 均未执行；个人首版尚未通过。
+
+本文把当前代码入口映射到个人首版 UAT。它不再使用旧的公共首发、签名、公证、更新、候选包或 30 次性能门禁作为当前完成条件。
 
 ## 状态定义
 
-- **自动化闭环**：当前实现有正向、失败关闭或回归测试，并进入 `scripts/verify-launch.sh` 全量门禁。
-- **实现闭环，外部 UAT 待执行**：代码路径和自动化成立，但权威标准要求指定硬件、系统辅助技术、物理输入法、真实签名或服务端事实。
-- **外部阻断**：仓库不能自行创建证书、产品批准或受控服务配置；不得伪造为通过。
+- **实现入口**：当前工作树中存在对应主流程、纯函数或测试文件，可供开发验证。
+- **自动化结果**：只有实际运行并记录的构建或测试结果才能声称通过；代码或测试文件存在本身不算结果。
+- **人工 UAT**：产品负责人必须在自己的真实项目上完成产品文档中的操作，并记录“通过”“退回”或“未执行”。
+- **个人首版通过**：仅当十项人工 UAT 全部实际通过，且产品负责人签署最终结论时成立。
 
-## 首发 UAT 映射
+自动化不能替代 Finder、Dock、拖放、中文输入法、外部编辑器、外部查看器、沙箱授权、强制退出、焦点或真实项目烟测。
 
-| UAT | 当前实现与自动化证据 | 状态 / 发布前补充 |
-| --- | --- | --- |
-| FILE-01 新建与首次保存 | `FolderBrowserTests` 覆盖启动请求可编辑的未命名文档、新空白文档进入源码编辑视图、Dock 重开行为、顶部“文件”菜单保留打开/打开文件夹/打开最近，以及文件夹精确书签与 Markdown 扫描；`MarkdownCodecTests` 覆盖新文档 UTF-8/LF；`AppPreferencesTests` 验证真实 DocumentGroup 文档类支持原位保存 | 自动化闭环；候选包人工确认启动无 Finder 面板、光标直接进入编辑区，输入后第一次 ⌘S 弹出原生保存面板 |
-| FILE-02 已有文件日常保存 | UTF-8/BOM/LF/CRLF 往返、持久 AppKit undo、原生保存协调器与重新打开授权均有测试 | 自动化闭环；候选包人工保存/关闭/重开 |
-| FILE-03 保存失败与只读 | `DocumentFileSafetyTests`、`DocumentRelocationTests` 与冻结失败文案覆盖原文件保全、另存和复制退路 | 自动化闭环；真实只读卷/权限变化人工走查 |
-| FILE-04 外部变化 | 三方快照、外部修改/删除、重载、冲突副本、过期决定和目录授权均有失败关闭测试 | 自动化闭环；用另一编辑器完成候选包端到端走查 |
-| FILE-05 另存与目标占用 | Rust 引用提取、跨目录影响、目标指纹、已打开目标和原生 Save As/Save Copy 操作有测试 | 自动化闭环；真实双窗口与保存面板人工走查 |
-| FILE-06 异常恢复 | `DocumentRecoveryTests` 覆盖 5 秒保护、30 天保留、磁盘关系、恢复/另存/放弃和保护降级 | 自动化闭环；真实强制退出后重启走查 |
-| FLOW-01 三种写作方式 | 持久 `NSTextView`、scene 级视图状态、分栏比例、选区/undo/焦点迁移和标题定位有宿主测试 | 自动化闭环；物理键盘与多窗口人工走查 |
-| FLOW-02 连续输入与反馈 | 派生任务代次、过期结果拒绝、分批高亮、1 MiB 完整分析/预览/高亮均有测试 | 自动化闭环；最低目标机输入停顿见 FLOW-05 |
-| FLOW-03 查找替换 | Unicode 字素、多行、大小写、环绕、影响预览、一次 undo、只读和 responder chain 有测试 | 自动化闭环；中文输入法候选人工走查 |
-| FLOW-04 关闭与恢复工作状态 | scene 恢复、最近主动视图、窗口独立视图/分栏、滚动与开关持久化有测试 | 自动化闭环；真实应用重启与两个文档窗口人工走查 |
-| FLOW-05 首发响应与启动 | Release 1 MiB/10,000 行完整派生硬门禁为 300 ms；Debug 另有主线程响应测试 | 实现闭环，外部 UAT 待执行：入门 Apple Silicon、8 GB、macOS 14 上测冷启动、打开、150 ms 视图切换、100 ms 输入停顿及分位数 |
-| STRUCT-01 大纲与标题定位 | Rust 标题范围、重复/Unicode 标题、大纲和预览标题双向定位、过期快照拒绝有测试 | 自动化闭环；键盘/VoiceOver 层级人工走查 |
-| STRUCT-02 基础表达 | Rust 渲染、语法高亮、公式、四类 Mermaid、局部降级及所有首发格式/插入命令有测试 | 自动化闭环；候选包视觉抽样 |
-| STRUCT-03 图片与链接 | 文件选择/粘贴/拖入、复制/原位、相对目录、替代文本、缺图恢复和封闭链接计划有测试 | 自动化闭环；真实沙箱选择面板和外部应用确认人工走查 |
-| DELIVER-01 当前内容交付 | HTML/PDF 共享冻结 UTF-8 快照；`LaunchJourneyTests` 用同一份日常、结构、技术与资源样本串联解码、Rust 分析/渲染、HTML 及 PDF 交付 | 自动化闭环；候选包快速编辑后导出人工比对 |
-| DELIVER-02 离线交付物 | CSP/无脚本/无网络、自包含资源、图片元数据清除、PDF 隐私与分页/宽度边界有测试 | 自动化闭环；在普通浏览器与 PDF 阅读器离线打开人工走查 |
-| DELIVER-03 问题检查与覆盖 | 缺图/异常链接预检、100 MiB 上限、覆盖目标指纹、原子写入、取消和失败退路有测试 | 自动化闭环；真实目标被其他进程替换人工走查 |
-| BASE-01 无账号、无网络、无附加能力 | 启动与核心代码无账号依赖；预览 CSP 禁止网络；实际菜单测试拒绝所有后续版本入口 | 自动化闭环；候选机断网完整旅程人工走查 |
-| BASE-02 主动外部行为 | 网页/mailto 离开确认、本地目标快照、匿名数据显式同意/关闭/清除和字段闭集有测试 | 实现闭环；匿名数据线上发送见 PRIVACY-01 |
-| A11Y-01 键盘闭环 | 菜单/快捷键唯一性、焦点、Tab/Shift-Tab/Esc/IME、查找 responder 和场景路由有宿主测试 | 实现闭环，外部 UAT 待执行：物理键盘完成完整旅程 |
-| A11Y-02 放大与高对比度 | 字号/缩放/宽度边界、四主题、深浅外观、增强对比和减少动态配置有测试 | 实现闭环，外部 UAT 待执行：macOS 放大、高对比和减少动态的候选包视觉走查 |
-| A11Y-03 辅助阅读 | 编辑器、预览、大纲、状态、错误、恢复、设置和隐私控件均提供明确辅助名称/值/层级 | 实现闭环，外部 UAT 待执行：VoiceOver 完整旅程，不以静态 label 代替 |
-| PREF-01 设置约束 | 默认值、范围、持久化、设置失败、分组/全部恢复默认和内容不变性有测试 | 自动化闭环；真实重启抽样 |
-| PRIVACY-01 匿名产品使用数据 | 默认关闭、查看后启用、闭集载荷、禁止内容无写入通道、30 天本地清理、关闭/清除和 HTTPS 无重定向有测试；候选 App 内置不关联身份、不跟踪且仅用于分析的 `PrivacyInfo.xcprivacy`，并由 XCTest 与 Archive 双重校验 | 外部阻断：发布配置需受控 HTTPS endpoint，并验证服务端单次事件 ≤30 天、不可回溯汇总 ≤12 个月；未验证前客户端保持不可开启 |
+## 当前 UAT 映射
 
-## 自动门禁
+| UAT | 当前可检查的实现入口 | 必须由本人实际确认 | 当前人工状态 |
+| --- | --- | --- | --- |
+| UAT-PERSONAL-01 入口、新建、首次保存、编辑与关闭 | InflowApp、RecentDocuments、FolderBrowser、MarkdownDocument、ManualSaveDocumentHostPolicy、DocumentSaveCommands；相关 FolderBrowserTests、RecentDocumentsTests、MarkdownCodecTests、AppPreferencesTests | 普通启动；菜单与 Command+N；首次保存取消/成功；应用内多文件与项目；Finder“打开方式”与默认应用；拖到应用图标；去重和空白窗口复用；另存退出项目；关闭确认；保存失败；全程无自动保存 | **未执行** |
+| UAT-PERSONAL-02 简单外部变化提示 | DocumentFileSafety、DocumentFileSafetyView、DocumentSaveCommands；相关 DocumentFileSafetyTests | 外部编辑器修改；重新加载或暂不处理；双方变化后手动保存的明确覆盖确认；取消时两边各自保持；无三版本比较或自动合并 | **未执行** |
+| UAT-PERSONAL-03 轻量单快照恢复 | DocumentRecovery、LightweightRecoveryPromptView；相关 DocumentRecoveryTests | 真实强制退出；每份文档只见一个最新快照；恢复为未命名文档或放弃；恢复前不覆盖原文件；手动保存后清理 | **未执行** |
+| UAT-PERSONAL-04 源码、分栏、查找格式与两类 Mermaid | MarkdownEditorView、MarkdownSourceEditor、MarkdownRenderer、MarkdownFormatter、查找组件；相关 MarkdownRendererTests、MarkdownFormatterTests、MarkdownInsertionTests | 源码与分栏共用正文；大纲定位；查找替换与一次撤销；只使用允许的格式命令和固定表格模板；删除线/围栏代码/图片走源码；CommonMark/GFM、flowchart、stateDiagram-v2；原始 HTML 安全；单图局部降级；不冒充公式、脚注或其他 Mermaid | **未执行** |
+| UAT-PERSONAL-05 图片与本地链接 | ImageAssetImporter、LocalImageResolver、PreviewLinkNavigation、图片插入与临时副本路径；相关 MarkdownInsertionTests、MarkdownRendererTests | 文件选择/拖放/剪贴板静态 PNG/JPEG；assets 与递增重名；撤销只移除引用且保留资源；项目 Markdown 打开原件并去重；PNG/JPEG/PDF 是不可写临时副本；http/https 需明确激活；file、脚本、自定义 scheme 被阻止；临时副本周期清理 | **未执行** |
+| UAT-PERSONAL-06 基础浅色 PDF | HTMLExportCommands 当前只安装 PDF；PDFExporter 与 personalPDF 配置；相关 PDF 定向测试及“无 HTML 菜单”测试 | 空白禁用；导出时当前内容；基础浅色页面；PNG/JPEG、两类 Mermaid 与缺图占位；http/https 可点击且危险 scheme 无动作；同名覆盖确认；成功后打开/Finder；失败不误报 | **未执行** |
+| UAT-PERSONAL-07 本地最小日志与无自动遥测 | LocalFailureLogController、帮助菜单导出日志；LocalFailureLogTests | 当前与上一会话；仅时间、应用版本、操作类别和错误代码；无敏感内容；本人选择位置；Inflow 不上传、不打开上传渠道、不保留隐藏副本 | **未执行** |
+| UAT-PERSONAL-08 一个真实项目端到端与基础烟测 | 上述主流程的组合入口 | 用同一个真实项目完成产品文档列出的整段旅程；基础键盘和焦点；非颜色状态；可控异常不崩溃；较大文档继续工作或安全降级；记录实际环境与观察，不套用固定阈值或 30 次协议 | **未执行** |
+| UAT-PERSONAL-09 项目目录树、新建与相对资源 | FolderBrowser、LightweightProjectCoordinator、项目资源边界与链接路径；相关 FolderBrowserTests、MarkdownRendererTests | 普通文件夹项目；递归树、隐藏项与手动刷新；按钮/右键安全新建；未保存切换；落盘前后失败差异；项目内相对链接与图片；规范化和符号链接越界阻止；编辑区与应用图标拖放语义分离 | **未执行** |
+| UAT-PERSONAL-10 即时渲染编辑基础范围 | RenderedMarkdownEditor、MarkdownSourceEditorSession、MarkdownEditorView；RenderedMarkdownEditorTests | 基础结构直接编辑；复杂块局部源码；中文输入法 marked text；普通点击编辑、Command+点击打开；文本/RTF/HTML 粘贴只留纯文本，PNG/JPEG 走图片流程；三视图同一正文/undo/路径；保存后仍为纯 Markdown；未操作与不支持范围逐字不变 | **未执行** |
 
-首个完整本地候选的构建环境、校验结果、产物哈希及外部待办记录在 [`launch-candidate-0.1.0-build-1.md`](launch-candidate-0.1.0-build-1.md)。该记录明确属于无签名验收包，不构成发布批准。
+表中的测试名称只是定位入口。本文没有把它们写成一次新的全量测试回执，也没有因此改变人工状态。
 
-无发布证书的开发机运行：
+## UAT-PERSONAL-04 与 05 的固定边界
 
-```sh
-scripts/release-workflow.sh check
-```
+为防止旧文档把超范围能力重新带回当前口径，验收时必须特别检查：
 
-需要保留本地候选包时运行：
+- 格式菜单只有粗体、斜体、行内代码、H1–H6、引用和三类列表；链接与固定空表格模板位于插入菜单。
+- 删除线、围栏代码和图片内容通过源码编辑与预览验证，不写成格式菜单能力。
+- Mermaid 当前只验 flowchart 与 stateDiagram-v2；公式、脚注、sequenceDiagram、classDiagram 和其他 Mermaid 不计入通过。
+- 原始 HTML 只能可读或安全转义，不能执行样式、脚本、事件、表单、嵌入、导航或网络动作。
+- 图片新增只接受静态 PNG/JPEG，写入 assets，重名递增；撤销不删除已写入资源。
+- 项目内 Markdown 打开可编辑原件；PNG/JPEG/PDF 打开不可写临时副本。即时渲染编辑只在 Command+点击时执行链接。
 
-```sh
-scripts/release-workflow.sh candidate
-```
+## 自动化检查口径
 
-取得 Developer ID 证书与公证 Keychain profile 后运行：
+开发者可以按改动范围运行 Rust 检查、macOS build 与定向 XCTest。允许记录：
 
-```sh
-scripts/release-workflow.sh developer-id-archive YOUR_TEAM_ID
-scripts/release-workflow.sh notarize /path/to/Inflow.xcarchive KEYCHAIN_PROFILE
-```
+- 执行日期、提交或工作树标识；
+- 精确命令；
+- 通过、失败、跳过与未执行数量；
+- 已知测试宿主或环境阻塞。
 
-门禁包含 Rust 格式/Clippy/150 项单测、非零且无跳过的 macOS 全量 XCTest、Analyze、Release 大文档性能测试，以及 Archive 的 arm64/macOS 14 Mach-O、系统动态依赖、无开发产物污染、版本、私有路径、dSYM、hardened runtime、entitlement 和隐私清单检查。
+仓库级当前自动检查的唯一配置是 `scripts/verify-launch.sh --personal`。它运行 Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查，不生成归档或发布证据。`quality/personal-xctest-scope.tsv` 将当前 360 个 XCTest method 逐项分为 254 个 `current-direct`、13 个 `current-host`、88 个 `deferred` 与 5 个 `fixed-performance`；personal profile 只执行第一类，其他三类不计为通过。13 个宿主用例保留为 App-host 专项验证或真实应用 UAT；deferred profile 仍运行 macOS 全量测试。清单只要出现重复、陈旧、未分类、非法分区或计数变化，脚本就失败关闭。`--deferred-release-local`、`--deferred-signed-archive`、`scripts/release-workflow.sh`、固定性能协议和扩展合同均为显式后置门禁；即使单独通过，也不改变本表的人工状态。
 
-## 仍需外部完成的发布条件
+可用 `scripts/verify-launch.sh --describe-profile personal` 查看当前配置，也可查看两个 deferred profile；描述命令不构建、不归档、不签名、不联网。
 
-1. 产品负责人批准仍标为“待评审”的首发范围、验收标准与附录，并确认候选包/发布说明一致。
-2. 在附录 A 的入门 Apple Silicon、8 GB、macOS 14 环境记录冷启动、打开、视图切换、输入停顿和预览更新的中位/最长/95 分位结果。
-3. 用物理键盘、中文输入法、VoiceOver、系统放大、高对比和减少动态效果执行六条核心旅程。
-4. 配置并审查受控匿名数据 HTTPS 服务；未完成时保持 endpoint 为空，不能把“控制界面存在”写成线上发送已验收。
-5. 由选定分发渠道提供真实签名身份，完成 notarization/渠道验证，再用严格模式检查最终 `.xcarchive`。`--local` 和 ad-hoc 只属于开发证据。
+不允许把以下内容写成当前结论：
 
-上述任一项未完成时，可以确认“首发代码实现与自动化闭环”，不能宣称“产品发布验收全部通过”。
+- “有测试文件”推导为“测试已通过”；
+- “定向测试通过”推导为“十项 UAT 已通过”；
+- “产品范围已批准”推导为“实现已完成”；
+- 旧归档、旧哈希或旧测试计数推导为“当前候选有效”。
+
+## 人工记录模板
+
+产品负责人完成一次真实操作后，至少记录：
+
+| 字段 | 内容 |
+| --- | --- |
+| 日期 | 实际验收日期 |
+| 环境 | Mac 型号、macOS 版本 |
+| 构建 | 应用构建或提交标识 |
+| 主样本 | 本人真实 Markdown 项目的内部标识 |
+| 烟测样本 | 项目内较大 Markdown 的内部标识 |
+| UAT 结果 | UAT-PERSONAL-01 至 10 各自的通过、退回或未执行 |
+| 问题 | 影响、复现方式与复验结果 |
+| 最终结论 | 产品负责人签署“个人首版通过”或“退回” |
+
+在这份记录实际产生前，当前结论保持“未执行”。
+
+## 历史记录
+
+[launch-candidate-0.1.0-build-1.md](launch-candidate-0.1.0-build-1.md) 已废止。它不绑定当前工作树，不使用当前个人首版 UAT，也不构成当前候选、内部验收或发布批准。

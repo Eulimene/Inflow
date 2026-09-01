@@ -8,20 +8,35 @@ enum RecoveryProtectionPrompt {
     static let continueTitle = "继续写作"
 }
 
+enum RecoveryCenterPrompt {
+    static let title = "恢复未保存的文档"
+    static let message = "上次 Inflow 未正常关闭。以下内容来自异常关闭，可打开或与当前磁盘版本比较。"
+}
+
 enum RecoveryOriginalChangePrompt {
-    static let title = "恢复内容不会覆盖原文件"
-    static let message = "原文件已经变化。请比较后将恢复内容作为未命名文档打开或另存。"
+    static let title = "原文件已变化"
+    static let message =
+        "恢复内容不会自动写回。请比较后将它作为未命名文档打开，或另存到你确认的位置。"
     static let compareTitle = "查看差异…"
     static let openTitle = "打开恢复文档"
     static let saveAsTitle = "另存为…"
     static let closeTitle = "关闭"
 }
 
+enum RecoveryClearAllPrompt {
+    static let title = "清除全部恢复内容？"
+    static let message =
+        "这会清除全部可恢复内容、无法读取的隔离材料、未完成状态和关联的本机保护密钥；"
+        + "后续修改会建立新的保护。你的 Markdown 文件、资源和已导出文件不会被删除或改写。"
+    static let actionTitle = "清除全部"
+    static let buttonTitle = "清除全部恢复内容…"
+}
+
 enum RecoveryDiskPreview: Equatable, Sendable {
     case unnamed
     case missing(URL)
     case unavailable(URL)
-    case readable(URL, text: String, matchesRecovery: Bool)
+    case readable(URL, text: String, relationship: DocumentRecoveryDiskRelationship)
 
     var status: String {
         switch self {
@@ -31,9 +46,11 @@ enum RecoveryDiskPreview: Equatable, Sendable {
             "原文件已不存在：\(url.path)"
         case let .unavailable(url):
             "暂时无法读取原文件：\(url.path)"
-        case let .readable(url, _, true):
+        case let .readable(url, _, .sameAsRecovery):
             "磁盘文件与恢复内容当前一致：\(url.path)"
-        case let .readable(url, _, false):
+        case let .readable(url, _, .sameAsCommittedBase):
+            "恢复内容比该会话最近已知保存版本更新：\(url.path)"
+        case let .readable(url, _, .divergedOrUnknown):
             "磁盘文件与恢复内容不同：\(url.path)"
         }
     }
@@ -44,7 +61,7 @@ enum RecoveryDiskPreview: Equatable, Sendable {
     }
 
     var originalHasChanged: Bool {
-        guard case .readable(_, _, false) = self else { return false }
+        guard case .readable(_, _, .divergedOrUnknown) = self else { return false }
         return true
     }
 }
@@ -63,7 +80,7 @@ actor RecoveryDiskInspector {
             return .readable(
                 originalURL,
                 text: decoded.text,
-                matchesRecovery: UTF8Text.isExactlyEqual(decoded.text, record.text)
+                relationship: record.relationship(toDiskData: data)
             )
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
             return .missing(originalURL)
@@ -140,6 +157,116 @@ struct RecoveryProtectionStatusBanner: View {
     }
 }
 
+/// The personal milestone intentionally exposes recovery as a single-item prompt.
+/// The store can contain one latest snapshot for more than one document, but the
+/// user handles them sequentially instead of through a history or comparison UI.
+struct LightweightRecoveryPromptView: View {
+    @ObservedObject var coordinator: DocumentRecoveryCoordinator
+    let onClose: () -> Void
+
+    @Environment(\.newDocument) private var newDocument
+    @State private var recordPendingDiscard: DocumentRecoveryRecord?
+    @State private var errorMessage: String?
+
+    private var currentRecord: DocumentRecoveryRecord? {
+        coordinator.recoveredRecords.first
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("恢复未保存的文档")
+                    .font(.title2.weight(.semibold))
+                Spacer()
+                Button("稍后", action: onClose)
+                    .keyboardShortcut(.cancelAction)
+            }
+
+            if let record = currentRecord {
+                Label {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(record.displayName)
+                            .font(.headline)
+                            .lineLimit(1)
+                        Text("发现上次异常关闭前保留的一份最新快照。恢复后会作为未命名文档打开，不会覆盖原文件。")
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "doc.badge.clock")
+                        .foregroundStyle(.orange)
+                }
+
+                HStack {
+                    Button("放弃…", role: .destructive) {
+                        recordPendingDiscard = record
+                    }
+                    Spacer()
+                    Button("恢复为未命名文档") {
+                        restore(record)
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+            } else {
+                Text("没有可恢复的未保存内容。")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(20)
+        .frame(width: 520)
+        .onChange(of: coordinator.recoveredRecords) { _, records in
+            if records.isEmpty {
+                onClose()
+            }
+        }
+        .alert(
+            "恢复操作未完成",
+            isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )
+        ) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "恢复快照仍然保留。")
+        }
+        .confirmationDialog(
+            "放弃这份恢复内容？",
+            isPresented: Binding(
+                get: { recordPendingDiscard != nil },
+                set: { if !$0 { recordPendingDiscard = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("放弃", role: .destructive) {
+                guard let record = recordPendingDiscard else { return }
+                recordPendingDiscard = nil
+                Task { @MainActor in
+                    await coordinator.discard(record)
+                    if coordinator.recoveredRecords.contains(where: { $0.id == record.id }) {
+                        errorMessage = "未能放弃这份恢复内容；快照仍然保留。"
+                    }
+                }
+            }
+            Button("取消", role: .cancel) {
+                recordPendingDiscard = nil
+            }
+        } message: {
+            Text("这份未保存内容将被删除，且无法恢复。")
+        }
+    }
+
+    private func restore(_ record: DocumentRecoveryRecord) {
+        Task { @MainActor in
+            do {
+                let document = try await coordinator.claimForRestoration(record)
+                newDocument(document)
+            } catch {
+                errorMessage = "快照无法验证，因此没有打开新文档；原快照仍然保留。"
+            }
+        }
+    }
+}
+
 struct RecoveryCenterView: View {
     @ObservedObject var coordinator: DocumentRecoveryCoordinator
     let onClose: () -> Void
@@ -153,6 +280,7 @@ struct RecoveryCenterView: View {
     @State private var recordPendingDiscard: DocumentRecoveryRecord?
     @State private var comparisonRecordID: DocumentRecoveryRecord.ID?
     @State private var dismissedChangePromptRecordID: DocumentRecoveryRecord.ID?
+    @State private var isClearAllConfirmationPresented = false
 
     private var selectedRecord: DocumentRecoveryRecord? {
         coordinator.recoveredRecords.first { $0.id == selectedID }
@@ -162,13 +290,16 @@ struct RecoveryCenterView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("恢复未保存的文档")
+                    Text(RecoveryCenterPrompt.title)
                         .font(.title2.weight(.semibold))
-                    Text("这里只显示比最近磁盘内容更新、且上次未正常关闭的恢复副本。")
+                    Text(RecoveryCenterPrompt.message)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button(RecoveryClearAllPrompt.buttonTitle, role: .destructive) {
+                    isClearAllConfirmationPresented = true
+                }
                 Button("完成", action: onClose)
                     .keyboardShortcut(.cancelAction)
             }
@@ -243,6 +374,26 @@ struct RecoveryCenterView: View {
             }
         } message: {
             Text("这些未保存内容将被删除，且无法恢复。")
+        }
+        .confirmationDialog(
+            RecoveryClearAllPrompt.title,
+            isPresented: $isClearAllConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button(RecoveryClearAllPrompt.actionTitle, role: .destructive) {
+                Task { @MainActor in
+                    do {
+                        try await coordinator.removeAllRecoveryContent()
+                        selectedID = nil
+                    } catch {
+                        errorMessage =
+                            "未能清除全部恢复内容；未确认删除的内容仍保留。Markdown 文件未被修改。"
+                    }
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(RecoveryClearAllPrompt.message)
         }
     }
 
@@ -397,29 +548,27 @@ struct RecoveryCenterView: View {
     }
 
     private func restore(_ record: DocumentRecoveryRecord) {
-        do {
-            let document = try record.restoredDocument()
-            newDocument(document)
-            Task { await coordinator.discard(record) }
-        } catch {
-            errorMessage = "恢复内容无法验证，因此没有打开新文档。原恢复项仍被保留。"
+        Task { @MainActor in
+            do {
+                let document = try await coordinator.claimForRestoration(record)
+                newDocument(document)
+            } catch {
+                errorMessage = "恢复内容无法验证，因此没有打开新文档。原恢复项仍被保留。"
+            }
         }
     }
 
     private func restoreAll() {
         let records = coordinator.recoveredRecords
-        do {
-            let documents = try records.map { try $0.restoredDocument() }
-            for document in documents {
-                newDocument(document)
-            }
-            Task {
+        Task { @MainActor in
+            do {
                 for record in records {
-                    await coordinator.discard(record)
+                    let document = try await coordinator.claimForRestoration(record)
+                    newDocument(document)
                 }
+            } catch {
+                errorMessage = "至少一项恢复内容无法验证；未完成交接的恢复项仍被保留。"
             }
-        } catch {
-            errorMessage = "至少一项恢复内容无法验证；本次没有放弃任何恢复项。"
         }
     }
 
@@ -454,7 +603,7 @@ struct RecoveryCenterView: View {
                 }
             } catch {
                 errorMessage = (error as? LocalizedError)?.errorDescription
-                    ?? "未能安全另存恢复内容；恢复项和原目标均未改变。"
+                    ?? "未能安全另存恢复内容；恢复项仍保留，请重新确认目标文件的状态。"
             }
         }
     }

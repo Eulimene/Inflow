@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "protocol_id": "inflow-launch-performance-v1",
+  "authoritative_target": {
+    "product": "MacBook Air (M1, 2020)",
+    "model_identifier": "MacBookAir10,1",
+    "soc": "Apple M1",
+    "physical_memory_bytes": 8589934592,
+    "operating_system_version": "14.0",
+    "operating_system_build": null,
+    "requires_exact_os_build_in_evidence": true,
+    "power": "AC power, Low Power Mode off",
+    "display": "built-in display at default scaling"
+  },
+  "fixture": {
+    "id": "large-markdown-v1",
+    "full_fixture_status": "open",
+    "encoding": "UTF-8 without BOM",
+    "line_ending": "LF",
+    "generator": {
+      "kind": "numbered-lines-v1",
+      "line_count_before_marker": 9999,
+      "heading_every": 100,
+      "paragraph_token": "alpha beta gamma delta ",
+      "paragraph_token_repetitions": 3,
+      "final_marker": "## FINAL-PREVIEW-MARKER",
+      "exact_size_padding": "distribute ASCII x bytes evenly over the first 9999 lines, one extra byte on the lowest indexes"
+    },
+    "expected_bytes": 1048576,
+    "expected_lines": 10000,
+    "expected_line_feeds": 9999,
+    "sha256": "b5bdc607c8478024496a9e3fa98478ecd7eee32b12ad3ef35fb4edc1f7c9817b",
+    "full_fixture_sha256": null,
+    "structure_distribution": {
+      "status": "open",
+      "sha256": null,
+      "requirement": "same structural proportions as the 32 KiB/800-line ordinary fixture",
+      "reason": "the versioned structured text corpus has not been committed and hashed"
+    },
+    "local_images": {
+      "status": "open",
+      "required_count": 20,
+      "required_total_bytes": 16777216,
+      "allowed_types": [
+        "image/png",
+        "image/jpeg"
+      ],
+      "corpus_sha256": null,
+      "reason": "the versioned 16 MiB image corpus has not been committed and hashed"
+    }
+  },
+  "performance_budgets": {
+    "status": "open",
+    "preview_update_p95_milliseconds": 300,
+    "view_switch_maximum_milliseconds": 150,
+    "input_pause_p95_milliseconds": 50,
+    "input_pause_maximum_milliseconds": 100,
+    "blank_window_median_milliseconds": 1500,
+    "blank_window_maximum_milliseconds": 2000,
+    "warm_open_median_milliseconds": 1500,
+    "warm_open_p95_milliseconds": 2000,
+    "cold_open_median_milliseconds": 2500,
+    "cold_open_maximum_milliseconds": 3000,
+    "aggregate_rss_peak_bytes": null,
+    "aggregate_cpu_window_percent": null,
+    "reason": "product latency limits are frozen, but aggregate RSS and CPU release limits still require product approval"
+  },
+  "measurement": {
+    "warmup_runs": 3,
+    "measured_runs": 30,
+    "statistics": [
+      "median",
+      "p95",
+      "maximum"
+    ],
+    "resource_sample_window_seconds": 30,
+    "continuous_input": {
+      "duration_seconds": 60,
+      "characters_per_second": 10,
+      "content": "mixed Chinese and English"
+    },
+    "measurement_session_preparation": {
+      "device_restart_required": true,
+      "post_restart_wait_seconds": 300,
+      "close_other_user_foreground_apps": true
+    },
+    "cold_definition": {
+      "inflow_exited": true,
+      "minimum_not_running_seconds": 30,
+      "start_event": "finder-open-request-for-benchmark-document"
+    },
+    "warm_definition": {
+      "inflow_state": "one-blank-window",
+      "idle_seconds": 10,
+      "start_event": "user-confirms-open-file"
+    },
+    "process_scope": {
+      "latency": "user action timestamp through first stable editor and preview frame",
+      "cpu": "Inflow plus every descendant helper PID created during the sample window",
+      "memory": "sum of resident bytes for Inflow plus every descendant helper PID; retain exited PID peaks",
+      "short_lived_helpers": "attribute by audit-token parentage and include until the end of the window"
+    }
+  },
+  "repository_gate": {
+    "status": "component-smoke-only",
+    "xctest": "InflowTests/MarkdownRendererTests/testMiBDocumentDerivesCompletePreviewWithinUpdateBudget",
+    "configuration": "Release",
+    "derived_pipeline_budget_milliseconds": 300,
+    "authoritative_for_target_device": false
+  },
+  "external_release_gates": [
+    {
+      "id": "full-input-chain",
+      "scope": "TextKit input, recovery persistence, WebKit mount, 20 local images totaling 16 MiB and first stable preview",
+      "status": "blocked-on-open-versioned-fixture"
+    },
+    {
+      "id": "cold-launch",
+      "scope": "process launch to editable source view",
+      "status": "must-run-on-authoritative-target"
+    },
+    {
+      "id": "view-switch",
+      "scope": "source/split/preview switch to stable frame",
+      "status": "must-run-on-authoritative-target"
+    },
+    {
+      "id": "continuous-input",
+      "scope": "physical keyboard event to visible glyph and subsequent preview convergence",
+      "status": "must-run-on-authoritative-target"
+    }
+  ],
+  "evidence_requirements": [
+    "clean source HEAD",
+    "exact macOS version and build",
+    "exact model identifier and physical memory",
+    "fixture SHA-256",
+    "20-image corpus SHA-256 and exact 16 MiB total",
+    "all raw samples",
+    "median, p95 and maximum",
+    "process-tree PID attribution",
+    "peak aggregate RSS and CPU window",
+    "no skipped or failed run"
+  ]
+}

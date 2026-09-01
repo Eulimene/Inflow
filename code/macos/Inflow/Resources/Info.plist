@@ -20,6 +20,18 @@
 				<string>net.daringfireball.markdown</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Folder Project</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.folder</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
@@ -39,16 +51,20 @@
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
-	<key>InflowAnonymousUsageEndpoint</key>
-	<string>$(INFLOW_ANONYMOUS_USAGE_ENDPOINT)</string>
+	<key>InflowManualUpdateURL</key>
+	<string>$(INFLOW_MANUAL_UPDATE_URL)</string>
+	<key>InflowReleaseProfile</key>
+	<string>$(INFLOW_RELEASE_PROFILE)</string>
+	<key>InflowSourceHead</key>
+	<string>$(INFLOW_SOURCE_HEAD)</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Inflow. All rights reserved.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticTermination</key>
-	<true/>
+	<false/>
 	<key>NSSupportsSuddenTermination</key>
-	<true/>
+	<false/>
 	<key>UTImportedTypeDeclarations</key>
 	<array>
 		<dict>

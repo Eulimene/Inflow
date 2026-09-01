@@ -277,8 +277,8 @@ final class MarkdownSearcherTests: XCTestCase {
         XCTAssertEqual(MemoryLayout<InflowSearchResult>.size, 24)
     }
 
-    func testPurePreviewFindRoutesToEditableSplitView() {
-        XCTAssertEqual(EditorViewMode.preview.sourceVisible, .split)
+    func testRenderedEditingViewKeepsFindInTheCurrentEditableMode() {
+        XCTAssertEqual(EditorViewMode.preview.sourceVisible, .preview)
         XCTAssertEqual(EditorViewMode.source.sourceVisible, .source)
         XCTAssertEqual(EditorViewMode.split.sourceVisible, .split)
     }

@@ -39,23 +39,11 @@ final class PreviewZoomCommandsTests: XCTestCase {
     }
 
     @MainActor
-    func testAppMenuExposesLaunchZoomShortcutsExactlyOnce() throws {
+    func testLaunchMenuDoesNotExposeGrowthZoomCommands() throws {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
         let items = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu))
-        let expected: [(String, String)] = [
-            ("放大", "+"),
-            ("缩小", "-"),
-            ("实际大小", "0"),
-        ]
-        for (title, key) in expected {
-            let matching = items.filter { $0.title == title }
-            XCTAssertEqual(matching.count, 1)
-            let item = try XCTUnwrap(matching.first)
-            XCTAssertEqual(item.keyEquivalent, key)
-            XCTAssertEqual(
-                item.keyEquivalentModifierMask.intersection([.command, .option, .shift]),
-                .command
-            )
+        for title in ["放大", "缩小", "实际大小"] {
+            XCTAssertTrue(items.filter { $0.title == title }.isEmpty)
         }
     }
 

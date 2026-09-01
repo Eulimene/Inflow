@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.inflow.app/domain-packs/release-record/v1",
+  "title": "Inflow Domain Pack Release Record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "recordType",
+    "packID",
+    "packVersion",
+    "publisherID",
+    "releaseSequence",
+    "previousRecordSHA256",
+    "marketReleaseRecordSHA256",
+    "resolutionAlgorithm",
+    "resolutionInput",
+    "resolutionInputSHA256",
+    "resolvedComponents",
+    "outputPolicy",
+    "signatureAlgorithm",
+    "publishedAtUTC",
+    "criticalFields"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "recordType": { "const": "domain-pack-release" },
+    "packID": { "$ref": "#/$defs/reverseDomainID" },
+    "packVersion": { "$ref": "#/$defs/semver" },
+    "publisherID": { "$ref": "#/$defs/reverseDomainID" },
+    "releaseSequence": { "type": "integer", "minimum": 1 },
+    "previousRecordSHA256": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/sha256" }
+      ]
+    },
+    "marketReleaseRecordSHA256": { "$ref": "#/$defs/sha256" },
+    "resolutionAlgorithm": { "const": "exact-components-v1" },
+    "resolutionInput": { "$ref": "#/$defs/resolutionInput" },
+    "resolutionInputSHA256": { "$ref": "#/$defs/sha256" },
+    "resolvedComponents": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "extensionID",
+          "extensionVersion",
+          "componentID",
+          "apiVersion",
+          "manifestSHA256",
+          "componentSHA256"
+        ],
+        "properties": {
+          "extensionID": { "$ref": "#/$defs/reverseDomainID" },
+          "extensionVersion": { "$ref": "#/$defs/semver" },
+          "componentID": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "apiVersion": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+          },
+          "manifestSHA256": { "$ref": "#/$defs/sha256" },
+          "componentSHA256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    },
+    "outputPolicy": { "const": "core-declarative-content-tree-v1" },
+    "signatureAlgorithm": { "const": "market-ed25519-jcs-v1" },
+    "publishedAtUTC": { "type": "string", "format": "date-time" },
+    "criticalFields": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "releaseSequence",
+          "previousRecordSHA256",
+          "marketReleaseRecordSHA256",
+          "resolutionAlgorithm",
+          "resolutionInput",
+          "resolutionInputSHA256",
+          "resolvedComponents",
+          "outputPolicy"
+        ]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "releaseSequence": { "const": 1 } } },
+      "then": { "properties": { "previousRecordSHA256": { "type": "null" } } },
+      "else": { "properties": { "previousRecordSHA256": { "$ref": "#/$defs/sha256" } } }
+    }
+  ],
+  "$defs": {
+    "resolutionInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hostVersion",
+        "apiVersion",
+        "catalogSnapshotSHA256",
+        "solverPolicyVersion",
+        "requestedComponents"
+      ],
+      "properties": {
+        "hostVersion": { "$ref": "#/$defs/hostVersion" },
+        "apiVersion": { "const": "1.0" },
+        "catalogSnapshotSHA256": { "$ref": "#/$defs/sha256" },
+        "solverPolicyVersion": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "requestedComponents": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["extensionID", "componentID", "allowedVersions"],
+            "properties": {
+              "extensionID": { "$ref": "#/$defs/reverseDomainID" },
+              "componentID": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9-]{0,63}$"
+              },
+              "allowedVersions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 64,
+                "uniqueItems": true,
+                "items": { "$ref": "#/$defs/semver" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+    },
+    "reverseDomainID": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$",
+      "maxLength": 160
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$",
+      "maxLength": 128
+    },
+    "hostVersion": {
+      "type": "string",
+      "description": "Host compatibility release version: exactly major.minor.patch; prerelease and build metadata are not accepted.",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "maxLength": 64
+    }
+  }
+}

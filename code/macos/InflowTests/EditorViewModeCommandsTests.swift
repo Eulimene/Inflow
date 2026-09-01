@@ -35,6 +35,7 @@ final class EditorViewModeCommandsTests: XCTestCase {
         XCTAssertTrue(EmptyMarkdownGuidance.description.contains("顶部“文件”菜单"))
         XCTAssertTrue(EmptyMarkdownGuidance.description.contains("选择文件名和位置"))
         XCTAssertTrue(EmptyMarkdownGuidance.description.contains("不会把内容导入专有格式"))
+        XCTAssertTrue(EmptyMarkdownGuidance.description.contains("文件夹项目"))
     }
 
     @MainActor

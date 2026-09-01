@@ -13,24 +13,18 @@ enum ReadOnlyDocumentPrompt {
 }
 
 enum ExternalFileChangePrompt {
-    static let diskOnlyMessage = "你没有未保存更改，可以查看变化并采用磁盘版本。"
-    static let conflictMessage = "为避免覆盖，自动保存已暂停。请对照最近成功保存版本、当前编辑和磁盘版本。"
+    static let diskOnlyMessage = "你没有未保存更改。可以重新载入磁盘内容，或暂不处理。"
+    static let conflictMessage = "磁盘内容与当前编辑都已保留。重新载入会采用磁盘版本；再次手动保存时会先询问是否覆盖。"
     static let reloadConfirmationTitle = "放弃当前编辑并重新载入？"
     static let reloadConfirmationMessage = "当前未保存更改将被放弃，且无法通过撤销恢复。"
     static let overwriteConfirmationTitle = "覆盖磁盘上的新版本？"
-    static let overwriteConfirmationMessage = "先保存当前磁盘版本的冲突副本，然后写入你的编辑。"
-    static let overwriteFailureTitle = "无法安全覆盖"
-    static let overwriteFailureMessage = "未能保存磁盘当前版本的冲突副本，因此没有执行覆盖。"
+    static let overwriteConfirmationMessage = "确认后将用当前编辑覆盖磁盘内容；取消时两份内容都保持不变。"
     static let deletedMessage = "当前编辑仍已保留，且不会自动重建原文件。"
-    static let viewChangesTitle = "查看变化…"
     static let reloadTitle = "重新载入"
     static let reloadReviewTitle = "重新载入…"
     static let laterTitle = "稍后"
-    static let compareTitle = "比较…"
-    static let saveCopyTitle = "保存副本…"
     static let overwriteTitle = "覆盖磁盘版本…"
     static let saveAsTitle = "另存为…"
-    static let recreateTitle = "在原位置重建…"
     static let handleLaterTitle = "稍后处理"
 
     static func diskOnlyTitle(filename: String) -> String {
@@ -49,7 +43,6 @@ enum ExternalFileChangePrompt {
 enum DocumentConflictDecision: String, Identifiable {
     case reload
     case overwrite
-    case recreate
 
     var id: String { rawValue }
 }
@@ -57,14 +50,10 @@ enum DocumentConflictDecision: String, Identifiable {
 struct DocumentFileSafetyBanner: View {
     let state: DocumentFileSafetyState
     let deferredSnapshotID: DocumentFileConflictSnapshot.ID?
-    let onCompare: () -> Void
     let onReload: (DocumentFileConflictSnapshot) -> Void
-    let onOverwrite: (DocumentFileConflictSnapshot) -> Void
-    let onRecreate: (DocumentFileConflictSnapshot) -> Void
     let onDefer: (DocumentFileConflictSnapshot) -> Void
     let onResume: () -> Void
     let onSaveAs: () -> Void
-    let onSaveCopy: () -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -99,10 +88,8 @@ struct DocumentFileSafetyBanner: View {
                     ),
                     detail: ExternalFileChangePrompt.conflictMessage
                 ) {
-                    Button(ExternalFileChangePrompt.compareTitle, action: onCompare)
-                    Button(ExternalFileChangePrompt.saveCopyTitle, action: onSaveCopy)
                     Button(ExternalFileChangePrompt.reloadReviewTitle) { onReload(snapshot) }
-                    Button(ExternalFileChangePrompt.overwriteTitle) { onOverwrite(snapshot) }
+                    Button(ExternalFileChangePrompt.laterTitle) { onDefer(snapshot) }
                 }
             } else {
                 banner(
@@ -112,7 +99,6 @@ struct DocumentFileSafetyBanner: View {
                     ),
                     detail: ExternalFileChangePrompt.diskOnlyMessage
                 ) {
-                    Button(ExternalFileChangePrompt.viewChangesTitle, action: onCompare)
                     Button(ExternalFileChangePrompt.reloadTitle) { onReload(snapshot) }
                     Button(ExternalFileChangePrompt.laterTitle) { onDefer(snapshot) }
                 }
@@ -134,7 +120,6 @@ struct DocumentFileSafetyBanner: View {
                     detail: ExternalFileChangePrompt.deletedMessage
                 ) {
                     Button(ExternalFileChangePrompt.saveAsTitle, action: onSaveAs)
-                    Button(ExternalFileChangePrompt.recreateTitle) { onRecreate(snapshot) }
                     Button(ExternalFileChangePrompt.handleLaterTitle) { onDefer(snapshot) }
                 }
             }
@@ -145,7 +130,7 @@ struct DocumentFileSafetyBanner: View {
         banner(
             icon: icon,
             title: title,
-            detail: "自动保存仍已暂停；当前编辑仍已保留。"
+            detail: "当前编辑仍已保留；再次手动保存前会先确认是否覆盖。"
         ) {
             Button("处理…", action: onResume)
         }
@@ -184,92 +169,54 @@ struct DocumentFileSafetyBanner: View {
 struct DocumentConflictReviewView: View {
     let snapshot: DocumentFileConflictSnapshot
     let initialDecision: DocumentConflictDecision?
-    let onSaveCopy: () -> Void
     let onReload: () async throws -> Void
-    let onOverwrite: () async throws -> URL
-    let onRecreate: () async throws -> Void
+    let onOverwrite: () async throws -> Void
     let onResolved: () -> Void
     let onClose: () -> Void
 
     @State private var pendingDecision: DocumentConflictDecision?
     @State private var isWorking = false
     @State private var errorMessage: String?
-    @State private var conflictCopyFailure = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(snapshot.diskExists ? "比较文档版本" : "原文件已删除")
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.title2)
+                    .foregroundStyle(.orange)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(reviewTitle)
                         .font(.title2.weight(.semibold))
-                    Text(snapshot.url.path)
-                        .font(.caption)
+                    Text(reviewMessage)
                         .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer()
+                Spacer(minLength: 16)
                 if isWorking {
                     ProgressView()
                         .controlSize(.small)
                         .accessibilityLabel("正在处理文件冲突")
                 }
-                Button("完成", action: onClose)
-                    .keyboardShortcut(.cancelAction)
-                    .disabled(isWorking)
             }
-            .padding(16)
-
-            Divider()
-
-            HSplitView {
-                sourceColumn(title: "最近成功保存", text: snapshot.baselineText)
-                sourceColumn(title: "当前编辑", text: snapshot.localText)
-                sourceColumn(
-                    title: "当前磁盘版本",
-                    text: snapshot.diskExists
-                        ? snapshot.diskText ?? "（无法以 UTF-8 Markdown 读取）"
-                        : "（文件已删除）"
-                )
-            }
-            .frame(minHeight: 420)
 
             Divider()
 
             HStack(spacing: 10) {
-                Button(snapshot.diskExists ? "保存副本…" : "另存为…") {
-                    onSaveCopy()
-                }
-                .disabled(isWorking)
+                Button(cancelTitle, action: onClose)
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(isWorking)
 
                 Spacer()
 
-                if snapshot.diskExists {
-                    Button(
-                        snapshot.localHasChanges
-                            ? ExternalFileChangePrompt.reloadReviewTitle
-                            : ExternalFileChangePrompt.reloadTitle
-                    ) {
-                        if snapshot.localHasChanges {
-                            pendingDecision = .reload
-                        } else {
-                            perform(.reload)
-                        }
-                    }
-                    .disabled(isWorking || snapshot.diskText == nil)
-                    Button(ExternalFileChangePrompt.overwriteTitle) {
-                        pendingDecision = .overwrite
-                    }
-                    .disabled(isWorking || snapshot.diskData == nil)
-                } else {
-                    Button(ExternalFileChangePrompt.recreateTitle) {
-                        pendingDecision = .recreate
-                    }
-                    .disabled(isWorking)
+                Button(actionTitle) {
+                    pendingDecision = presentedDecision
                 }
+                .disabled(isWorking || !canPerformPresentedDecision)
             }
-            .padding(16)
         }
-        .frame(minWidth: 1_020, minHeight: 600)
+        .padding(20)
+        .frame(minWidth: 520, maxWidth: 620, minHeight: 210)
         .onAppear {
             guard pendingDecision == nil else { return }
             pendingDecision = initialDecision
@@ -285,7 +232,7 @@ struct DocumentConflictReviewView: View {
             if let decision = pendingDecision {
                 Button(
                     confirmationButton(for: decision),
-                    role: decision == .reload ? .destructive : nil
+                    role: .destructive
                 ) {
                     perform(decision)
                 }
@@ -297,66 +244,69 @@ struct DocumentConflictReviewView: View {
             }
         }
         .alert(
-            conflictCopyFailure
-                ? ExternalFileChangePrompt.overwriteFailureTitle
-                : "文件冲突尚未处理",
+            "文件冲突尚未处理",
             isPresented: Binding(
                 get: { errorMessage != nil },
                 set: {
                     if !$0 {
                         errorMessage = nil
-                        conflictCopyFailure = false
                     }
                 }
             )
         ) {
-            if conflictCopyFailure {
-                Button("重试") {
-                    errorMessage = nil
-                    conflictCopyFailure = false
-                    perform(.overwrite)
-                }
-                Button(ExternalFileChangePrompt.saveCopyTitle) {
-                    errorMessage = nil
-                    conflictCopyFailure = false
-                    onSaveCopy()
-                }
-                Button("取消", role: .cancel) {}
-            } else {
-                Button("好", role: .cancel) {}
-            }
+            Button("好", role: .cancel) {}
         } message: {
             Text(errorMessage ?? "当前编辑和磁盘文件均未被丢弃。")
         }
     }
 
-    private func sourceColumn(title: String, text: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.headline)
-            ScrollView([.horizontal, .vertical]) {
-                Text(text)
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .padding(10)
-            }
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay {
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
-            }
+    private var presentedDecision: DocumentConflictDecision {
+        initialDecision ?? .reload
+    }
+
+    private var reviewTitle: String {
+        switch presentedDecision {
+        case .reload:
+            ExternalFileChangePrompt.conflictTitle(filename: snapshot.url.lastPathComponent)
+        case .overwrite:
+            ExternalFileChangePrompt.overwriteConfirmationTitle
         }
-        .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
-        .padding(12)
+    }
+
+    private var reviewMessage: String {
+        switch presentedDecision {
+        case .reload:
+            snapshot.localHasChanges
+                ? ExternalFileChangePrompt.reloadConfirmationMessage
+                : ExternalFileChangePrompt.diskOnlyMessage
+        case .overwrite:
+            ExternalFileChangePrompt.overwriteConfirmationMessage
+        }
+    }
+
+    private var cancelTitle: String {
+        presentedDecision == .reload ? ExternalFileChangePrompt.laterTitle : "取消"
+    }
+
+    private var actionTitle: String {
+        switch presentedDecision {
+        case .reload: ExternalFileChangePrompt.reloadReviewTitle
+        case .overwrite: ExternalFileChangePrompt.overwriteTitle
+        }
+    }
+
+    private var canPerformPresentedDecision: Bool {
+        guard snapshot.diskExists else { return false }
+        switch presentedDecision {
+        case .reload: return snapshot.diskText != nil
+        case .overwrite: return snapshot.localHasChanges
+        }
     }
 
     private var confirmationTitle: String {
         switch pendingDecision {
         case .reload: ExternalFileChangePrompt.reloadConfirmationTitle
         case .overwrite: ExternalFileChangePrompt.overwriteConfirmationTitle
-        case .recreate: "在原位置重建文件？"
         case nil: "确认文件操作"
         }
     }
@@ -364,8 +314,7 @@ struct DocumentConflictReviewView: View {
     private func confirmationButton(for decision: DocumentConflictDecision) -> String {
         switch decision {
         case .reload: "重新载入"
-        case .overwrite: "保存冲突副本并覆盖"
-        case .recreate: "在原位置重建"
+        case .overwrite: "明确覆盖"
         }
     }
 
@@ -375,8 +324,6 @@ struct DocumentConflictReviewView: View {
             ExternalFileChangePrompt.reloadConfirmationMessage
         case .overwrite:
             ExternalFileChangePrompt.overwriteConfirmationMessage
-        case .recreate:
-            "只有原位置仍然没有文件时才会写入；若目标重新出现，本次操作会停止。"
         }
     }
 
@@ -388,36 +335,26 @@ struct DocumentConflictReviewView: View {
                 case .reload:
                     try await onReload()
                 case .overwrite:
-                    _ = try await onOverwrite()
-                case .recreate:
-                    try await onRecreate()
+                    try await onOverwrite()
                 }
                 isWorking = false
                 onResolved()
             } catch {
                 isWorking = false
-                if case .cannotCreateConflictCopy = error as? DocumentFileSafetyError {
-                    conflictCopyFailure = true
-                    errorMessage = ExternalFileChangePrompt.overwriteFailureMessage
-                } else {
-                    conflictCopyFailure = false
-                    errorMessage = (error as? LocalizedError)?.errorDescription
-                        ?? "文件内容已再次变化，没有执行写入。"
-                }
+                errorMessage = (error as? LocalizedError)?.errorDescription
+                    ?? "文件内容已再次变化，没有执行写入。"
             }
         }
     }
 }
 
 enum DocumentFileSafetyNotice: Identifiable {
-    case conflictCopySaved(URL)
     case copySaved(URL)
     case savedAs(URL)
     case failure(String)
 
     var id: String {
         switch self {
-        case let .conflictCopySaved(url): "conflict-\(url.path)"
         case let .copySaved(url): "copy-\(url.path)"
         case let .savedAs(url): "save-as-\(url.path)"
         case let .failure(message): "failure-\(message)"
@@ -426,12 +363,6 @@ enum DocumentFileSafetyNotice: Identifiable {
 
     var alert: Alert {
         switch self {
-        case let .conflictCopySaved(url):
-            Alert(
-                title: Text("已安全覆盖"),
-                message: Text("磁盘原版本已保存为「\(url.lastPathComponent)」。"),
-                dismissButton: .default(Text("好"))
-            )
         case let .copySaved(url):
             Alert(
                 title: Text("副本已保存"),

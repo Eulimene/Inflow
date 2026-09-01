@@ -1,6 +1,11 @@
 import AppKit
 import SwiftUI
 
+enum MarkdownEditorPresentation: Equatable {
+    case source
+    case rendered
+}
+
 struct SourceSelectionRequest: Equatable {
     let generation: Int
     let utf8Range: Range<Int>
@@ -112,6 +117,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var syntaxHighlightingSpans: [MarkdownSyntaxSpan] = []
     private var syntaxApplicationGeneration = 0
     private var syntaxApplicationTask: Task<Void, Never>?
+    private var presentation = MarkdownEditorPresentation.source
+    private var renderedPlan: RenderedMarkdownPlan?
+    private var renderedAppliedAppearance: SourceEditorAppearance?
+    private var renderedLinkHandler: ((String) -> Void)?
+    private var renderedMarkerParagraphRange = NSRange(location: NSNotFound, length: 0)
     private let lineNumberRuler: MarkdownLineNumberRulerView
     private var focusModeEnabled = false
     private var typewriterModeEnabled = false
@@ -171,6 +181,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             self?.lineNumberRuler.updateText(text)
             self?.refreshWritingModePresentation()
             self?.updateBoundText?(text)
+            self?.scheduleRenderedPresentation(for: text)
         }
         NotificationCenter.default.addObserver(
             self,
@@ -197,6 +208,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         guard force || !hasAppliedSourceAppearance || sourceAppearance != appearance else { return }
         sourceAppearance = appearance
         hasAppliedSourceAppearance = true
+        renderedAppliedAppearance = nil
 
         let selection = textView.selectedRange()
         let font = NSFont.monospacedSystemFont(
@@ -242,6 +254,211 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.setSelectedRange(selection)
         scheduleCachedSyntaxHighlighting(baseFont: font)
         refreshWritingModePresentation()
+    }
+
+    func setPresentation(
+        _ presentation: MarkdownEditorPresentation,
+        source: String,
+        onCommandClickLink: ((String) -> Void)?
+    ) {
+        let changed = self.presentation != presentation
+        self.presentation = presentation
+        renderedLinkHandler = onCommandClickLink
+        switch presentation {
+        case .source:
+            renderedPlan = nil
+            renderedMarkerParagraphRange = NSRange(location: NSNotFound, length: 0)
+            textView.commandClickHandler = nil
+            textView.setAccessibilityLabel("Markdown 源码编辑器")
+            applySourceAppearance(sourceAppearance, force: changed)
+        case .rendered:
+            textView.setAccessibilityLabel("Markdown 即时渲染编辑器")
+            textView.commandClickHandler = { [weak self] location, modifiers in
+                guard let self,
+                      let renderedPlan = self.renderedPlan,
+                      let link = RenderedMarkdownEditor.commandClickTarget(
+                          atUTF16Location: location,
+                          modifierFlags: modifiers,
+                          currentSource: self.textView.string,
+                          plan: renderedPlan
+                      )
+                else {
+                    return false
+                }
+                self.renderedLinkHandler?(link.target)
+                return true
+            }
+            applyRenderedPresentation(source: source, force: changed)
+        }
+    }
+
+    private func scheduleRenderedPresentation(for source: String) {
+        guard presentation == .rendered else { return }
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self,
+                  self.presentation == .rendered,
+                  UTF8Text.isExactlyEqual(self.textView.string, source)
+            else {
+                return
+            }
+            self.applyRenderedPresentation(source: source, force: true)
+        }
+    }
+
+    private func applyRenderedPresentation(source: String, force: Bool) {
+        guard presentation == .rendered,
+              UTF8Text.isExactlyEqual(textView.string, source),
+              !textView.hasMarkedText()
+        else {
+            return
+        }
+        let selection = textView.selectedRange()
+        let sourceLength = (source as NSString).length
+        let paragraphRange = (source as NSString).paragraphRange(
+            for: NSRange(location: min(selection.location, sourceLength), length: 0)
+        )
+        if !force,
+           renderedPlan?.exactlyMatches(source) == true,
+           renderedAppliedAppearance == sourceAppearance,
+           renderedMarkerParagraphRange == paragraphRange
+        {
+            return
+        }
+
+        invalidateSyntaxApplication()
+        let plan = RenderedMarkdownEditor.plan(for: source)
+        renderedPlan = plan
+        renderedMarkerParagraphRange = paragraphRange
+        scrollView.hasVerticalRuler = false
+        scrollView.rulersVisible = false
+
+        let baseFont = NSFont.systemFont(ofSize: max(15, CGFloat(sourceAppearance.fontSize)))
+        let baseParagraph = NSMutableParagraphStyle()
+        baseParagraph.lineHeightMultiple = CGFloat(sourceAppearance.lineHeight)
+        baseParagraph.paragraphSpacing = 6
+        textView.font = baseFont
+        textView.defaultParagraphStyle = baseParagraph
+        textView.typingAttributes = [
+            .font: baseFont,
+            .foregroundColor: NSColor.textColor,
+            .paragraphStyle: baseParagraph,
+        ]
+
+        guard let storage = textView.textStorage else { return }
+        let fullRange = NSRange(location: 0, length: storage.length)
+        let undoManager = textView.undoManager
+        let restoreUndoRegistration = undoManager?.isUndoRegistrationEnabled == true
+        if restoreUndoRegistration { undoManager?.disableUndoRegistration() }
+        defer {
+            if restoreUndoRegistration { undoManager?.enableUndoRegistration() }
+        }
+
+        storage.beginEditing()
+        storage.setAttributes(
+            [
+                .font: baseFont,
+                .foregroundColor: NSColor.textColor,
+                .paragraphStyle: baseParagraph,
+            ],
+            range: fullRange
+        )
+        for style in plan.contentStyles {
+            let range = style.sourceRange.utf16Range
+            guard NSMaxRange(range) <= storage.length else { continue }
+            storage.addAttributes(
+                renderedAttributes(for: style.kind, baseFont: baseFont),
+                range: range
+            )
+        }
+        for block in plan.localSourceBlocks {
+            let range = block.sourceRange.utf16Range
+            guard NSMaxRange(range) <= storage.length else { continue }
+            storage.addAttributes(
+                [
+                    .font: NSFont.monospacedSystemFont(
+                        ofSize: max(13, CGFloat(sourceAppearance.fontSize) - 1),
+                        weight: .regular
+                    ),
+                    .foregroundColor: NSColor.labelColor,
+                    .backgroundColor: NSColor.systemYellow.withAlphaComponent(0.08),
+                ],
+                range: range
+            )
+        }
+        for marker in plan.markers {
+            let range = marker.sourceRange.utf16Range
+            guard NSMaxRange(range) <= storage.length,
+                  !plan.localSourceBlocks.contains(where: {
+                      NSIntersectionRange($0.sourceRange.utf16Range, range).length > 0
+                  })
+            else {
+                continue
+            }
+            if NSIntersectionRange(paragraphRange, range).length > 0 {
+                storage.addAttributes(
+                    [
+                        .font: NSFont.monospacedSystemFont(
+                            ofSize: max(12, CGFloat(sourceAppearance.fontSize) - 2),
+                            weight: .regular
+                        ),
+                        .foregroundColor: NSColor.tertiaryLabelColor,
+                    ],
+                    range: range
+                )
+            } else {
+                storage.addAttributes(
+                    [
+                        .font: NSFont.systemFont(ofSize: 0.1),
+                        .foregroundColor: NSColor.clear,
+                    ],
+                    range: range
+                )
+            }
+        }
+        storage.endEditing()
+        renderedAppliedAppearance = sourceAppearance
+        textView.setSelectedRange(selection)
+        refreshWritingModePresentation()
+    }
+
+    private func renderedAttributes(
+        for kind: RenderedMarkdownContentStyleKind,
+        baseFont: NSFont
+    ) -> [NSAttributedString.Key: Any] {
+        switch kind {
+        case .paragraph, .unorderedListItem, .orderedListItem, .taskListItem:
+            [:]
+        case let .heading(level):
+            [
+                .font: NSFont.systemFont(
+                    ofSize: max(baseFont.pointSize, 30 - CGFloat(level * 3)),
+                    weight: level <= 2 ? .bold : .semibold
+                ),
+                .foregroundColor: NSColor.labelColor,
+            ]
+        case .emphasis:
+            [.obliqueness: 0.18]
+        case .strong:
+            [.font: NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)]
+        case .strikethrough:
+            [.strikethroughStyle: NSUnderlineStyle.single.rawValue]
+        case .inlineCode:
+            [
+                .font: NSFont.monospacedSystemFont(
+                    ofSize: max(13, baseFont.pointSize - 1),
+                    weight: .regular
+                ),
+                .backgroundColor: NSColor.quaternaryLabelColor.withAlphaComponent(0.2),
+            ]
+        case .blockQuote:
+            [.foregroundColor: NSColor.secondaryLabelColor]
+        case .link:
+            [
+                .foregroundColor: NSColor.linkColor,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+            ]
+        }
     }
 
     func setWritingModes(
@@ -346,7 +563,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         syntaxHighlightingSourceUTF8 = Data(source.utf8)
         syntaxHighlightingSpans = enabled ? spans : []
         guard UTF8Text.isExactlyEqual(textView.string, source) else { return false }
-        applySourceAppearance(sourceAppearance, force: true)
+        if presentation == .source {
+            applySourceAppearance(sourceAppearance, force: true)
+        } else {
+            applyRenderedPresentation(source: source, force: true)
+        }
         return true
     }
 
@@ -354,7 +575,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         syntaxApplicationTask?.cancel()
         syntaxApplicationGeneration &+= 1
         let generation = syntaxApplicationGeneration
-        guard syntaxHighlightingEnabled,
+        guard presentation == .source,
+              syntaxHighlightingEnabled,
               syntaxHighlightingSourceUTF8 == Data(textView.string.utf8)
         else {
             return
@@ -476,6 +698,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             selectedUTF16Range = range
         }
         refreshWritingModePresentation()
+        if presentation == .rendered {
+            applyRenderedPresentation(source: textView.string, force: false)
+        }
     }
 
     func requestRestoration(_ state: MarkdownRestorationState) {
@@ -641,105 +866,14 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     @discardableResult
     func applyMarkdownImage(
         _ plan: MarkdownFormatPlan,
-        asset: ImportedImageAsset,
+        asset _: ImportedImageAsset,
         actionName: String,
-        onResourceError: @escaping @MainActor (String) -> Void
+        onResourceError _: @escaping @MainActor (String) -> Void
     ) -> Bool {
-        guard textView.isEditable,
-              !textView.hasMarkedText(),
-              UTF8Text.isExactlyEqual(textView.string, plan.sourceSnapshot),
-              let replacementTarget = MarkdownSourceRange.navigationTarget(
-                  forUTF8Range: plan.replaceUTF8Range,
-                  in: plan.sourceSnapshot
-              ),
-              let finalSelection = MarkdownSourceRange.navigationTarget(
-                  forUTF8Range: plan.selectionUTF8Range,
-                  in: plan.resultingSource
-              ),
-              let undoManager = textView.undoManager
-        else {
-            return false
-        }
-
-        undoManager.beginUndoGrouping()
-        textView.insertText(
-            plan.replacement,
-            replacementRange: replacementTarget.revealRange
-        )
-        guard UTF8Text.isExactlyEqual(textView.string, plan.resultingSource) else {
-            undoManager.endUndoGrouping()
-            undoManager.undo()
-            return false
-        }
-
-        registerImageAssetUndo(
-            asset,
-            on: undoManager,
-            onResourceError: onResourceError
-        )
-        undoManager.setActionName(actionName)
-        undoManager.endUndoGrouping()
-
-        textView.setSelectedRange(finalSelection.revealRange)
-        updateSelectedRange(finalSelection.revealRange)
-        textView.scrollRangeToVisible(finalSelection.revealRange)
-        return true
-    }
-
-    private func registerImageAssetUndo(
-        _ asset: ImportedImageAsset,
-        on undoManager: UndoManager,
-        onResourceError: @escaping @MainActor (String) -> Void
-    ) {
-        undoManager.registerUndo(withTarget: self) { target in
-            target.undoImageAsset(
-                asset,
-                using: undoManager,
-                onResourceError: onResourceError
-            )
-        }
-    }
-
-    private func undoImageAsset(
-        _ asset: ImportedImageAsset,
-        using undoManager: UndoManager,
-        onResourceError: @escaping @MainActor (String) -> Void
-    ) {
-        do {
-            try asset.restoreBeforeUndo()
-            undoManager.registerUndo(withTarget: self) { target in
-                target.redoImageAsset(
-                    asset,
-                    using: undoManager,
-                    onResourceError: onResourceError
-                )
-            }
-        } catch {
-            onResourceError(
-                (error as? LocalizedError)?.errorDescription ?? "无法撤销图片资源变更。"
-            )
-        }
-    }
-
-    private func redoImageAsset(
-        _ asset: ImportedImageAsset,
-        using undoManager: UndoManager,
-        onResourceError: @escaping @MainActor (String) -> Void
-    ) {
-        do {
-            try asset.restoreAfterRedo()
-            undoManager.registerUndo(withTarget: self) { target in
-                target.undoImageAsset(
-                    asset,
-                    using: undoManager,
-                    onResourceError: onResourceError
-                )
-            }
-        } catch {
-            onResourceError(
-                (error as? LocalizedError)?.errorDescription ?? "无法重做图片资源变更。"
-            )
-        }
+        // The imported file is a durable project resource. Undo owns only the
+        // Markdown reference; removing the asset could break another document
+        // that started using it after insertion.
+        applyMarkdownFormat(plan, actionName: actionName)
     }
 }
 
@@ -901,6 +1035,7 @@ final class WindowAwareTextView: NSTextView {
     var textDidChangeHandler: ((String) -> Void)?
     var pasteImageHandler: ((ClipboardImagePayload) -> Void)?
     var dropImageHandler: ((URL) -> Void)?
+    var commandClickHandler: ((Int, NSEvent.ModifierFlags) -> Bool)?
 
     override var undoManager: UndoManager? {
         persistentUndoManager
@@ -933,6 +1068,21 @@ final class WindowAwareTextView: NSTextView {
     override func paste(_ sender: Any?) {
         if consumeImagePaste(from: .general) { return }
         super.paste(sender)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
+           let window,
+           commandClickHandler?(
+               characterIndexForInsertion(
+                   at: window.convertPoint(toScreen: event.locationInWindow)
+               ),
+               event.modifierFlags
+           ) == true
+        {
+            return
+        }
+        super.mouseDown(with: event)
     }
 
     @discardableResult
@@ -1009,8 +1159,10 @@ struct MarkdownSourceEditor: NSViewRepresentable {
     let session: MarkdownSourceEditorSession
     let isEditable: Bool
     let appearance: SourceEditorAppearance
+    let presentation: MarkdownEditorPresentation
     let onPasteImage: ((ClipboardImagePayload) -> Void)?
     let onDropImage: ((URL) -> Void)?
+    let onCommandClickLink: ((String) -> Void)?
 
     init(
         text: Binding<String>,
@@ -1018,16 +1170,20 @@ struct MarkdownSourceEditor: NSViewRepresentable {
         session: MarkdownSourceEditorSession,
         isEditable: Bool = true,
         appearance: SourceEditorAppearance = .default,
+        presentation: MarkdownEditorPresentation = .source,
         onPasteImage: ((ClipboardImagePayload) -> Void)? = nil,
-        onDropImage: ((URL) -> Void)? = nil
+        onDropImage: ((URL) -> Void)? = nil,
+        onCommandClickLink: ((String) -> Void)? = nil
     ) {
         _text = text
         self.selectionRequest = selectionRequest
         self.session = session
         self.isEditable = isEditable
         self.appearance = appearance
+        self.presentation = presentation
         self.onPasteImage = onPasteImage
         self.onDropImage = onDropImage
+        self.onCommandClickLink = onCommandClickLink
     }
 
     func makeCoordinator() -> Coordinator {
@@ -1051,6 +1207,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
             textView.didAttachToWindow = nil
             textView.pasteImageHandler = nil
             textView.dropImageHandler = nil
+            textView.commandClickHandler = nil
         }
     }
 
@@ -1091,6 +1248,11 @@ struct MarkdownSourceEditor: NSViewRepresentable {
                 textView.setSelectedRange(NSRange(location: location, length: length))
             }
             parent.session.applySourceAppearance(parent.appearance, force: textChanged)
+            parent.session.setPresentation(
+                parent.presentation,
+                source: parent.text,
+                onCommandClickLink: parent.onCommandClickLink
+            )
 
             parent.session.applyPendingRestorationIfPossible()
             apply(parent.selectionRequest, to: textView)

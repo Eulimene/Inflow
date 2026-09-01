@@ -436,7 +436,7 @@ InflowMarkdownEditResult inflow_markdown_insert_math(
 
 /// Plans a fenced Mermaid diagram insertion. An empty selection receives an
 /// editable flowchart template; selected source must parse as one supported
-/// launch-scope flowchart, sequence, class or state diagram. The fence is made
+/// personal-milestone flowchart or stateDiagram-v2 diagram. The fence is made
 /// longer than every selected backtick run. Existing fenced-code intersections
 /// and unsupported syntax are rejected. Selection and returned ranges use
 /// end-exclusive UTF-8 byte offsets aligned to complete extended graphemes.

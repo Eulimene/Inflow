@@ -309,7 +309,8 @@ mod tests {
     #[test]
     fn mermaid_language_matching_is_case_insensitive() {
         let html = String::from_utf8(
-            html_document("```MerMaid\ngraph LR\nA --> B\n```").expect("Mermaid is self-contained"),
+            html_document("```MerMaid\nflowchart LR\nA --> B\n```")
+                .expect("Mermaid is self-contained"),
         )
         .expect("export is UTF-8");
         assert!(html.contains("class=\"mermaid-diagram\""));

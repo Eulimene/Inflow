@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "dialect": "Inflow Markdown 1.0",
+  "product_contract": "APP-DIALECT-001 v1.1",
+  "candidate_status": "open",
+  "candidate_blocker": "The required complete positive, negative, ambiguity, and cross-tool corpus has not been frozen with reference-tool build and output hashes.",
+  "cases": [
+    {
+      "id": "DIALECT-1.0-001",
+      "status": "verified",
+      "operation": "heading_identifiers",
+      "source": "# Hello World",
+      "expected_identifiers": ["hello-world"]
+    },
+    {
+      "id": "DIALECT-1.0-002",
+      "status": "verified",
+      "operation": "heading_identifiers",
+      "source": "# 重复标题\n\n# 重复标题",
+      "expected_identifiers": ["重复标题", "重复标题-1"]
+    },
+    {
+      "id": "DIALECT-1.0-003",
+      "status": "verified",
+      "operation": "fragment",
+      "source": "# 重复标题\n\n# 重复标题\n\n[go](#%E9%87%8D%E5%A4%8D%E6%A0%87%E9%A2%98-1)",
+      "target": "#%E9%87%8D%E5%A4%8D%E6%A0%87%E9%A2%98-1",
+      "expected_fragment": "重复标题-1",
+      "expected_exact_match": true
+    },
+    {
+      "id": "DIALECT-1.0-004",
+      "status": "verified",
+      "operation": "fragment",
+      "source": "# foo bar\n\n[go](#%2520)",
+      "target": "#%2520",
+      "expected_fragment": "%20",
+      "expected_exact_match": false
+    },
+    {
+      "id": "DIALECT-1.0-005",
+      "status": "verified",
+      "operation": "render",
+      "source": "Unclosed $formula",
+      "contains": ["Unclosed $formula"],
+      "excludes": ["math-error", "无法呈现这个公式"]
+    },
+    {
+      "id": "DIALECT-1.0-006",
+      "status": "verified",
+      "operation": "render",
+      "source": "before $\\unknown{<script>}$ after",
+      "contains": ["before", "after", "math-error", "无法呈现这个公式", "&lt;script&gt;"],
+      "excludes": ["<script>"]
+    },
+    {
+      "id": "DIALECT-1.0-007",
+      "status": "verified",
+      "operation": "render",
+      "source": "<script>window.location='https://example.com'</script>",
+      "contains": ["&lt;script&gt;", "https://example.com"],
+      "excludes": ["<script>"]
+    },
+    {
+      "id": "DIALECT-1.0-CM-001",
+      "status": "verified",
+      "operation": "render",
+      "source": "# Title\n\n**Bold** and <https://example.com>",
+      "contains": ["<h1>Title</h1>", "<strong>Bold</strong>", "href=\"https://example.com\""],
+      "excludes": []
+    },
+    {
+      "id": "DIALECT-1.0-GFM-001",
+      "status": "verified",
+      "operation": "render",
+      "source": "~~old~~\n\n- [x] Done\n\n| A | B |\n| - | - |\n| 1 | 2 |",
+      "contains": ["<del>old</del>", "type=\"checkbox\"", "<table>"],
+      "excludes": []
+    }
+  ],
+  "cross_tool_compatibility": {
+    "status": "open",
+    "reference_tool_builds": [],
+    "result_artifacts": [],
+    "reason": "No versioned reference-tool build identifiers, exact inputs, normalized outputs, or output hashes are committed."
+  }
+}

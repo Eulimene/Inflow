@@ -68,6 +68,35 @@ final class MarkdownFormatterTests: XCTestCase {
         }
     }
 
+    func testSelectionStateMatrixRejectsMixedAndPreservesNestedSemantics() throws {
+        let mixed = "plain **bold**"
+        XCTAssertThrowsError(
+            try MarkdownFormatter.plan(
+                source: mixed,
+                selectedUTF16Range: NSRange(
+                    location: 0,
+                    length: (mixed as NSString).length
+                ),
+                format: .bold
+            )
+        ) { error in
+            guard case MarkdownFormatError.ambiguousSelection = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        let nested = "***both***"
+        let plan = try MarkdownFormatter.plan(
+            source: nested,
+            selectedUTF16Range: (nested as NSString).range(of: "both"),
+            format: .bold
+        )
+        XCTAssertEqual(plan.resultingSource, "*both*")
+        XCTAssertTrue(try MarkdownRenderer.htmlFragment(for: plan.resultingSource).contains(
+            "<em>both</em>"
+        ))
+    }
+
     func testEmptySelectionInsertsEditableTemplate() throws {
         let plan = try MarkdownFormatter.plan(
             source: "text",
@@ -549,6 +578,33 @@ final class MarkdownFormatterTests: XCTestCase {
     }
 
     @MainActor
+    func testSessionRejectsFormattingDuringIMECompositionWithoutChangingMarkedText() throws {
+        let session = MarkdownSourceEditorSession()
+        session.textView.isEditable = true
+        session.textView.string = "source"
+        session.textView.setSelectedRange(NSRange(location: 0, length: 0))
+        session.textView.setMarkedText(
+            "拼",
+            selectedRange: NSRange(location: 1, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        XCTAssertTrue(session.textView.hasMarkedText())
+
+        let markedSource = session.textView.string
+        let plan = try MarkdownFormatter.plan(
+            source: markedSource,
+            selectedUTF16Range: NSRange(
+                location: 0,
+                length: (markedSource as NSString).length
+            ),
+            format: .italic
+        )
+        XCTAssertFalse(session.applyMarkdownFormat(plan, actionName: "斜体格式"))
+        XCTAssertEqual(session.textView.string, markedSource)
+        XCTAssertTrue(session.textView.hasMarkedText())
+    }
+
+    @MainActor
     func testFormatCommandActionsAreSceneScopedAndRespectReadOnlyState() {
         var first: [MarkdownFormatCommand] = []
         var second: [MarkdownFormatCommand] = []
@@ -582,7 +638,7 @@ final class MarkdownFormatterTests: XCTestCase {
     }
 
     @MainActor
-    func testFormatMenuExposesUniqueBoldAndItalicShortcuts() throws {
+    func testFormatMenuExposesPersonalCommandsAndHidesDeferredCommands() throws {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
         let items = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu))
         for (format, shortcut) in [
@@ -602,8 +658,7 @@ final class MarkdownFormatterTests: XCTestCase {
         let strikethroughItems = items.filter {
             $0.title == MarkdownInlineFormat.strikethrough.label
         }
-        XCTAssertEqual(strikethroughItems.count, 1)
-        XCTAssertEqual(strikethroughItems.first?.keyEquivalent, "")
+        XCTAssertTrue(strikethroughItems.isEmpty)
 
         XCTAssertEqual(items.filter { $0.title == "标题" }.count, 1)
         for level in MarkdownHeadingLevel.allCases {
@@ -628,12 +683,10 @@ final class MarkdownFormatterTests: XCTestCase {
         XCTAssertEqual(inlineCodeItems.first?.keyEquivalent, "")
 
         let codeBlockItems = items.filter { $0.title == "代码块" }
-        XCTAssertEqual(codeBlockItems.count, 1)
-        XCTAssertEqual(codeBlockItems.first?.keyEquivalent, "")
+        XCTAssertTrue(codeBlockItems.isEmpty)
 
         let clearItems = items.filter { $0.title == "清除格式标记" }
-        XCTAssertEqual(clearItems.count, 1)
-        XCTAssertEqual(clearItems.first?.keyEquivalent, "")
+        XCTAssertTrue(clearItems.isEmpty)
     }
 
     @MainActor

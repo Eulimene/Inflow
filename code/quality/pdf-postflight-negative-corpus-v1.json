@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "policy_id": "inflow-pdf-delivery-postflight-v1",
+  "candidate_status": "pending",
+  "safe_output_contract": {
+    "paper": "A4 portrait",
+    "media_box_background": "full-page opaque theme color",
+    "network": "none",
+    "attachments": "none",
+    "document_actions": "none",
+    "annotations": "http/https links only",
+    "document_info": "empty",
+    "xmp_metadata": "none",
+    "absolute_local_paths": "none outside visible page-content streams"
+  },
+  "cases": [
+    {
+      "id": "PDF-NEG-001",
+      "fixture": "catalog-open-action",
+      "expected_outcome": "reject",
+      "catalog_fragment": "/OpenAction [3 0 R /Fit]",
+      "page_fragment": "",
+      "info_fragment": "",
+      "extra_objects": [],
+      "forbidden_markers": ["/OpenAction"]
+    },
+    {
+      "id": "PDF-NEG-002",
+      "fixture": "catalog-additional-actions",
+      "expected_outcome": "reject",
+      "catalog_fragment": "/AA << /WC 6 0 R >>",
+      "page_fragment": "",
+      "info_fragment": "",
+      "extra_objects": [
+        {
+          "number": 6,
+          "dictionary": "/S /JavaScript /JS (app.alert\\(private\\))",
+          "stream": null
+        }
+      ],
+      "forbidden_markers": ["/AA", "/JavaScript", "/JS"]
+    },
+    {
+      "id": "PDF-NEG-003",
+      "fixture": "javascript-name-tree",
+      "expected_outcome": "reject",
+      "catalog_fragment": "/Names << /JavaScript << /Names [(startup) 6 0 R] >> >>",
+      "page_fragment": "",
+      "info_fragment": "",
+      "extra_objects": [
+        {
+          "number": 6,
+          "dictionary": "/S /JavaScript /JS (app.alert\\(startup\\))",
+          "stream": null
+        }
+      ],
+      "forbidden_markers": ["/JavaScript", "/JS"]
+    },
+    {
+      "id": "PDF-NEG-004",
+      "fixture": "embedded-files-name-tree",
+      "expected_outcome": "reject",
+      "catalog_fragment": "/Names << /EmbeddedFiles << /Names [(secret.txt) 6 0 R] >> >>",
+      "page_fragment": "",
+      "info_fragment": "",
+      "extra_objects": [
+        {
+          "number": 6,
+          "dictionary": "/Type /Filespec /F (/Users/alice/private/secret.txt)",
+          "stream": null
+        }
+      ],
+      "forbidden_markers": ["/EmbeddedFiles", "/Filespec", "/Users/"]
+    },
+    {
+      "id": "PDF-NEG-005",
+      "fixture": "uri-action-annotation",
+      "expected_outcome": "accept",
+      "catalog_fragment": "",
+      "page_fragment": "/Annots [6 0 R]",
+      "info_fragment": "",
+      "extra_objects": [
+        {
+          "number": 6,
+          "dictionary": "/Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (https://example.invalid/track) >>",
+          "stream": null
+        }
+      ],
+      "forbidden_markers": ["/Annots", "/URI"]
+    },
+    {
+      "id": "PDF-NEG-006",
+      "fixture": "launch-action-absolute-path",
+      "expected_outcome": "reject",
+      "catalog_fragment": "",
+      "page_fragment": "/Annots [6 0 R]",
+      "info_fragment": "",
+      "extra_objects": [
+        {
+          "number": 6,
+          "dictionary": "/Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /Launch /F (/Applications/Calculator.app) >>",
+          "stream": null
+        }
+      ],
+      "forbidden_markers": ["/Launch", "/Applications/"]
+    },
+    {
+      "id": "PDF-NEG-007",
+      "fixture": "catalog-xmp-metadata",
+      "expected_outcome": "reject",
+      "catalog_fragment": "/Metadata 6 0 R",
+      "page_fragment": "",
+      "info_fragment": "",
+      "extra_objects": [
+        {
+          "number": 6,
+          "dictionary": "/Type /Metadata /Subtype /XML",
+          "stream": "<x:xmpmeta><rdf:Description>file:///Users/alice/private.md</rdf:Description></x:xmpmeta>"
+        }
+      ],
+      "forbidden_markers": ["/Metadata", "x:xmpmeta", "file:///Users/"]
+    },
+    {
+      "id": "PDF-NEG-008",
+      "fixture": "page-xmp-metadata",
+      "expected_outcome": "reject",
+      "catalog_fragment": "",
+      "page_fragment": "/Metadata 6 0 R",
+      "info_fragment": "",
+      "extra_objects": [
+        {
+          "number": 6,
+          "dictionary": "/Type /Metadata /Subtype /XML",
+          "stream": "<x:xmpmeta><rdf:Description>/Volumes/Private/report.md</rdf:Description></x:xmpmeta>"
+        }
+      ],
+      "forbidden_markers": ["/Metadata", "x:xmpmeta", "/Volumes/"]
+    },
+    {
+      "id": "PDF-NEG-009",
+      "fixture": "absolute-local-path",
+      "expected_outcome": "reject",
+      "catalog_fragment": "/InflowPrivatePath (/private/var/tmp/inflow/source.md)",
+      "page_fragment": "",
+      "info_fragment": "",
+      "extra_objects": [],
+      "forbidden_markers": ["/private/var/tmp/"]
+    },
+    {
+      "id": "PDF-NEG-010",
+      "fixture": "privacy-document-info",
+      "expected_outcome": "sanitize",
+      "catalog_fragment": "",
+      "page_fragment": "",
+      "info_fragment": "/Title (Private draft) /Author (Alice) /Subject (Confidential) /Keywords (secret) /Creator (Inflow /Users/alice) /Producer (Quartz PDFContext) /CreationDate (D:20260830010101Z) /ModDate (D:20260830020202Z)",
+      "extra_objects": [],
+      "forbidden_markers": ["/Title", "/Author", "/Subject", "/Keywords", "/Creator", "/Producer", "/CreationDate", "/ModDate", "/Users/"]
+    },
+    {
+      "id": "PDF-NEG-011",
+      "fixture": "catalog-open-action-hex-name-escape",
+      "expected_outcome": "reject",
+      "catalog_fragment": "/Open#41ction [3 0 R /Fit]",
+      "page_fragment": "",
+      "info_fragment": "",
+      "extra_objects": [],
+      "forbidden_markers": ["/Open#41ction"]
+    },
+    {
+      "id": "PDF-NEG-012",
+      "fixture": "file-uri-action-annotation",
+      "expected_outcome": "reject",
+      "catalog_fragment": "",
+      "page_fragment": "/Annots [6 0 R]",
+      "info_fragment": "",
+      "extra_objects": [
+        {
+          "number": 6,
+          "dictionary": "/Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (file:///Users/alice/private.md) >>",
+          "stream": null
+        }
+      ],
+      "forbidden_markers": ["/Annots", "file:///Users/"]
+    },
+    {
+      "id": "PDF-NEG-013",
+      "fixture": "custom-uri-action-annotation",
+      "expected_outcome": "reject",
+      "catalog_fragment": "",
+      "page_fragment": "/Annots [6 0 R]",
+      "info_fragment": "",
+      "extra_objects": [
+        {
+          "number": 6,
+          "dictionary": "/Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI (inflow-script:run) >>",
+          "stream": null
+        }
+      ],
+      "forbidden_markers": ["/Annots", "inflow-script:"]
+    }
+  ]
+}

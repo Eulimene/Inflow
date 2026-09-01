@@ -24,9 +24,8 @@ final class DocumentFileSafetyTests: XCTestCase {
         )
         XCTAssertEqual(
             ExternalFileChangePrompt.diskOnlyMessage,
-            "你没有未保存更改，可以查看变化并采用磁盘版本。"
+            "你没有未保存更改。可以重新载入磁盘内容，或暂不处理。"
         )
-        XCTAssertEqual(ExternalFileChangePrompt.viewChangesTitle, "查看变化…")
         XCTAssertEqual(ExternalFileChangePrompt.reloadTitle, "重新载入")
         XCTAssertEqual(ExternalFileChangePrompt.laterTitle, "稍后")
         XCTAssertEqual(
@@ -35,10 +34,8 @@ final class DocumentFileSafetyTests: XCTestCase {
         )
         XCTAssertEqual(
             ExternalFileChangePrompt.conflictMessage,
-            "为避免覆盖，自动保存已暂停。请对照最近成功保存版本、当前编辑和磁盘版本。"
+            "磁盘内容与当前编辑都已保留。重新载入会采用磁盘版本；再次手动保存时会先询问是否覆盖。"
         )
-        XCTAssertEqual(ExternalFileChangePrompt.compareTitle, "比较…")
-        XCTAssertEqual(ExternalFileChangePrompt.saveCopyTitle, "保存副本…")
         XCTAssertEqual(ExternalFileChangePrompt.reloadReviewTitle, "重新载入…")
         XCTAssertEqual(ExternalFileChangePrompt.overwriteTitle, "覆盖磁盘版本…")
         XCTAssertEqual(
@@ -55,12 +52,7 @@ final class DocumentFileSafetyTests: XCTestCase {
         )
         XCTAssertEqual(
             ExternalFileChangePrompt.overwriteConfirmationMessage,
-            "先保存当前磁盘版本的冲突副本，然后写入你的编辑。"
-        )
-        XCTAssertEqual(ExternalFileChangePrompt.overwriteFailureTitle, "无法安全覆盖")
-        XCTAssertEqual(
-            ExternalFileChangePrompt.overwriteFailureMessage,
-            "未能保存磁盘当前版本的冲突副本，因此没有执行覆盖。"
+            "确认后将用当前编辑覆盖磁盘内容；取消时两份内容都保持不变。"
         )
         XCTAssertEqual(
             ExternalFileChangePrompt.deletedTitle(filename: "notes.md"),
@@ -71,7 +63,6 @@ final class DocumentFileSafetyTests: XCTestCase {
             "当前编辑仍已保留，且不会自动重建原文件。"
         )
         XCTAssertEqual(ExternalFileChangePrompt.saveAsTitle, "另存为…")
-        XCTAssertEqual(ExternalFileChangePrompt.recreateTitle, "在原位置重建…")
         XCTAssertEqual(ExternalFileChangePrompt.handleLaterTitle, "稍后处理")
     }
 
@@ -192,6 +183,95 @@ final class DocumentFileSafetyTests: XCTestCase {
         )
     }
 
+    func testAutomaticSaveConfirmedByNextWrapperIsStillObservedBeforeFollowingWrite()
+        throws
+    {
+        let fixture = try FileSafetyFixture()
+        defer { fixture.remove() }
+        let baseline = Data("baseline\n".utf8)
+        try baseline.write(to: fixture.documentURL)
+        var document = try MarkdownDocument(fileData: baseline)
+        document.writeGuard.configure(
+            url: fixture.documentURL,
+            baselineData: baseline
+        )
+
+        document.text = "automatic A\n"
+        let wrapperA = try document.fileWrapper(
+            existingFile: FileWrapper(regularFileWithContents: baseline)
+        )
+        let dataA = try XCTUnwrap(wrapperA.regularFileContents)
+        try dataA.write(to: fixture.documentURL)
+
+        document.text = "automatic B\n"
+        let wrapperB = try document.fileWrapper(
+            existingFile: FileWrapper(regularFileWithContents: dataA)
+        )
+        let dataB = try XCTUnwrap(wrapperB.regularFileContents)
+        XCTAssertNotEqual(dataA, dataB)
+
+        let observedA = try XCTUnwrap(
+            document.writeGuard.observe(diskData: dataA).committedAutomaticEnvelope
+        )
+        XCTAssertEqual(observedA.operation, .automatic)
+        XCTAssertEqual(observedA.bytes, dataA)
+        XCTAssertNil(
+            document.writeGuard.observe(diskData: dataA).committedAutomaticEnvelope
+        )
+
+        try dataB.write(to: fixture.documentURL)
+        let observedB = try XCTUnwrap(
+            document.writeGuard.observe(diskData: dataB).committedAutomaticEnvelope
+        )
+        XCTAssertEqual(observedB.bytes, dataB)
+        XCTAssertGreaterThan(observedB.revision, observedA.revision)
+        XCTAssertNil(
+            document.writeGuard.observe(diskData: dataB).committedAutomaticEnvelope
+        )
+    }
+
+    func testMultipleUnobservedAutomaticCommitsCollapseToLatestRevision() throws {
+        let fixture = try FileSafetyFixture()
+        defer { fixture.remove() }
+        let baseline = Data("baseline\n".utf8)
+        try baseline.write(to: fixture.documentURL)
+        var document = try MarkdownDocument(fileData: baseline)
+        document.writeGuard.configure(
+            url: fixture.documentURL,
+            baselineData: baseline
+        )
+
+        document.text = "automatic A\n"
+        let dataA = try XCTUnwrap(
+            document.fileWrapper(
+                existingFile: FileWrapper(regularFileWithContents: baseline)
+            ).regularFileContents
+        )
+        try dataA.write(to: fixture.documentURL)
+
+        document.text = "automatic B\n"
+        let dataB = try XCTUnwrap(
+            document.fileWrapper(
+                existingFile: FileWrapper(regularFileWithContents: dataA)
+            ).regularFileContents
+        )
+        try dataB.write(to: fixture.documentURL)
+
+        document.text = "automatic C not committed\n"
+        _ = try document.fileWrapper(
+            existingFile: FileWrapper(regularFileWithContents: dataB)
+        )
+
+        let latest = try XCTUnwrap(
+            document.writeGuard.observe(diskData: dataB).committedAutomaticEnvelope
+        )
+        XCTAssertEqual(latest.bytes, dataB)
+        XCTAssertNotEqual(latest.bytes, dataA)
+        XCTAssertNil(
+            document.writeGuard.observe(diskData: dataB).committedAutomaticEnvelope
+        )
+    }
+
     func testWriteGuardBlocksExternalChangeAndDeletionButAllowsSaveAsTarget() throws {
         let fixture = try FileSafetyFixture()
         defer { fixture.remove() }
@@ -226,81 +306,251 @@ final class DocumentFileSafetyTests: XCTestCase {
         }
     }
 
-    func testWorkerOverwriteCreatesPermanentConflictCopyBeforeReplacingOriginal() async throws {
+    @MainActor
+    func testSaveEnvelopeCommitsOnlyFrozenBytesAndLeavesNewerEditDirty() async throws {
         let fixture = try FileSafetyFixture()
         defer { fixture.remove() }
         let baseline = Data("baseline\n".utf8)
-        let disk = Data("external\n".utf8)
-        let local = Data("local\n".utf8)
-        try disk.write(to: fixture.documentURL)
-        let snapshot = DocumentFileConflictSnapshot(
-            url: fixture.documentURL,
-            baselineData: baseline,
-            baselineText: "baseline\n",
-            localData: local,
-            localText: "local\n",
-            diskData: disk,
-            diskText: "external\n",
-            diskExists: true
-        )
+        try baseline.write(to: fixture.documentURL)
+        var document = try MarkdownDocument(fileData: baseline)
+        let session = DocumentFileSafetySession(intervalNanoseconds: 60_000_000_000)
+        session.update(document: document, fileURL: fixture.documentURL)
 
-        let conflictURL = try await DocumentFileSafetyWorker().overwrite(
-            snapshot: snapshot,
-            with: local,
-            now: Date(timeIntervalSince1970: 1_700_000_000)
+        document.text = "first edit\n"
+        session.update(document: document, fileURL: fixture.documentURL)
+        let envelope = try session.prepareSave(
+            document: document,
+            sourceURL: fixture.documentURL,
+            targetURL: fixture.documentURL,
+            targetExpectation: try .capture(fixture.documentURL),
+            operation: .save
         )
+        XCTAssertTrue(envelope.hasValidHash)
+        XCTAssertEqual(envelope.bytes, Data("first edit\n".utf8))
 
-        XCTAssertEqual(try Data(contentsOf: fixture.documentURL), local)
-        XCTAssertEqual(try Data(contentsOf: conflictURL), disk)
-        XCTAssertTrue(conflictURL.lastPathComponent.contains("冲突副本"))
+        try envelope.bytes.write(to: fixture.documentURL)
+        document.text = "first edit\nnewer edit\n"
+        session.update(document: document, fileURL: fixture.documentURL)
+        try await session.commitSave(envelope)
+
+        XCTAssertTrue(session.hasUncommittedChanges)
+        XCTAssertEqual(try Data(contentsOf: fixture.documentURL), envelope.bytes)
+        session.stopMonitoring()
     }
 
-    func testOverwriteAndRecreateRejectStaleDiskDecision() async throws {
+    @MainActor
+    func testFileDocumentWrapperSerializesPreparedEnvelopeWhileNewerEditStaysDirty()
+        async throws
+    {
         let fixture = try FileSafetyFixture()
         defer { fixture.remove() }
         let baseline = Data("baseline\n".utf8)
-        let disk = Data("external\n".utf8)
-        let local = Data("local\n".utf8)
-        try disk.write(to: fixture.documentURL)
-        let worker = DocumentFileSafetyWorker()
-        let changedSnapshot = DocumentFileConflictSnapshot(
-            url: fixture.documentURL,
-            baselineData: baseline,
-            baselineText: "baseline\n",
-            localData: local,
-            localText: "local\n",
-            diskData: disk,
-            diskText: "external\n",
-            diskExists: true
-        )
-        try Data("changed again\n".utf8).write(to: fixture.documentURL)
+        try baseline.write(to: fixture.documentURL)
+        var document = try MarkdownDocument(fileData: baseline)
+        let session = DocumentFileSafetySession(intervalNanoseconds: 60_000_000_000)
+        session.update(document: document, fileURL: fixture.documentURL)
 
-        do {
-            _ = try await worker.overwrite(snapshot: changedSnapshot, with: local)
-            XCTFail("Expected a stale overwrite decision")
-        } catch {
-            XCTAssertEqual(error as? DocumentFileSafetyError, .staleDecision)
-        }
+        document.text = "frozen save\n"
+        session.update(document: document, fileURL: fixture.documentURL)
+        let envelope = try session.prepareSave(
+            document: document,
+            sourceURL: fixture.documentURL,
+            targetURL: fixture.documentURL,
+            targetExpectation: try .capture(fixture.documentURL),
+            operation: .save
+        )
+        defer { session.cancelSave(envelope) }
+
+        document.text = "frozen save\nnewer edit\n"
+        session.update(document: document, fileURL: fixture.documentURL)
+        let wrapper = try document.fileWrapper(
+            existingFile: FileWrapper(regularFileWithContents: baseline)
+        )
+        let serialized = try XCTUnwrap(wrapper.regularFileContents)
+
+        XCTAssertEqual(serialized, envelope.bytes)
+        XCTAssertNotEqual(serialized, try document.encodedFileData())
+        try serialized.write(to: fixture.documentURL)
+        try await session.commitSave(envelope)
+        XCTAssertTrue(session.hasUncommittedChanges)
+        XCTAssertEqual(try Data(contentsOf: fixture.documentURL), envelope.bytes)
+        session.stopMonitoring()
+    }
+
+    func testSaveExpectationRejectsSymlinkAndIdentityReplacementWithSameBytes() throws {
+        let fixture = try FileSafetyFixture()
+        defer { fixture.remove() }
+        let original = Data("same bytes\n".utf8)
+        try original.write(to: fixture.documentURL)
+        let expectation = try SaveEnvelope.TargetExpectation.capture(fixture.documentURL)
 
         try FileManager.default.removeItem(at: fixture.documentURL)
-        let deletedSnapshot = DocumentFileConflictSnapshot(
-            url: fixture.documentURL,
-            baselineData: baseline,
-            baselineText: "baseline\n",
-            localData: local,
-            localText: "local\n",
-            diskData: nil,
-            diskText: nil,
-            diskExists: false
+        try original.write(to: fixture.documentURL)
+        XCTAssertFalse(expectation.isCurrent(at: fixture.documentURL))
+
+        let symbolicLink = fixture.root.appendingPathComponent("save-target.md")
+        try FileManager.default.createSymbolicLink(
+            at: symbolicLink,
+            withDestinationURL: fixture.documentURL
         )
-        try Data("reappeared\n".utf8).write(to: fixture.documentURL)
-        do {
-            try await worker.recreate(snapshot: deletedSnapshot, with: local)
-            XCTFail("Expected a stale recreate decision")
-        } catch {
-            XCTAssertEqual(error as? DocumentFileSafetyError, .staleDecision)
+        XCTAssertThrowsError(try SaveEnvelope.TargetExpectation.capture(symbolicLink)) {
+            error in
+            XCTAssertEqual(error as? HTMLExportTargetError, .unsupportedTarget)
         }
-        XCTAssertEqual(try Data(contentsOf: fixture.documentURL), Data("reappeared\n".utf8))
+    }
+
+    @MainActor
+    func testSaveEnvelopeRejectsCompletionWhoseDiskBytesDoNotMatch() async throws {
+        let fixture = try FileSafetyFixture()
+        defer { fixture.remove() }
+        let baseline = Data("baseline\n".utf8)
+        try baseline.write(to: fixture.documentURL)
+        var document = try MarkdownDocument(fileData: baseline)
+        let session = DocumentFileSafetySession(intervalNanoseconds: 60_000_000_000)
+        session.update(document: document, fileURL: fixture.documentURL)
+        document.text = "requested save\n"
+        session.update(document: document, fileURL: fixture.documentURL)
+        let envelope = try session.prepareSave(
+            document: document,
+            sourceURL: fixture.documentURL,
+            targetURL: fixture.documentURL,
+            targetExpectation: try .capture(fixture.documentURL),
+            operation: .save
+        )
+        try Data("different writer won\n".utf8).write(to: fixture.documentURL)
+
+        do {
+            try await session.commitSave(envelope)
+            XCTFail("Expected mismatched completion to remain uncommitted")
+        } catch {
+            XCTAssertEqual(error as? DocumentFileSafetyError, .saveCompletionMismatch)
+        }
+        XCTAssertTrue(session.hasUncommittedChanges)
+        session.cancelSave(envelope)
+        session.stopMonitoring()
+    }
+
+    @MainActor
+    func testSaveAsBaselineSurvivesFileURLTransitionBeforeAndAfterCompletion() async throws {
+        let fixture = try FileSafetyFixture()
+        defer { fixture.remove() }
+        let targetURL = fixture.root.appendingPathComponent("renamed.md")
+        let baseline = Data("baseline\n".utf8)
+        try baseline.write(to: fixture.documentURL)
+        var document = try MarkdownDocument(fileData: baseline)
+        document.text = "save as snapshot\n"
+        let session = DocumentFileSafetySession(intervalNanoseconds: 60_000_000_000)
+        session.update(document: document, fileURL: fixture.documentURL)
+        let envelope = try session.prepareSave(
+            document: document,
+            sourceURL: fixture.documentURL,
+            targetURL: targetURL,
+            targetExpectation: .absent,
+            operation: .saveAs
+        )
+        try envelope.bytes.write(to: targetURL)
+
+        // SwiftUI may publish the new fileURL before AppKit calls save completion.
+        session.update(document: document, fileURL: targetURL)
+        try await session.commitSave(envelope)
+        XCTAssertFalse(session.hasUncommittedChanges)
+
+        // The reverse callback order must preserve the same committed baseline.
+        let secondTarget = fixture.root.appendingPathComponent("renamed-again.md")
+        document.text = "second relocation\n"
+        session.update(document: document, fileURL: targetURL)
+        let secondEnvelope = try session.prepareSave(
+            document: document,
+            sourceURL: targetURL,
+            targetURL: secondTarget,
+            targetExpectation: .absent,
+            operation: .saveAs
+        )
+        try secondEnvelope.bytes.write(to: secondTarget)
+        try await session.commitSave(secondEnvelope)
+        session.update(document: document, fileURL: secondTarget)
+        XCTAssertFalse(session.hasUncommittedChanges)
+        session.stopMonitoring()
+    }
+
+    @MainActor
+    func testFirstSaveAsCommitsFrozenEnvelopeWhenFileURLPublishesBeforeCompletion() async throws {
+        let fixture = try FileSafetyFixture()
+        defer { fixture.remove() }
+        let targetURL = fixture.root.appendingPathComponent("first-save.md")
+        var document = MarkdownDocument(text: "first save snapshot\n")
+        let session = DocumentFileSafetySession(intervalNanoseconds: 60_000_000_000)
+        session.update(document: document, fileURL: nil)
+        let envelope = try session.prepareSave(
+            document: document,
+            sourceURL: nil,
+            targetURL: targetURL,
+            targetExpectation: .absent,
+            operation: .saveAs
+        )
+
+        document.text = "first save snapshot\nnewer edit\n"
+        session.update(document: document, fileURL: targetURL)
+        try envelope.bytes.write(to: targetURL)
+        try await session.commitSave(envelope)
+
+        XCTAssertEqual(try Data(contentsOf: targetURL), envelope.bytes)
+        XCTAssertTrue(session.hasUncommittedChanges)
+        session.stopMonitoring()
+    }
+
+    func testFrozenLocalFileReadRejectsPathReplacementAndSymlink() throws {
+        let fixture = try FileSafetyFixture()
+        defer { fixture.remove() }
+        let original = Data("trusted bytes".utf8)
+        try original.write(to: fixture.documentURL)
+        let snapshot = try PreviewLocalFileSnapshot.capture(fixture.documentURL)
+        let frozen = try PreviewLocalFileReader.read(
+            fixture.documentURL,
+            expected: snapshot
+        )
+        XCTAssertEqual(frozen.data, original)
+
+        try FileManager.default.removeItem(at: fixture.documentURL)
+        try Data("replacement".utf8).write(to: fixture.documentURL)
+        XCTAssertThrowsError(
+            try PreviewLocalFileReader.read(fixture.documentURL, expected: snapshot)
+        ) { error in
+            XCTAssertEqual(error as? PreviewLocalFileError, .changedDuringRead)
+        }
+
+        let symlink = fixture.root.appendingPathComponent("link.md")
+        try FileManager.default.createSymbolicLink(
+            at: symlink,
+            withDestinationURL: fixture.documentURL
+        )
+        XCTAssertThrowsError(try PreviewLocalFileSnapshot.capture(symlink)) { error in
+            XCTAssertEqual(error as? PreviewLocalFileError, .notRegularFile)
+        }
+
+        let symlinkTarget = fixture.root.appendingPathComponent("symlink-target.md")
+        try Data("symlink replacement".utf8).write(to: symlinkTarget)
+        try FileManager.default.removeItem(at: fixture.documentURL)
+        try FileManager.default.createSymbolicLink(
+            at: fixture.documentURL,
+            withDestinationURL: symlinkTarget
+        )
+        XCTAssertThrowsError(
+            try PreviewLocalFileReader.read(fixture.documentURL, expected: snapshot)
+        ) { error in
+            XCTAssertEqual(error as? PreviewLocalFileError, .unavailable)
+        }
+    }
+
+    func testFrozenMarkdownOpensAsUntitledCopyAndCarriesExactDecodedFragment() throws {
+        let document = try FrozenPreviewMarkdownDocument.make(
+            data: Data("# Café\n\nbody\n".utf8),
+            headingFragment: "café"
+        )
+
+        XCTAssertEqual(document.text, "# Café\n\nbody\n")
+        XCTAssertEqual(document.initialHeadingFragment, "café")
+        XCTAssertNil(document.openedFileData)
     }
 
     @MainActor

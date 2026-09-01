@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import SwiftUI
 
 enum ExportFormat: String, Sendable {
@@ -8,26 +9,12 @@ enum ExportFormat: String, Sendable {
     var filenameExtension: String {
         rawValue.lowercased()
     }
-
-    var alternate: Self {
-        self == .html ? .pdf : .html
-    }
 }
 
 struct FrozenExportRequest: Sendable {
     let format: ExportFormat
     let snapshot: HTMLExportSnapshot
     let suggestedFilename: String
-
-    func changingFormat() -> Self {
-        let stem = (suggestedFilename as NSString).deletingPathExtension
-        let alternateFormat = format.alternate
-        return Self(
-            format: alternateFormat,
-            snapshot: snapshot,
-            suggestedFilename: "\(stem).\(alternateFormat.filenameExtension)"
-        )
-    }
 }
 
 private struct PreparedExportDelivery: Sendable {
@@ -154,7 +141,6 @@ enum ExportFailurePrompt {
     static let cancelTitle = "取消"
     static let tooLargeTitle = "导出内容过大"
     static let returnToAdjustTitle = "返回调整"
-    static let changeFormatTitle = "更换格式…"
     static let checkFailedTitle = "导出结果未通过检查"
     static let checkFailedMessage =
         "交付物包含不安全动作、私密路径或结构不完整，因此没有替换目标。"
@@ -176,7 +162,7 @@ enum ExportFailurePrompt {
                 CharacterSet(charactersIn: "。.!！?？")
             )
         )
-        return "\(normalized)。Markdown 文档未改变，也没有留下残缺目标。"
+        return "\(normalized)。Markdown 文档未改变；请重新确认目标文件的状态。"
     }
 }
 
@@ -237,6 +223,31 @@ private struct PendingExportConfirmation: Identifiable {
     let preparation: HTMLExportPreparation
 }
 
+private struct SourceOnlyDocumentBanner: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("已切换为源码优先")
+                    .font(.headline)
+                Text(
+                    "文件大于 1 MiB。完整源码、查找、保存、恢复和冲突保护仍可用；"
+                        + "实时/纯预览、大纲、完整语法高亮、诊断、统计和结构格式已暂停。"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.08))
+        .accessibilityElement(children: .combine)
+    }
+}
+
 enum EditorViewMode: String, CaseIterable, Identifiable {
     case source
     case split
@@ -248,7 +259,7 @@ enum EditorViewMode: String, CaseIterable, Identifiable {
         switch self {
         case .source: "源码编辑"
         case .split: "实时预览"
-        case .preview: "纯预览"
+        case .preview: "即时渲染编辑"
         }
     }
 
@@ -261,7 +272,7 @@ enum EditorViewMode: String, CaseIterable, Identifiable {
     }
 
     var sourceVisible: EditorViewMode {
-        self == .preview ? .split : self
+        self
     }
 
     static func resolve(storedValue: String) -> EditorViewMode {
@@ -297,7 +308,7 @@ enum EditorStatisticMode: String, CaseIterable, Identifiable {
 enum EmptyMarkdownGuidance {
     static let title = "这份 Markdown 属于你"
     static let description =
-        "直接在源码编辑器中开始写作，或从 macOS 顶部“文件”菜单打开文件与文件夹。首次保存时由你选择文件名和位置，Inflow 不会把内容导入专有格式。"
+        "直接在源码编辑器中开始写作，或从 macOS 顶部“文件”菜单打开 Markdown 或文件夹项目。首次保存时由你选择文件名和位置，Inflow 不会把内容导入专有格式。"
 
     static func isVisible(markdown: String) -> Bool {
         markdown.isEmpty
@@ -408,15 +419,15 @@ private struct EmptyMarkdownPreviewView: View {
 }
 
 struct MarkdownEditorView: View {
-    @Environment(\.openDocument) private var openDocument
+    @Environment(\.newDocument) private var newDocument
     @Binding var document: MarkdownDocument
     let fileURL: URL?
     let isEditable: Bool
     var recoveryCoordinator: DocumentRecoveryCoordinator? = nil
     @ObservedObject private var preferences: AppPreferences
-    private let anonymousUsage: AnonymousUsageDataController?
     private let recentDocuments: RecentDocumentsController?
     @ObservedObject private var folderBrowser: FolderBrowserController
+    private let projectCoordinator: LightweightProjectCoordinator?
 
     init(
         document: Binding<MarkdownDocument>,
@@ -424,19 +435,28 @@ struct MarkdownEditorView: View {
         isEditable: Bool,
         recoveryCoordinator: DocumentRecoveryCoordinator? = nil,
         preferences: AppPreferences? = nil,
-        anonymousUsage: AnonymousUsageDataController? = nil,
         recentDocuments: RecentDocumentsController? = nil,
-        folderBrowser: FolderBrowserController
+        folderBrowser: FolderBrowserController,
+        projectCoordinator: LightweightProjectCoordinator? = nil
     ) {
         _document = document
         self.fileURL = fileURL
         self.isEditable = isEditable
         self.recoveryCoordinator = recoveryCoordinator
         _preferences = ObservedObject(wrappedValue: preferences ?? AppPreferences())
-        self.anonymousUsage = anonymousUsage
         self.recentDocuments = recentDocuments
         _folderBrowser = ObservedObject(wrappedValue: folderBrowser)
+        self.projectCoordinator = projectCoordinator
         let initialDocument = document.wrappedValue
+        _recoveryRecordID = State(
+            initialValue: initialDocument.recoveryTransfer?.targetRecordID ?? UUID()
+        )
+        _incomingHeadingFragment = State(
+            initialValue: initialDocument.initialHeadingFragment
+        )
+        _incomingNavigationIsPending = State(
+            initialValue: initialDocument.initialHeadingFragment != nil
+        )
         _initialEditorModeOverride = State(
             initialValue: InflowLaunchPolicy.shouldFocusFreshUntitledDocument(
                 fileURL: fileURL,
@@ -450,12 +470,18 @@ struct MarkdownEditorView: View {
 
     @SceneStorage("editorViewMode") private var storedViewMode = ""
     @SceneStorage("isDocumentOutlineVisible") private var isOutlineVisible = true
+    @SceneStorage("isProjectSidebarVisible") private var isProjectSidebarVisible = true
     @SceneStorage("editorStatisticMode") private var storedStatisticMode =
         EditorStatisticMode.words.rawValue
-    @SceneStorage("isFocusModeEnabled") private var isFocusModeEnabled = false
-    @SceneStorage("isTypewriterModeEnabled") private var isTypewriterModeEnabled = false
-    @SceneStorage("editorSplitFraction") private var editorSplitFraction =
-        EditorSplitLayout.defaultFraction
+    // These keys existed in development previews. The launch product does not expose
+    // either writing mode, so restored true values are cleared and never become effective.
+    @SceneStorage("isFocusModeEnabled") private var restoredFocusModeEnabled = false
+    @SceneStorage("isTypewriterModeEnabled") private var restoredTypewriterModeEnabled = false
+    private var isFocusModeEnabled: Bool { false }
+    private var isTypewriterModeEnabled: Bool { false }
+    // A negative sentinel distinguishes a brand-new scene from one whose own
+    // fraction was restored. The global preference seeds only the former.
+    @SceneStorage("editorSplitFraction") private var editorSplitFraction = -1.0
     @State private var previewHTML = MarkdownRenderer.htmlDocument(for: "")
     @State private var previewSourceSnapshot = ""
     @State private var previewFailureMessage: String?
@@ -474,7 +500,6 @@ struct MarkdownEditorView: View {
     @State private var previewLinkPlan: PreviewLinkPlan?
     @State private var incomingHeadingFragment: String?
     @State private var incomingNavigationIsPending = false
-    @State private var navigationRegistrationID = UUID()
     @StateObject private var sourceEditorSession = MarkdownSourceEditorSession()
     @State private var selectedHeadingID: DocumentHeading.ID?
     @State private var sourceSelectionRequest: SourceSelectionRequest?
@@ -524,6 +549,9 @@ struct MarkdownEditorView: View {
 
     private var viewMode: EditorViewMode {
         get {
+            if usesSourceOnlyExperience {
+                return .source
+            }
             if let initialEditorModeOverride {
                 return initialEditorModeOverride
             }
@@ -533,9 +561,14 @@ struct MarkdownEditorView: View {
             )
         }
         nonmutating set {
+            guard !usesSourceOnlyExperience || newValue == .source else { return }
             initialEditorModeOverride = nil
             storedViewMode = newValue.rawValue
         }
+    }
+
+    private var usesSourceOnlyExperience: Bool {
+        document.capabilityTier == .sourceOnly
     }
 
     private var statisticMode: EditorStatisticMode {
@@ -545,6 +578,7 @@ struct MarkdownEditorView: View {
 
     private var canEditDocument: Bool {
         isEditable
+            && !isProjectShell
             && !document.properties.requiresLineEndingChoice
             && !fileSafetySession.state.blocksEditing
             && !isFileSafetyPresented
@@ -615,17 +649,7 @@ struct MarkdownEditorView: View {
             DocumentFileSafetyBanner(
                 state: displayedFileSafetyState,
                 deferredSnapshotID: deferredFileSafetySnapshotID,
-                onCompare: {
-                    requestedConflictDecision = nil
-                    isFileSafetyPresented = true
-                },
                 onReload: requestFileSafetyReload,
-                onOverwrite: { snapshot in
-                    presentFileSafetyReview(snapshot, decision: .overwrite)
-                },
-                onRecreate: { snapshot in
-                    presentFileSafetyReview(snapshot, decision: .recreate)
-                },
                 onDefer: { snapshot in
                     deferredFileSafetySnapshotID = snapshot.id
                 },
@@ -633,7 +657,6 @@ struct MarkdownEditorView: View {
                     deferredFileSafetySnapshotID = nil
                 },
                 onSaveAs: { beginDocumentRelocation(.saveAs) },
-                onSaveCopy: { beginDocumentRelocation(.saveCopy) },
                 onClose: {
                     MixedLineEndingPrompt.closeDocumentWindow(
                         sourceEditorSession.textView.window ?? NSApp.keyWindow
@@ -667,6 +690,11 @@ struct MarkdownEditorView: View {
                 Divider()
             }
 
+            if usesSourceOnlyExperience {
+                SourceOnlyDocumentBanner()
+                Divider()
+            }
+
             if findSession.isPresented {
                 DocumentFindBar(
                     session: findSession,
@@ -687,6 +715,10 @@ struct MarkdownEditorView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .focusedValue(\.outlineVisibility, $isOutlineVisible)
+        .focusedValue(
+            \.projectSidebarVisibility,
+            hasProjectContext ? $isProjectSidebarVisible : nil
+        )
         .focusedSceneValue(\.editorViewModeActions, editorViewModeCommandActions)
         .focusedSceneValue(\.previewZoomActions, previewZoomCommandActions)
         .focusedSceneValue(\.writingModeActions, writingModeCommandActions)
@@ -708,6 +740,7 @@ struct MarkdownEditorView: View {
                 }
                 .help(isOutlineVisible ? "隐藏文档大纲" : "显示文档大纲")
                 .accessibilityValue(isOutlineVisible ? "已显示" : "已隐藏")
+                .disabled(usesSourceOnlyExperience)
             }
 
             ToolbarItem {
@@ -726,6 +759,7 @@ struct MarkdownEditorView: View {
                 .pickerStyle(.segmented)
                 .frame(width: 330)
                 .accessibilityLabel("写作视图")
+                .disabled(usesSourceOnlyExperience)
             }
         }
     }
@@ -733,10 +767,13 @@ struct MarkdownEditorView: View {
     private var documentObservationLayer: some View {
         editorSurface
         .onAppear {
+            SafePreviewOpenStore.startMaintenance()
             // SwiftUI creates its document controller while the app is launching.
             // Apply the host policy only after this document scene is attached.
             preferences.applyAutosavePolicy()
-            registerDocumentNavigation(url: fileURL)
+            if editorSplitFraction < 0 {
+                editorSplitFraction = preferences.defaultSplitFraction
+            }
             restoreRelativeResourceDirectoryAccess(for: fileURL)
             if let fileURL {
                 recentDocuments?.note(fileURL)
@@ -747,6 +784,7 @@ struct MarkdownEditorView: View {
             scheduleDerivedContent(
                 for: document.text,
                 documentDirectory: fileURL?.deletingLastPathComponent(),
+                projectRoot: activeProjectRoot,
                 configuration: preferences.previewConfiguration,
                 headingNavigationEnabled: preferences.headingNavigationEnabled,
                 syntaxHighlightingEnabled: preferences.syntaxHighlightingEnabled,
@@ -763,14 +801,19 @@ struct MarkdownEditorView: View {
             }
             updateRecoveryProtection()
             fileSafetySession.update(document: document, fileURL: fileURL)
+            consumePendingLinkedHeadingNavigation()
+            restoredFocusModeEnabled = false
+            restoredTypewriterModeEnabled = false
             if canEditDocument {
                 sourceEditorSession.setWritingModes(
                     focusModeEnabled: isFocusModeEnabled,
                     typewriterModeEnabled: isTypewriterModeEnabled
                 )
             } else {
-                isFocusModeEnabled = false
-                isTypewriterModeEnabled = false
+                sourceEditorSession.setWritingModes(
+                    focusModeEnabled: false,
+                    typewriterModeEnabled: false
+                )
             }
             if let recoveryCoordinator {
                 Task {
@@ -789,6 +832,7 @@ struct MarkdownEditorView: View {
             scheduleDerivedContent(
                 for: markdown,
                 documentDirectory: fileURL?.deletingLastPathComponent(),
+                projectRoot: activeProjectRoot,
                 configuration: preferences.previewConfiguration,
                 headingNavigationEnabled: preferences.headingNavigationEnabled,
                 syntaxHighlightingEnabled: preferences.syntaxHighlightingEnabled,
@@ -813,13 +857,13 @@ struct MarkdownEditorView: View {
             deferredResourceDirectoryPath = nil
             deferredDirectoryConflictSnapshotID = nil
             restoreRelativeResourceDirectoryAccess(for: newURL)
-            registerDocumentNavigation(url: newURL)
             if let newURL {
                 recentDocuments?.note(newURL)
             }
             scheduleDerivedContent(
                 for: document.text,
                 documentDirectory: newURL?.deletingLastPathComponent(),
+                projectRoot: projectRoot(for: newURL),
                 configuration: preferences.previewConfiguration,
                 headingNavigationEnabled: preferences.headingNavigationEnabled,
                 syntaxHighlightingEnabled: preferences.syntaxHighlightingEnabled,
@@ -828,9 +872,31 @@ struct MarkdownEditorView: View {
             updateRecoveryProtection()
             fileSafetySession.update(document: document, fileURL: newURL)
         }
+        .onChange(of: folderBrowser.folderURL) { _, newRoot in
+            if newRoot != nil {
+                isProjectSidebarVisible = true
+            }
+            scheduleDerivedContent(
+                for: document.text,
+                documentDirectory: fileURL?.deletingLastPathComponent(),
+                projectRoot: projectRoot(for: fileURL),
+                configuration: preferences.previewConfiguration,
+                headingNavigationEnabled: preferences.headingNavigationEnabled,
+                syntaxHighlightingEnabled: preferences.syntaxHighlightingEnabled,
+                delayNanoseconds: 0
+            )
+        }
         .onChange(of: document.properties) { _, _ in
             updateRecoveryProtection()
             fileSafetySession.update(document: document, fileURL: fileURL)
+        }
+        .onChange(of: fileSafetySession.automaticSaveCommit) { _, envelope in
+            guard let envelope else { return }
+            document.adoptRecoveryCommittedSave(envelope)
+            updateRecoveryProtection(originalURL: envelope.targetURL)
+            Task { @MainActor in
+                await recoveryCoordinator?.flush(recoveryRecordID)
+            }
         }
         .onChange(of: storedViewMode) { _, _ in
             updateRecoveryProtection()
@@ -839,6 +905,7 @@ struct MarkdownEditorView: View {
             scheduleDerivedContent(
                 for: document.text,
                 documentDirectory: fileURL?.deletingLastPathComponent(),
+                projectRoot: activeProjectRoot,
                 configuration: configuration,
                 headingNavigationEnabled: preferences.headingNavigationEnabled,
                 syntaxHighlightingEnabled: preferences.syntaxHighlightingEnabled,
@@ -849,6 +916,7 @@ struct MarkdownEditorView: View {
             scheduleDerivedContent(
                 for: document.text,
                 documentDirectory: fileURL?.deletingLastPathComponent(),
+                projectRoot: activeProjectRoot,
                 configuration: preferences.previewConfiguration,
                 headingNavigationEnabled: isEnabled,
                 syntaxHighlightingEnabled: preferences.syntaxHighlightingEnabled,
@@ -866,6 +934,7 @@ struct MarkdownEditorView: View {
             scheduleDerivedContent(
                 for: document.text,
                 documentDirectory: fileURL?.deletingLastPathComponent(),
+                projectRoot: activeProjectRoot,
                 configuration: preferences.previewConfiguration,
                 headingNavigationEnabled: preferences.headingNavigationEnabled,
                 syntaxHighlightingEnabled: isEnabled,
@@ -878,16 +947,16 @@ struct MarkdownEditorView: View {
                 requestPreviewScroll()
             }
         }
-        .onChange(of: isFocusModeEnabled) { _, _ in
+        .onChange(of: restoredFocusModeEnabled) { _, isEnabled in
+            if isEnabled { restoredFocusModeEnabled = false }
             applyWritingModes()
         }
-        .onChange(of: isTypewriterModeEnabled) { _, _ in
+        .onChange(of: restoredTypewriterModeEnabled) { _, isEnabled in
+            if isEnabled { restoredTypewriterModeEnabled = false }
             applyWritingModes()
         }
-        .onChange(of: canEditDocument) { _, canEdit in
-            guard !canEdit else { return }
-            isFocusModeEnabled = false
-            isTypewriterModeEnabled = false
+        .onChange(of: canEditDocument) { _, _ in
+            applyWritingModes()
         }
     }
 
@@ -952,11 +1021,22 @@ struct MarkdownEditorView: View {
             findSession.cancelSearch()
             fileSafetySession.stopMonitoring()
             recoveryCoordinator?.close(recoveryRecordID)
-            PreviewDocumentNavigationBroker.shared.unregister(id: navigationRegistrationID)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) {
             _ in
             recoveryCoordinator?.close(recoveryRecordID)
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: LinkedHeadingNavigationBroker.didRequestNavigation
+            )
+        ) { notification in
+            guard let requestedPath = notification.object as? String,
+                  fileURL?.standardizedFileURL.path == requestedPath
+            else {
+                return
+            }
+            consumePendingLinkedHeadingNavigation()
         }
     }
 
@@ -992,7 +1072,7 @@ struct MarkdownEditorView: View {
         }
         .sheet(isPresented: $isRecoveryCenterPresented) {
             if let recoveryCoordinator {
-                RecoveryCenterView(
+                LightweightRecoveryPromptView(
                     coordinator: recoveryCoordinator,
                     onClose: { isRecoveryCenterPresented = false }
                 )
@@ -1003,12 +1083,8 @@ struct MarkdownEditorView: View {
                 DocumentConflictReviewView(
                     snapshot: snapshot,
                     initialDecision: requestedConflictDecision,
-                    onSaveCopy: saveCopyFromConflictReview,
                     onReload: { try await reloadFromDisk(snapshot) },
-                    onOverwrite: {
-                        try await overwriteDiskVersion(snapshot)
-                    },
-                    onRecreate: { try await recreateDeletedFile(snapshot) },
+                    onOverwrite: { try await overwriteDiskVersion(snapshot) },
                     onResolved: {
                         requestedConflictDecision = nil
                         isFileSafetyPresented = false
@@ -1072,25 +1148,17 @@ struct MarkdownEditorView: View {
                     Button(ExportFailurePrompt.cancelTitle, role: .cancel) {
                         htmlExportNotice = nil
                     }
-                case let .tooLarge(request):
+                case .tooLarge:
                     Button(ExportFailurePrompt.returnToAdjustTitle, role: .cancel) {
                         htmlExportNotice = nil
                     }
-                    Button(ExportFailurePrompt.changeFormatTitle) {
-                        htmlExportNotice = nil
-                        prepareExport(request.changingFormat())
-                    }
-                case let .checkFailed(request, details):
+                case let .checkFailed(_, details):
                     Button(ExportFailurePrompt.viewProblemsTitle) {
                         htmlExportNotice = nil
                         Task { @MainActor in
                             await Task.yield()
                             exportIssueDetails = ExportIssueDetails(message: details)
                         }
-                    }
-                    Button(ExportFailurePrompt.changeFormatTitle) {
-                        htmlExportNotice = nil
-                        prepareExport(request.changingFormat())
                     }
                     Button(ExportFailurePrompt.closeTitle, role: .cancel) {
                         htmlExportNotice = nil
@@ -1147,7 +1215,7 @@ struct MarkdownEditorView: View {
             Button("继续编辑", role: .cancel) {}
         } message: {
             Text(
-                "\(documentSaveFailureMessage ?? "目标当前不可写。")\n\n原文件未被破坏，当前编辑仍已保留。"
+                "\(documentSaveFailureMessage ?? "目标当前不可写。")\n\n当前编辑仍已保留；请重新确认目标文件的状态。"
             )
         }
         .alert(
@@ -1180,13 +1248,73 @@ struct MarkdownEditorView: View {
 
     @ViewBuilder
     private var content: some View {
-        if folderBrowser.folderURL != nil {
+        if hasProjectContext && isProjectSidebarVisible {
             HSplitView {
                 FolderBrowserSidebar(
                     controller: folderBrowser,
                     currentDocumentURL: fileURL,
                     onOpenDocument: { url in
-                        recentDocuments?.openDocumentFromFolder(url)
+                        guard let recentDocuments else {
+                            throw DocumentOpenError.unsupportedTarget
+                        }
+                        if let projectCoordinator {
+                            projectCoordinator.openDocument(
+                                url,
+                                replacing: nativeDocument,
+                                using: recentDocuments
+                            )
+                        } else {
+                            recentDocuments.openDocumentFromFolder(url)
+                        }
+                    },
+                    onOpenDocumentWithCompletion: { url, completion in
+                        guard let recentDocuments else {
+                            completion(.failure(DocumentOpenError.unsupportedTarget))
+                            return
+                        }
+                        if let projectCoordinator {
+                            projectCoordinator.openDocument(
+                                url,
+                                replacing: nativeDocument,
+                                using: recentDocuments,
+                                completion: completion
+                            )
+                        } else {
+                            recentDocuments.openDocumentFromFolder(
+                                url,
+                                completion: completion
+                            )
+                        }
+                    },
+                    onOpenCreatedDocument: { url, completion in
+                        guard let recentDocuments else {
+                            completion(.failure(DocumentOpenError.unsupportedTarget))
+                            return
+                        }
+                        if let projectCoordinator {
+                            projectCoordinator.openDocument(
+                                url,
+                                replacing: nativeDocument,
+                                using: recentDocuments,
+                                requiresCloseAuthorization: false,
+                                completion: completion
+                            )
+                        } else {
+                            recentDocuments.openDocumentFromFolder(
+                                url,
+                                completion: completion
+                            )
+                        }
+                    },
+                    onPrepareToReplaceCurrentDocument: { completion in
+                        guard let projectCoordinator else {
+                            completion(true)
+                            return
+                        }
+                        projectCoordinator.prepareToReplaceCurrentDocument(
+                            nativeDocument,
+                            completion: completion
+                        )
                     }
                 )
                 .frame(minWidth: 190, idealWidth: 230, maxWidth: 340)
@@ -1199,9 +1327,45 @@ struct MarkdownEditorView: View {
         }
     }
 
+    private var hasProjectContext: Bool {
+        activeProjectRoot != nil
+    }
+
+    private var activeProjectRoot: URL? {
+        projectRoot(for: fileURL)
+    }
+
+    private func projectRoot(for documentURL: URL?) -> URL? {
+        guard let root = folderBrowser.folderURL else { return nil }
+        guard folderBrowser.isAssociatedProjectDocument(nativeDocument) else {
+            return nil
+        }
+        if let documentURL,
+           !FolderProjectPathBoundary.contains(documentURL, in: root)
+        {
+            return nil
+        }
+        return root
+    }
+
+    private var isProjectShell: Bool {
+        hasProjectContext && fileURL == nil
+    }
+
+    private var nativeDocument: NSDocument? {
+        sourceEditorSession.textView.window?.windowController?.document as? NSDocument
+    }
+
     @ViewBuilder
     private var documentContent: some View {
-        if isOutlineVisible {
+        if isProjectShell {
+            ContentUnavailableView(
+                "选择一份 Markdown",
+                systemImage: "doc.text.magnifyingglass",
+                description: Text("从左侧项目树选择 .md 或 .markdown，或新建一份 Markdown。")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if isOutlineVisible && !usesSourceOnlyExperience {
             HSplitView {
                 DocumentOutlineView(
                     analysisState: analysisState,
@@ -1233,7 +1397,7 @@ struct MarkdownEditorView: View {
                     .frame(minWidth: 320)
             }
         case .preview:
-            preview
+            renderedEditor
         }
     }
 
@@ -1244,8 +1408,23 @@ struct MarkdownEditorView: View {
             session: sourceEditorSession,
             isEditable: canEditDocument,
             appearance: preferences.sourceEditorAppearance,
+            presentation: .source,
             onPasteImage: pasteImage,
             onDropImage: dropImage
+        )
+    }
+
+    private var renderedEditor: some View {
+        MarkdownSourceEditor(
+            text: $document.text,
+            selectionRequest: sourceSelectionRequest,
+            session: sourceEditorSession,
+            isEditable: canEditDocument,
+            appearance: preferences.sourceEditorAppearance,
+            presentation: .rendered,
+            onPasteImage: pasteImage,
+            onDropImage: dropImage,
+            onCommandClickLink: activatePreviewLink
         )
     }
 
@@ -1337,8 +1516,13 @@ struct MarkdownEditorView: View {
 
             Spacer()
 
-            statisticsMenu
-                .help(statisticsHelp)
+            if usesSourceOnlyExperience {
+                Label("统计已暂停", systemImage: "pause.circle")
+                    .help("源码优先文件不运行完整文档分析")
+            } else {
+                statisticsMenu
+                    .help(statisticsHelp)
+            }
             Text("UTF-8\(document.properties.hasUTF8BOM ? " BOM" : "")")
             Text(
                 document.properties.requiresLineEndingChoice
@@ -1396,13 +1580,13 @@ struct MarkdownEditorView: View {
             isFocusModeEnabled: isFocusModeEnabled,
             isTypewriterModeEnabled: isTypewriterModeEnabled,
             canEdit: canEditDocument,
-            setFocusMode: { isEnabled in
-                guard canEditDocument || !isEnabled else { return }
-                isFocusModeEnabled = isEnabled
+            setFocusMode: { _ in
+                restoredFocusModeEnabled = false
+                applyWritingModes()
             },
-            setTypewriterMode: { isEnabled in
-                guard canEditDocument || !isEnabled else { return }
-                isTypewriterModeEnabled = isEnabled
+            setTypewriterMode: { _ in
+                restoredTypewriterModeEnabled = false
+                applyWritingModes()
             }
         )
     }
@@ -1464,13 +1648,13 @@ struct MarkdownEditorView: View {
         }
     }
 
-    private func updateRecoveryProtection() {
+    private func updateRecoveryProtection(originalURL: URL? = nil) {
         guard let recoveryCoordinator else { return }
         recoveryCoordinator.update(
             DocumentRecoveryRecord(
                 id: recoveryRecordID,
                 document: document,
-                originalURL: fileURL,
+                originalURL: originalURL ?? fileURL,
                 selectedUTF16Range: sourceEditorSession.selectedUTF16Range,
                 viewMode: viewMode,
                 verticalScrollOffset: sourceEditorSession.verticalScrollOffset
@@ -1479,7 +1663,20 @@ struct MarkdownEditorView: View {
     }
 
     private func reloadFromDisk(_ snapshot: DocumentFileConflictSnapshot) async throws {
-        let result = try await fileSafetySession.reload(snapshot)
+        guard let nativeDocument = NativeDocumentSaveCoordinator.activeDocument(
+            sourceURL: snapshot.url
+        ), NativeDocumentSaveCoordinator.represents(
+            nativeDocument,
+            sourceURL: snapshot.url
+        ) else {
+            throw DocumentRelocationError.cannotInspect
+        }
+        let reloadEnvelope = try await fileSafetySession.prepareReload(snapshot)
+        try NativeDocumentSaveCoordinator.revert(
+            document: nativeDocument,
+            from: snapshot.url
+        )
+        let result = try await fileSafetySession.commitReload(reloadEnvelope)
         document.properties = result.decoded.properties
         document.openedFileData = result.data
         document.text = result.decoded.text
@@ -1513,31 +1710,15 @@ struct MarkdownEditorView: View {
         isFileSafetyPresented = true
     }
 
-    private func overwriteDiskVersion(_ snapshot: DocumentFileConflictSnapshot) async throws
-        -> URL
-    {
-        guard try await requestDocumentDirectoryAccessIfNeeded(for: snapshot) else {
-            throw DocumentDirectoryAccessDecisionError.declined
-        }
-        let conflictURL = try await fileSafetySession.overwrite(snapshot)
-        fileSafetyNotice = .conflictCopySaved(conflictURL)
-        return conflictURL
-    }
-
-    private func recreateDeletedFile(_ snapshot: DocumentFileConflictSnapshot) async throws {
-        guard try await requestDocumentDirectoryAccessIfNeeded(for: snapshot) else {
-            throw DocumentDirectoryAccessDecisionError.declined
-        }
-        try await fileSafetySession.recreate(snapshot)
-    }
-
     private var documentSaveCommandActions: DocumentSaveCommandActions {
         DocumentSaveCommandActions(
-            isBusy: isSavingDocument || isRelocatingDocument || relocationRequest != nil,
+            isBusy: isProjectShell
+                || isSavingDocument
+                || isRelocatingDocument
+                || relocationRequest != nil,
             canSave: canEditDocument,
             save: saveCurrentDocument,
             saveAs: { beginDocumentRelocation(.saveAs) },
-            saveCopy: { beginDocumentRelocation(.saveCopy) },
             showInFinder: fileURL.map { url in
                 { NSWorkspace.shared.activateFileViewerSelecting([url]) }
             }
@@ -1547,7 +1728,7 @@ struct MarkdownEditorView: View {
     private func saveCurrentDocument() {
         guard !isSavingDocument, !isRelocatingDocument, relocationRequest == nil else { return }
         guard let fileURL else {
-            NSApp.sendAction(#selector(NSDocument.save(_:)), to: nil, from: nil)
+            _ = beginDocumentRelocation(.saveAs)
             return
         }
         guard let nativeDocument = NativeDocumentSaveCoordinator.activeDocument(
@@ -1556,19 +1737,74 @@ struct MarkdownEditorView: View {
             documentSaveFailureMessage = "无法确认当前文档的保存目标。"
             return
         }
+        if let snapshot = fileSafetySession.state.conflictSnapshot {
+            guard snapshot.diskExists else {
+                beginDocumentRelocation(.saveAs)
+                return
+            }
+            presentFileSafetyReview(snapshot, decision: .overwrite)
+            return
+        }
 
         isSavingDocument = true
         Task { @MainActor in
             defer { isSavingDocument = false }
             do {
+                let envelope = try fileSafetySession.prepareSave(
+                    document: document,
+                    sourceURL: fileURL,
+                    targetURL: fileURL,
+                    targetExpectation: try .capture(fileURL),
+                    operation: .save
+                )
+                defer { fileSafetySession.cancelSave(envelope) }
                 try await NativeDocumentSaveCoordinator.saveCurrent(
                     document: nativeDocument,
                     to: fileURL
                 )
+                try await fileSafetySession.commitSave(envelope)
+                document.adoptRecoveryCommittedSave(envelope)
+                updateRecoveryProtection(originalURL: envelope.targetURL)
+                await recoveryCoordinator?.flush(recoveryRecordID)
                 documentSaveFailureMessage = nil
             } catch {
+                LocalFailureLogController.shared.record(.saving, code: .saveFailed)
                 documentSaveFailureMessage = error.localizedDescription
             }
+        }
+    }
+
+    private func overwriteDiskVersion(_ snapshot: DocumentFileConflictSnapshot) async throws {
+        guard !isSavingDocument,
+              let nativeDocument = NativeDocumentSaveCoordinator.activeDocument(
+                  sourceURL: snapshot.url
+              ), NativeDocumentSaveCoordinator.represents(
+                  nativeDocument,
+                  sourceURL: snapshot.url
+              )
+        else {
+            throw DocumentRelocationError.cannotInspect
+        }
+        isSavingDocument = true
+        defer { isSavingDocument = false }
+        do {
+            let envelope = try await fileSafetySession.prepareConfirmedOverwrite(
+                document: document,
+                snapshot: snapshot
+            )
+            defer { fileSafetySession.cancelSave(envelope) }
+            try await NativeDocumentSaveCoordinator.saveCurrent(
+                document: nativeDocument,
+                to: snapshot.url
+            )
+            try await fileSafetySession.commitSave(envelope)
+            document.adoptRecoveryCommittedSave(envelope)
+            updateRecoveryProtection(originalURL: envelope.targetURL)
+            await recoveryCoordinator?.flush(recoveryRecordID)
+            documentSaveFailureMessage = nil
+        } catch {
+            LocalFailureLogController.shared.record(.saving, code: .saveFailed)
+            throw error
         }
     }
 
@@ -1698,6 +1934,16 @@ struct MarkdownEditorView: View {
                 throw DocumentRelocationError.targetOpen
             }
 
+            let envelope = try fileSafetySession.prepareSave(
+                document: document,
+                sourceURL: request.plan.sourceURL,
+                targetURL: request.plan.targetURL,
+                targetExpectation: request.plan.targetSnapshot.isExistingTarget
+                    ? .exact(request.plan.targetSnapshot)
+                    : .absent,
+                operation: request.operation == .saveAs ? .saveAs : .saveCopy
+            )
+            defer { fileSafetySession.cancelSave(envelope) }
             try document.writeGuard.authorizeRelocation(
                 to: request.plan.targetURL,
                 targetSnapshot: request.plan.targetSnapshot,
@@ -1712,6 +1958,12 @@ struct MarkdownEditorView: View {
                 to: request.plan.targetURL,
                 operation: request.operation
             )
+            try await fileSafetySession.commitSave(envelope)
+            if request.operation == .saveAs {
+                document.adoptRecoveryCommittedSave(envelope)
+                updateRecoveryProtection(originalURL: envelope.targetURL)
+                await recoveryCoordinator?.flush(recoveryRecordID)
+            }
 
             let deferredInsertion = request.operation == .saveAs
                 ? deferredImageInsertionQueue.consumeAfterSuccessfulSave()
@@ -1745,20 +1997,12 @@ struct MarkdownEditorView: View {
 
     private func presentFileOperationFailure(
         _ error: Error,
-        fallback: String = "未能安全完成文件操作；原文件与当前编辑均未改变。"
+        fallback: String = "未能完成文件操作；当前编辑仍已保留，请重新确认目标文件的状态。"
     ) {
+        LocalFailureLogController.shared.record(.saving, code: .saveFailed)
         fileSafetyNotice = .failure(
             (error as? LocalizedError)?.errorDescription ?? fallback
         )
-    }
-
-    private func saveCopyFromConflictReview() {
-        requestedConflictDecision = nil
-        isFileSafetyPresented = false
-        Task { @MainActor in
-            await Task.yield()
-            beginDocumentRelocation(.saveCopy)
-        }
     }
 
     private func selectHeading(_ heading: DocumentHeading) {
@@ -1870,12 +2114,14 @@ struct MarkdownEditorView: View {
         let generation = previewLinkGeneration
         let markdown = document.text
         let documentURL = fileURL
+        let projectRoot = hasProjectContext ? folderBrowser.folderURL : nil
 
         previewLinkTask = Task { @MainActor in
             let plan = await previewLinkWorker.plan(
                 markdown: markdown,
                 target: target,
-                documentURL: documentURL
+                documentURL: documentURL,
+                projectRoot: projectRoot
             )
             guard !Task.isCancelled, generation == previewLinkGeneration else { return }
             guard PreviewLinkPlanner.isCurrent(plan, markdown: document.text) else {
@@ -1942,15 +2188,6 @@ struct MarkdownEditorView: View {
         }
     }
 
-    private func registerDocumentNavigation(url: URL?) {
-        PreviewDocumentNavigationBroker.shared.register(
-            id: navigationRegistrationID,
-            url: url
-        ) { fragment in
-            navigateInCurrentDocument(to: fragment)
-        }
-    }
-
     private func confirmPreviewLink(_ plan: PreviewLinkPlan) {
         guard PreviewLinkPlanner.isCurrent(plan, markdown: document.text) else {
             previewLinkPlan = blockedPreviewLinkPlan(
@@ -2005,20 +2242,62 @@ struct MarkdownEditorView: View {
             previewLinkPlan = nil
             switch link.kind {
             case .markdown:
-                openLinkedMarkdown(
-                    link,
-                    originalTarget: plan.target,
-                    accessURL: accessURL
-                )
+                if link.projectRoot != nil {
+                    openProjectMarkdown(link, sourcePlan: plan)
+                } else {
+                    do {
+                        let frozen = try PreviewLocalFileReader.read(
+                            accessURL,
+                            expected: link.snapshot
+                        )
+                        try openLinkedMarkdown(link, frozenData: frozen.data)
+                    } catch {
+                        previewLinkPlan = blockedPreviewLinkPlan(
+                            target: plan.target,
+                            reason: .unavailableLocalTarget,
+                            safeTarget: link.url.lastPathComponent,
+                            expectedURL: link.url
+                        )
+                    }
+                }
             case .image, .pdf:
-                guard NSWorkspace.shared.open(accessURL) else {
+                do {
+                    let frozen = try PreviewLocalFileReader.read(
+                        accessURL,
+                        expected: link.snapshot
+                    )
+                    let safeURL = try SafePreviewOpenStore.materialize(
+                        frozen,
+                        extension: link.url.pathExtension.lowercased()
+                    )
+                    do {
+                        switch link.kind {
+                        case .image:
+                            _ = try LocalImageValidator.load(at: safeURL)
+                        case .pdf:
+                            guard let provider = CGDataProvider(data: frozen.data as CFData),
+                                  let pdf = CGPDFDocument(provider),
+                                  pdf.numberOfPages > 0
+                            else {
+                                throw PreviewLocalFileError.unsafeContent
+                            }
+                        case .markdown, .attachment:
+                            break
+                        }
+                        guard NSWorkspace.shared.open(safeURL) else {
+                            throw PreviewLocalFileError.unavailable
+                        }
+                    } catch {
+                        try? FileManager.default.removeItem(at: safeURL)
+                        throw error
+                    }
+                } catch {
                     previewLinkPlan = blockedPreviewLinkPlan(
                         target: plan.target,
-                        reason: .cannotOpen,
+                        reason: .unsafeLocalTarget,
                         safeTarget: link.url.lastPathComponent,
                         expectedURL: link.url
                     )
-                    return
                 }
             case .attachment:
                 NSWorkspace.shared.activateFileViewerSelecting([accessURL])
@@ -2031,54 +2310,73 @@ struct MarkdownEditorView: View {
         }
     }
 
-    private func openLinkedMarkdown(
+    private func openLinkedMarkdown(_ link: PreviewLocalLink, frozenData: Data) throws {
+        let restored = try FrozenPreviewMarkdownDocument.make(
+            data: frozenData,
+            headingFragment: link.fragment
+        )
+        newDocument(restored)
+    }
+
+    private func openProjectMarkdown(
         _ link: PreviewLocalLink,
-        originalTarget: String,
-        accessURL: URL
+        sourcePlan: PreviewLinkPlan
     ) {
-        if PreviewDocumentNavigationBroker.shared.routeIfOpen(
-            to: link.url,
-            fragment: link.fragment
-        ) {
-            if let openDocument = NativeDocumentSaveCoordinator.documentAlreadyOpen(
-                at: link.url,
-                excluding: nil
-            ) {
-                openDocument.showWindows()
-                openDocument.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
-            }
+        guard let recentDocuments else {
+            previewLinkPlan = blockedPreviewLinkPlan(
+                target: sourcePlan.target,
+                reason: .cannotOpen,
+                safeTarget: link.url.lastPathComponent
+            )
             return
         }
 
-        let token = PreviewDocumentNavigationBroker.shared.enqueue(
-            url: link.url,
-            fragment: link.fragment
-        )
-        Task { @MainActor in
-            let accessed = accessURL.startAccessingSecurityScopedResource()
-            defer {
-                if accessed { accessURL.stopAccessingSecurityScopedResource() }
-            }
-            do {
-                _ = try await openDocument(at: accessURL)
-                try? await Task.sleep(for: .seconds(10))
-                PreviewDocumentNavigationBroker.shared.cancelPending(
-                    url: link.url,
-                    token: token
+        let completion: @MainActor @Sendable (Result<Void, Error>) -> Void = { result in
+            switch result {
+            case .success:
+                LinkedHeadingNavigationBroker.request(
+                    documentURL: link.url,
+                    fragment: link.fragment
                 )
-            } catch {
-                PreviewDocumentNavigationBroker.shared.cancelPending(
-                    url: link.url,
-                    token: token
-                )
+            case let .failure(error):
+                if let openError = error as? DocumentOpenError,
+                   case .cancelled = openError
+                {
+                    previewLinkPlan = nil
+                    return
+                }
                 previewLinkPlan = blockedPreviewLinkPlan(
-                    target: originalTarget,
+                    target: sourcePlan.target,
                     reason: .cannotOpen,
                     safeTarget: link.url.lastPathComponent,
                     expectedURL: link.url
                 )
             }
         }
+        if let projectCoordinator {
+            projectCoordinator.openDocument(
+                link.url,
+                replacing: nativeDocument,
+                using: recentDocuments,
+                completion: completion
+            )
+        } else {
+            recentDocuments.openDocumentFromFolder(
+                link.url,
+                completion: completion
+            )
+        }
+    }
+
+    private func consumePendingLinkedHeadingNavigation() {
+        guard let fileURL,
+              let fragment = LinkedHeadingNavigationBroker.consume(for: fileURL)
+        else {
+            return
+        }
+        incomingHeadingFragment = fragment
+        incomingNavigationIsPending = true
+        applyPendingDocumentNavigationIfPossible()
     }
 
     private func previewLocalTargetIsCurrent(_ plan: PreviewLinkPlan, url: URL) -> Bool {
@@ -2115,7 +2413,8 @@ struct MarkdownEditorView: View {
             let refreshed = await previewLinkWorker.plan(
                 markdown: document.text,
                 target: plan.target,
-                documentURL: fileURL
+                documentURL: fileURL,
+                projectRoot: hasProjectContext ? folderBrowser.folderURL : nil
             )
             guard PreviewLinkPlanner.isCurrent(refreshed, markdown: document.text) else {
                 previewLinkPlan = blockedPreviewLinkPlan(
@@ -2190,20 +2489,20 @@ struct MarkdownEditorView: View {
 
     private var htmlExportCommandActions: HTMLExportCommandActions {
         HTMLExportCommandActions(
-            isExportingHTML: isExportingHTML,
             isExportingPDF: isExportingPDF,
-            startHTML: startHTMLExport,
+            canExportPDF: !document.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             startPDF: startPDFExport
         )
     }
 
     private var markdownFormatCommandActions: MarkdownFormatCommandActions {
-        let canClearFormat = canEditDocument && MarkdownFormatter.canClearFormat(
+        let formattingIsAvailable = canEditDocument && !usesSourceOnlyExperience
+        let canClearFormat = formattingIsAvailable && MarkdownFormatter.canClearFormat(
             source: document.text,
             selectedUTF16Range: sourceEditorSession.selectedUTF16Range
         )
         return MarkdownFormatCommandActions(
-            canFormat: canEditDocument,
+            canFormat: formattingIsAvailable,
             canClearFormat: canClearFormat,
             apply: applyMarkdownFormat
         )
@@ -2353,32 +2652,8 @@ struct MarkdownEditorView: View {
 
             do {
                 let image = try await worker.loadSource(at: sourceURL)
-                let placement: ExistingImagePlacement
-                if let automaticPlacement = preferences.existingImagePlacement.automaticPlacement {
-                    placement = automaticPlacement
-                } else {
-                    guard let selectedPlacement = await ImageAssetPicker.choosePlacement(
-                        filename: sourceURL.lastPathComponent,
-                        attachedTo: window
-                    ) else {
-                        return
-                    }
-                    placement = selectedPlacement
-                }
+                let placement = ExistingImagePlacement.copyToAssets
                 let alternative = sourceURL.deletingPathExtension().lastPathComponent
-
-                if placement == .keepOriginal {
-                    try await retainExistingImage(
-                        sourceURL: sourceURL,
-                        documentURL: documentURL,
-                        sourceSnapshot: sourceSnapshot,
-                        selectedRange: selectedRange,
-                        defaultAlternative: alternative,
-                        window: window,
-                        worker: worker
-                    )
-                    return
-                }
 
                 guard let directoryPlan = try await imageAssetDirectoryPlan(
                     for: placement,
@@ -2393,34 +2668,9 @@ struct MarkdownEditorView: View {
                     directoryPlan: directoryPlan,
                     originalFilename: filename
                 )
-                let resolution: ImageAssetCollisionResolution
-                if destinationSnapshot.exists {
-                    guard let choice = await ImageAssetPicker.resolveExistingImageCollision(
-                        filename: filename,
-                        attachedTo: window
-                    ) else {
-                        return
-                    }
-                    switch choice {
-                    case .incrementName:
-                        resolution = .incrementName
-                    case .replace:
-                        resolution = .replace
-                    case .keepOriginal:
-                        try await retainExistingImage(
-                            sourceURL: sourceURL,
-                            documentURL: documentURL,
-                            sourceSnapshot: sourceSnapshot,
-                            selectedRange: selectedRange,
-                            defaultAlternative: alternative,
-                            window: window,
-                            worker: worker
-                        )
-                        return
-                    }
-                } else {
-                    resolution = .failIfExists
-                }
+                let resolution: ImageAssetCollisionResolution = destinationSnapshot.exists
+                    ? .incrementName
+                    : .failIfExists
 
                 let asset = try await worker.importAsset(
                     image: image,
@@ -2456,6 +2706,7 @@ struct MarkdownEditorView: View {
                     throw error
                 }
             } catch {
+                LocalFailureLogController.shared.record(.imageImport, code: .invalidImage)
                 markdownFormatErrorMessage = (error as? LocalizedError)?.errorDescription
                     ?? ImageAssetImportError.copyFailed.localizedDescription
             }
@@ -2559,12 +2810,8 @@ struct MarkdownEditorView: View {
             defer { isImportingImage = false }
             do {
                 let image = try await worker.prepareClipboardImage(payload)
-                let copyPlacement: ExistingImagePlacement =
-                    preferences.existingImagePlacement == .copyToRelativeDirectory
-                    ? .copyToRelativeDirectory
-                    : .copyToAssets
                 guard let directoryPlan = try await imageAssetDirectoryPlan(
-                    for: copyPlacement,
+                    for: .copyToAssets,
                     documentDirectory: documentDirectory,
                     attachedTo: window
                 ) else {
@@ -2756,7 +3003,7 @@ struct MarkdownEditorView: View {
     }
 
     private func applyMarkdownFormat(_ command: MarkdownFormatCommand) {
-        guard canEditDocument else { return }
+        guard canEditDocument, !usesSourceOnlyExperience else { return }
         let source = document.text
 
         do {
@@ -2773,8 +3020,6 @@ struct MarkdownEditorView: View {
                 markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未修改文档。"
                 return
             }
-            anonymousUsage?.record(feature: .formatting, command: .formatMarkdown)
-
             Task { @MainActor in
                 await Task.yield()
                 _ = sourceEditorSession.focusEditor()
@@ -2828,15 +3073,13 @@ struct MarkdownEditorView: View {
         isExportingPDF = false
     }
 
-    private func startHTMLExport() {
-        guard !isExportingHTML, !isExportingPDF else { return }
-        anonymousUsage?.record(feature: .export, command: .exportHTML)
-        prepareExport(makeFrozenExportRequest(format: .html))
-    }
-
     private func startPDFExport() {
-        guard !isExportingHTML, !isExportingPDF else { return }
-        anonymousUsage?.record(feature: .export, command: .exportPDF)
+        guard !document.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !isExportingHTML,
+              !isExportingPDF
+        else {
+            return
+        }
         prepareExport(makeFrozenExportRequest(format: .pdf))
     }
 
@@ -2844,7 +3087,8 @@ struct MarkdownEditorView: View {
         let snapshot = HTMLExportSnapshot(
             markdown: document.text,
             documentDirectory: fileURL?.deletingLastPathComponent(),
-            appearance: preferences.previewConfiguration
+            projectRoot: activeProjectRoot,
+            appearance: format == .pdf ? .personalPDF : preferences.previewConfiguration
         )
         let basename = fileURL?.deletingPathExtension().lastPathComponent ?? "未命名文档"
         return FrozenExportRequest(
@@ -3031,6 +3275,9 @@ struct MarkdownEditorView: View {
         _ error: HTMLExportError,
         request: FrozenExportRequest
     ) {
+        if request.format == .pdf {
+            LocalFailureLogController.shared.record(.pdfExport, code: .pdfPreparationFailed)
+        }
         switch error {
         case .outputTooLarge:
             htmlExportNotice = HTMLExportNotice(outcome: .tooLarge(request))
@@ -3057,6 +3304,7 @@ struct MarkdownEditorView: View {
     }
 
     private func presentPDFFailure(_ error: Error, request: FrozenExportRequest) {
+        LocalFailureLogController.shared.record(.pdfExport, code: .pdfRenderingFailed)
         if error as? PDFExportError == .invalidOutput {
             htmlExportNotice = HTMLExportNotice(
                 outcome: .checkFailed(
@@ -3077,6 +3325,9 @@ struct MarkdownEditorView: View {
         _ error: HTMLExportTargetError,
         context: ExportRecoveryContext
     ) {
+        if context.request.format == .pdf {
+            LocalFailureLogController.shared.record(.pdfExport, code: .pdfWriteFailed)
+        }
         if error == .targetChanged, let delivery = context.delivery {
             let targetURL: URL = switch context {
             case let .capture(_, url), let .write(_, url, _): url
@@ -3112,14 +3363,9 @@ struct MarkdownEditorView: View {
     }
 
     private func selectViewMode(_ mode: EditorViewMode) {
+        guard !usesSourceOnlyExperience || mode == .source else { return }
         viewMode = mode
         preferences.recordActiveEditorViewMode(mode)
-        let command: AnonymousUsageCommand = switch mode {
-        case .source: .selectSourceView
-        case .split: .selectSplitView
-        case .preview: .selectPreviewView
-        }
-        anonymousUsage?.record(feature: .preview, command: command)
         guard mode != .preview, !findSession.isPresented else { return }
 
         Task { @MainActor in
@@ -3374,6 +3620,7 @@ struct MarkdownEditorView: View {
     private func scheduleDerivedContent(
         for markdown: String,
         documentDirectory: URL?,
+        projectRoot: URL?,
         configuration: PreviewAppearanceConfiguration,
         headingNavigationEnabled: Bool,
         syntaxHighlightingEnabled: Bool,
@@ -3382,6 +3629,23 @@ struct MarkdownEditorView: View {
         derivedContentTask?.cancel()
         derivedContentGeneration &+= 1
         let generation = derivedContentGeneration
+
+        guard !usesSourceOnlyExperience else {
+            previewHTML = MarkdownRenderer.htmlDocument(for: "")
+            previewSourceSnapshot = ""
+            previewFailureMessage = nil
+            relativeResourceSourceSnapshot = ""
+            hasRelativeResources = false
+            analysisState = .ready(.empty)
+            selectedHeadingID = nil
+            incomingNavigationIsPending = false
+            _ = sourceEditorSession.applySyntaxHighlighting(
+                [],
+                source: markdown,
+                enabled: false
+            )
+            return
+        }
 
         derivedContentTask = Task { @MainActor in
             if delayNanoseconds > 0 {
@@ -3392,6 +3656,7 @@ struct MarkdownEditorView: View {
             guard let content = await contentDeriver.derive(
                 markdown: markdown,
                 documentDirectory: documentDirectory,
+                projectRoot: projectRoot,
                 configuration: configuration,
                 headingNavigationEnabled: headingNavigationEnabled,
                 syntaxHighlightingEnabled: syntaxHighlightingEnabled
@@ -3413,6 +3678,7 @@ struct MarkdownEditorView: View {
                 analysisState = .ready(analysis)
                 applyPendingDocumentNavigationIfPossible()
             case let .failure(message):
+                LocalFailureLogController.shared.record(.previewing, code: .previewFailed)
                 analysisState = .failed(
                     previous: analysisState.displayedAnalysis,
                     message: message
@@ -3425,6 +3691,7 @@ struct MarkdownEditorView: View {
         scheduleDerivedContent(
             for: document.text,
             documentDirectory: fileURL?.deletingLastPathComponent(),
+            projectRoot: activeProjectRoot,
             configuration: preferences.previewConfiguration,
             headingNavigationEnabled: preferences.headingNavigationEnabled,
             syntaxHighlightingEnabled: preferences.syntaxHighlightingEnabled,
@@ -3526,6 +3793,7 @@ private actor DocumentContentDeriver {
     func derive(
         markdown: String,
         documentDirectory: URL?,
+        projectRoot: URL?,
         configuration: PreviewAppearanceConfiguration,
         headingNavigationEnabled: Bool,
         syntaxHighlightingEnabled: Bool
@@ -3557,6 +3825,7 @@ private actor DocumentContentDeriver {
         let previewDocument = MarkdownRenderer.previewDocument(
             for: markdown,
             documentDirectory: documentDirectory,
+            projectRoot: projectRoot,
             configuration: configuration,
             navigationHeadings: headings
         )

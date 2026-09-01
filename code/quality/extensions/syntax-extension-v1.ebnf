@@ -1,0 +1,52 @@
+namespace       = "inflow:", extension-id, ":", name ;
+extension-id    = domain-label, ".", domain-label, { ".", domain-label } ;
+domain-label    = lower-or-digit | lower-or-digit, { lower-or-digit | "-" }, lower-or-digit ;
+name            = lower, { lower | digit | "-" } ;
+indent          = "" | " " | "  " | "   " ;
+line-end        = "\n" | "\r\n" ;
+space           = " " | "\t" ;
+
+fenced-block    = fence-open, line-end, { body-line }, fence-close ;
+fence-open      = indent, fence-marker, [ space ], namespace, { space } ;
+fence-close     = indent, fence-marker, { space }, [ line-end ] ;
+fence-marker    = backtick-fence | tilde-fence ;
+backtick-fence  = "```", { "`" } ;
+tilde-fence     = "~~~", { "~" } ;
+
+block-directive = directive-open, line-end, { directive-body }, directive-close ;
+directive-open  = indent, ":::", namespace, [ space, attributes ], { space } ;
+directive-close = indent, ":::", { space }, [ line-end ] ;
+attributes      = json-object ;
+
+body-line       = { unicode-scalar }, line-end ;
+directive-body  = commonmark-block ;
+json-object     = "{", json-ws, [ member, { json-ws, ",", json-ws, member } ], json-ws, "}" ;
+member          = json-string, json-ws, ":", json-ws, scalar ;
+scalar          = json-string | finite-number | "true" | "false" | string-array ;
+string-array    = "[", json-ws, [ json-string, { json-ws, ",", json-ws, json-string } ], json-ws, "]" ;
+json-ws         = { " " | "\t" } ;
+json-string     = quote, { json-char | escape }, quote ;
+escape          = reverse-solidus, ( quote | reverse-solidus | "/" | "b" | "f" | "n" | "r" | "t" | unicode-escape ) ;
+unicode-escape  = "u", hex, hex, hex, hex ;
+finite-number   = [ "-" ], ( "0" | nonzero, { digit } ), [ ".", digit, { digit } ], [ exponent ] ;
+exponent        = ( "e" | "E" ), [ "+" | "-" ], digit, { digit } ;
+lower-or-digit  = lower | digit ;
+lower           = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" ;
+digit           = "0" | nonzero ;
+nonzero         = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+hex             = digit | "a" | "b" | "c" | "d" | "e" | "f" | "A" | "B" | "C" | "D" | "E" | "F" ;
+quote           = ? U+0022 quotation mark ? ;
+reverse-solidus = ? U+005C reverse solidus ? ;
+json-char       = ? any Unicode scalar except U+0000-U+001F, quotation mark and reverse solidus ? ;
+unicode-scalar  = ? any Unicode scalar value ? ;
+commonmark-block = ? a CommonMark/GFM block sequence accepted by Core ? ;
+
+(* Semantic constraints not expressible in EBNF:
+   - extension-id and name lengths/patterns are those in syntax-api-v1.schema.json.
+   - an opening fence closes only with the same character and at least its opening length.
+   - the first eligible matching fence/directive close ends the construct.
+   - backtick info strings cannot contain a backtick.
+   - directive attributes are UTF-8 JSON with NFC keys; duplicate or undeclared keys reject the contribution.
+   - a directive cannot contain another Inflow directive; fenced bodies are opaque.
+   - Core CommonMark/GFM recognition runs first and excludes code, HTML, links and formula regions.
+*)

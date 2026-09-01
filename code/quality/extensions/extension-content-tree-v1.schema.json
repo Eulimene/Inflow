@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.inflow.app/extensions/content-tree/v1",
+  "title": "Inflow Extension Content Tree v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "treeType",
+    "sourceRangeSHA256",
+    "declaredNodeCount",
+    "declaredUTF8Bytes",
+    "declaredMaxDepth",
+    "root"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "treeType": { "const": "extension-content-tree" },
+    "sourceRangeSHA256": { "$ref": "#/$defs/sha256" },
+    "declaredNodeCount": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "declaredUTF8Bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2097152
+    },
+    "declaredMaxDepth": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32
+    },
+    "root": { "$ref": "#/$defs/documentNode" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+    },
+    "children": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "documentNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "children"],
+      "properties": {
+        "type": { "const": "document" },
+        "children": { "$ref": "#/$defs/children" }
+      }
+    },
+    "paragraphNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "children"],
+      "properties": {
+        "type": { "const": "paragraph" },
+        "children": { "$ref": "#/$defs/children" }
+      }
+    },
+    "listItemNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "children"],
+      "properties": {
+        "type": { "const": "list-item" },
+        "children": { "$ref": "#/$defs/children" }
+      }
+    },
+    "tableCellNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "children"],
+      "properties": {
+        "type": { "const": "table-cell" },
+        "children": { "$ref": "#/$defs/children" }
+      }
+    },
+    "tableRowNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "children"],
+      "properties": {
+        "type": { "const": "table-row" },
+        "children": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/tableCellNode" }
+        }
+      }
+    },
+    "textNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "text"],
+      "properties": {
+        "type": { "const": "text" },
+        "text": { "type": "string", "maxLength": 262144 }
+      }
+    },
+    "emphasisNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "style", "children"],
+      "properties": {
+        "type": { "const": "emphasis" },
+        "style": { "enum": ["emphasis", "strong", "strikethrough"] },
+        "children": { "$ref": "#/$defs/children" }
+      }
+    },
+    "codeNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "display", "text"],
+      "properties": {
+        "type": { "const": "code" },
+        "display": { "type": "boolean" },
+        "language": {
+          "type": ["string", "null"],
+          "pattern": "^[A-Za-z0-9_+.-]{1,64}$"
+        },
+        "text": { "type": "string", "maxLength": 1048576 }
+      }
+    },
+    "listNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "ordered", "children"],
+      "properties": {
+        "type": { "const": "list" },
+        "ordered": { "type": "boolean" },
+        "start": { "type": "integer", "minimum": 1, "maximum": 999999 },
+        "children": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": { "$ref": "#/$defs/listItemNode" }
+        }
+      }
+    },
+    "tableNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "children"],
+      "properties": {
+        "type": { "const": "table" },
+        "children": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": { "$ref": "#/$defs/tableRowNode" }
+        }
+      }
+    },
+    "mathNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "display", "source", "fallbackText"],
+      "properties": {
+        "type": { "const": "math" },
+        "display": { "type": "boolean" },
+        "source": { "type": "string", "maxLength": 262144 },
+        "fallbackText": { "type": "string", "maxLength": 262144 }
+      }
+    },
+    "resourceNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "resourceHandle", "alternativeText"],
+      "properties": {
+        "type": { "const": "resource" },
+        "resourceHandle": {
+          "type": "string",
+          "pattern": "^(package|core):[a-f0-9]{64}$"
+        },
+        "alternativeText": { "type": "string", "maxLength": 4096 }
+      }
+    },
+    "groupNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "layout", "children"],
+      "properties": {
+        "type": { "const": "group" },
+        "layout": { "enum": ["stack", "inline", "callout"] },
+        "children": { "$ref": "#/$defs/children" }
+      }
+    },
+    "node": {
+      "oneOf": [
+        { "$ref": "#/$defs/paragraphNode" },
+        { "$ref": "#/$defs/textNode" },
+        { "$ref": "#/$defs/emphasisNode" },
+        { "$ref": "#/$defs/codeNode" },
+        { "$ref": "#/$defs/listNode" },
+        { "$ref": "#/$defs/tableNode" },
+        { "$ref": "#/$defs/mathNode" },
+        { "$ref": "#/$defs/resourceNode" },
+        { "$ref": "#/$defs/groupNode" }
+      ]
+    }
+  }
+}

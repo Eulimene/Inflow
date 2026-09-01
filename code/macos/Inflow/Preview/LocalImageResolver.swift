@@ -15,12 +15,14 @@ enum LocalImageResolver {
     static func resolveSlots(
         in fragment: String,
         documentDirectory: URL?,
-        imageReferences: [MarkdownReference] = []
+        imageReferences: [MarkdownReference] = [],
+        projectRoot: URL? = nil
     ) -> String {
         resolution(
             in: fragment,
             documentDirectory: documentDirectory,
-            imageReferences: imageReferences
+            imageReferences: imageReferences,
+            projectRoot: projectRoot
         ).html
     }
 
@@ -28,6 +30,7 @@ enum LocalImageResolver {
         in fragment: String,
         documentDirectory: URL?,
         imageReferences: [MarkdownReference] = [],
+        projectRoot: URL? = nil,
         sanitizesImageMetadata: Bool = false
     ) -> (html: String, hasFailure: Bool) {
         let fullRange = NSRange(location: 0, length: (fragment as NSString).length)
@@ -72,6 +75,7 @@ enum LocalImageResolver {
                 target: target,
                 alternative: alternative,
                 documentDirectory: documentDirectory,
+                projectRoot: projectRoot,
                 warningContext: warningContext,
                 sanitizesMetadata: sanitizesImageMetadata
             )
@@ -85,11 +89,13 @@ enum LocalImageResolver {
 
     static func resolveSlotsForExport(
         in fragment: String,
-        documentDirectory: URL?
+        documentDirectory: URL?,
+        projectRoot: URL? = nil
     ) throws -> String {
         let result = resolution(
             in: fragment,
             documentDirectory: documentDirectory,
+            projectRoot: projectRoot,
             sanitizesImageMetadata: true
         )
         guard !result.hasFailure else {
@@ -100,11 +106,13 @@ enum LocalImageResolver {
 
     static func resolveSlotsForPreparedExport(
         in fragment: String,
-        documentDirectory: URL?
+        documentDirectory: URL?,
+        projectRoot: URL? = nil
     ) -> ExportResolution {
         let result = resolution(
             in: fragment,
             documentDirectory: documentDirectory,
+            projectRoot: projectRoot,
             sanitizesImageMetadata: true
         )
         return ExportResolution(html: result.html, hasWarnings: result.hasFailure)
@@ -114,6 +122,7 @@ enum LocalImageResolver {
         target: String,
         alternative: String,
         documentDirectory: URL?,
+        projectRoot: URL?,
         warningContext: WarningContext?,
         sanitizesMetadata: Bool
     ) -> String {
@@ -143,8 +152,14 @@ enum LocalImageResolver {
                     context: warningContext
                 )
             }
+            guard let boundedURL = projectBoundURL(absolute, projectRoot: projectRoot) else {
+                return outsideProjectWarning(
+                    target: target,
+                    warningContext: warningContext
+                )
+            }
             return loadImage(
-                at: absolute,
+                at: boundedURL,
                 target: target,
                 alternative: alternative,
                 warningContext: warningContext,
@@ -170,12 +185,40 @@ enum LocalImageResolver {
                 context: warningContext
             )
         }
+        guard let boundedURL = projectBoundURL(resolvedURL, projectRoot: projectRoot) else {
+            return outsideProjectWarning(
+                target: target,
+                warningContext: warningContext
+            )
+        }
         return loadImage(
-            at: resolvedURL,
+            at: boundedURL,
             target: target,
             alternative: alternative,
             warningContext: warningContext,
             sanitizesMetadata: sanitizesMetadata
+        )
+    }
+
+    private static func projectBoundURL(_ url: URL, projectRoot: URL?) -> URL? {
+        guard let projectRoot else { return url }
+        guard let normalizedRoot = try? FolderProjectPathBoundary.normalizedProjectRoot(
+            projectRoot
+        ) else {
+            return nil
+        }
+        return FolderProjectPathBoundary.resolvedURL(url, within: normalizedRoot)
+    }
+
+    private static func outsideProjectWarning(
+        target: String,
+        warningContext: WarningContext?
+    ) -> String {
+        warning(
+            title: "无法读取项目外图片",
+            detail: "\(safeDisplayTarget(target)) 位于当前项目边界之外，原引用已保留。",
+            kind: .local,
+            context: warningContext
         )
     }
 

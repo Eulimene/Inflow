@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.inflow.app/extensions/manifest/v1",
+  "title": "Inflow Extension Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "extensionID",
+    "publisherID",
+    "version",
+    "minimumHostVersion",
+    "apiVersion",
+    "displayName",
+    "components",
+    "licenseFiles",
+    "requiredCapabilities",
+    "optionalCapabilities",
+    "contentRootSHA256"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "extensionID": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$",
+      "maxLength": 160
+    },
+    "publisherID": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$",
+      "maxLength": 160
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$",
+      "maxLength": 128
+    },
+    "minimumHostVersion": {
+      "type": "string",
+      "description": "Host compatibility release version: exactly major.minor.patch; prerelease and build metadata are not accepted.",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "maxLength": 64
+    },
+    "apiVersion": { "const": "1.0" },
+    "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["componentID", "kind", "path", "sha256", "size"],
+        "properties": {
+          "componentID": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "kind": {
+            "enum": [
+              "wasm-command",
+              "syntax-provider",
+              "declarative-view",
+              "asset"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^components/[A-Za-z0-9._/-]+$",
+            "not": { "pattern": "(?:^|/)\\.\\.(?:/|$)" }
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 67108864
+          },
+          "entryPoint": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_.-]{0,127}$"
+          },
+          "imports": {
+            "type": "array",
+            "maxItems": 16,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "host.text.selection.read",
+                "host.suggestion.emit",
+                "host.diagnostic.emit",
+                "host.syntax.node.emit",
+                "host.view.tree.emit",
+                "host.export.tree.emit",
+                "host.task.cancelled",
+                "host.log.redacted"
+              ]
+            }
+          },
+          "syntaxNamespaces": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 16,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^inflow:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+:[a-z][a-z0-9-]{0,63}$",
+              "maxLength": 232
+            }
+          },
+          "attributeSchemas": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 16,
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["namespace", "policyVersion", "path", "sha256", "size"],
+              "properties": {
+                "namespace": {
+                  "type": "string",
+                  "pattern": "^inflow:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+:[a-z][a-z0-9-]{0,63}$",
+                  "maxLength": 232
+                },
+                "policyVersion": { "const": 1 },
+                "path": {
+                  "type": "string",
+                  "pattern": "^components/[A-Za-z0-9._/-]+\\.json$",
+                  "not": { "pattern": "(?:^|/)\\.\\.(?:/|$)" }
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+                },
+                "size": {
+                  "type": "integer",
+                  "minimum": 2,
+                  "maximum": 1048576
+                }
+              }
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "enum": ["wasm-command", "declarative-view"]
+                }
+              },
+              "required": ["kind"]
+            },
+            "then": { "required": ["entryPoint", "imports"] }
+          },
+          {
+            "if": {
+              "properties": { "kind": { "const": "syntax-provider" } },
+              "required": ["kind"]
+            },
+            "then": {
+              "required": ["entryPoint", "imports", "syntaxNamespaces", "attributeSchemas"]
+            }
+          }
+        ]
+      }
+    },
+    "licenseFiles": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "size"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^licenses/[A-Za-z0-9._/-]+$",
+            "not": { "pattern": "(?:^|/)\\.\\.(?:/|$)" }
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16777216
+          }
+        }
+      }
+    },
+    "requiredCapabilities": { "$ref": "#/$defs/capabilitySet" },
+    "optionalCapabilities": { "$ref": "#/$defs/capabilitySet" },
+    "contentRootSHA256": {
+      "type": "string",
+      "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+    }
+  },
+  "$defs": {
+    "capabilitySet": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "selected-text.read",
+          "selected-text.suggest",
+          "document.diagnose",
+          "syntax.directive",
+          "syntax.fenced-block",
+          "declarative-view.present",
+          "export.declarative"
+        ]
+      }
+    }
+  }
+}

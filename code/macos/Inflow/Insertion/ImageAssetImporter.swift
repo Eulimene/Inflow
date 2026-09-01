@@ -138,7 +138,7 @@ struct ClipboardImagePayload: Sendable, Equatable {
 
     @MainActor
     static func read(from pasteboard: NSPasteboard) -> Self? {
-        for kind in [ClipboardImageKind.png, .jpeg, .tiff] {
+        for kind in [ClipboardImageKind.png, .jpeg] {
             if let data = pasteboard.data(forType: kind.pasteboardType) {
                 return Self(data: data, kind: kind)
             }
@@ -184,50 +184,8 @@ enum ClipboardImageProcessor {
         case .jpeg:
             try LocalImageValidator.validate(data: payload.data, fileExtension: "jpg")
         case .tiff:
-            try convertTIFFToPNG(payload.data)
-        }
-    }
-
-    private static func convertTIFFToPNG(_ data: Data) throws -> ValidatedLocalImage {
-        guard data.count <= LocalImageValidator.maximumBytes,
-              let source = CGImageSourceCreateWithData(data as CFData, [
-                  kCGImageSourceShouldCache: false,
-              ] as CFDictionary),
-              CGImageSourceGetCount(source) == 1,
-              let typeIdentifier = CGImageSourceGetType(source) as String?,
-              UTType(typeIdentifier)?.conforms(to: .tiff) == true,
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
-                as? [CFString: Any],
-              let width = properties[kCGImagePropertyPixelWidth] as? Int,
-              let height = properties[kCGImagePropertyPixelHeight] as? Int,
-              width > 0,
-              height > 0,
-              width <= 32_768,
-              height <= 32_768,
-              case let (pixelCount, overflow) = width.multipliedReportingOverflow(by: height),
-              !overflow,
-              pixelCount <= 100_000_000,
-              let image = CGImageSourceCreateImageAtIndex(source, 0, [
-                  kCGImageSourceShouldCacheImmediately: false,
-              ] as CFDictionary)
-        else {
             throw LocalImageValidationError.unsafeOrUnsupported
         }
-
-        let output = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(
-            output,
-            UTType.png.identifier as CFString,
-            1,
-            nil
-        ) else {
-            throw LocalImageValidationError.unsafeOrUnsupported
-        }
-        CGImageDestinationAddImage(destination, image, nil)
-        guard CGImageDestinationFinalize(destination) else {
-            throw LocalImageValidationError.unsafeOrUnsupported
-        }
-        return try LocalImageValidator.validate(data: output as Data, fileExtension: "png")
     }
 }
 

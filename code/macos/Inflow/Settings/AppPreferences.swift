@@ -149,6 +149,19 @@ struct PreviewAppearanceConfiguration: Equatable, Sendable {
         mermaidRenderingEnabled: true
     )
 
+    /// The personal milestone has one intentionally fixed PDF treatment. It
+    /// must not inherit a dark/system preview or any later preference surface.
+    static let personalPDF = Self(
+        contentWidth: 760,
+        zoom: 1,
+        colorScheme: .light,
+        theme: .standard,
+        increasedContrast: false,
+        reduceMotion: true,
+        mathRenderingEnabled: false,
+        mermaidRenderingEnabled: true
+    )
+
     let contentWidth: Double
     let zoom: Double
     let colorScheme: PreviewColorScheme
@@ -230,6 +243,7 @@ final class AppPreferences: ObservableObject {
         static let editorLineHeight = 1.2 ... 2.0
         static let previewContentWidth = 600.0 ... 1_200.0
         static let previewZoom = 0.5 ... 2.0
+        static let defaultSplitFraction = EditorSplitLayout.allowedFraction
     }
 
     private enum Key {
@@ -250,9 +264,78 @@ final class AppPreferences: ObservableObject {
         static let increasedContrast = "preferences.accessibility.increasedContrast"
         static let reduceMotion = "preferences.accessibility.reduceMotion"
         static let lastActiveEditorViewMode = "preferences.window.lastActiveEditorViewMode"
+        static let defaultSplitFraction = "preferences.preview.defaultSplitFraction"
         static let autosaveEnabled = "preferences.documents.autosaveEnabled"
         static let autosaveDelay = "preferences.documents.autosaveDelay"
         static let existingImagePlacement = "preferences.resources.existingImagePlacement"
+    }
+
+    enum Registry {
+        static let currentSchemaVersion = 1
+        static let schemaVersionKey = "preferences.schemaVersion"
+        static let knownKeys: Set<String> = [
+            schemaVersionKey,
+            Key.editorFontSize,
+            Key.editorLineHeight,
+            Key.syntaxHighlightingEnabled,
+            Key.spellingEnabled,
+            Key.wrapsLines,
+            Key.showsLineNumbers,
+            Key.scrollSyncEnabled,
+            Key.headingNavigationEnabled,
+            Key.previewContentWidth,
+            Key.previewZoom,
+            Key.previewColorScheme,
+            Key.previewTheme,
+            Key.mathRenderingEnabled,
+            Key.mermaidRenderingEnabled,
+            Key.increasedContrast,
+            Key.reduceMotion,
+            Key.lastActiveEditorViewMode,
+            Key.defaultSplitFraction,
+            Key.autosaveEnabled,
+            Key.autosaveDelay,
+            Key.existingImagePlacement,
+            RecentDocumentPolicy.capacityKey,
+            RecentDocumentPolicy.openBehaviorKey,
+        ]
+
+        /// Version 1 adopts the pre-registry keys without renaming them. This
+        /// makes existing installations forward-compatible while giving every
+        /// later rename or type conversion an explicit migration entry point.
+        static func migrate(_ defaults: UserDefaults) {
+            let storedVersion = defaults.object(forKey: schemaVersionKey) == nil
+                ? 0
+                : defaults.integer(forKey: schemaVersionKey)
+            guard storedVersion >= 0,
+                  storedVersion < currentSchemaVersion
+            else {
+                return
+            }
+            defaults.set(currentSchemaVersion, forKey: schemaVersionKey)
+        }
+    }
+
+    /// Values that are deliberately fixed in the single-document launch
+    /// profile. The stored keys remain registered for forward migration, but
+    /// stale values from development previews must not activate hidden growth
+    /// settings when their controls and commands are absent.
+    enum LaunchFixed {
+        static let editorLineHeight = 1.6
+        static let spellingEnabled = true
+        static let wrapsLines = true
+        static let showsLineNumbers = false
+        static let previewZoom = 1.0
+        static let previewTheme = PreviewTheme.standard
+        static let mathRenderingEnabled = false
+        static let mermaidRenderingEnabled = true
+        static let increasedContrast = AccessibilityPreference.followSystem
+        static let reduceMotion = AccessibilityPreference.followSystem
+        static let recentDocumentCapacity = 20
+        static let markdownOpenBehavior = MarkdownOpenBehavior.newWindow
+        static let autosaveDelay = AutosaveDelay.oneSecond
+        static let autosaveEnabled = false
+        static let existingImagePlacement = ExistingImagePlacementPreference.copyToAssets
     }
 
     private let defaults: UserDefaults
@@ -364,6 +447,21 @@ final class AppPreferences: ObservableObject {
         }
     }
 
+    @Published var defaultSplitFraction: Double {
+        didSet {
+            let clamped = Self.clamped(
+                defaultSplitFraction,
+                range: Limits.defaultSplitFraction
+            )
+            guard clamped == defaultSplitFraction else {
+                defaultSplitFraction = clamped
+                persist(clamped, forKey: Key.defaultSplitFraction)
+                return
+            }
+            persist(clamped, forKey: Key.defaultSplitFraction)
+        }
+    }
+
     @Published var recentDocumentCapacity: Int {
         didSet {
             let clamped = RecentDocumentPolicy.clampCapacity(recentDocumentCapacity)
@@ -411,6 +509,7 @@ final class AppPreferences: ObservableObject {
     ) {
         self.defaults = defaults
         self.persistence = persistence ?? UserDefaultsAppPreferencePersistence(defaults: defaults)
+        Registry.migrate(defaults)
         persistenceFailure = nil
         editorFontSize = Self.number(
             forKey: Key.editorFontSize,
@@ -418,32 +517,15 @@ final class AppPreferences: ObservableObject {
             defaultValue: SourceEditorAppearance.default.fontSize,
             range: Limits.editorFontSize
         )
-        editorLineHeight = Self.number(
-            forKey: Key.editorLineHeight,
-            in: defaults,
-            defaultValue: SourceEditorAppearance.default.lineHeight,
-            range: Limits.editorLineHeight
-        )
+        editorLineHeight = LaunchFixed.editorLineHeight
         syntaxHighlightingEnabled = Self.bool(
             forKey: Key.syntaxHighlightingEnabled,
             in: defaults,
             defaultValue: true
         )
-        spellingEnabled = Self.bool(
-            forKey: Key.spellingEnabled,
-            in: defaults,
-            defaultValue: SourceEditorAppearance.default.spellingEnabled
-        )
-        wrapsLines = Self.bool(
-            forKey: Key.wrapsLines,
-            in: defaults,
-            defaultValue: SourceEditorAppearance.default.wrapsLines
-        )
-        showsLineNumbers = Self.bool(
-            forKey: Key.showsLineNumbers,
-            in: defaults,
-            defaultValue: SourceEditorAppearance.default.showsLineNumbers
-        )
+        spellingEnabled = LaunchFixed.spellingEnabled
+        wrapsLines = LaunchFixed.wrapsLines
+        showsLineNumbers = LaunchFixed.showsLineNumbers
         scrollSyncEnabled = Self.bool(
             forKey: Key.scrollSyncEnabled,
             in: defaults,
@@ -460,71 +542,35 @@ final class AppPreferences: ObservableObject {
             defaultValue: PreviewAppearanceConfiguration.default.contentWidth,
             range: Limits.previewContentWidth
         )
-        previewZoom = Self.number(
-            forKey: Key.previewZoom,
-            in: defaults,
-            defaultValue: PreviewAppearanceConfiguration.default.zoom,
-            range: Limits.previewZoom
-        )
+        previewZoom = LaunchFixed.previewZoom
         previewColorScheme = Self.enumeration(
             PreviewColorScheme.self,
             forKey: Key.previewColorScheme,
             in: defaults,
             defaultValue: .system
         )
-        previewTheme = Self.enumeration(
-            PreviewTheme.self,
-            forKey: Key.previewTheme,
-            in: defaults,
-            defaultValue: .standard
-        )
-        mathRenderingEnabled = Self.bool(
-            forKey: Key.mathRenderingEnabled,
-            in: defaults,
-            defaultValue: PreviewAppearanceConfiguration.default.mathRenderingEnabled
-        )
-        mermaidRenderingEnabled = Self.bool(
-            forKey: Key.mermaidRenderingEnabled,
-            in: defaults,
-            defaultValue: PreviewAppearanceConfiguration.default.mermaidRenderingEnabled
-        )
-        increasedContrast = Self.enumeration(
-            AccessibilityPreference.self,
-            forKey: Key.increasedContrast,
-            in: defaults,
-            defaultValue: .followSystem
-        )
-        reduceMotion = Self.enumeration(
-            AccessibilityPreference.self,
-            forKey: Key.reduceMotion,
-            in: defaults,
-            defaultValue: .followSystem
-        )
+        previewTheme = LaunchFixed.previewTheme
+        mathRenderingEnabled = LaunchFixed.mathRenderingEnabled
+        mermaidRenderingEnabled = LaunchFixed.mermaidRenderingEnabled
+        increasedContrast = LaunchFixed.increasedContrast
+        reduceMotion = LaunchFixed.reduceMotion
         lastActiveEditorViewMode = Self.enumeration(
             EditorViewMode.self,
             forKey: Key.lastActiveEditorViewMode,
             in: defaults,
             defaultValue: .split
         )
-        recentDocumentCapacity = RecentDocumentPolicy.capacity(in: defaults)
-        markdownOpenBehavior = RecentDocumentPolicy.openBehavior(in: defaults)
-        autosaveEnabled = Self.bool(
-            forKey: Key.autosaveEnabled,
+        defaultSplitFraction = Self.number(
+            forKey: Key.defaultSplitFraction,
             in: defaults,
-            defaultValue: true
+            defaultValue: EditorSplitLayout.defaultFraction,
+            range: Limits.defaultSplitFraction
         )
-        autosaveDelay = Self.enumeration(
-            AutosaveDelay.self,
-            forKey: Key.autosaveDelay,
-            in: defaults,
-            defaultValue: .oneSecond
-        )
-        existingImagePlacement = Self.enumeration(
-            ExistingImagePlacementPreference.self,
-            forKey: Key.existingImagePlacement,
-            in: defaults,
-            defaultValue: .copyToAssets
-        )
+        recentDocumentCapacity = LaunchFixed.recentDocumentCapacity
+        markdownOpenBehavior = LaunchFixed.markdownOpenBehavior
+        autosaveEnabled = LaunchFixed.autosaveEnabled
+        autosaveDelay = LaunchFixed.autosaveDelay
+        existingImagePlacement = LaunchFixed.existingImagePlacement
 
         persistCurrentValues()
         accessibilityObserver = NSWorkspace.shared.notificationCenter
@@ -569,15 +615,19 @@ final class AppPreferences: ObservableObject {
     }
 
     func applyAutosavePolicy(to documentController: NSDocumentController = .shared) {
-        documentController.autosavingDelay = autosaveEnabled ? autosaveDelay.seconds : 0
+        // The personal validation milestone is deliberately manual-save only.
+        // Keep AppKit automatic saving disabled even if a development build left
+        // an older preference behind.
+        documentController.autosavingDelay = 0
     }
 
     func reset(_ group: AppPreferenceGroup) {
         switch group {
         case .general:
-            autosaveEnabled = true
+            autosaveEnabled = LaunchFixed.autosaveEnabled
             autosaveDelay = .oneSecond
             lastActiveEditorViewMode = .split
+            defaultSplitFraction = EditorSplitLayout.defaultFraction
             recentDocumentCapacity = RecentDocumentPolicy.defaultCapacity
             markdownOpenBehavior = .newWindow
         case .writing:
@@ -622,8 +672,8 @@ final class AppPreferences: ObservableObject {
         previewZoom = PreviewAppearanceConfiguration.default.zoom
         previewColorScheme = .system
         previewTheme = .standard
-        mathRenderingEnabled = PreviewAppearanceConfiguration.default.mathRenderingEnabled
-        mermaidRenderingEnabled = PreviewAppearanceConfiguration.default.mermaidRenderingEnabled
+        mathRenderingEnabled = LaunchFixed.mathRenderingEnabled
+        mermaidRenderingEnabled = LaunchFixed.mermaidRenderingEnabled
     }
 
     private func persistCurrentValues() {
@@ -645,6 +695,7 @@ final class AppPreferences: ObservableObject {
                 Key.increasedContrast: increasedContrast.rawValue,
                 Key.reduceMotion: reduceMotion.rawValue,
                 Key.lastActiveEditorViewMode: lastActiveEditorViewMode.rawValue,
+                Key.defaultSplitFraction: defaultSplitFraction,
                 RecentDocumentPolicy.capacityKey: recentDocumentCapacity,
                 RecentDocumentPolicy.openBehaviorKey: markdownOpenBehavior.rawValue,
                 Key.autosaveEnabled: autosaveEnabled,
