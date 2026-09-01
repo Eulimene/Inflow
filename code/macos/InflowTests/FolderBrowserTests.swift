@@ -116,6 +116,27 @@ final class FolderBrowserTests: XCTestCase {
         )
     }
 
+    func testLaunchIntegrationsWaitUntilApplicationDidFinishLaunching() {
+        var installationCount = 0
+        let delegate = InflowApplicationDelegate(
+            createUntitledDocument: { _ in },
+            installLaunchIntegrations: { _ in
+                installationCount += 1
+            }
+        )
+
+        XCTAssertEqual(installationCount, 0)
+
+        let notification = Notification(
+            name: NSApplication.didFinishLaunchingNotification,
+            object: NSApp
+        )
+        delegate.applicationDidFinishLaunching(notification)
+        delegate.applicationDidFinishLaunching(notification)
+
+        XCTAssertEqual(installationCount, 1)
+    }
+
     func testDockReopenCreatesAnUntitledDocumentOnlyWhenNoWindowIsVisible() {
         var createdDocumentCount = 0
         let delegate = InflowApplicationDelegate { _ in

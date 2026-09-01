@@ -1071,6 +1071,8 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     let folderBrowser: FolderBrowserController
     let projectCoordinator: LightweightProjectCoordinator
     private let createUntitledDocument: (Any?) -> Void
+    private let installLaunchIntegrations: (RecentDocumentsController) -> Void
+    private var hasInstalledLaunchIntegrations = false
     private var isReviewingTermination = false
 
     override convenience init() {
@@ -1088,7 +1090,8 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
         createUntitledDocument: @escaping (Any?) -> Void,
         createProjectDocument: @escaping () throws -> NSDocument = {
             try NSDocumentController.shared.openUntitledDocumentAndDisplay(false)
-        }
+        },
+        installLaunchIntegrations: ((RecentDocumentsController) -> Void)? = nil
     ) {
         let folderBrowser = FolderBrowserController(restoresSavedFolder: false)
         let projectCoordinator = LightweightProjectCoordinator(
@@ -1115,9 +1118,17 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
         self.folderBrowser = folderBrowser
         self.projectCoordinator = projectCoordinator
         self.createUntitledDocument = createUntitledDocument
+        self.installLaunchIntegrations = installLaunchIntegrations ?? { controller in
+            NSDocumentController.shared.autosavingDelay = 0
+            controller.installMenuIntegration()
+        }
         super.init()
-        NSDocumentController.shared.autosavingDelay = 0
-        controller.installMenuIntegration()
+    }
+
+    func applicationDidFinishLaunching(_: Notification) {
+        guard !hasInstalledLaunchIntegrations else { return }
+        hasInstalledLaunchIntegrations = true
+        installLaunchIntegrations(recentDocuments)
     }
 
     func application(_: NSApplication, open urls: [URL]) {
