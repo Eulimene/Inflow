@@ -122,6 +122,7 @@ private struct ManualSaveDocumentGate<Content: View>: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onDisappear {
             releaseBlockedHost()
         }
@@ -1675,9 +1676,16 @@ struct InflowApp: App {
                     projectCoordinator: applicationDelegate.projectCoordinator
                 )
             }
-            .frame(minWidth: 720, minHeight: 480)
+            .frame(
+                minWidth: EditorWorkspaceMetrics.minimumWindowWidth,
+                minHeight: EditorWorkspaceMetrics.minimumWindowHeight
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .defaultSize(width: 1_080, height: 720)
+        .defaultSize(
+            width: EditorWorkspaceMetrics.defaultWindowWidth,
+            height: EditorWorkspaceMetrics.defaultWindowHeight
+        )
         .commands {
             InflowPrimaryCommands(
                 recentDocuments: applicationDelegate.recentDocuments,

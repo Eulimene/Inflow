@@ -185,6 +185,18 @@ final class MarkdownCodecTests: XCTestCase {
         )
         XCTAssertTrue(sourceEditor.isEditable)
         XCTAssertTrue(window.firstResponder === sourceEditor)
+        let sourceScrollView = try XCTUnwrap(sourceEditor.enclosingScrollView)
+        let sourceFrame = sourceScrollView.convert(sourceScrollView.bounds, to: contentView)
+        XCTAssertLessThanOrEqual(
+            sourceFrame.minY,
+            EditorWorkspaceMetrics.statusBarHeight + 4,
+            "The source editor should extend down to the status bar instead of leaving blank space."
+        )
+        XCTAssertGreaterThan(
+            sourceFrame.height,
+            contentView.bounds.height * 0.8,
+            "The source editor should consume the available document height."
+        )
         let visiblePreviewWebViews = descendantWebViews(in: contentView).filter { webView in
             !hasHiddenAncestor(webView)
                 && !webView.convert(webView.bounds, to: contentView)

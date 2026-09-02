@@ -26,7 +26,7 @@ struct DocumentOutlineView: View {
                     .accessibilityLabel("\(analysis.headings.count) 个标题")
             }
             .padding(.horizontal, 12)
-            .frame(height: 42)
+            .frame(height: EditorWorkspaceMetrics.navigationHeaderHeight)
 
             Divider()
 
@@ -34,6 +34,7 @@ struct DocumentOutlineView: View {
 
             if analysis.headings.isEmpty {
                 emptyState
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
@@ -46,6 +47,7 @@ struct DocumentOutlineView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(nsColor: .controlBackgroundColor))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("文档大纲")
@@ -108,12 +110,14 @@ struct DocumentOutlineView: View {
                 systemImage: "text.badge.plus",
                 description: Text("使用 H1–H6 标题即可生成大纲。")
             )
+            .padding(16)
         case let .failed(_, message):
             ContentUnavailableView(
                 "大纲暂不可用",
                 systemImage: "exclamationmark.triangle",
                 description: Text(message)
             )
+            .padding(16)
         }
     }
 
@@ -139,8 +143,8 @@ struct DocumentOutlineView: View {
                         .accessibilityHidden(true)
                 }
             }
-            .padding(.vertical, 6)
-            .padding(.leading, CGFloat(heading.level - 1) * 10)
+            .padding(.vertical, 5)
+            .padding(.leading, CGFloat(heading.level - 1) * 8)
             .padding(.trailing, 8)
             .background(
                 isSelected ? Color.accentColor.opacity(0.18) : Color.clear,

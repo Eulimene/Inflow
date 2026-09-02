@@ -102,6 +102,24 @@ enum EditorWorkspaceLayout {
     }
 }
 
+enum EditorWorkspaceMetrics {
+    static let minimumWindowWidth: CGFloat = 820
+    static let minimumWindowHeight: CGFloat = 520
+    static let defaultWindowWidth: CGFloat = 1_200
+    static let defaultWindowHeight: CGFloat = 760
+
+    static let projectSidebarMinimumWidth: CGFloat = 200
+    static let projectSidebarIdealWidth: CGFloat = 228
+    static let projectSidebarMaximumWidth: CGFloat = 300
+    static let editorMinimumWidth: CGFloat = 560
+    static let outlineMinimumWidth: CGFloat = 200
+    static let outlineIdealWidth: CGFloat = 228
+    static let outlineMaximumWidth: CGFloat = 288
+
+    static let navigationHeaderHeight: CGFloat = 40
+    static let statusBarHeight: CGFloat = 30
+}
+
 enum EditorSplitSceneState {
     static let uninitialized = -1.0
 
@@ -922,11 +940,16 @@ struct MarkdownEditorView: View {
                 Divider()
             }
 
-            content
+            GeometryReader { geometry in
+                content
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+            }
+            .layoutPriority(1)
 
             Divider()
             statusBar
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
         .focusedValue(
             \.outlineVisibility,
@@ -987,7 +1010,7 @@ struct MarkdownEditorView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 330)
+                .frame(width: 300)
                 .accessibilityLabel("写作视图")
                 .disabled(usesSourceOnlyExperience)
             }
@@ -1561,10 +1584,14 @@ struct MarkdownEditorView: View {
                         )
                     }
                 )
-                .frame(minWidth: 190, idealWidth: 230, maxWidth: 340)
+                .frame(
+                    minWidth: EditorWorkspaceMetrics.projectSidebarMinimumWidth,
+                    idealWidth: EditorWorkspaceMetrics.projectSidebarIdealWidth,
+                    maxWidth: EditorWorkspaceMetrics.projectSidebarMaximumWidth
+                )
 
                 documentContent
-                    .frame(minWidth: 520)
+                    .frame(minWidth: EditorWorkspaceMetrics.editorMinimumWidth)
             }
         } else {
             documentContent
@@ -1638,7 +1665,7 @@ struct MarkdownEditorView: View {
         } else if workspacePanes.last == .outline {
             HSplitView {
                 editorContent
-                    .frame(minWidth: 520)
+                    .frame(minWidth: EditorWorkspaceMetrics.editorMinimumWidth)
 
                 DocumentOutlineView(
                     analysisState: analysisState,
@@ -1646,7 +1673,11 @@ struct MarkdownEditorView: View {
                     focusGeneration: outlineFocusGeneration,
                     onSelect: selectHeading
                 )
-                .frame(minWidth: 200, idealWidth: 240, maxWidth: 320)
+                .frame(
+                    minWidth: EditorWorkspaceMetrics.outlineMinimumWidth,
+                    idealWidth: EditorWorkspaceMetrics.outlineIdealWidth,
+                    maxWidth: EditorWorkspaceMetrics.outlineMaximumWidth
+                )
             }
         } else {
             editorContent
@@ -1682,6 +1713,7 @@ struct MarkdownEditorView: View {
             onPasteImage: pasteImage,
             onDropImage: dropImage
         )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var renderedEditor: some View {
@@ -1767,7 +1799,10 @@ struct MarkdownEditorView: View {
                 fileURL?.lastPathComponent ?? "未命名文档",
                 systemImage: fileURL == nil ? "doc.badge.plus" : "doc.text"
             )
+            .lineLimit(1)
 
+            Divider()
+                .frame(height: 12)
             Text(viewMode.label)
 
             if isSavingDocument {
@@ -1793,6 +1828,8 @@ struct MarkdownEditorView: View {
                 statisticsMenu
                     .help(statisticsHelp)
             }
+            Divider()
+                .frame(height: 12)
             Text("UTF-8\(document.properties.hasUTF8BOM ? " BOM" : "")")
             Text(
                 document.properties.requiresLineEndingChoice
@@ -1802,8 +1839,9 @@ struct MarkdownEditorView: View {
         }
         .font(.caption)
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .frame(height: 28)
+        .padding(.horizontal, 14)
+        .frame(height: EditorWorkspaceMetrics.statusBarHeight)
+        .background(Color(nsColor: .windowBackgroundColor))
         .accessibilityElement(children: .contain)
     }
 

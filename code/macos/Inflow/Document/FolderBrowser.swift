@@ -1433,6 +1433,7 @@ struct FolderBrowserSidebar: View {
             Divider()
             browserContent
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(nsColor: .controlBackgroundColor))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("项目侧栏")
@@ -1494,7 +1495,7 @@ struct FolderBrowserSidebar: View {
             .accessibilityLabel("刷新项目")
         }
         .padding(.horizontal, 12)
-        .frame(height: 42)
+        .frame(height: EditorWorkspaceMetrics.navigationHeaderHeight)
     }
 
     @ViewBuilder
@@ -1749,7 +1750,7 @@ private struct FolderProjectItemRow: View {
             Spacer(minLength: 2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
         .padding(.horizontal, 4)
         .background(
             isCurrentDocument ? Color.accentColor.opacity(0.16) : Color.clear,

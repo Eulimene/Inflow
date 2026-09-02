@@ -332,6 +332,17 @@ final class EditorViewModeCommandsTests: XCTestCase {
             [.projectSidebar, .editor],
             "a project shell cannot accidentally expose an outline action"
         )
+
+        XCTAssertEqual(EditorWorkspaceMetrics.defaultWindowWidth, 1_200)
+        XCTAssertEqual(EditorWorkspaceMetrics.defaultWindowHeight, 760)
+        XCTAssertLessThan(
+            EditorWorkspaceMetrics.projectSidebarMaximumWidth,
+            EditorWorkspaceMetrics.editorMinimumWidth
+        )
+        XCTAssertLessThan(
+            EditorWorkspaceMetrics.outlineMaximumWidth,
+            EditorWorkspaceMetrics.editorMinimumWidth
+        )
     }
 
     @MainActor
