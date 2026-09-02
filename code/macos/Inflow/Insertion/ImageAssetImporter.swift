@@ -9,6 +9,28 @@ struct ValidatedLocalImage: Sendable {
     let mimeType: String
 }
 
+struct LocalImageFileIdentity: Equatable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+    let generation: UInt32
+    let changeSeconds: Int64
+    let changeNanoseconds: Int64
+    let size: Int64
+    let modificationSeconds: Int64
+    let modificationNanoseconds: Int64
+
+    fileprivate init(metadata: stat) {
+        device = UInt64(metadata.st_dev)
+        inode = metadata.st_ino
+        generation = metadata.st_gen
+        changeSeconds = Int64(metadata.st_ctimespec.tv_sec)
+        changeNanoseconds = Int64(metadata.st_ctimespec.tv_nsec)
+        size = metadata.st_size
+        modificationSeconds = Int64(metadata.st_mtimespec.tv_sec)
+        modificationNanoseconds = Int64(metadata.st_mtimespec.tv_nsec)
+    }
+}
+
 enum LocalImageValidationError: Error, LocalizedError, Equatable {
     case notRegularOrUnreadable
     case tooLarge
@@ -32,32 +54,23 @@ enum LocalImageValidationError: Error, LocalizedError, Equatable {
 enum LocalImageValidator {
     static let maximumBytes = 100 * 1_024 * 1_024
 
-    static func load(at url: URL) throws -> ValidatedLocalImage {
-        let values: URLResourceValues
-        do {
-            values = try url.resourceValues(forKeys: [
-                .isRegularFileKey,
-                .isSymbolicLinkKey,
-                .fileSizeKey,
-            ])
-        } catch {
-            throw LocalImageValidationError.notRegularOrUnreadable
-        }
-        guard values.isRegularFile == true,
-              values.isSymbolicLink != true,
-              let size = values.fileSize,
-              size >= 0,
-              size <= maximumBytes
-        else {
-            if let size = values.fileSize, size > maximumBytes {
-                throw LocalImageValidationError.tooLarge
-            }
-            throw LocalImageValidationError.notRegularOrUnreadable
-        }
-
+    static func load(
+        at url: URL,
+        expectedIdentity: LocalImageFileIdentity? = nil,
+        onWillRead: (() throws -> Void)? = nil,
+        afterRead: (() throws -> Void)? = nil
+    ) throws -> ValidatedLocalImage {
         let data: Data
         do {
-            data = try boundedData(at: url)
+            data = try LocalImageDescriptorReader.read(
+                at: url,
+                expectedIdentity: expectedIdentity,
+                maximumBytes: maximumBytes,
+                onWillRead: onWillRead,
+                afterRead: afterRead
+            )
+        } catch let error as LocalImageValidationError {
+            throw error
         } catch {
             throw LocalImageValidationError.notRegularOrUnreadable
         }
@@ -102,19 +115,87 @@ enum LocalImageValidator {
         return ValidatedLocalImage(data: data, mimeType: mimeType)
     }
 
-    private static func boundedData(at url: URL) throws -> Data {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
+}
+
+enum LocalImageDescriptorReader {
+    static func captureIdentity(at url: URL) throws -> LocalImageFileIdentity {
+        let descriptor = try openDescriptor(at: url)
+        defer { Darwin.close(descriptor) }
+        return try identity(of: descriptor)
+    }
+
+    static func read(
+        at url: URL,
+        expectedIdentity: LocalImageFileIdentity? = nil,
+        maximumBytes: Int,
+        onWillRead: (() throws -> Void)? = nil,
+        afterRead: (() throws -> Void)? = nil
+    ) throws -> Data {
+        let descriptor = try openDescriptor(at: url)
+        defer { Darwin.close(descriptor) }
+
+        let beforeRead = try identity(of: descriptor)
+        if let expectedIdentity, beforeRead != expectedIdentity {
+            throw LocalImageValidationError.notRegularOrUnreadable
+        }
+        guard beforeRead.size >= 0 else {
+            throw LocalImageValidationError.notRegularOrUnreadable
+        }
+        guard beforeRead.size <= maximumBytes else {
+            throw LocalImageValidationError.tooLarge
+        }
+
+        try onWillRead?()
 
         var data = Data()
-        data.reserveCapacity(min(maximumBytes, 1_024 * 1_024))
-        while data.count <= maximumBytes {
-            let remaining = maximumBytes + 1 - data.count
-            let chunk = try handle.read(upToCount: min(remaining, 1_024 * 1_024))
-            guard let chunk, !chunk.isEmpty else { break }
-            data.append(chunk)
+        data.reserveCapacity(min(Int(beforeRead.size), 1_024 * 1_024))
+        var buffer = [UInt8](repeating: 0, count: 1_048_576)
+        while true {
+            let count = buffer.withUnsafeMutableBytes { rawBuffer in
+                Darwin.read(descriptor, rawBuffer.baseAddress, rawBuffer.count)
+            }
+            if count == 0 { break }
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw LocalImageValidationError.notRegularOrUnreadable
+            }
+            guard data.count <= maximumBytes - count else {
+                throw LocalImageValidationError.tooLarge
+            }
+            data.append(contentsOf: buffer.prefix(count))
+        }
+
+        try afterRead?()
+
+        let afterRead = try identity(of: descriptor)
+        guard afterRead == beforeRead,
+              data.count == Int(afterRead.size)
+        else {
+            throw LocalImageValidationError.notRegularOrUnreadable
         }
         return data
+    }
+
+    private static func openDescriptor(at url: URL) throws -> Int32 {
+        errno = 0
+        let descriptor: Int32 = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return -1 }
+            return Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        }
+        guard descriptor >= 0 else {
+            throw LocalImageValidationError.notRegularOrUnreadable
+        }
+        return descriptor
+    }
+
+    private static func identity(of descriptor: Int32) throws -> LocalImageFileIdentity {
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG
+        else {
+            throw LocalImageValidationError.notRegularOrUnreadable
+        }
+        return LocalImageFileIdentity(metadata: metadata)
     }
 }
 

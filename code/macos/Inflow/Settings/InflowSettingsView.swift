@@ -68,7 +68,7 @@ struct InflowSettingsView: View {
 
         }
         .padding(20)
-        .frame(width: 620, height: 470)
+        .frame(width: 620, height: 520)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Menu("恢复默认…") {
@@ -137,7 +137,15 @@ struct InflowSettingsView: View {
 
     private var generalSettings: some View {
         Form {
-            Section("新窗口") {
+            Section("新窗口布局") {
+                Toggle(
+                    "项目默认显示目录树",
+                    isOn: $preferences.defaultProjectSidebarVisible
+                )
+                Toggle(
+                    "默认显示文档大纲",
+                    isOn: $preferences.defaultOutlineVisible
+                )
                 SettingSliderRow(
                     title: "新窗口分栏比例",
                     value: $preferences.defaultSplitFraction,
@@ -147,7 +155,10 @@ struct InflowSettingsView: View {
                         .percent.precision(.fractionLength(0))
                     )
                 )
-                Text("只作为新文档窗口首次进入实时预览时的起点；已有或恢复的窗口保留自己的比例。")
+                Text(
+                    "目录树固定在项目窗口左侧，大纲固定在编辑区右侧。"
+                        + "这些选项只决定新窗口起点；当前窗口仍可从工具栏或“显示”菜单独立隐藏。"
+                )
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

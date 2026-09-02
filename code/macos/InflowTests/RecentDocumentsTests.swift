@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import UniformTypeIdentifiers
 @testable import Inflow
 
 @MainActor
@@ -235,7 +236,7 @@ final class RecentDocumentsTests: XCTestCase {
         XCTAssertFalse(DocumentCloseAuthorization.hasPendingRequests)
     }
 
-    func testOpenPreflightAcceptsUTF8AndPreservesUnsupportedOriginalBytes() throws {
+    func testOpenPreflightAcceptsUTF8AndPreservesUnsupportedOriginalBytes() async throws {
         XCTAssertEqual(
             try MarkdownOpenPreflight.inspect(Data("# 你好\n".utf8)),
             .supported
@@ -246,9 +247,136 @@ final class RecentDocumentsTests: XCTestCase {
             try MarkdownOpenPreflight.inspect(unsupported),
             .unsupportedEncoding(originalData: unsupported)
         )
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Inflow.ProjectOpenAuthorization.\(UUID().uuidString)")
+        let project = root.appendingPathComponent("Project", isDirectory: true)
+        let target = project.appendingPathComponent("target.md")
+        let outside = root.appendingPathComponent("outside.md")
+        try FileManager.default.createDirectory(
+            at: project,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("# Project target\n".utf8).write(to: target)
+        try Data("# Outside secret\n".utf8).write(to: outside)
+
+        let authorization = try XCTUnwrap(
+            ProjectDocumentOpenAuthorization.capture(
+                targetURL: target,
+                projectRoot: project
+            )
+        )
+        XCTAssertEqual(
+            authorization.resolvedTargetURL,
+            target.resolvingSymlinksInPath().standardizedFileURL
+        )
+        XCTAssertTrue(authorization.isCurrent())
+        let authorizedInspection = try await MarkdownOpenPreflightWorker().inspect(
+            target,
+            authorization: authorization
+        )
+        XCTAssertEqual(authorizedInspection.preflight, .supported)
+        XCTAssertEqual(
+            authorizedInspection.authorizedData,
+            Data("# Project target\n".utf8)
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: target.path
+        )
+        XCTAssertFalse(
+            authorization.isCurrent(),
+            "ctime-only metadata bookkeeping must invalidate the exact old snapshot"
+        )
+        let metadataRefreshedAuthorization = try XCTUnwrap(
+            authorization.refreshedAfterVerifiedRead(
+                expectedData: Data("# Project target\n".utf8)
+            )
+        )
+        XCTAssertTrue(metadataRefreshedAuthorization.isCurrent())
+        XCTAssertNil(
+            authorization.refreshedAfterVerifiedRead(
+                expectedData: Data("# Different bytes\n".utf8)
+            ),
+            "a ctime refresh must still verify the descriptor-read bytes"
+        )
+
+        let oversized = project.appendingPathComponent("oversized.md")
+        XCTAssertTrue(FileManager.default.createFile(atPath: oversized.path, contents: nil))
+        let oversizedHandle = try FileHandle(forWritingTo: oversized)
+        try oversizedHandle.truncate(
+            atOffset: UInt64(PreviewLocalFileReader.maximumBytes + 1)
+        )
+        try oversizedHandle.close()
+        let oversizedAuthorization = try XCTUnwrap(
+            ProjectDocumentOpenAuthorization.capture(
+                targetURL: oversized,
+                projectRoot: project
+            )
+        )
+        do {
+            _ = try await MarkdownOpenPreflightWorker().inspect(
+                oversized,
+                authorization: oversizedAuthorization
+            )
+            XCTFail("oversized project Markdown must fail closed")
+        } catch DocumentOpenError.tooLarge {
+            // Expected: report the safe size refusal instead of a false change race.
+        }
+
+        let unreadable = project.appendingPathComponent("unreadable.md")
+        try Data("# Permission denied\n".utf8).write(to: unreadable)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0],
+            ofItemAtPath: unreadable.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: unreadable.path
+            )
+        }
+        let unreadableAuthorization = try XCTUnwrap(
+            ProjectDocumentOpenAuthorization.capture(
+                targetURL: unreadable,
+                projectRoot: project
+            )
+        )
+        do {
+            _ = try await MarkdownOpenPreflightWorker().inspect(
+                unreadable,
+                authorization: unreadableAuthorization
+            )
+            XCTFail("an unreadable target must not be reported as a change race")
+        } catch DocumentOpenError.fileUnavailable {
+            // Expected: permissions and I/O failures have their own user-facing reason.
+        }
+
+        try FileManager.default.removeItem(at: target)
+        try FileManager.default.createSymbolicLink(
+            at: target,
+            withDestinationURL: outside
+        )
+        XCTAssertFalse(authorization.isCurrent())
+        XCTAssertNil(
+            authorization.refreshedAfterVerifiedRead(
+                expectedData: Data("# Project target\n".utf8)
+            ),
+            "path replacement must never be accepted as benign metadata bookkeeping"
+        )
+        do {
+            _ = try await MarkdownOpenPreflightWorker().inspect(
+                target,
+                authorization: authorization
+            )
+            XCTFail("replaced project target must fail closed")
+        } catch DocumentOpenError.targetChanged {
+            // Expected: the preflight never accepts bytes from the replacement.
+        }
     }
 
-    func testExternalOpenRouterAcceptsOnlySupportedLocalMarkdownURLs() {
+    func testExternalOpenRouterAcceptsOnlySupportedLocalMarkdownURLs() async throws {
         let markdown = URL(fileURLWithPath: "/tmp/Notes.MD")
         let longExtension = URL(fileURLWithPath: "/tmp/guide.Markdown")
         let text = URL(fileURLWithPath: "/tmp/plain.txt")
@@ -260,9 +388,121 @@ final class RecentDocumentsTests: XCTestCase {
             ),
             [markdown, longExtension]
         )
+
+        let application = NSApplication.shared
+        let didFinishLaunching = Notification(
+            name: NSApplication.didFinishLaunchingNotification,
+            object: application
+        )
+        let openedBeforeLaunchFinished = NSDocument()
+        openedBeforeLaunchFinished.fileURL = markdown
+        let openedAfterLaunchFinished = NSDocument()
+        openedAfterLaunchFinished.fileURL = longExtension
+        NSDocumentController.shared.addDocument(openedBeforeLaunchFinished)
+        NSDocumentController.shared.addDocument(openedAfterLaunchFinished)
+        defer {
+            openedBeforeLaunchFinished.close()
+            openedAfterLaunchFinished.close()
+        }
+
+        var earlyInitialDocumentRequests = 0
+        var earlyIntegrationInstallations = 0
+        let earlyOpenDelegate = InflowApplicationDelegate(
+            createUntitledDocument: { _ in
+                earlyInitialDocumentRequests += 1
+            },
+            hasOpenDocuments: { false },
+            installLaunchIntegrations: { _ in
+                earlyIntegrationInstallations += 1
+            }
+        )
+        earlyOpenDelegate.application(application, open: [markdown])
+        earlyOpenDelegate.applicationDidFinishLaunching(didFinishLaunching)
+        earlyOpenDelegate.applicationDidFinishLaunching(didFinishLaunching)
+        await drainMainActorTurns()
+
+        XCTAssertEqual(earlyInitialDocumentRequests, 0)
+        XCTAssertEqual(earlyIntegrationInstallations, 1)
+        XCTAssertFalse(
+            earlyOpenDelegate.applicationShouldOpenUntitledFile(application),
+            "AppKit must not infer an untitled-document or Open-panel launch path"
+        )
+
+        var lateInitialDocumentRequests = 0
+        var lateIntegrationInstallations = 0
+        let lateOpenDelegate = InflowApplicationDelegate(
+            createUntitledDocument: { _ in
+                lateInitialDocumentRequests += 1
+            },
+            hasOpenDocuments: { false },
+            installLaunchIntegrations: { _ in
+                lateIntegrationInstallations += 1
+            }
+        )
+        lateOpenDelegate.applicationDidFinishLaunching(didFinishLaunching)
+        lateOpenDelegate.application(application, open: [longExtension])
+        lateOpenDelegate.applicationDidFinishLaunching(didFinishLaunching)
+        await drainMainActorTurns()
+
+        XCTAssertEqual(
+            lateInitialDocumentRequests,
+            0,
+            "an external-open callback just after didFinishLaunching must cancel the fallback blank"
+        )
+        XCTAssertEqual(lateIntegrationInstallations, 1)
+        XCTAssertFalse(lateOpenDelegate.applicationShouldOpenUntitledFile(application))
+
+        var ordinaryInitialDocumentRequests = 0
+        var ordinaryIntegrationInstallations = 0
+        let ordinaryLaunchDelegate = InflowApplicationDelegate(
+            createUntitledDocument: { _ in
+                ordinaryInitialDocumentRequests += 1
+            },
+            hasOpenDocuments: { false },
+            installLaunchIntegrations: { _ in
+                ordinaryIntegrationInstallations += 1
+            }
+        )
+        ordinaryLaunchDelegate.applicationDidFinishLaunching(didFinishLaunching)
+        ordinaryLaunchDelegate.applicationDidFinishLaunching(didFinishLaunching)
+        await drainMainActorTurns()
+
+        XCTAssertEqual(ordinaryInitialDocumentRequests, 1)
+        XCTAssertEqual(ordinaryIntegrationInstallations, 1)
+
+        let info = try hostApplicationInfoDictionary()
+        let documentTypes = try XCTUnwrap(
+            info["CFBundleDocumentTypes"] as? [[String: Any]]
+        )
+        let markdownDocumentType = try XCTUnwrap(documentTypes.first { entry in
+            (entry["LSItemContentTypes"] as? [String])?
+                .contains(UTType.inflowMarkdown.identifier) == true
+        })
+        XCTAssertEqual(markdownDocumentType["CFBundleTypeRole"] as? String, "Editor")
+
+        let folderDocumentType = try XCTUnwrap(documentTypes.first { entry in
+            (entry["LSItemContentTypes"] as? [String])?
+                .contains(UTType.folder.identifier) == true
+        })
+        XCTAssertEqual(folderDocumentType["CFBundleTypeRole"] as? String, "Viewer")
+
+        let importedTypes = try XCTUnwrap(
+            info["UTImportedTypeDeclarations"] as? [[String: Any]]
+        )
+        let markdownDeclaration = try XCTUnwrap(importedTypes.first { entry in
+            entry["UTTypeIdentifier"] as? String == UTType.inflowMarkdown.identifier
+        })
+        let markdownTags = try XCTUnwrap(
+            markdownDeclaration["UTTypeTagSpecification"] as? [String: Any]
+        )
+        XCTAssertEqual(
+            Set(try XCTUnwrap(markdownTags["public.filename-extension"] as? [String])),
+            Set(["md", "markdown"])
+        )
+        XCTAssertEqual(markdownTags["public.mime-type"] as? String, "text/markdown")
     }
 
-    func testOpenRouteDeduplicatesBeforeGivingBlankToFirstNewFile() {
+    func testOpenRouteDeduplicatesBeforeGivingBlankToFirstNewFile() throws {
         let root = URL(fileURLWithPath: "/tmp/inflow-open-router", isDirectory: true)
         let existing = root.appendingPathComponent("existing.md")
         let equivalentExisting = URL(
@@ -296,6 +536,37 @@ final class RecentDocumentsTests: XCTestCase {
             ]
         )
         XCTAssertTrue(plan.rejections.isEmpty)
+
+        try withTemporaryDirectory { directory in
+            let existing = directory.appendingPathComponent("symlink-target.md")
+            let alias = directory.appendingPathComponent("alias.md")
+            let firstNew = directory.appendingPathComponent("after-alias.md")
+            try Data("existing".utf8).write(to: existing)
+            try Data().write(to: firstNew)
+            try FileManager.default.createSymbolicLink(
+                at: alias,
+                withDestinationURL: existing
+            )
+
+            let plan = DocumentOpenRouter.plan(
+                inputURLs: [alias, existing, firstNew],
+                openedDocumentURLs: [existing],
+                openedProjectURLs: [],
+                hasReusableBlankWindow: true
+            )
+
+            XCTAssertEqual(
+                plan.actions,
+                [
+                    .focusExistingFile(alias.standardizedFileURL),
+                    .openFile(
+                        firstNew.standardizedFileURL,
+                        reuseBlank: .reusableBlankWindow
+                    ),
+                ]
+            )
+            XCTAssertTrue(plan.rejections.isEmpty)
+        }
     }
 
     func testOpenRouteDoesNotReuseDraftWindow() {
@@ -320,7 +591,7 @@ final class RecentDocumentsTests: XCTestCase {
         )
     }
 
-    func testOpenRouteFocusesExistingProjectWithoutConsumingBlank() {
+    func testOpenRouteFocusesExistingProjectWithoutConsumingBlank() throws {
         let existingProject = URL(
             fileURLWithPath: "/tmp/inflow-open-router/project",
             isDirectory: true
@@ -378,6 +649,43 @@ final class RecentDocumentsTests: XCTestCase {
                 ),
             ]
         )
+
+        try withTemporaryDirectory { directory in
+            let project = directory.appendingPathComponent("Project", isDirectory: true)
+            let alias = directory.appendingPathComponent("Project Alias", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: project,
+                withIntermediateDirectories: false
+            )
+            try FileManager.default.createSymbolicLink(
+                at: alias,
+                withDestinationURL: project
+            )
+
+            let aliasInputPlan = DocumentOpenRouter.plan(
+                inputURLs: [alias, project],
+                openedDocumentURLs: [],
+                openedProjectURLs: [project],
+                hasReusableBlankWindow: true
+            )
+            XCTAssertEqual(
+                aliasInputPlan.actions,
+                [.focusExistingProject(alias.standardizedFileURL)]
+            )
+            XCTAssertTrue(aliasInputPlan.rejections.isEmpty)
+
+            let aliasOpenedPlan = DocumentOpenRouter.plan(
+                inputURLs: [project],
+                openedDocumentURLs: [],
+                openedProjectURLs: [alias],
+                hasReusableBlankWindow: true
+            )
+            XCTAssertEqual(
+                aliasOpenedPlan.actions,
+                [.focusExistingProject(project.standardizedFileURL)]
+            )
+            XCTAssertTrue(aliasOpenedPlan.rejections.isEmpty)
+        }
     }
 
     func testOpenRouteSafelyRejectsOutOfScopeDirectoryBatches() {
@@ -579,19 +887,383 @@ final class RecentDocumentsTests: XCTestCase {
     }
 
     @MainActor
-    func testFileMenuRoutesOpenWithoutInstallingManagedRecentDocuments() throws {
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+    func testFileMenuRoutesOpenWithoutInstallingManagedRecentDocuments() async throws {
+        try await Task.sleep(for: .milliseconds(200))
         let fileMenu = try XCTUnwrap(NSApp.mainMenu?.item(withTitle: "文件")?.submenu)
         let openItems = fileMenu.items.filter { $0.title == "打开…" }
         XCTAssertEqual(openItems.count, 1)
         XCTAssertEqual(openItems.first?.keyEquivalent, "o")
         XCTAssertTrue(openItems.first?.target is RecentDocumentsController)
+        let menuController = try XCTUnwrap(
+            openItems.first?.target as? RecentDocumentsController
+        )
         let managedRecentItems = fileMenu.items.flatMap { item in
             [item] + (item.submenu?.items ?? [])
         }.filter {
             $0.target is RecentDocumentsController && $0.title != "打开…"
         }
         XCTAssertTrue(managedRecentItems.isEmpty)
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "inflow-authorized-open-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let originalURL = directory.appendingPathComponent("authorized.md")
+        let trustedData = Data("# Descriptor-frozen bytes\n".utf8)
+        try trustedData.write(to: originalURL)
+        let trustedSnapshot = try PreviewLocalFileSnapshot.capture(originalURL)
+        let projectIdentity = try XCTUnwrap(
+            FolderProjectDirectoryIdentity.capture(directory)
+        )
+        let resolvedURL = try XCTUnwrap(
+            FolderProjectPathBoundary.resolvedURL(originalURL, within: directory)
+        )
+        let authorization = ProjectDocumentOpenAuthorization(
+            targetURL: originalURL.standardizedFileURL,
+            resolvedTargetURL: resolvedURL,
+            projectRoot: projectIdentity.resolvedURL,
+            projectIdentity: projectIdentity,
+            snapshot: trustedSnapshot
+        )
+        try Data("# Bytes currently at the path\n".utf8).write(to: originalURL)
+
+        let openedDocuments = try await openAuthorizedDocumentsConcurrently(
+            from: trustedData,
+            authorization: authorization
+        )
+        let document = try XCTUnwrap(openedDocuments.first?.document)
+        let appKitOwnedContentsURL = try XCTUnwrap(document.autosavedContentsFileURL)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: appKitOwnedContentsURL.path),
+            "the descriptor-frozen contents must remain available while AppKit owns them"
+        )
+
+        XCTAssertTrue(openedDocuments.allSatisfy { $0.document === document })
+        XCTAssertEqual(
+            NSDocumentController.shared.documents.filter {
+                $0.fileURL?.standardizedFileURL == originalURL.standardizedFileURL
+            }.count,
+            1,
+            "concurrent authorized opens must coalesce to one native document"
+        )
+        XCTAssertEqual(document.fileURL?.standardizedFileURL, originalURL.standardizedFileURL)
+        XCTAssertFalse(document.isDocumentEdited)
+
+        NativeDocumentLoadedFileRegistry.register(
+            document,
+            authorization: authorization
+        )
+        XCTAssertTrue(
+            NativeDocumentLoadedFileRegistry.matches(
+                document,
+                authorization: authorization
+            )
+        )
+
+        let serializedURL = directory.appendingPathComponent("serialized.md")
+        try document.write(
+            to: serializedURL,
+            ofType: UTType.inflowMarkdown.identifier,
+            for: .saveToOperation,
+            originalContentsURL: originalURL
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: serializedURL),
+            trustedData,
+            "the native host must use the frozen bytes instead of reopening the path"
+        )
+
+        document.fileURL = serializedURL
+        XCTAssertFalse(
+            NativeDocumentLoadedFileRegistry.matches(
+                document,
+                authorization: authorization
+            ),
+            "Save As must not leave the old project identity attached to a new URL"
+        )
+        document.fileURL = originalURL
+        try trustedData.write(to: originalURL)
+        XCTAssertTrue(NativeDocumentLoadedFileRegistry.refreshAfterVerifiedWrite(
+            document,
+            targetURL: originalURL,
+            expectedData: trustedData
+        ))
+        let refreshedAuthorization = try XCTUnwrap(
+            ProjectDocumentOpenAuthorization.capture(
+                targetURL: originalURL,
+                projectRoot: directory
+            )
+        )
+        XCTAssertTrue(
+            NativeDocumentLoadedFileRegistry.matches(
+                document,
+                authorization: refreshedAuthorization
+            ),
+            "a successful in-place save or reload must refresh the trusted snapshot"
+        )
+
+        try Data("unexpected replacement\n".utf8).write(to: originalURL)
+        XCTAssertFalse(NativeDocumentLoadedFileRegistry.refreshAfterVerifiedWrite(
+            document,
+            targetURL: originalURL,
+            expectedData: trustedData
+        ))
+        XCTAssertFalse(
+            NativeDocumentLoadedFileRegistry.matches(
+                document,
+                authorization: refreshedAuthorization
+            ),
+            "a post-save replacement must invalidate rather than refresh trusted identity"
+        )
+        let replacementAuthorization = try XCTUnwrap(
+            ProjectDocumentOpenAuthorization.capture(
+                targetURL: originalURL,
+                projectRoot: directory
+            )
+        )
+        XCTAssertFalse(
+            NativeDocumentLoadedFileRegistry.canFocusAlreadyOpen(
+                document,
+                authorization: replacementAuthorization
+            ),
+            "an invalidated managed document must not fall back to ordinary-window focus"
+        )
+        XCTAssertNil(
+            NativeDocumentLoadedFileRegistry.focusableDocument(
+                authorization: replacementAuthorization
+            ),
+            "a failed registry refresh must remain fail closed"
+        )
+        document.close()
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: appKitOwnedContentsURL.path),
+            "AppKit must remove its adopted contents copy when the native document closes"
+        )
+
+        let restoredContentsURL = try SafePreviewOpenStore.materialize(
+            data: Data("# Restored autosave\n".utf8),
+            extension: "md"
+        )
+        let restoredDocument = NSDocument()
+        restoredDocument.autosavedContentsFileURL = restoredContentsURL
+        NSDocumentController.shared.addDocument(restoredDocument)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-7_200)],
+            ofItemAtPath: restoredContentsURL.path
+        )
+        let restoredMaintenance = SafePreviewOpenMaintenance(
+            rootURL: restoredContentsURL.deletingLastPathComponent(),
+            retentionInterval: 60,
+            intervalNanoseconds: 60_000_000_000
+        )
+        restoredMaintenance.start()
+        restoredMaintenance.stop()
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: restoredContentsURL.path),
+            "startup maintenance must preserve an autosave owned by a restored native document"
+        )
+        restoredDocument.close()
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: restoredContentsURL.path),
+            "the restored native document must retain cleanup ownership"
+        )
+
+        let callbackURL = directory.appendingPathComponent("callback-order.md")
+        let callbackData = Data("# Callback order\n".utf8)
+        try callbackData.write(to: callbackURL)
+        let callbackAuthorization = try XCTUnwrap(
+            ProjectDocumentOpenAuthorization.capture(
+                targetURL: callbackURL,
+                projectRoot: directory
+            )
+        )
+        let callbackResults = try await openAuthorizedDocumentsWithClosingFirstCallback(
+            from: callbackData,
+            authorization: callbackAuthorization
+        )
+        let firstCallbackDocument = callbackResults.documents[0].document
+        let secondCallbackDocument = callbackResults.documents[1].document
+        let reentrantCallbackDocument = callbackResults.documents[2].document
+        defer { secondCallbackDocument.close() }
+
+        XCTAssertEqual(callbackResults.order, [1, 2, 3])
+        XCTAssertFalse(
+            NSDocumentController.shared.documents.contains(where: {
+                $0 === firstCallbackDocument
+            }),
+            "the first completion must be allowed to synchronously close its document"
+        )
+        XCTAssertFalse(firstCallbackDocument === secondCallbackDocument)
+        XCTAssertTrue(secondCallbackDocument === reentrantCallbackDocument)
+        XCTAssertEqual(
+            callbackResults.documents.map(\.wasAlreadyOpen),
+            [false, false, true],
+            "the queued request must fresh-open after close before a reentrant request reuses it"
+        )
+
+        let routedURL = directory.appendingPathComponent("routed-authorized.md")
+        let routedData = Data("# Routed authorized open\n".utf8)
+        try routedData.write(to: routedURL)
+        let routedAuthorization = try XCTUnwrap(
+            ProjectDocumentOpenAuthorization.capture(
+                targetURL: routedURL,
+                projectRoot: directory
+            )
+        )
+        let routedDocument = try await openAuthorizedDocumentThroughController(
+            menuController,
+            url: routedURL,
+            authorization: routedAuthorization
+        )
+        defer { routedDocument.document.close() }
+        XCTAssertFalse(routedDocument.wasAlreadyOpen)
+        let routedCurrentAuthorization = try XCTUnwrap(
+            ProjectDocumentOpenAuthorization.capture(
+                targetURL: routedURL,
+                projectRoot: directory
+            )
+        )
+        XCTAssertEqual(
+            try PreviewLocalFileReader.read(
+                routedURL,
+                expected: routedCurrentAuthorization.snapshot
+            ).data,
+            routedData
+        )
+        XCTAssertTrue(
+            NativeDocumentLoadedFileRegistry.matches(
+                routedDocument.document,
+                authorization: routedCurrentAuthorization
+            ),
+            "the real controller path must preserve its descriptor-bound authorization"
+        )
+
+        let ordinaryRouteURL = directory.appendingPathComponent("ordinary-route.md")
+        try Data("# Existing ordinary window\n".utf8).write(to: ordinaryRouteURL)
+        let ordinaryRouteDocument = NSDocument()
+        ordinaryRouteDocument.fileURL = ordinaryRouteURL
+        NSDocumentController.shared.addDocument(ordinaryRouteDocument)
+        defer { ordinaryRouteDocument.close() }
+        let ordinaryRouteAuthorization = try XCTUnwrap(
+            ProjectDocumentOpenAuthorization.capture(
+                targetURL: ordinaryRouteURL,
+                projectRoot: directory
+            )
+        )
+        let focusedOrdinary = try await openAuthorizedDocumentThroughController(
+            menuController,
+            url: ordinaryRouteURL,
+            authorization: ordinaryRouteAuthorization
+        )
+        XCTAssertTrue(focusedOrdinary.wasAlreadyOpen)
+        XCTAssertTrue(focusedOrdinary.document === ordinaryRouteDocument)
+        XCTAssertFalse(
+            NativeDocumentLoadedFileRegistry.matches(
+                ordinaryRouteDocument,
+                authorization: ordinaryRouteAuthorization
+            ),
+            "focusing an ordinary document must not claim a managed disk snapshot"
+        )
+    }
+
+    @MainActor
+    private func openAuthorizedDocumentsConcurrently(
+        from data: Data,
+        authorization: ProjectDocumentOpenAuthorization
+    ) async throws -> [OpenedDocumentResult] {
+        try await withCheckedThrowingContinuation { continuation in
+            var results: [Result<OpenedDocumentResult, Error>] = []
+            let receive: @MainActor (Result<OpenedDocumentResult, Error>) -> Void = { result in
+                results.append(result)
+                guard results.count == 2 else { return }
+                do {
+                    continuation.resume(returning: try results.map { try $0.get() })
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+            AuthorizedMarkdownDocumentOpener.open(
+                from: data,
+                authorization: authorization,
+                completion: receive
+            )
+            AuthorizedMarkdownDocumentOpener.open(
+                from: data,
+                authorization: authorization,
+                completion: receive
+            )
+        }
+    }
+
+    @MainActor
+    private func openAuthorizedDocumentsWithClosingFirstCallback(
+        from data: Data,
+        authorization: ProjectDocumentOpenAuthorization
+    ) async throws -> (order: [Int], documents: [OpenedDocumentResult]) {
+        try await withCheckedThrowingContinuation { continuation in
+            var order: [Int] = []
+            var results: [Result<OpenedDocumentResult, Error>] = []
+            var didResume = false
+            let receive: @MainActor (
+                Int,
+                Result<OpenedDocumentResult, Error>
+            ) -> Void = { index, result in
+                guard !didResume else { return }
+                order.append(index)
+                results.append(result)
+                guard results.count == 3 else { return }
+                didResume = true
+                do {
+                    continuation.resume(
+                        returning: (order, try results.map { try $0.get() })
+                    )
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+
+            AuthorizedMarkdownDocumentOpener.open(
+                from: data,
+                authorization: authorization
+            ) { firstResult in
+                if case let .success(opened) = firstResult {
+                    opened.document.close()
+                }
+                receive(1, firstResult)
+                AuthorizedMarkdownDocumentOpener.open(
+                    from: data,
+                    authorization: authorization
+                ) { receive(3, $0) }
+            }
+            AuthorizedMarkdownDocumentOpener.open(
+                from: data,
+                authorization: authorization
+            ) { receive(2, $0) }
+        }
+    }
+
+    @MainActor
+    private func openAuthorizedDocumentThroughController(
+        _ controller: RecentDocumentsController,
+        url: URL,
+        authorization: ProjectDocumentOpenAuthorization
+    ) async throws -> OpenedDocumentResult {
+        try await withCheckedThrowingContinuation { continuation in
+            controller.openDocumentFromFolderDetailed(
+                url,
+                authorization: authorization,
+                display: false,
+                presentsErrors: false
+            ) { result in
+                continuation.resume(with: result)
+            }
+        }
     }
 
     private func record(_ path: String, bookmark: Data?) -> RecentDocumentRecord {
@@ -599,6 +1271,26 @@ final class RecentDocumentsTests: XCTestCase {
             exactPath: URL(fileURLWithPath: path).standardizedFileURL.path,
             bookmark: bookmark
         )
+    }
+
+    private func hostApplicationInfoDictionary() throws -> [String: Any] {
+        var candidate = Bundle(for: type(of: self)).bundleURL
+        while candidate.pathExtension != "app",
+              candidate.path != candidate.deletingLastPathComponent().path
+        {
+            candidate.deleteLastPathComponent()
+        }
+        let applicationBundle = try XCTUnwrap(
+            candidate.pathExtension == "app" ? Bundle(url: candidate) : nil,
+            "the hosted test bundle must be nested inside the built Inflow.app"
+        )
+        return try XCTUnwrap(applicationBundle.infoDictionary)
+    }
+
+    private func drainMainActorTurns() async {
+        for _ in 0..<4 {
+            await Task.yield()
+        }
     }
 
     private func withTemporaryDirectory(_ body: (URL) throws -> Void) throws {

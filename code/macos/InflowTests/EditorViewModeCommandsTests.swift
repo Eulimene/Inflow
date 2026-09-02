@@ -81,23 +81,256 @@ final class EditorViewModeCommandsTests: XCTestCase {
             0.75,
             accuracy: 0.01
         )
-    }
 
-    func testNewSceneUsesLastActiveModeWhileRestoredSceneKeepsItsOwnMode() {
+        var uninitializedFraction = EditorSplitSceneState.uninitialized
+        let firstFrameRoot = PersistentHorizontalSplitView(
+            fraction: Binding(
+                get: {
+                    EditorSplitSceneState.effectiveFraction(
+                        storedValue: uninitializedFraction,
+                        defaultValue: 0.65
+                    )
+                },
+                set: { uninitializedFraction = EditorSplitLayout.normalized($0) }
+            )
+        ) {
+            Text("First-frame source")
+        } trailing: {
+            Text("First-frame preview")
+        }
+        let firstFrameHost = NSHostingView(rootView: firstFrameRoot)
+        firstFrameHost.frame = NSRect(x: 0, y: 0, width: 1_002, height: 500)
+        firstFrameHost.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+
+        let firstFrameSplit = try XCTUnwrap(
+            descendants(of: firstFrameHost).compactMap { $0 as? NSSplitView }.first
+        )
+        let firstFrameAvailableWidth =
+            firstFrameSplit.bounds.width - firstFrameSplit.dividerThickness
         XCTAssertEqual(
-            EditorViewMode.initialMode(storedValue: "", lastActiveMode: .preview),
-            .preview
+            firstFrameSplit.subviews[0].frame.width / firstFrameAvailableWidth,
+            0.65,
+            accuracy: 0.01,
+            "the configured default must be effective before onAppear persists the scene value"
         )
         XCTAssertEqual(
-            EditorViewMode.initialMode(
-                storedValue: EditorViewMode.source.rawValue,
-                lastActiveMode: .preview
+            uninitializedFraction,
+            EditorSplitSceneState.uninitialized,
+            "synthetic bootstrap resizes must not overwrite SceneStorage"
+        )
+    }
+
+    @MainActor
+    func testDocumentContextDefaultsAndSceneNavigationStateRemainScoped() {
+        XCTAssertEqual(
+            EditorViewModeLaunchContext.resolve(
+                fileURL: nil,
+                hasRestorationState: false
             ),
+            .untitled
+        )
+        XCTAssertEqual(
+            EditorViewModeLaunchContext.resolve(
+                fileURL: URL(fileURLWithPath: "/tmp/existing.md"),
+                hasRestorationState: false
+            ),
+            .existingDocument
+        )
+        XCTAssertEqual(
+            EditorViewModeLaunchContext.resolve(
+                fileURL: URL(fileURLWithPath: "/tmp/recovered.md"),
+                hasRestorationState: true
+            ),
+            .recoverySnapshot
+        )
+        XCTAssertEqual(
+            EditorViewMode.initialMode(storedValue: "", context: .untitled),
             .source
         )
         XCTAssertEqual(
-            EditorViewMode.initialMode(storedValue: "retired-mode", lastActiveMode: .preview),
+            EditorViewMode.initialMode(storedValue: "", context: .existingDocument),
             .split
+        )
+        XCTAssertEqual(
+            EditorViewMode.initialMode(storedValue: "", context: .recoverySnapshot),
+            .source
+        )
+        XCTAssertEqual(
+            EditorViewMode.initialMode(
+                storedValue: EditorViewMode.preview.rawValue,
+                context: .existingDocument
+            ),
+            .preview,
+            "a valid value restored for the same scene remains authoritative"
+        )
+        XCTAssertEqual(
+            EditorViewMode.initialMode(storedValue: "retired-mode", context: .untitled),
+            .source,
+            "an invalid nonempty scene value is frozen to the document-context default"
+        )
+
+        XCTAssertFalse(
+            EditorNavigationVisibilityState.resolve(
+                storedValue: "",
+                defaultValue: false
+            )
+        )
+        XCTAssertTrue(
+            EditorNavigationVisibilityState.resolve(
+                storedValue: "",
+                defaultValue: true
+            )
+        )
+        XCTAssertTrue(
+            EditorNavigationVisibilityState.resolve(
+                storedValue: EditorNavigationVisibilityState.storedValue(isVisible: true),
+                defaultValue: false
+            )
+        )
+        XCTAssertFalse(
+            EditorNavigationVisibilityState.resolve(
+                storedValue: EditorNavigationVisibilityState.storedValue(isVisible: false),
+                defaultValue: true
+            )
+        )
+
+        let normalizedInvalidVisibility =
+            EditorNavigationVisibilityState.normalizedStoredValue(
+                "retired-visibility",
+                defaultValue: false
+            )
+        XCTAssertFalse(
+            EditorNavigationVisibilityState.resolve(
+                storedValue: normalizedInvalidVisibility,
+                defaultValue: true
+            ),
+            "normalization must keep an existing scene independent of later preference changes"
+        )
+
+        let projectState = ProjectEditorNavigationState()
+        let projectA = FolderProjectDirectoryIdentity(
+            resolvedURL: URL(fileURLWithPath: "/tmp/project-a"),
+            device: 1,
+            inode: 10,
+            generation: 1
+        )
+        let projectB = FolderProjectDirectoryIdentity(
+            resolvedURL: URL(fileURLWithPath: "/tmp/project-b"),
+            device: 1,
+            inode: 11,
+            generation: 1
+        )
+        XCTAssertEqual(
+            projectState.resolve(
+                projectIdentity: projectA,
+                defaultProjectSidebarVisible: false,
+                defaultOutlineVisible: true
+            ),
+            EditorNavigationVisibilitySnapshot(
+                projectSidebarVisible: false,
+                outlineVisible: true
+            )
+        )
+        let editorSession = MarkdownSourceEditorSession()
+        editorSession.textView.string = "project draft"
+        editorSession.textView.setSelectedRange(NSRange(location: 7, length: 5))
+        editorSession.textView.insertText(
+            "note",
+            replacementRange: editorSession.textView.selectedRange()
+        )
+        let textBeforeNavigationToggle = editorSession.textView.string
+        let selectionBeforeNavigationToggle = editorSession.textView.selectedRange()
+        let undoBeforeNavigationToggle = editorSession.textView.undoManager?.canUndo
+        projectState.setProjectSidebarVisible(true)
+        projectState.setOutlineVisible(false)
+        XCTAssertEqual(
+            projectState.resolve(
+                projectIdentity: projectA,
+                defaultProjectSidebarVisible: true,
+                defaultOutlineVisible: false
+            ),
+            EditorNavigationVisibilitySnapshot(
+                projectSidebarVisible: true,
+                outlineVisible: false
+            ),
+            "a replacement project document must inherit its window's navigation state"
+        )
+        XCTAssertEqual(
+            projectState.resolve(
+                projectIdentity: projectB,
+                defaultProjectSidebarVisible: true,
+                defaultOutlineVisible: false
+            ),
+            EditorNavigationVisibilitySnapshot(
+                projectSidebarVisible: true,
+                outlineVisible: false
+            ),
+            "a different project starts from current defaults instead of project A or blank-scene storage"
+        )
+        projectState.setProjectSidebarVisible(false)
+        projectState.setOutlineVisible(true)
+        projectState.reset()
+        XCTAssertEqual(
+            projectState.resolve(
+                projectIdentity: projectB,
+                defaultProjectSidebarVisible: true,
+                defaultOutlineVisible: false
+            ),
+            EditorNavigationVisibilitySnapshot(
+                projectSidebarVisible: true,
+                outlineVisible: false
+            ),
+            "closing and reopening the same directory starts a fresh project-window session"
+        )
+        XCTAssertTrue(
+            UTF8Text.isExactlyEqual(
+                editorSession.textView.string,
+                textBeforeNavigationToggle
+            )
+        )
+        XCTAssertEqual(
+            editorSession.textView.selectedRange(),
+            selectionBeforeNavigationToggle
+        )
+        XCTAssertEqual(editorSession.textView.undoManager?.canUndo, undoBeforeNavigationToggle)
+
+        XCTAssertEqual(
+            EditorWorkspaceLayout.panes(
+                hasProjectContext: true,
+                projectSidebarVisible: true,
+                outlineAvailable: true,
+                outlineVisible: true
+            ),
+            [.projectSidebar, .editor, .outline]
+        )
+        XCTAssertEqual(
+            EditorWorkspaceLayout.panes(
+                hasProjectContext: true,
+                projectSidebarVisible: false,
+                outlineAvailable: true,
+                outlineVisible: true
+            ),
+            [.editor, .outline]
+        )
+        XCTAssertEqual(
+            EditorWorkspaceLayout.panes(
+                hasProjectContext: true,
+                projectSidebarVisible: true,
+                outlineAvailable: true,
+                outlineVisible: false
+            ),
+            [.projectSidebar, .editor]
+        )
+        XCTAssertEqual(
+            EditorWorkspaceLayout.panes(
+                hasProjectContext: true,
+                projectSidebarVisible: true,
+                outlineAvailable: false,
+                outlineVisible: true
+            ),
+            [.projectSidebar, .editor],
+            "a project shell cannot accidentally expose an outline action"
         )
     }
 
@@ -154,6 +387,15 @@ final class EditorViewModeCommandsTests: XCTestCase {
                 .command
             )
         }
+
+        let directoryTreeItems = items.filter { $0.title == "显示目录树" }
+        XCTAssertEqual(directoryTreeItems.count, 1)
+        XCTAssertEqual(directoryTreeItems.first?.keyEquivalent, "")
+        let outlineItems = items.filter {
+            $0.title == "显示大纲" || $0.title == "隐藏大纲"
+        }
+        XCTAssertEqual(outlineItems.count, 1)
+        XCTAssertEqual(outlineItems.first?.keyEquivalent, "")
     }
 
     @MainActor

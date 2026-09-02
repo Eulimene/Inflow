@@ -25,14 +25,19 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertTrue(preferences.mermaidRenderingEnabled)
             XCTAssertEqual(preferences.increasedContrast, .followSystem)
             XCTAssertEqual(preferences.reduceMotion, .followSystem)
-            XCTAssertEqual(preferences.lastActiveEditorViewMode, .split)
+            XCTAssertTrue(preferences.defaultProjectSidebarVisible)
+            XCTAssertTrue(preferences.defaultOutlineVisible)
             XCTAssertEqual(preferences.defaultSplitFraction, 0.5)
             XCTAssertEqual(preferences.recentDocumentCapacity, 20)
-            XCTAssertEqual(preferences.markdownOpenBehavior, .newWindow)
+            XCTAssertEqual(preferences.markdownOpenBehavior, .reuseBlankWindow)
             XCTAssertFalse(preferences.autosaveEnabled)
             XCTAssertEqual(preferences.autosaveDelay, .oneSecond)
             XCTAssertEqual(preferences.existingImagePlacement, .copyToAssets)
             XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
+            XCTAssertNil(
+                defaults.object(forKey: "preferences.window.lastActiveEditorViewMode"),
+                "the launch product must not create a global recent editor-mode preference"
+            )
         }
     }
 
@@ -55,10 +60,11 @@ final class AppPreferencesTests: XCTestCase {
             first.mermaidRenderingEnabled = false
             first.increasedContrast = .enabled
             first.reduceMotion = .disabled
-            first.recordActiveEditorViewMode(.preview)
+            first.defaultProjectSidebarVisible = false
+            first.defaultOutlineVisible = false
             first.defaultSplitFraction = 0.65
             first.recentDocumentCapacity = 42
-            first.markdownOpenBehavior = .reuseBlankWindow
+            first.markdownOpenBehavior = .newWindow
             first.autosaveEnabled = false
             first.autosaveDelay = .fiveSeconds
             first.existingImagePlacement = .copyToRelativeDirectory
@@ -81,10 +87,11 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertTrue(second.mermaidRenderingEnabled)
             XCTAssertEqual(second.increasedContrast, .followSystem)
             XCTAssertEqual(second.reduceMotion, .followSystem)
-            XCTAssertEqual(second.lastActiveEditorViewMode, .preview)
+            XCTAssertFalse(second.defaultProjectSidebarVisible)
+            XCTAssertFalse(second.defaultOutlineVisible)
             XCTAssertEqual(second.defaultSplitFraction, 0.65)
             XCTAssertEqual(second.recentDocumentCapacity, 20)
-            XCTAssertEqual(second.markdownOpenBehavior, .newWindow)
+            XCTAssertEqual(second.markdownOpenBehavior, .reuseBlankWindow)
             XCTAssertFalse(second.autosaveEnabled)
             XCTAssertEqual(second.autosaveDelay, .oneSecond)
             XCTAssertEqual(second.existingImagePlacement, .copyToAssets)
@@ -108,6 +115,8 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(third.editorLineHeight, 1.6)
             XCTAssertEqual(third.previewContentWidth, 600)
             XCTAssertEqual(third.previewZoom, 1)
+            XCTAssertFalse(third.defaultProjectSidebarVisible)
+            XCTAssertFalse(third.defaultOutlineVisible)
             XCTAssertEqual(third.defaultSplitFraction, 0.75)
             XCTAssertEqual(third.recentDocumentCapacity, 20)
         }
@@ -120,6 +129,11 @@ final class AppPreferencesTests: XCTestCase {
             defaults.set(5_000, forKey: "preferences.preview.contentWidth")
             defaults.set("retired-theme", forKey: "preferences.preview.theme")
             defaults.set("retired-view", forKey: "preferences.window.lastActiveEditorViewMode")
+            defaults.set(
+                "not-a-boolean",
+                forKey: "preferences.window.defaultProjectSidebarVisible"
+            )
+            defaults.set(7, forKey: "preferences.window.defaultOutlineVisible")
             defaults.set(Double.nan, forKey: "preferences.preview.defaultSplitFraction")
             defaults.set(-40, forKey: RecentDocumentPolicy.capacityKey)
             defaults.set("retired-open", forKey: RecentDocumentPolicy.openBehaviorKey)
@@ -135,13 +149,19 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.editorLineHeight, 1.6)
             XCTAssertEqual(preferences.previewContentWidth, 1_200)
             XCTAssertEqual(preferences.previewTheme, .standard)
-            XCTAssertEqual(preferences.lastActiveEditorViewMode, .split)
+            XCTAssertTrue(preferences.defaultProjectSidebarVisible)
+            XCTAssertTrue(preferences.defaultOutlineVisible)
             XCTAssertEqual(preferences.defaultSplitFraction, 0.5)
             XCTAssertEqual(preferences.recentDocumentCapacity, 20)
-            XCTAssertEqual(preferences.markdownOpenBehavior, .newWindow)
+            XCTAssertEqual(preferences.markdownOpenBehavior, .reuseBlankWindow)
             XCTAssertEqual(preferences.autosaveDelay, .oneSecond)
             XCTAssertEqual(preferences.existingImagePlacement, .copyToAssets)
             XCTAssertEqual(defaults.string(forKey: "unrelated.document-state"), "keep-me")
+            XCTAssertEqual(
+                defaults.string(forKey: "preferences.window.lastActiveEditorViewMode"),
+                "retired-view",
+                "a legacy value may remain for migration but must never be read or rewritten"
+            )
         }
     }
 
@@ -154,10 +174,11 @@ final class AppPreferencesTests: XCTestCase {
             preferences.syntaxHighlightingEnabled = false
             preferences.scrollSyncEnabled = false
             preferences.increasedContrast = .enabled
-            preferences.recordActiveEditorViewMode(.source)
+            preferences.defaultProjectSidebarVisible = false
+            preferences.defaultOutlineVisible = false
             preferences.defaultSplitFraction = 0.7
             preferences.recentDocumentCapacity = 31
-            preferences.markdownOpenBehavior = .reuseBlankWindow
+            preferences.markdownOpenBehavior = .newWindow
             preferences.autosaveEnabled = false
             preferences.autosaveDelay = .twoSeconds
             preferences.existingImagePlacement = .keepOriginal
@@ -169,14 +190,26 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.previewZoom, 1.8)
             XCTAssertFalse(preferences.scrollSyncEnabled)
             XCTAssertEqual(preferences.increasedContrast, .enabled)
-            XCTAssertEqual(preferences.lastActiveEditorViewMode, .source)
+            XCTAssertFalse(preferences.defaultProjectSidebarVisible)
+            XCTAssertFalse(preferences.defaultOutlineVisible)
             XCTAssertEqual(preferences.defaultSplitFraction, 0.7)
             XCTAssertEqual(preferences.recentDocumentCapacity, 31)
-            XCTAssertEqual(preferences.markdownOpenBehavior, .reuseBlankWindow)
+            XCTAssertEqual(preferences.markdownOpenBehavior, .newWindow)
             XCTAssertFalse(preferences.autosaveEnabled)
             XCTAssertEqual(preferences.autosaveDelay, .twoSeconds)
             XCTAssertEqual(preferences.existingImagePlacement, .keepOriginal)
             XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
+            XCTAssertEqual(defaults.string(forKey: "document.recovery.record"), "recovery-sentinel")
+
+            preferences.reset(.general)
+
+            XCTAssertTrue(preferences.defaultProjectSidebarVisible)
+            XCTAssertTrue(preferences.defaultOutlineVisible)
+            XCTAssertEqual(preferences.defaultSplitFraction, 0.5)
+            XCTAssertEqual(preferences.markdownOpenBehavior, .reuseBlankWindow)
+            XCTAssertFalse(preferences.scrollSyncEnabled)
+            XCTAssertEqual(preferences.increasedContrast, .enabled)
+            XCTAssertEqual(preferences.existingImagePlacement, .keepOriginal)
             XCTAssertEqual(defaults.string(forKey: "document.recovery.record"), "recovery-sentinel")
         }
     }
@@ -202,10 +235,11 @@ final class AppPreferencesTests: XCTestCase {
             preferences.mermaidRenderingEnabled = false
             preferences.increasedContrast = .enabled
             preferences.reduceMotion = .disabled
-            preferences.recordActiveEditorViewMode(.source)
+            preferences.defaultProjectSidebarVisible = false
+            preferences.defaultOutlineVisible = false
             preferences.defaultSplitFraction = 0.7
             preferences.recentDocumentCapacity = 31
-            preferences.markdownOpenBehavior = .reuseBlankWindow
+            preferences.markdownOpenBehavior = .newWindow
             preferences.autosaveEnabled = false
             preferences.autosaveDelay = .fiveSeconds
             preferences.existingImagePlacement = .keepOriginal
@@ -228,10 +262,11 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertTrue(preferences.mermaidRenderingEnabled)
             XCTAssertEqual(preferences.increasedContrast, .followSystem)
             XCTAssertEqual(preferences.reduceMotion, .followSystem)
-            XCTAssertEqual(preferences.lastActiveEditorViewMode, .split)
+            XCTAssertTrue(preferences.defaultProjectSidebarVisible)
+            XCTAssertTrue(preferences.defaultOutlineVisible)
             XCTAssertEqual(preferences.defaultSplitFraction, 0.5)
             XCTAssertEqual(preferences.recentDocumentCapacity, 20)
-            XCTAssertEqual(preferences.markdownOpenBehavior, .newWindow)
+            XCTAssertEqual(preferences.markdownOpenBehavior, .reuseBlankWindow)
             XCTAssertFalse(preferences.autosaveEnabled)
             XCTAssertEqual(preferences.autosaveDelay, .oneSecond)
             XCTAssertEqual(preferences.existingImagePlacement, .copyToAssets)
@@ -279,6 +314,16 @@ final class AppPreferencesTests: XCTestCase {
                     "preferences.preview.defaultSplitFraction"
                 )
             )
+            XCTAssertTrue(
+                AppPreferences.Registry.knownKeys.contains(
+                    "preferences.window.defaultProjectSidebarVisible"
+                )
+            )
+            XCTAssertTrue(
+                AppPreferences.Registry.knownKeys.contains(
+                    "preferences.window.defaultOutlineVisible"
+                )
+            )
             XCTAssertEqual(defaults.string(forKey: "unrelated.document-state"), "keep-me")
         }
     }
@@ -295,9 +340,12 @@ final class AppPreferencesTests: XCTestCase {
 
             persistence.shouldFail = true
             preferences.previewContentWidth = 900
+            preferences.defaultOutlineVisible = false
 
             XCTAssertEqual(preferences.previewContentWidth, 900)
+            XCTAssertFalse(preferences.defaultOutlineVisible)
             XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 760)
+            XCTAssertTrue(defaults.bool(forKey: "preferences.window.defaultOutlineVisible"))
             XCTAssertNotNil(preferences.persistenceFailure)
             XCTAssertEqual(SettingsPersistencePrompt.title, "暂时无法保存设置")
             XCTAssertEqual(
@@ -321,6 +369,7 @@ final class AppPreferencesTests: XCTestCase {
 
             XCTAssertNil(preferences.persistenceFailure)
             XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 900)
+            XCTAssertFalse(defaults.bool(forKey: "preferences.window.defaultOutlineVisible"))
             XCTAssertEqual(
                 defaults.string(forKey: "preferences.preview.colorScheme"),
                 PreviewColorScheme.dark.rawValue
@@ -624,6 +673,14 @@ private final class ControlledPreferencePersistence: AppPreferencePersistence {
         for (key, value) in values {
             defaults.set(value, forKey: key)
         }
-        return defaults.synchronize()
+        _ = defaults.synchronize()
+        return values.allSatisfy { key, value in
+            guard let stored = defaults.object(forKey: key) as? NSObject,
+                  let expected = value as? NSObject
+            else {
+                return false
+            }
+            return stored.isEqual(expected)
+        }
     }
 }

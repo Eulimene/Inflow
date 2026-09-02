@@ -625,6 +625,99 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertTrue(insideHTML.contains("src=\"data:image/png;base64,"), insideHTML)
     }
 
+    func testReplacedProjectRootBlocksPreviewImagesAndLocalLinkExecution() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        let project = container.appendingPathComponent("project", isDirectory: true)
+        let displacedProject = container.appendingPathComponent(
+            "displaced-project",
+            isDirectory: true
+        )
+        let notes = project.appendingPathComponent("notes", isDirectory: true)
+        let assets = project.appendingPathComponent("assets", isDirectory: true)
+        let guides = project.appendingPathComponent("guides", isDirectory: true)
+        for directory in [notes, assets, guides] {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+        }
+        let sourceURL = notes.appendingPathComponent("source.md")
+        let imageURL = assets.appendingPathComponent("inside.png")
+        let linkedURL = guides.appendingPathComponent("inside.md")
+        try Data("# Source".utf8).write(to: sourceURL)
+        try pngData().write(to: imageURL)
+        try Data("# Inside".utf8).write(to: linkedURL)
+        let projectIdentity = try XCTUnwrap(
+            FolderProjectDirectoryIdentity.capture(project)
+        )
+
+        let linkTarget = "../guides/inside.md"
+        let originalPlan = PreviewLinkPlanner.plan(
+            markdown: "[inside](\(linkTarget))",
+            target: linkTarget,
+            documentURL: sourceURL,
+            projectRoot: project,
+            expectedProjectRootIdentity: projectIdentity
+        )
+        guard case let .local(originalLink) = originalPlan.destination else {
+            return XCTFail("expected a project-local link")
+        }
+        XCTAssertEqual(originalLink.expectedProjectRootIdentity, projectIdentity)
+        XCTAssertTrue(PreviewLinkPlanner.localTargetIsCurrent(originalLink))
+
+        try FileManager.default.moveItem(at: project, to: displacedProject)
+        for directory in [notes, assets, guides] {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+        }
+        try Data("# Replacement source".utf8).write(to: sourceURL)
+        try pngData().write(to: imageURL)
+        try Data("# Replacement target".utf8).write(to: linkedURL)
+
+        let imageMarkdown = "![inside](../assets/inside.png)"
+        let guardedHTML = MarkdownRenderer.htmlDocument(
+            for: imageMarkdown,
+            documentDirectory: notes,
+            projectRoot: project,
+            expectedProjectRootIdentity: projectIdentity,
+            requiresProjectBoundary: true
+        )
+        XCTAssertTrue(guardedHTML.contains("无法读取项目外图片"), guardedHTML)
+        XCTAssertFalse(guardedHTML.contains("data:image/png;base64,"), guardedHTML)
+
+        let invalidProjectFallback = MarkdownRenderer.htmlDocument(
+            for: imageMarkdown,
+            documentDirectory: nil,
+            projectRoot: nil,
+            requiresProjectBoundary: true
+        )
+        XCTAssertTrue(invalidProjectFallback.contains("暂时无法读取相对图片"))
+        XCTAssertFalse(invalidProjectFallback.contains("data:image/png;base64,"))
+        let absoluteFallback = MarkdownRenderer.htmlDocument(
+            for: "![inside](\(imageURL.absoluteString))",
+            documentDirectory: notes,
+            projectRoot: nil,
+            requiresProjectBoundary: true
+        )
+        XCTAssertTrue(absoluteFallback.contains("无法读取项目外图片"), absoluteFallback)
+        XCTAssertFalse(absoluteFallback.contains("data:image/png;base64,"), absoluteFallback)
+
+        XCTAssertFalse(PreviewLinkPlanner.localTargetIsCurrent(originalLink))
+        XCTAssertEqual(
+            blockedReason(PreviewLinkPlanner.plan(
+                markdown: "[inside](\(linkTarget))",
+                target: linkTarget,
+                documentURL: sourceURL,
+                projectRoot: project,
+                expectedProjectRootIdentity: projectIdentity
+            )),
+            .outsideProject
+        )
+    }
+
     func testMissingAndUnsavedRelativeImagesShowSpecificLocalPlaceholders() {
         let saved = MarkdownRenderer.htmlDocument(
             for: "![封面](assets/missing.png)",
@@ -1070,6 +1163,21 @@ final class MarkdownRendererTests: XCTestCase {
             try FolderProjectPathBoundary.normalizedProjectRoot(project)
         )
 
+        let absoluteInsideTarget = insideURL.path
+        let absoluteInsidePlan = PreviewLinkPlanner.plan(
+            markdown: "[absolute inside](\(absoluteInsideTarget))",
+            target: absoluteInsideTarget,
+            documentURL: sourceURL,
+            projectRoot: project
+        )
+        guard case let .local(absoluteInsideLink) = absoluteInsidePlan.destination else {
+            return XCTFail("expected an absolute project-local link")
+        }
+        XCTAssertEqual(
+            absoluteInsideLink.url.standardizedFileURL,
+            insideURL.standardizedFileURL
+        )
+
         let escapingTarget = "../../outside/outside.md"
         XCTAssertEqual(
             blockedReason(PreviewLinkPlanner.plan(
@@ -1173,7 +1281,8 @@ final class MarkdownRendererTests: XCTestCase {
         let plan = PreviewLinkPlanner.plan(
             markdown: markdown,
             target: "guide.md#target",
-            documentURL: sourceURL
+            documentURL: sourceURL,
+            projectRoot: directory
         )
         guard case let .local(link) = plan.destination else {
             return XCTFail("expected a local link")
@@ -1186,17 +1295,37 @@ final class MarkdownRendererTests: XCTestCase {
         try Data("# Replaced with different bytes\n".utf8).write(to: targetURL)
         XCTAssertFalse(PreviewLinkPlanner.localTargetIsCurrent(link))
 
-        let unsaved = PreviewLinkPlanner.plan(
+        let independentRelative = PreviewLinkPlanner.plan(
             markdown: markdown,
             target: "guide.md#target",
-            documentURL: nil
+            documentURL: sourceURL
         )
-        XCTAssertEqual(blockedReason(unsaved), .relativeTargetNeedsSavedDocument)
+        XCTAssertEqual(blockedReason(independentRelative), .localTargetRequiresProject)
+
+        let absoluteTarget = targetURL.path
+        let independentAbsolute = PreviewLinkPlanner.plan(
+            markdown: "[guide](\(absoluteTarget))",
+            target: absoluteTarget,
+            documentURL: sourceURL
+        )
+        XCTAssertEqual(blockedReason(independentAbsolute), .localTargetRequiresProject)
+
+        let unsavedProjectDocument = PreviewLinkPlanner.plan(
+            markdown: markdown,
+            target: "guide.md#target",
+            documentURL: nil,
+            projectRoot: directory
+        )
+        XCTAssertEqual(
+            blockedReason(unsavedProjectDocument),
+            .relativeTargetNeedsSavedDocument
+        )
 
         let sameDocument = PreviewLinkPlanner.plan(
             markdown: "[top](source.md#top)",
             target: "source.md#top",
-            documentURL: sourceURL
+            documentURL: sourceURL,
+            projectRoot: directory
         )
         XCTAssertEqual(sameDocument.destination, .currentDocument(fragment: "top"))
 
@@ -1204,7 +1333,8 @@ final class MarkdownRendererTests: XCTestCase {
             blockedReason(PreviewLinkPlanner.plan(
                 markdown: "[missing](missing.pdf)",
                 target: "missing.pdf",
-                documentURL: sourceURL
+                documentURL: sourceURL,
+                projectRoot: directory
             )),
             .missingLocalTarget
         )
@@ -1216,10 +1346,16 @@ final class MarkdownRendererTests: XCTestCase {
             target: "archive.zip",
             documentURL: sourceURL
         )
-        guard case let .local(attachment) = attachmentPlan.destination else {
-            return XCTFail("expected a local attachment")
-        }
-        XCTAssertEqual(attachment.kind, .attachment)
+        XCTAssertEqual(blockedReason(attachmentPlan), .localTargetRequiresProject)
+        XCTAssertEqual(
+            blockedReason(PreviewLinkPlanner.plan(
+                markdown: "[archive](archive.zip)",
+                target: "archive.zip",
+                documentURL: sourceURL,
+                projectRoot: directory
+            )),
+            .unsupportedScheme
+        )
 
         let fakePDF = directory.appendingPathComponent("fake.pdf")
         try Data("not pdf".utf8).write(to: fakePDF)
@@ -1227,7 +1363,8 @@ final class MarkdownRendererTests: XCTestCase {
             blockedReason(PreviewLinkPlanner.plan(
                 markdown: "[fake](fake.pdf)",
                 target: "fake.pdf",
-                documentURL: sourceURL
+                documentURL: sourceURL,
+                projectRoot: directory
             )),
             .unsafeLocalTarget
         )
@@ -1244,7 +1381,8 @@ final class MarkdownRendererTests: XCTestCase {
         let imagePlan = PreviewLinkPlanner.plan(
             markdown: imageMarkdown,
             target: "cover.png",
-            documentURL: sourceURL
+            documentURL: sourceURL,
+            projectRoot: directory
         )
         guard case let .local(image) = imagePlan.destination else {
             return XCTFail("expected a validated local image")
@@ -1257,7 +1395,8 @@ final class MarkdownRendererTests: XCTestCase {
             blockedReason(PreviewLinkPlanner.plan(
                 markdown: "[fake](fake.png)",
                 target: "fake.png",
-                documentURL: sourceURL
+                documentURL: sourceURL,
+                projectRoot: directory
             )),
             .unsafeLocalTarget
         )
@@ -1268,7 +1407,8 @@ final class MarkdownRendererTests: XCTestCase {
             blockedReason(PreviewLinkPlanner.plan(
                 markdown: "[alias](alias.md)",
                 target: "alias.md",
-                documentURL: sourceURL
+                documentURL: sourceURL,
+                projectRoot: directory
             )),
             .unsafeLocalTarget
         )
@@ -1284,15 +1424,17 @@ final class MarkdownRendererTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
         let expired = root.appendingPathComponent("\(UUID().uuidString).png")
+        let protected = root.appendingPathComponent("\(UUID().uuidString).md")
         let unmanaged = root.appendingPathComponent("keep.pdf")
         let directory = root.appendingPathComponent("\(UUID().uuidString).pdf", isDirectory: true)
         let symlink = root.appendingPathComponent("\(UUID().uuidString).jpg")
         try Data("expired".utf8).write(to: expired)
+        try Data("protected".utf8).write(to: protected)
         try Data("keep".utf8).write(to: unmanaged)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: unmanaged)
         let oldDate = Date().addingTimeInterval(-120)
-        for url in [expired, unmanaged, directory] {
+        for url in [expired, protected, unmanaged, directory] {
             try FileManager.default.setAttributes(
                 [.modificationDate: oldDate],
                 ofItemAtPath: url.path
@@ -1302,12 +1444,13 @@ final class MarkdownRendererTests: XCTestCase {
         let maintenance = SafePreviewOpenMaintenance(
             rootURL: root,
             retentionInterval: 60,
-            intervalNanoseconds: 60_000_000_000
+            intervalNanoseconds: 60_000_000_000,
+            excludedPaths: { [protected.standardizedFileURL.path] }
         )
         maintenance.start()
         defer { maintenance.stop() }
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: expired.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: protected.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: unmanaged.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: symlink.path))

@@ -9,7 +9,19 @@ enum InflowLaunchPolicy {
     /// the document does not present a file panel; the user chooses a path on
     /// the first explicit save.
     static let presentsEditableDocumentFirst = true
-    static let automaticallyOpensUntitledDocument = true
+    /// The app delegate owns cold-launch document creation explicitly. Letting
+    /// AppKit infer the launch action can route a document-based SwiftUI app to
+    /// its Open panel on some launch paths.
+    static let letsAppKitOpenUntitledDocument = false
+
+    static func shouldCreateInitialDocument(
+        hasReceivedExternalOpenRequest: Bool,
+        hasOpenDocuments: Bool
+    ) -> Bool {
+        presentsEditableDocumentFirst
+            && !hasReceivedExternalOpenRequest
+            && !hasOpenDocuments
+    }
 
     static func shouldFocusFreshUntitledDocument(
         fileURL: URL?,
@@ -37,6 +49,7 @@ struct FolderProjectDirectoryIdentity: Equatable, Sendable {
     let resolvedURL: URL
     let device: UInt64
     let inode: UInt64
+    let generation: UInt32
 
     static func capture(_ url: URL) -> Self? {
         let resolvedURL = FolderProjectPathBoundary.normalizedResolvedURL(url)
@@ -51,8 +64,16 @@ struct FolderProjectDirectoryIdentity: Equatable, Sendable {
         return Self(
             resolvedURL: resolvedURL,
             device: UInt64(metadata.st_dev),
-            inode: UInt64(metadata.st_ino)
+            inode: UInt64(metadata.st_ino),
+            generation: metadata.st_gen
         )
+    }
+
+    func matches(_ metadata: stat) -> Bool {
+        metadata.st_mode & S_IFMT == S_IFDIR
+            && UInt64(metadata.st_dev) == device
+            && UInt64(metadata.st_ino) == inode
+            && metadata.st_gen == generation
     }
 }
 
@@ -152,6 +173,21 @@ struct FolderProjectItem: Identifiable, Equatable, Sendable {
     }
 }
 
+enum FolderBrowserActivation {
+    static func markdownURL(
+        forSelectedItemID selectedItemID: String?,
+        in items: [FolderProjectItem]
+    ) -> URL? {
+        guard let selectedItemID else { return nil }
+        for item in items {
+            if let match = item.item(withID: selectedItemID) {
+                return match.markdownFile?.url
+            }
+        }
+        return nil
+    }
+}
+
 struct FolderContentSnapshot: Equatable, Sendable {
     let items: [FolderProjectItem]
     let markdownFiles: [FolderMarkdownFile]
@@ -223,6 +259,11 @@ enum FolderProjectPathBoundary {
 }
 
 enum FolderContentScanner {
+    /// Test-only observation point used to replace a directory after its
+    /// no-follow metadata check and before `openat`. Production callers leave
+    /// this nil. Keeping the hook as an argument avoids shared mutable state.
+    typealias BeforeOpeningDirectory = (_ directoryURL: URL) throws -> Void
+
     static func scan(
         _ rootURL: URL,
         fileManager: FileManager = .default,
@@ -250,58 +291,134 @@ enum FolderContentScanner {
     static func snapshot(
         _ rootURL: URL,
         fileManager: FileManager = .default,
-        maximumFileCount: Int = FolderBrowserPolicy.maximumFileCount
+        maximumFileCount: Int = FolderBrowserPolicy.maximumFileCount,
+        expectedRootIdentity: FolderProjectDirectoryIdentity? = nil,
+        beforeOpeningDirectory: BeforeOpeningDirectory? = nil
     ) throws -> FolderContentSnapshot {
         let root = try FolderProjectPathBoundary.normalizedProjectRoot(
             rootURL,
             fileManager: fileManager
         )
+        guard let capturedRootIdentity = FolderProjectDirectoryIdentity.capture(root) else {
+            throw FolderBrowserError.unavailable
+        }
+        let rootIdentity = expectedRootIdentity ?? capturedRootIdentity
+        guard rootIdentity.resolvedURL == root else {
+            throw FolderBrowserError.unavailable
+        }
+
+        try beforeOpeningDirectory?(root)
+        let rootDescriptor = root.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return Darwin.open(
+                path,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+        }
+        guard rootDescriptor >= 0 else { throw FolderBrowserError.unavailable }
+        defer { Darwin.close(rootDescriptor) }
+
+        var openedRootMetadata = stat()
+        guard Darwin.fstat(rootDescriptor, &openedRootMetadata) == 0,
+              rootIdentity.matches(openedRootMetadata)
+        else {
+            throw FolderBrowserError.unavailable
+        }
+
         var fileCount = 0
         var markdownFiles: [FolderMarkdownFile] = []
 
-        func readDirectory(_ directory: URL, relativePath: String?) throws
+        func readDirectory(
+            descriptor: Int32,
+            directoryURL: URL,
+            relativePath: String?
+        ) throws
             -> [FolderProjectItem]
         {
             try Task.checkCancellation()
-            let contents: [URL]
-            do {
-                contents = try fileManager.contentsOfDirectory(
-                    at: directory,
-                    includingPropertiesForKeys: [
-                        .isDirectoryKey,
-                        .isRegularFileKey,
-                        .isSymbolicLinkKey,
-                    ],
-                    options: [.skipsHiddenFiles]
-                )
-            } catch {
+            let enumerationDescriptor = Darwin.fcntl(
+                descriptor,
+                F_DUPFD_CLOEXEC,
+                0
+            )
+            guard enumerationDescriptor >= 0 else {
                 throw FolderBrowserError.unavailable
             }
+            guard let directoryStream = Darwin.fdopendir(enumerationDescriptor) else {
+                Darwin.close(enumerationDescriptor)
+                throw FolderBrowserError.unavailable
+            }
+            defer { Darwin.closedir(directoryStream) }
 
             var items: [FolderProjectItem] = []
-            for rawItem in contents {
+            errno = 0
+            while let entry = Darwin.readdir(directoryStream) {
                 try Task.checkCancellation()
-                let values: URLResourceValues
-                do {
-                    values = try rawItem.resourceValues(forKeys: [
-                        .isDirectoryKey,
-                        .isRegularFileKey,
-                        .isSymbolicLinkKey,
-                    ])
-                } catch {
+                let name = withUnsafePointer(to: entry.pointee.d_name) { pointer in
+                    pointer.withMemoryRebound(
+                        to: CChar.self,
+                        capacity: Int(MAXNAMLEN) + 1
+                    ) {
+                        String(validatingCString: $0)
+                    }
+                }
+                guard let name else {
                     throw FolderBrowserError.unavailable
                 }
-                guard values.isSymbolicLink != true else { continue }
+                guard name != ".", name != "..", !name.hasPrefix(".") else {
+                    continue
+                }
 
-                let item = rawItem.standardizedFileURL
-                guard FolderProjectPathBoundary.contains(item, in: root) else { continue }
-                let itemRelativePath = [relativePath, item.lastPathComponent]
+                var metadata = stat()
+                let metadataResult = name.withCString { namePointer in
+                    Darwin.fstatat(
+                        descriptor,
+                        namePointer,
+                        &metadata,
+                        AT_SYMLINK_NOFOLLOW
+                    )
+                }
+                guard metadataResult == 0 else {
+                    throw FolderBrowserError.unavailable
+                }
+                guard metadata.st_flags & UInt32(UF_HIDDEN) == 0 else { continue }
+
+                let fileType = metadata.st_mode & S_IFMT
+                guard fileType != S_IFLNK else { continue }
+
+                let itemRelativePath = [relativePath, name]
                     .compactMap { $0 }
                     .joined(separator: "/")
+                let item = directoryURL
+                    .appendingPathComponent(name, isDirectory: fileType == S_IFDIR)
+                    .standardizedFileURL
 
-                if values.isDirectory == true {
+                if fileType == S_IFDIR {
+                    try beforeOpeningDirectory?(item)
+                    let childDescriptor = name.withCString { namePointer in
+                        Darwin.openat(
+                            descriptor,
+                            namePointer,
+                            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+                        )
+                    }
+                    guard childDescriptor >= 0 else {
+                        throw FolderBrowserError.unavailable
+                    }
+                    defer { Darwin.close(childDescriptor) }
+
+                    var openedChildMetadata = stat()
+                    guard Darwin.fstat(childDescriptor, &openedChildMetadata) == 0,
+                          openedChildMetadata.st_mode & S_IFMT == S_IFDIR,
+                          openedChildMetadata.st_dev == metadata.st_dev,
+                          openedChildMetadata.st_ino == metadata.st_ino
+                    else {
+                        throw FolderBrowserError.unavailable
+                    }
+
                     let children = try readDirectory(
-                        item,
+                        descriptor: childDescriptor,
+                        directoryURL: item,
                         relativePath: itemRelativePath
                     )
                     items.append(
@@ -312,7 +429,7 @@ enum FolderContentScanner {
                             children: children
                         )
                     )
-                } else if values.isRegularFile == true {
+                } else if fileType == S_IFREG {
                     fileCount += 1
                     guard fileCount <= maximumFileCount else {
                         throw FolderBrowserError.tooManyMarkdownFiles(
@@ -330,10 +447,18 @@ enum FolderContentScanner {
                     }
                 }
             }
+            guard errno == 0 else { throw FolderBrowserError.unavailable }
             return items.sorted(by: FolderProjectItem.projectOrder)
         }
 
-        let items = try readDirectory(root, relativePath: nil)
+        let items = try readDirectory(
+            descriptor: rootDescriptor,
+            directoryURL: root,
+            relativePath: nil
+        )
+        guard FolderProjectDirectoryIdentity.capture(root) == rootIdentity else {
+            throw FolderBrowserError.unavailable
+        }
         markdownFiles.sort {
             $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
         }
@@ -351,8 +476,14 @@ private extension FolderProjectItem {
 }
 
 private actor FolderContentScanWorker {
-    func scan(_ rootURL: URL) throws -> FolderContentSnapshot {
-        try FolderContentScanner.snapshot(rootURL)
+    func scan(
+        _ rootURL: URL,
+        expectedRootIdentity: FolderProjectDirectoryIdentity
+    ) throws -> FolderContentSnapshot {
+        try FolderContentScanner.snapshot(
+            rootURL,
+            expectedRootIdentity: expectedRootIdentity
+        )
     }
 }
 
@@ -367,6 +498,11 @@ enum FolderBrowserSelection: Equatable, Sendable {
     case none
     case directory(URL)
     case file(URL)
+}
+
+struct FolderMarkdownCreationAuthorization: Equatable, Sendable {
+    let projectIdentity: FolderProjectDirectoryIdentity
+    let targetIdentity: FolderProjectDirectoryIdentity
 }
 
 enum FolderMarkdownCreationError: Error, Equatable, LocalizedError, Sendable {
@@ -630,8 +766,7 @@ enum FolderMarkdownFileCreator {
             return false
         }
         guard let expectedIdentity else { return true }
-        return UInt64(metadata.st_dev) == expectedIdentity.device
-            && UInt64(metadata.st_ino) == expectedIdentity.inode
+        return expectedIdentity.matches(metadata)
     }
 }
 
@@ -662,6 +797,7 @@ private final class FolderSecurityScopeLease {
 @MainActor
 final class FolderBrowserController: ObservableObject {
     @Published private(set) var folderURL: URL?
+    private(set) var projectRootIdentity: FolderProjectDirectoryIdentity?
     @Published private(set) var items: [FolderProjectItem] = []
     @Published private(set) var files: [FolderMarkdownFile] = []
     @Published private(set) var state = FolderBrowserState.idle
@@ -736,8 +872,11 @@ final class FolderBrowserController: ObservableObject {
     }
 
     func openFolder(_ url: URL, remember: Bool = true) {
-        guard let directory = validatedFolderURLForOpening(url) else {
+        guard let directory = validatedFolderURLForOpening(url),
+              let identity = FolderProjectDirectoryIdentity.capture(directory)
+        else {
             folderURL = nil
+            projectRootIdentity = nil
             items = []
             files = []
             state = .failed(FolderBrowserError.unavailable.localizedDescription)
@@ -749,7 +888,8 @@ final class FolderBrowserController: ObservableObject {
             return
         }
 
-        folderURL = directory
+        folderURL = identity.resolvedURL
+        projectRootIdentity = identity
         restorationWarning = nil
         if remember {
             let bookmark = bookmarkData(directory)
@@ -797,7 +937,10 @@ final class FolderBrowserController: ObservableObject {
                 return
             }
             do {
-                let snapshot = try await scanWorker.scan(identity.resolvedURL)
+                let snapshot = try await scanWorker.scan(
+                    identity.resolvedURL,
+                    expectedRootIdentity: identity
+                )
                 try Task.checkCancellation()
                 guard FolderProjectDirectoryIdentity.capture(identity.resolvedURL)
                     == identity
@@ -825,26 +968,61 @@ final class FolderBrowserController: ObservableObject {
     /// scanned. No asynchronous failure remains after this point.
     @discardableResult
     func commitPreparedFolder(
-        _ preparation: FolderProjectOpenPreparation
+        _ preparation: FolderProjectOpenPreparation,
+        finalValidation: () -> Bool = { true }
     ) -> Bool {
         guard FolderProjectDirectoryIdentity.capture(preparation.rootURL)
             == preparation.rootIdentity
         else { return false }
-        scanTask?.cancel()
-        scanGeneration &+= 1
+
+        // Publishing the candidate URL is synchronous. A subscriber can therefore
+        // invalidate the directory between the first identity check and the final
+        // one. Preserve the complete visible snapshot (and keep an in-flight scan
+        // alive) until the candidate has survived that publication boundary.
+        let previousFolderURL = folderURL
+        let previousProjectRootIdentity = projectRootIdentity
+        let previousItems = items
+        let previousFiles = files
+        let previousState = state
+        let previousRestorationWarning = restorationWarning
+
         folderURL = preparation.rootURL
+        projectRootIdentity = preparation.rootIdentity
         items = preparation.snapshot.items
         files = preparation.snapshot.markdownFiles
         state = .ready
         restorationWarning = nil
+        guard FolderProjectDirectoryIdentity.capture(preparation.rootURL)
+                  == preparation.rootIdentity,
+              finalValidation(),
+              // The validation closure may itself synchronously enter app or
+              // filesystem code, so keep the directory check on both sides.
+              FolderProjectDirectoryIdentity.capture(preparation.rootURL)
+                  == preparation.rootIdentity
+        else {
+            projectRootIdentity = previousProjectRootIdentity
+            items = previousItems
+            files = previousFiles
+            state = previousState
+            restorationWarning = previousRestorationWarning
+            folderURL = previousFolderURL
+            return false
+        }
+        scanTask?.cancel()
+        scanGeneration &+= 1
         return true
     }
 
     func refresh() {
-        guard let folderURL else {
+        guard let folderURL,
+              let projectRootIdentity,
+              FolderProjectDirectoryIdentity.capture(folderURL) == projectRootIdentity
+        else {
             items = []
             files = []
-            state = .idle
+            state = folderURL == nil
+                ? .idle
+                : .failed(FolderBrowserError.unavailable.localizedDescription)
             return
         }
         scanTask?.cancel()
@@ -854,12 +1032,26 @@ final class FolderBrowserController: ObservableObject {
         state = .loading
         scanTask = Task { [weak self, scanWorker] in
             do {
-                let snapshot = try await scanWorker.scan(folderURL)
+                let snapshot = try await scanWorker.scan(
+                    folderURL,
+                    expectedRootIdentity: projectRootIdentity
+                )
                 guard !Task.isCancelled,
                       let self,
                       self.scanGeneration == generation,
-                      self.folderURL?.standardizedFileURL == folderURL.standardizedFileURL
+                      self.folderURL?.standardizedFileURL == folderURL.standardizedFileURL,
+                      self.projectRootIdentity == projectRootIdentity
                 else {
+                    return
+                }
+                guard FolderProjectDirectoryIdentity.capture(folderURL)
+                    == projectRootIdentity
+                else {
+                    self.items = []
+                    self.files = []
+                    self.state = .failed(
+                        FolderBrowserError.unavailable.localizedDescription
+                    )
                     return
                 }
                 self.items = snapshot.items
@@ -893,13 +1085,49 @@ final class FolderBrowserController: ObservableObject {
     }
 
     func targetDirectory(for selection: FolderBrowserSelection) throws -> URL {
-        guard let folderURL else {
+        guard let folderURL,
+              let projectRootIdentity,
+              FolderProjectDirectoryIdentity.capture(folderURL) == projectRootIdentity
+        else {
             throw FolderMarkdownCreationError.projectUnavailable
         }
         return try FolderMarkdownFileCreator.targetDirectory(
             for: selection,
             projectRoot: folderURL
         )
+    }
+
+    func creationAuthorization(
+        for selection: FolderBrowserSelection
+    ) throws -> FolderMarkdownCreationAuthorization {
+        guard let projectRootIdentity else {
+            throw FolderMarkdownCreationError.projectUnavailable
+        }
+        let target = try targetDirectory(for: selection)
+        guard let targetIdentity = FolderProjectDirectoryIdentity.capture(target) else {
+            throw FolderMarkdownCreationError.targetDirectoryUnavailable
+        }
+        return FolderMarkdownCreationAuthorization(
+            projectIdentity: projectRootIdentity,
+            targetIdentity: targetIdentity
+        )
+    }
+
+    func creationAuthorizationIsCurrent(
+        _ authorization: FolderMarkdownCreationAuthorization,
+        for selection: FolderBrowserSelection
+    ) -> Bool {
+        guard projectRootIdentity == authorization.projectIdentity,
+              let folderURL,
+              FolderProjectDirectoryIdentity.capture(folderURL)
+                  == authorization.projectIdentity,
+              let target = try? targetDirectory(for: selection),
+              FolderProjectDirectoryIdentity.capture(target)
+                  == authorization.targetIdentity
+        else {
+            return false
+        }
+        return true
     }
 
     func validateMarkdownFileCreation(
@@ -1078,13 +1306,19 @@ final class FolderBrowserController: ObservableObject {
         expectedRootIdentity: FolderProjectDirectoryIdentity?,
         expectedTargetIdentity: FolderProjectDirectoryIdentity?
     ) -> Result<FolderMarkdownFile, FolderMarkdownCreationError> {
-        guard let folderURL else { return .failure(.projectUnavailable) }
+        guard let folderURL,
+              let projectRootIdentity,
+              FolderProjectDirectoryIdentity.capture(folderURL) == projectRootIdentity,
+              expectedRootIdentity.map({ $0 == projectRootIdentity }) ?? true
+        else {
+            return .failure(.projectUnavailable)
+        }
         do {
             let file = try FolderMarkdownFileCreator.createEmptyMarkdownFile(
                 named: rawName,
                 projectRoot: folderURL,
                 selection: selection,
-                expectedRootIdentity: expectedRootIdentity,
+                expectedRootIdentity: expectedRootIdentity ?? projectRootIdentity,
                 expectedTargetIdentity: expectedTargetIdentity
             )
             includeCreatedFile(file)
@@ -1159,7 +1393,7 @@ struct FolderBrowserSidebar: View {
     @State private var isPresentingNewFile = false
     @State private var isPreparingCreation = false
     @State private var notice: FolderBrowserNotice?
-    @State private var creationProjectIdentity: FolderProjectDirectoryIdentity?
+    @State private var creationAuthorization: FolderMarkdownCreationAuthorization?
 
     init(
         controller: FolderBrowserController,
@@ -1300,15 +1534,17 @@ struct FolderBrowserSidebar: View {
                 OutlineGroup(controller.items, children: \.children) { item in
                     FolderProjectItemRow(
                         item: item,
-                        isCurrentDocument: isCurrentDocument(item)
+                        isCurrentDocument: isCurrentDocument(item),
+                        onActivate: {
+                            selectedItemID = item.id
+                            activateItem(withID: item.id)
+                        }
                     )
                     .tag(item.id)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         selectedItemID = item.id
-                        if item.isMarkdown {
-                            openItem(at: item.url, createdFile: false)
-                        }
+                        activateItem(withID: item.id)
                     }
                     .contextMenu {
                         Button("新建 Markdown 文件…") {
@@ -1324,6 +1560,9 @@ struct FolderBrowserSidebar: View {
                 }
             }
             .listStyle(.sidebar)
+            .onKeyPress(.return, phases: .down) { _ in
+                activateItem(withID: selectedItemID) ? .handled : .ignored
+            }
             .contextMenu {
                 Button("新建 Markdown 文件…") {
                     selectedItemID = nil
@@ -1349,9 +1588,7 @@ struct FolderBrowserSidebar: View {
 
     private func beginCreatingMarkdown(in selection: FolderBrowserSelection) {
         creationSelection = selection
-        creationProjectIdentity = controller.folderURL.flatMap(
-            FolderProjectDirectoryIdentity.capture
-        )
+        creationAuthorization = try? controller.creationAuthorization(for: selection)
         newFileName = ""
         creationError = nil
         isPresentingNewFile = true
@@ -1361,34 +1598,25 @@ struct FolderBrowserSidebar: View {
         isPresentingNewFile = false
         isPreparingCreation = false
         creationError = nil
-        creationProjectIdentity = nil
+        creationAuthorization = nil
     }
 
     private func createMarkdownFile() {
         guard !isPreparingCreation else { return }
-        guard let creationProjectIdentity,
-              let currentRoot = controller.folderURL,
-              FolderProjectDirectoryIdentity.capture(currentRoot)
-                  == creationProjectIdentity
+        guard let creationAuthorization,
+              controller.creationAuthorizationIsCurrent(
+                  creationAuthorization,
+                  for: creationSelection
+              )
         else {
             creationError = .projectUnavailable
             return
         }
-        let creationTargetIdentity: FolderProjectDirectoryIdentity
         do {
             try controller.validateMarkdownFileCreation(
                 named: newFileName,
                 selection: creationSelection
             )
-            let targetDirectory = try controller.targetDirectory(
-                for: creationSelection
-            )
-            guard let identity = FolderProjectDirectoryIdentity.capture(
-                targetDirectory
-            ) else {
-                throw FolderMarkdownCreationError.targetDirectoryUnavailable
-            }
-            creationTargetIdentity = identity
         } catch let error as FolderMarkdownCreationError {
             creationError = error
             return
@@ -1403,14 +1631,10 @@ struct FolderBrowserSidebar: View {
                 isPreparingCreation = false
                 return
             }
-            guard let currentRoot = controller.folderURL,
-                  FolderProjectDirectoryIdentity.capture(currentRoot)
-                      == creationProjectIdentity,
-                  let currentTarget = try? controller.targetDirectory(
-                      for: creationSelection
-                  ),
-                  FolderProjectDirectoryIdentity.capture(currentTarget)
-                      == creationTargetIdentity
+            guard controller.creationAuthorizationIsCurrent(
+                creationAuthorization,
+                for: creationSelection
+            )
             else {
                 isPreparingCreation = false
                 creationError = .projectUnavailable
@@ -1419,8 +1643,8 @@ struct FolderBrowserSidebar: View {
             controller.createMarkdownFile(
                 named: newFileName,
                 selection: creationSelection,
-                expectedRootIdentity: creationProjectIdentity,
-                expectedTargetIdentity: creationTargetIdentity,
+                expectedRootIdentity: creationAuthorization.projectIdentity,
+                expectedTargetIdentity: creationAuthorization.targetIdentity,
                 openDocumentWithCompletion: onOpenCreatedDocument,
                 completion: handleCreationResult
             )
@@ -1482,6 +1706,16 @@ struct FolderBrowserSidebar: View {
         }
     }
 
+    @discardableResult
+    private func activateItem(withID itemID: String?) -> Bool {
+        guard let url = FolderBrowserActivation.markdownURL(
+            forSelectedItemID: itemID,
+            in: controller.items
+        ) else { return false }
+        openItem(at: url, createdFile: false)
+        return true
+    }
+
     private func isCurrentDocument(_ item: FolderProjectItem) -> Bool {
         guard item.isMarkdown, let currentDocumentURL else { return false }
         return FolderProjectPathBoundary.normalizedResolvedURL(item.url)
@@ -1492,8 +1726,21 @@ struct FolderBrowserSidebar: View {
 private struct FolderProjectItemRow: View {
     let item: FolderProjectItem
     let isCurrentDocument: Bool
+    let onActivate: () -> Void
 
+    @ViewBuilder
     var body: some View {
+        if item.isMarkdown {
+            rowContent
+                .accessibilityAction(.default) {
+                    onActivate()
+                }
+        } else {
+            rowContent
+        }
+    }
+
+    private var rowContent: some View {
         HStack(spacing: 7) {
             Image(systemName: systemImage)
                 .foregroundStyle(.secondary)

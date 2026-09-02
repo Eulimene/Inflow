@@ -87,6 +87,12 @@ struct DocumentSaveCommands: Commands {
 
 @MainActor
 enum NativeDocumentSaveCoordinator {
+    struct RevertPreparation {
+        fileprivate let sourceURL: URL
+        fileprivate let stagingURL: URL
+        fileprivate let modificationDate: Date
+    }
+
     static func activeDocument(sourceURL: URL?) -> NSDocument? {
         if let sourceURL,
            let matched = NSDocumentController.shared.documents.first(where: {
@@ -139,11 +145,48 @@ enum NativeDocumentSaveCoordinator {
 
     /// Revert stays on AppKit's document lifecycle path so its change count and
     /// undo ownership are updated by the same document that owns the window.
-    static func revert(document: NSDocument, from sourceURL: URL) throws {
+    static func prepareRevert(
+        from sourceURL: URL,
+        verifiedData: Data,
+        materialize: (Data, String) throws -> URL = { data, pathExtension in
+            try SafePreviewOpenStore.materialize(
+                data: data,
+                extension: pathExtension
+            )
+        }
+    ) throws -> RevertPreparation {
+        let snapshot = try PreviewLocalFileSnapshot.capture(sourceURL)
+        let frozen = try PreviewLocalFileReader.read(
+            sourceURL,
+            expected: snapshot
+        )
+        guard frozen.data == verifiedData else {
+            throw DocumentFileSafetyError.staleDecision
+        }
+        let stagingURL = try materialize(verifiedData, sourceURL.pathExtension)
+        return RevertPreparation(
+            sourceURL: sourceURL.standardizedFileURL,
+            stagingURL: stagingURL,
+            modificationDate: snapshot.modificationDate
+        )
+    }
+
+    static func discardRevertPreparation(_ preparation: RevertPreparation) {
+        SafePreviewOpenStore.discardManagedCopy(at: preparation.stagingURL)
+    }
+
+    static func revert(
+        document: NSDocument,
+        using preparation: RevertPreparation
+    ) throws {
         try document.revert(
-            toContentsOf: sourceURL,
+            toContentsOf: preparation.stagingURL,
             ofType: document.fileType ?? UTType.inflowMarkdown.identifier
         )
+        // `revert(toContentsOf:)` receives an app-owned immutable contents
+        // URL. Preserve both parts of AppKit's represented-file baseline.
+        document.fileURL = preparation.sourceURL
+        document.fileModificationDate = preparation.modificationDate
     }
 
     private static func save(

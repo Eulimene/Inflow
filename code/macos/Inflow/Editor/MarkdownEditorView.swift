@@ -2,6 +2,117 @@ import AppKit
 import CoreGraphics
 import SwiftUI
 
+enum EditorNavigationVisibilityState {
+    private static let visible = "visible"
+    private static let hidden = "hidden"
+
+    static func resolve(storedValue: String, defaultValue: Bool) -> Bool {
+        switch storedValue {
+        case visible: true
+        case hidden: false
+        default: defaultValue
+        }
+    }
+
+    static func storedValue(isVisible: Bool) -> String {
+        isVisible ? visible : hidden
+    }
+
+    static func normalizedStoredValue(
+        _ storedValue: String,
+        defaultValue: Bool
+    ) -> String {
+        self.storedValue(
+            isVisible: resolve(storedValue: storedValue, defaultValue: defaultValue)
+        )
+    }
+}
+
+struct EditorNavigationVisibilitySnapshot: Equatable, Sendable {
+    var projectSidebarVisible: Bool
+    var outlineVisible: Bool
+}
+
+/// Navigation belongs to the project window rather than to the transient
+/// NSDocument that currently supplies its editor. Project file replacement
+/// therefore reuses this snapshot while ordinary document scenes continue to
+/// use their own SceneStorage values.
+@MainActor
+final class ProjectEditorNavigationState {
+    private var projectIdentity: FolderProjectDirectoryIdentity?
+    private var snapshot: EditorNavigationVisibilitySnapshot?
+
+    func resolve(
+        projectIdentity: FolderProjectDirectoryIdentity?,
+        defaultProjectSidebarVisible: Bool,
+        defaultOutlineVisible: Bool
+    ) -> EditorNavigationVisibilitySnapshot {
+        if self.projectIdentity == projectIdentity, let snapshot {
+            return snapshot
+        }
+        let resolved = EditorNavigationVisibilitySnapshot(
+            projectSidebarVisible: defaultProjectSidebarVisible,
+            outlineVisible: defaultOutlineVisible
+        )
+        self.projectIdentity = projectIdentity
+        snapshot = resolved
+        return resolved
+    }
+
+    func setProjectSidebarVisible(_ isVisible: Bool) {
+        guard var snapshot else { return }
+        snapshot.projectSidebarVisible = isVisible
+        self.snapshot = snapshot
+    }
+
+    func setOutlineVisible(_ isVisible: Bool) {
+        guard var snapshot else { return }
+        snapshot.outlineVisible = isVisible
+        self.snapshot = snapshot
+    }
+
+    func reset() {
+        projectIdentity = nil
+        snapshot = nil
+    }
+}
+
+enum EditorWorkspacePane: Equatable {
+    case projectSidebar
+    case editor
+    case outline
+}
+
+enum EditorWorkspaceLayout {
+    static func panes(
+        hasProjectContext: Bool,
+        projectSidebarVisible: Bool,
+        outlineAvailable: Bool,
+        outlineVisible: Bool
+    ) -> [EditorWorkspacePane] {
+        var result: [EditorWorkspacePane] = []
+        if hasProjectContext && projectSidebarVisible {
+            result.append(.projectSidebar)
+        }
+        result.append(.editor)
+        if outlineAvailable && outlineVisible {
+            result.append(.outline)
+        }
+        return result
+    }
+}
+
+enum EditorSplitSceneState {
+    static let uninitialized = -1.0
+
+    static func effectiveFraction(storedValue: Double, defaultValue: Double) -> Double {
+        guard storedValue.isFinite, storedValue >= 0 else {
+            return EditorSplitLayout.normalized(defaultValue)
+        }
+        return EditorSplitLayout.normalized(storedValue)
+    }
+}
+
 enum ExportFormat: String, Sendable {
     case html = "HTML"
     case pdf = "PDF"
@@ -281,9 +392,32 @@ enum EditorViewMode: String, CaseIterable, Identifiable {
 
     static func initialMode(
         storedValue: String,
-        lastActiveMode: EditorViewMode
+        context: EditorViewModeLaunchContext
     ) -> EditorViewMode {
-        storedValue.isEmpty ? lastActiveMode : resolve(storedValue: storedValue)
+        guard !storedValue.isEmpty else { return context.defaultMode }
+        return EditorViewMode(rawValue: storedValue) ?? context.defaultMode
+    }
+}
+
+enum EditorViewModeLaunchContext: Equatable {
+    case untitled
+    case existingDocument
+    case recoverySnapshot
+
+    var defaultMode: EditorViewMode {
+        switch self {
+        case .untitled, .recoverySnapshot:
+            .source
+        case .existingDocument:
+            .split
+        }
+    }
+
+    static func resolve(fileURL: URL?, hasRestorationState: Bool) -> Self {
+        if hasRestorationState {
+            return .recoverySnapshot
+        }
+        return fileURL == nil ? .untitled : .existingDocument
     }
 }
 
@@ -457,20 +591,13 @@ struct MarkdownEditorView: View {
         _incomingNavigationIsPending = State(
             initialValue: initialDocument.initialHeadingFragment != nil
         )
-        _initialEditorModeOverride = State(
-            initialValue: InflowLaunchPolicy.shouldFocusFreshUntitledDocument(
-                fileURL: fileURL,
-                text: initialDocument.text,
-                hasRestorationState: initialDocument.restorationState != nil,
-                isEditable: isEditable
-                    && !initialDocument.properties.requiresLineEndingChoice
-            ) ? .source : nil
-        )
     }
 
     @SceneStorage("editorViewMode") private var storedViewMode = ""
-    @SceneStorage("isDocumentOutlineVisible") private var isOutlineVisible = true
-    @SceneStorage("isProjectSidebarVisible") private var isProjectSidebarVisible = true
+    @SceneStorage("editor.navigation.outlineVisibility.v2")
+    private var storedOutlineVisibility = ""
+    @SceneStorage("editor.navigation.projectSidebarVisibility.v2")
+    private var storedProjectSidebarVisibility = ""
     @SceneStorage("editorStatisticMode") private var storedStatisticMode =
         EditorStatisticMode.words.rawValue
     // These keys existed in development previews. The launch product does not expose
@@ -481,7 +608,8 @@ struct MarkdownEditorView: View {
     private var isTypewriterModeEnabled: Bool { false }
     // A negative sentinel distinguishes a brand-new scene from one whose own
     // fraction was restored. The global preference seeds only the former.
-    @SceneStorage("editorSplitFraction") private var editorSplitFraction = -1.0
+    @SceneStorage("editorSplitFraction")
+    private var editorSplitFraction = EditorSplitSceneState.uninitialized
     @State private var previewHTML = MarkdownRenderer.htmlDocument(for: "")
     @State private var previewSourceSnapshot = ""
     @State private var previewFailureMessage: String?
@@ -535,7 +663,6 @@ struct MarkdownEditorView: View {
     @State private var isRecoveryCenterPresented = false
     @State private var didApplyRestorationState = false
     @State private var didPrepareFreshUntitledDocument = false
-    @State private var initialEditorModeOverride: EditorViewMode?
     @StateObject private var fileSafetySession = DocumentFileSafetySession()
     @State private var isFileSafetyPresented = false
     @State private var requestedConflictDecision: DocumentConflictDecision?
@@ -552,19 +679,106 @@ struct MarkdownEditorView: View {
             if usesSourceOnlyExperience {
                 return .source
             }
-            if let initialEditorModeOverride {
-                return initialEditorModeOverride
-            }
             return EditorViewMode.initialMode(
                 storedValue: storedViewMode,
-                lastActiveMode: preferences.lastActiveEditorViewMode
+                context: initialViewModeContext
             )
         }
         nonmutating set {
             guard !usesSourceOnlyExperience || newValue == .source else { return }
-            initialEditorModeOverride = nil
             storedViewMode = newValue.rawValue
         }
+    }
+
+    private var initialViewModeContext: EditorViewModeLaunchContext {
+        EditorViewModeLaunchContext.resolve(
+            fileURL: fileURL,
+            hasRestorationState: document.restorationState != nil
+        )
+    }
+
+    private var editorSplitFractionBinding: Binding<Double> {
+        Binding(
+            get: {
+                EditorSplitSceneState.effectiveFraction(
+                    storedValue: editorSplitFraction,
+                    defaultValue: preferences.defaultSplitFraction
+                )
+            },
+            set: { editorSplitFraction = EditorSplitLayout.normalized($0) }
+        )
+    }
+
+    private var isOutlineVisible: Bool {
+        get {
+            if hasProjectContext, let projectCoordinator {
+                return projectCoordinator.editorNavigationState.resolve(
+                    projectIdentity: folderBrowser.projectRootIdentity,
+                    defaultProjectSidebarVisible: preferences.defaultProjectSidebarVisible,
+                    defaultOutlineVisible: preferences.defaultOutlineVisible
+                ).outlineVisible
+            }
+            return EditorNavigationVisibilityState.resolve(
+                storedValue: storedOutlineVisibility,
+                defaultValue: preferences.defaultOutlineVisible
+            )
+        }
+        nonmutating set {
+            storedOutlineVisibility = EditorNavigationVisibilityState.storedValue(
+                isVisible: newValue
+            )
+            if hasProjectContext, let projectCoordinator {
+                _ = projectCoordinator.editorNavigationState.resolve(
+                    projectIdentity: folderBrowser.projectRootIdentity,
+                    defaultProjectSidebarVisible: preferences.defaultProjectSidebarVisible,
+                    defaultOutlineVisible: preferences.defaultOutlineVisible
+                )
+                projectCoordinator.editorNavigationState.setOutlineVisible(newValue)
+            }
+        }
+    }
+
+    private var isProjectSidebarVisible: Bool {
+        get {
+            if hasProjectContext, let projectCoordinator {
+                return projectCoordinator.editorNavigationState.resolve(
+                    projectIdentity: folderBrowser.projectRootIdentity,
+                    defaultProjectSidebarVisible: preferences.defaultProjectSidebarVisible,
+                    defaultOutlineVisible: preferences.defaultOutlineVisible
+                ).projectSidebarVisible
+            }
+            return EditorNavigationVisibilityState.resolve(
+                storedValue: storedProjectSidebarVisibility,
+                defaultValue: preferences.defaultProjectSidebarVisible
+            )
+        }
+        nonmutating set {
+            storedProjectSidebarVisibility = EditorNavigationVisibilityState.storedValue(
+                isVisible: newValue
+            )
+            if hasProjectContext, let projectCoordinator {
+                _ = projectCoordinator.editorNavigationState.resolve(
+                    projectIdentity: folderBrowser.projectRootIdentity,
+                    defaultProjectSidebarVisible: preferences.defaultProjectSidebarVisible,
+                    defaultOutlineVisible: preferences.defaultOutlineVisible
+                )
+                projectCoordinator.editorNavigationState.setProjectSidebarVisible(newValue)
+            }
+        }
+    }
+
+    private var outlineVisibilityBinding: Binding<Bool> {
+        Binding(
+            get: { isOutlineVisible },
+            set: { isOutlineVisible = $0 }
+        )
+    }
+
+    private var projectSidebarVisibilityBinding: Binding<Bool> {
+        Binding(
+            get: { isProjectSidebarVisible },
+            set: { isProjectSidebarVisible = $0 }
+        )
     }
 
     private var usesSourceOnlyExperience: Bool {
@@ -714,10 +928,13 @@ struct MarkdownEditorView: View {
             statusBar
         }
         .background(Color(nsColor: .textBackgroundColor))
-        .focusedValue(\.outlineVisibility, $isOutlineVisible)
+        .focusedValue(
+            \.outlineVisibility,
+            isProjectShell || usesSourceOnlyExperience ? nil : outlineVisibilityBinding
+        )
         .focusedValue(
             \.projectSidebarVisibility,
-            hasProjectContext ? $isProjectSidebarVisible : nil
+            hasProjectContext ? projectSidebarVisibilityBinding : nil
         )
         .focusedSceneValue(\.editorViewModeActions, editorViewModeCommandActions)
         .focusedSceneValue(\.previewZoomActions, previewZoomCommandActions)
@@ -729,18 +946,31 @@ struct MarkdownEditorView: View {
         .focusedSceneValue(\.recoveryActions, recoveryCommandActions)
         .focusedSceneValue(\.documentSaveActions, documentSaveCommandActions)
         .toolbar {
-            ToolbarItem {
+            ToolbarItemGroup {
+                if hasProjectContext {
+                    Button {
+                        isProjectSidebarVisible.toggle()
+                    } label: {
+                        Label(
+                            isProjectSidebarVisible ? "隐藏目录树" : "显示目录树",
+                            systemImage: "sidebar.left"
+                        )
+                    }
+                    .help(isProjectSidebarVisible ? "隐藏项目目录树" : "显示项目目录树")
+                    .accessibilityValue(isProjectSidebarVisible ? "已显示" : "已隐藏")
+                }
+
                 Button {
                     isOutlineVisible.toggle()
                 } label: {
                     Label(
                         isOutlineVisible ? "隐藏大纲" : "显示大纲",
-                        systemImage: "sidebar.left"
+                        systemImage: "sidebar.right"
                     )
                 }
                 .help(isOutlineVisible ? "隐藏文档大纲" : "显示文档大纲")
                 .accessibilityValue(isOutlineVisible ? "已显示" : "已隐藏")
-                .disabled(usesSourceOnlyExperience)
+                .disabled(isProjectShell || usesSourceOnlyExperience)
             }
 
             ToolbarItem {
@@ -771,8 +1001,15 @@ struct MarkdownEditorView: View {
             // SwiftUI creates its document controller while the app is launching.
             // Apply the host policy only after this document scene is attached.
             preferences.applyAutosavePolicy()
-            if editorSplitFraction < 0 {
-                editorSplitFraction = preferences.defaultSplitFraction
+            initializeNavigationVisibilityIfNeeded()
+            let effectiveSplitFraction = EditorSplitSceneState.effectiveFraction(
+                storedValue: editorSplitFraction,
+                defaultValue: preferences.defaultSplitFraction
+            )
+            if !editorSplitFraction.isFinite
+                || editorSplitFraction != effectiveSplitFraction
+            {
+                editorSplitFraction = effectiveSplitFraction
             }
             restoreRelativeResourceDirectoryAccess(for: fileURL)
             if let fileURL {
@@ -872,10 +1109,8 @@ struct MarkdownEditorView: View {
             updateRecoveryProtection()
             fileSafetySession.update(document: document, fileURL: newURL)
         }
-        .onChange(of: folderBrowser.folderURL) { _, newRoot in
-            if newRoot != nil {
-                isProjectSidebarVisible = true
-            }
+        .onChange(of: folderBrowser.folderURL) { _, _ in
+            initializeNavigationVisibilityIfNeeded()
             scheduleDerivedContent(
                 for: document.text,
                 documentDirectory: fileURL?.deletingLastPathComponent(),
@@ -892,6 +1127,15 @@ struct MarkdownEditorView: View {
         }
         .onChange(of: fileSafetySession.automaticSaveCommit) { _, envelope in
             guard let envelope else { return }
+            if let nativeDocument = NativeDocumentSaveCoordinator.activeDocument(
+                sourceURL: envelope.targetURL
+            ) {
+                NativeDocumentLoadedFileRegistry.refreshAfterVerifiedWrite(
+                    nativeDocument,
+                    targetURL: envelope.targetURL,
+                    expectedData: envelope.bytes
+                )
+            }
             document.adoptRecoveryCommittedSave(envelope)
             updateRecoveryProtection(originalURL: envelope.targetURL)
             Task { @MainActor in
@@ -1248,7 +1492,7 @@ struct MarkdownEditorView: View {
 
     @ViewBuilder
     private var content: some View {
-        if hasProjectContext && isProjectSidebarVisible {
+        if workspacePanes.first == .projectSidebar {
             HSplitView {
                 FolderBrowserSidebar(
                     controller: folderBrowser,
@@ -1331,21 +1575,37 @@ struct MarkdownEditorView: View {
         activeProjectRoot != nil
     }
 
+    private var workspacePanes: [EditorWorkspacePane] {
+        EditorWorkspaceLayout.panes(
+            hasProjectContext: hasProjectContext,
+            projectSidebarVisible: isProjectSidebarVisible,
+            outlineAvailable: !isProjectShell && !usesSourceOnlyExperience,
+            outlineVisible: isOutlineVisible
+        )
+    }
+
     private var activeProjectRoot: URL? {
         projectRoot(for: fileURL)
     }
 
     private func projectRoot(for documentURL: URL?) -> URL? {
-        guard let root = folderBrowser.folderURL else { return nil }
-        guard folderBrowser.isAssociatedProjectDocument(nativeDocument) else {
+        ProjectSessionBoundary.activeEditorRoot(
+            for: documentURL,
+            document: nativeDocument,
+            browser: folderBrowser
+        )
+    }
+
+    private func currentProjectRootIdentity(
+        for projectRoot: URL?
+    ) -> FolderProjectDirectoryIdentity? {
+        guard let projectRoot,
+              let identity = folderBrowser.projectRootIdentity,
+              FolderProjectDirectoryIdentity.capture(projectRoot) == identity
+        else {
             return nil
         }
-        if let documentURL,
-           !FolderProjectPathBoundary.contains(documentURL, in: root)
-        {
-            return nil
-        }
-        return root
+        return identity
     }
 
     private var isProjectShell: Bool {
@@ -1359,14 +1619,27 @@ struct MarkdownEditorView: View {
     @ViewBuilder
     private var documentContent: some View {
         if isProjectShell {
-            ContentUnavailableView(
-                "选择一份 Markdown",
-                systemImage: "doc.text.magnifyingglass",
-                description: Text("从左侧项目树选择 .md 或 .markdown，或新建一份 Markdown。")
-            )
+            ContentUnavailableView {
+                Label("选择一份 Markdown", systemImage: "doc.text.magnifyingglass")
+            } description: {
+                Text(
+                    isProjectSidebarVisible
+                        ? "从左侧目录树选择 .md 或 .markdown，或新建一份 Markdown。"
+                        : "目录树已隐藏。显示后可以选择或新建 Markdown。"
+                )
+            } actions: {
+                if !isProjectSidebarVisible {
+                    Button("显示目录树") {
+                        isProjectSidebarVisible = true
+                    }
+                }
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if isOutlineVisible && !usesSourceOnlyExperience {
+        } else if workspacePanes.last == .outline {
             HSplitView {
+                editorContent
+                    .frame(minWidth: 520)
+
                 DocumentOutlineView(
                     analysisState: analysisState,
                     selectedHeadingID: selectedHeadingID,
@@ -1374,9 +1647,6 @@ struct MarkdownEditorView: View {
                     onSelect: selectHeading
                 )
                 .frame(minWidth: 200, idealWidth: 240, maxWidth: 320)
-
-                editorContent
-                    .frame(minWidth: 520)
             }
         } else {
             editorContent
@@ -1389,7 +1659,7 @@ struct MarkdownEditorView: View {
         case .source:
             sourceEditor
         case .split:
-            PersistentHorizontalSplitView(fraction: $editorSplitFraction) {
+            PersistentHorizontalSplitView(fraction: editorSplitFractionBinding) {
                 sourceEditor
                     .frame(minWidth: 320)
             } trailing: {
@@ -1613,19 +1883,49 @@ struct MarkdownEditorView: View {
 
     private func applyRestorationStateIfNeeded() {
         guard !didApplyRestorationState,
-              let restorationState = document.restorationState,
-              EditorViewMode(rawValue: restorationState.viewModeRawValue) != nil
+              let restorationState = document.restorationState
         else {
             return
         }
         didApplyRestorationState = true
-        storedViewMode = restorationState.viewModeRawValue
+        if storedViewMode.isEmpty {
+            storedViewMode = EditorViewMode.source.rawValue
+        }
         sourceEditorSession.requestRestoration(restorationState)
     }
 
+    private func initializeNavigationVisibilityIfNeeded() {
+        if hasProjectContext, let projectCoordinator {
+            let snapshot = projectCoordinator.editorNavigationState.resolve(
+                projectIdentity: folderBrowser.projectRootIdentity,
+                defaultProjectSidebarVisible: preferences.defaultProjectSidebarVisible,
+                defaultOutlineVisible: preferences.defaultOutlineVisible
+            )
+            storedProjectSidebarVisibility = EditorNavigationVisibilityState.storedValue(
+                isVisible: snapshot.projectSidebarVisible
+            )
+            storedOutlineVisibility = EditorNavigationVisibilityState.storedValue(
+                isVisible: snapshot.outlineVisible
+            )
+            return
+        }
+
+        storedProjectSidebarVisibility =
+            EditorNavigationVisibilityState.normalizedStoredValue(
+                storedProjectSidebarVisibility,
+                defaultValue: preferences.defaultProjectSidebarVisible
+            )
+        storedOutlineVisibility = EditorNavigationVisibilityState.normalizedStoredValue(
+            storedOutlineVisibility,
+            defaultValue: preferences.defaultOutlineVisible
+        )
+    }
+
     private func initializeViewModeIfNeeded() {
-        guard storedViewMode.isEmpty else { return }
-        storedViewMode = preferences.lastActiveEditorViewMode.rawValue
+        storedViewMode = EditorViewMode.initialMode(
+            storedValue: storedViewMode,
+            context: initialViewModeContext
+        ).rawValue
     }
 
     private func prepareFreshUntitledDocumentForEditingIfNeeded() {
@@ -1640,8 +1940,6 @@ struct MarkdownEditorView: View {
             return
         }
 
-        initialEditorModeOverride = .source
-        storedViewMode = EditorViewMode.source.rawValue
         Task { @MainActor in
             await Task.yield()
             _ = sourceEditorSession.focusEditor()
@@ -1672,11 +1970,26 @@ struct MarkdownEditorView: View {
             throw DocumentRelocationError.cannotInspect
         }
         let reloadEnvelope = try await fileSafetySession.prepareReload(snapshot)
+        let nativeRevert = try NativeDocumentSaveCoordinator.prepareRevert(
+            from: snapshot.url,
+            verifiedData: reloadEnvelope.diskData
+        )
+        defer {
+            NativeDocumentSaveCoordinator.discardRevertPreparation(nativeRevert)
+        }
+        // Verify the decision one final time before mutating the native
+        // document. The subsequent revert consumes only the already-frozen
+        // bytes, never the now-mutable source pathname.
+        let result = try await fileSafetySession.commitReload(reloadEnvelope)
         try NativeDocumentSaveCoordinator.revert(
             document: nativeDocument,
-            from: snapshot.url
+            using: nativeRevert
         )
-        let result = try await fileSafetySession.commitReload(reloadEnvelope)
+        NativeDocumentLoadedFileRegistry.refreshAfterVerifiedWrite(
+            nativeDocument,
+            targetURL: snapshot.url,
+            expectedData: result.data
+        )
         document.properties = result.decoded.properties
         document.openedFileData = result.data
         document.text = result.decoded.text
@@ -1763,6 +2076,11 @@ struct MarkdownEditorView: View {
                     to: fileURL
                 )
                 try await fileSafetySession.commitSave(envelope)
+                NativeDocumentLoadedFileRegistry.refreshAfterVerifiedWrite(
+                    nativeDocument,
+                    targetURL: envelope.targetURL,
+                    expectedData: envelope.bytes
+                )
                 document.adoptRecoveryCommittedSave(envelope)
                 updateRecoveryProtection(originalURL: envelope.targetURL)
                 await recoveryCoordinator?.flush(recoveryRecordID)
@@ -1798,6 +2116,11 @@ struct MarkdownEditorView: View {
                 to: snapshot.url
             )
             try await fileSafetySession.commitSave(envelope)
+            NativeDocumentLoadedFileRegistry.refreshAfterVerifiedWrite(
+                nativeDocument,
+                targetURL: envelope.targetURL,
+                expectedData: envelope.bytes
+            )
             document.adoptRecoveryCommittedSave(envelope)
             updateRecoveryProtection(originalURL: envelope.targetURL)
             await recoveryCoordinator?.flush(recoveryRecordID)
@@ -1960,6 +2283,11 @@ struct MarkdownEditorView: View {
             )
             try await fileSafetySession.commitSave(envelope)
             if request.operation == .saveAs {
+                NativeDocumentLoadedFileRegistry.refreshAfterVerifiedWrite(
+                    nativeDocument,
+                    targetURL: envelope.targetURL,
+                    expectedData: envelope.bytes
+                )
                 document.adoptRecoveryCommittedSave(envelope)
                 updateRecoveryProtection(originalURL: envelope.targetURL)
                 await recoveryCoordinator?.flush(recoveryRecordID)
@@ -2114,14 +2442,17 @@ struct MarkdownEditorView: View {
         let generation = previewLinkGeneration
         let markdown = document.text
         let documentURL = fileURL
-        let projectRoot = hasProjectContext ? folderBrowser.folderURL : nil
+        let candidateProjectRoot = activeProjectRoot
+        let projectRootIdentity = currentProjectRootIdentity(for: candidateProjectRoot)
+        let projectRoot = projectRootIdentity == nil ? nil : candidateProjectRoot
 
         previewLinkTask = Task { @MainActor in
             let plan = await previewLinkWorker.plan(
                 markdown: markdown,
                 target: target,
                 documentURL: documentURL,
-                projectRoot: projectRoot
+                projectRoot: projectRoot,
+                expectedProjectRootIdentity: projectRootIdentity
             )
             guard !Task.isCancelled, generation == previewLinkGeneration else { return }
             guard PreviewLinkPlanner.isCurrent(plan, markdown: document.text) else {
@@ -2322,11 +2653,31 @@ struct MarkdownEditorView: View {
         _ link: PreviewLocalLink,
         sourcePlan: PreviewLinkPlan
     ) {
-        guard let recentDocuments else {
+        guard let recentDocuments,
+              let projectRoot = link.projectRoot,
+              let authorization = ProjectDocumentOpenAuthorization.capture(
+                  targetURL: link.url,
+                  projectRoot: projectRoot
+              )
+        else {
             previewLinkPlan = blockedPreviewLinkPlan(
                 target: sourcePlan.target,
                 reason: .cannotOpen,
                 safeTarget: link.url.lastPathComponent
+            )
+            return
+        }
+        guard authorization.snapshot == link.snapshot,
+              link.expectedProjectRootIdentity.map({
+                  authorization.projectIdentity == $0
+              }) ?? true,
+              authorization.isCurrent()
+        else {
+            previewLinkPlan = blockedPreviewLinkPlan(
+                target: sourcePlan.target,
+                reason: .unavailableLocalTarget,
+                safeTarget: link.url.lastPathComponent,
+                expectedURL: link.url
             )
             return
         }
@@ -2345,9 +2696,18 @@ struct MarkdownEditorView: View {
                     previewLinkPlan = nil
                     return
                 }
+                let reason: PreviewLinkFailureReason
+                switch error as? DocumentOpenError {
+                case .targetChanged?, .fileUnavailable?:
+                    reason = .unavailableLocalTarget
+                case .unsupportedTarget?:
+                    reason = .unsafeLocalTarget
+                default:
+                    reason = .cannotOpen
+                }
                 previewLinkPlan = blockedPreviewLinkPlan(
                     target: sourcePlan.target,
-                    reason: .cannotOpen,
+                    reason: reason,
                     safeTarget: link.url.lastPathComponent,
                     expectedURL: link.url
                 )
@@ -2358,13 +2718,16 @@ struct MarkdownEditorView: View {
                 link.url,
                 replacing: nativeDocument,
                 using: recentDocuments,
+                authorization: authorization,
                 completion: completion
             )
         } else {
-            recentDocuments.openDocumentFromFolder(
+            recentDocuments.openDocumentFromFolderDetailed(
                 link.url,
-                completion: completion
-            )
+                authorization: authorization
+            ) { result in
+                completion(result.map { _ in () })
+            }
         }
     }
 
@@ -2410,11 +2773,15 @@ struct MarkdownEditorView: View {
             defer {
                 if accessed { chosen.stopAccessingSecurityScopedResource() }
             }
+            let candidateProjectRoot = activeProjectRoot
+            let projectRootIdentity = currentProjectRootIdentity(for: candidateProjectRoot)
+            let projectRoot = projectRootIdentity == nil ? nil : candidateProjectRoot
             let refreshed = await previewLinkWorker.plan(
                 markdown: document.text,
                 target: plan.target,
                 documentURL: fileURL,
-                projectRoot: hasProjectContext ? folderBrowser.folderURL : nil
+                projectRoot: projectRoot,
+                expectedProjectRootIdentity: projectRootIdentity
             )
             guard PreviewLinkPlanner.isCurrent(refreshed, markdown: document.text) else {
                 previewLinkPlan = blockedPreviewLinkPlan(
@@ -3084,10 +3451,19 @@ struct MarkdownEditorView: View {
     }
 
     private func makeFrozenExportRequest(format: ExportFormat) -> FrozenExportRequest {
+        let requiresProjectBoundary = folderBrowser.isAssociatedProjectDocument(nativeDocument)
+        let candidateProjectRoot = activeProjectRoot
+        let projectRootIdentity = currentProjectRootIdentity(for: candidateProjectRoot)
+        let projectRoot = projectRootIdentity == nil ? nil : candidateProjectRoot
+        let documentDirectory = requiresProjectBoundary && projectRoot == nil
+            ? nil
+            : fileURL?.deletingLastPathComponent()
         let snapshot = HTMLExportSnapshot(
             markdown: document.text,
-            documentDirectory: fileURL?.deletingLastPathComponent(),
-            projectRoot: activeProjectRoot,
+            documentDirectory: documentDirectory,
+            projectRoot: projectRoot,
+            expectedProjectRootIdentity: projectRootIdentity,
+            requiresProjectBoundary: requiresProjectBoundary,
             appearance: format == .pdf ? .personalPDF : preferences.previewConfiguration
         )
         let basename = fileURL?.deletingPathExtension().lastPathComponent ?? "未命名文档"
@@ -3365,7 +3741,6 @@ struct MarkdownEditorView: View {
     private func selectViewMode(_ mode: EditorViewMode) {
         guard !usesSourceOnlyExperience || mode == .source else { return }
         viewMode = mode
-        preferences.recordActiveEditorViewMode(mode)
         guard mode != .preview, !findSession.isPresented else { return }
 
         Task { @MainActor in
@@ -3626,6 +4001,13 @@ struct MarkdownEditorView: View {
         syntaxHighlightingEnabled: Bool,
         delayNanoseconds: UInt64
     ) {
+        let requiresProjectBoundary = folderBrowser.isAssociatedProjectDocument(nativeDocument)
+        let projectRootIdentity = currentProjectRootIdentity(for: projectRoot)
+        let authorizedProjectRoot = projectRootIdentity == nil ? nil : projectRoot
+        let authorizedDocumentDirectory = requiresProjectBoundary
+            && authorizedProjectRoot == nil
+            ? nil
+            : documentDirectory
         derivedContentTask?.cancel()
         derivedContentGeneration &+= 1
         let generation = derivedContentGeneration
@@ -3655,8 +4037,10 @@ struct MarkdownEditorView: View {
 
             guard let content = await contentDeriver.derive(
                 markdown: markdown,
-                documentDirectory: documentDirectory,
-                projectRoot: projectRoot,
+                documentDirectory: authorizedDocumentDirectory,
+                projectRoot: authorizedProjectRoot,
+                expectedProjectRootIdentity: projectRootIdentity,
+                requiresProjectBoundary: requiresProjectBoundary,
                 configuration: configuration,
                 headingNavigationEnabled: headingNavigationEnabled,
                 syntaxHighlightingEnabled: syntaxHighlightingEnabled
@@ -3794,6 +4178,8 @@ private actor DocumentContentDeriver {
         markdown: String,
         documentDirectory: URL?,
         projectRoot: URL?,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity?,
+        requiresProjectBoundary: Bool,
         configuration: PreviewAppearanceConfiguration,
         headingNavigationEnabled: Bool,
         syntaxHighlightingEnabled: Bool
@@ -3826,6 +4212,8 @@ private actor DocumentContentDeriver {
             for: markdown,
             documentDirectory: documentDirectory,
             projectRoot: projectRoot,
+            expectedProjectRootIdentity: expectedProjectRootIdentity,
+            requiresProjectBoundary: requiresProjectBoundary,
             configuration: configuration,
             navigationHeadings: headings
         )

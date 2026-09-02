@@ -8,6 +8,8 @@ struct HTMLExportSnapshot: Sendable {
     let utf8: Data
     let documentDirectory: URL?
     let projectRoot: URL?
+    let expectedProjectRootIdentity: FolderProjectDirectoryIdentity?
+    let requiresProjectBoundary: Bool
     let appearance: PreviewAppearanceConfiguration
     let documentVersion: String
 
@@ -15,11 +17,15 @@ struct HTMLExportSnapshot: Sendable {
         markdown: String,
         documentDirectory: URL? = nil,
         projectRoot: URL? = nil,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity? = nil,
+        requiresProjectBoundary: Bool = false,
         appearance: PreviewAppearanceConfiguration = .default
     ) {
         utf8 = Data(markdown.utf8)
         self.documentDirectory = documentDirectory
         self.projectRoot = projectRoot
+        self.expectedProjectRootIdentity = expectedProjectRootIdentity
+        self.requiresProjectBoundary = requiresProjectBoundary
         self.appearance = appearance
         documentVersion = Self.versionLabel(for: utf8)
     }
@@ -119,7 +125,9 @@ enum HTMLExporter {
                 let resolved = LocalImageResolver.resolveSlotsForPreparedExport(
                     in: coreHTML,
                     documentDirectory: snapshot.documentDirectory,
-                    projectRoot: snapshot.projectRoot
+                    projectRoot: snapshot.projectRoot,
+                    expectedProjectRootIdentity: snapshot.expectedProjectRootIdentity,
+                    requiresProjectBoundary: snapshot.requiresProjectBoundary
                 )
                 let themed = PreviewAppearanceCSS.applying(snapshot.appearance, to: resolved.html)
                 let output = Data(themed.utf8)

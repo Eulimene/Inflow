@@ -313,7 +313,7 @@ fn fallback_with_attributes(
     includes_actions: bool,
 ) -> String {
     let reason = match error {
-        MermaidError::UnsupportedType => "当前仅支持流程图、时序图、类图和状态图。",
+        MermaidError::UnsupportedType => "当前仅支持 flowchart 与 stateDiagram-v2。",
         MermaidError::InvalidSyntax => "请检查图表声明、节点和连接语法。",
     };
     let actions = if includes_actions {
@@ -376,6 +376,9 @@ mod tests {
         let error = svg("pie\ntitle Unsafe").expect_err("unsupported diagram");
         let fallback = fallback("pie\n<script>", &error);
         assert!(fallback.contains("无法呈现这个图表"));
+        assert!(fallback.contains("当前仅支持 flowchart 与 stateDiagram-v2。"));
+        assert!(!fallback.contains("时序图"));
+        assert!(!fallback.contains("类图"));
         assert!(fallback.contains("&lt;script&gt;"));
         assert!(!fallback.contains("<script>"));
     }

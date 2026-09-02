@@ -60,6 +60,13 @@ struct PreviewLocalFileSnapshot: Equatable, Sendable {
     let modificationSeconds: Int64
     let modificationNanoseconds: Int64
 
+    var modificationDate: Date {
+        Date(
+            timeIntervalSince1970: TimeInterval(modificationSeconds)
+                + TimeInterval(modificationNanoseconds) / 1_000_000_000
+        )
+    }
+
     static func capture(_ url: URL) throws -> Self {
         var metadata = stat()
         errno = 0
@@ -88,6 +95,18 @@ struct PreviewLocalFileSnapshot: Equatable, Sendable {
         size = metadata.st_size
         modificationSeconds = Int64(metadata.st_mtimespec.tv_sec)
         modificationNanoseconds = Int64(metadata.st_mtimespec.tv_nsec)
+    }
+
+    /// The change time can move when AppKit attaches bookkeeping metadata to
+    /// an otherwise unchanged document. Every identity and content-bearing
+    /// field must still match before that new ctime can be accepted.
+    fileprivate func hasSameFileAndContentMetadata(as other: Self) -> Bool {
+        device == other.device
+            && inode == other.inode
+            && generation == other.generation
+            && size == other.size
+            && modificationSeconds == other.modificationSeconds
+            && modificationNanoseconds == other.modificationNanoseconds
     }
 }
 
@@ -161,6 +180,111 @@ enum PreviewLocalFileReader {
     }
 }
 
+struct ProjectDocumentOpenAuthorization: Equatable, Sendable {
+    let targetURL: URL
+    let resolvedTargetURL: URL
+    let projectRoot: URL
+    let projectIdentity: FolderProjectDirectoryIdentity
+    let snapshot: PreviewLocalFileSnapshot
+
+    static func capture(targetURL: URL, projectRoot: URL) -> Self? {
+        guard let projectIdentity = FolderProjectDirectoryIdentity.capture(projectRoot),
+              let resolvedTargetURL = FolderProjectPathBoundary.resolvedURL(
+                  targetURL,
+                  within: projectRoot
+              ),
+              let snapshot = try? PreviewLocalFileSnapshot.capture(targetURL)
+        else {
+            return nil
+        }
+        return Self(
+            targetURL: targetURL.standardizedFileURL,
+            resolvedTargetURL: resolvedTargetURL,
+            projectRoot: projectIdentity.resolvedURL,
+            projectIdentity: projectIdentity,
+            snapshot: snapshot
+        )
+    }
+
+    func isCurrent() -> Bool {
+        guard FolderProjectDirectoryIdentity.capture(projectRoot) == projectIdentity,
+            let resolvedTarget = FolderProjectPathBoundary.resolvedURL(
+            targetURL,
+            within: projectRoot
+        ),
+            resolvedTarget == resolvedTargetURL,
+            (try? PreviewLocalFileSnapshot.capture(targetURL)) == snapshot
+        else {
+            return false
+        }
+        return true
+    }
+
+    /// Re-establishes the exact snapshot after AppKit has created the native
+    /// document. A ctime-only metadata update is accepted only when the path,
+    /// project, inode, size, modification time, and descriptor-read bytes all
+    /// still match the data authorized before opening.
+    func refreshedAfterVerifiedRead(expectedData: Data) -> Self? {
+        guard let refreshed = Self.capture(
+                  targetURL: targetURL,
+                  projectRoot: projectRoot
+              ),
+              refreshed.projectIdentity == projectIdentity,
+              refreshed.resolvedTargetURL == resolvedTargetURL,
+              snapshot.hasSameFileAndContentMetadata(as: refreshed.snapshot),
+              let frozen = try? PreviewLocalFileReader.read(
+                  targetURL,
+                  expected: refreshed.snapshot
+              ),
+              frozen.data == expectedData,
+              refreshed.isCurrent()
+        else {
+            return nil
+        }
+        return refreshed
+    }
+}
+
+/// Frozen content plus the most recently verified identity for one project
+/// document open. AppKit can perform several ctime-only bookkeeping updates
+/// while creating, showing, and activating a native document. Keeping the
+/// frozen bytes lets each commit boundary accept only those benign metadata
+/// updates while still rejecting replacement or content changes.
+struct ProjectDocumentOpenReceipt: Equatable, Sendable {
+    let authorization: ProjectDocumentOpenAuthorization
+    let expectedData: Data
+
+    static func capture(
+        authorization: ProjectDocumentOpenAuthorization
+    ) -> Self? {
+        guard authorization.isCurrent(),
+              let frozen = try? PreviewLocalFileReader.read(
+                  authorization.targetURL,
+                  expected: authorization.snapshot
+              ),
+              authorization.isCurrent()
+        else {
+            return nil
+        }
+        return Self(
+            authorization: authorization,
+            expectedData: frozen.data
+        )
+    }
+
+    func refreshed() -> Self? {
+        guard let refreshedAuthorization = authorization.refreshedAfterVerifiedRead(
+            expectedData: expectedData
+        ) else {
+            return nil
+        }
+        return Self(
+            authorization: refreshedAuthorization,
+            expectedData: expectedData
+        )
+    }
+}
+
 enum FrozenPreviewMarkdownDocument {
     static func make(data: Data, headingFragment: String?) throws -> MarkdownDocument {
         var document = try MarkdownDocument(fileData: data)
@@ -176,6 +300,7 @@ enum SafePreviewOpenStore {
     nonisolated static let cleanupIntervalNanoseconds: UInt64 = 15 * 60 * 1_000_000_000
 
     private static let maintenance = SafePreviewOpenMaintenance()
+    private static var protectedManagedCopyPaths: Set<String> = []
 
     static func startMaintenance() {
         maintenance.start()
@@ -184,6 +309,10 @@ enum SafePreviewOpenStore {
     static func materialize(_ file: FrozenPreviewLocalFile, extension pathExtension: String)
         throws -> URL
     {
+        try materialize(data: file.data, extension: pathExtension)
+    }
+
+    static func materialize(data: Data, extension pathExtension: String) throws -> URL {
         startMaintenance()
         let root = try defaultRootURL()
         try prepareRoot(root)
@@ -191,15 +320,17 @@ enum SafePreviewOpenStore {
         var target = root.appendingPathComponent(UUID().uuidString)
         if !pathExtension.isEmpty { target.appendPathExtension(pathExtension) }
         do {
-            try file.data.write(to: target, options: .withoutOverwriting)
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o400],
-                ofItemAtPath: target.path
-            )
+            try data.write(to: target, options: .withoutOverwriting)
             var values = URLResourceValues()
             values.isExcludedFromBackup = true
             var mutableTarget = target
             try mutableTarget.setResourceValues(values)
+            // Apply read-only permissions only after setting metadata. APFS
+            // can reject the backup-exclusion xattr once the file is 0400.
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o400],
+                ofItemAtPath: target.path
+            )
             return target
         } catch {
             unlinkManagedCopy(at: target)
@@ -236,10 +367,45 @@ enum SafePreviewOpenStore {
     }
 
     @discardableResult
+    static func discardManagedCopy(at url: URL) -> Bool {
+        guard isManagedCopy(url) else {
+            return false
+        }
+        protectedManagedCopyPaths.remove(url.standardizedFileURL.path)
+        return unlinkManagedCopy(at: url)
+    }
+
+    /// Keeps an AppKit-owned document contents copy out of periodic preview
+    /// cleanup. `NSDocumentController.reopenDocument` retains this URL as its
+    /// autosaved contents and removes it when the document closes or the copy
+    /// becomes obsolete, so unlinking it in the open callback breaks that
+    /// lifecycle.
+    @discardableResult
+    static func protectManagedCopy(at url: URL) -> Bool {
+        guard isManagedCopy(url) else { return false }
+        protectedManagedCopyPaths.insert(url.standardizedFileURL.path)
+        return true
+    }
+
+    private static func isManagedCopy(_ url: URL) -> Bool {
+        guard let root = try? defaultRootURL(),
+              url.deletingLastPathComponent().standardizedFileURL
+                  == root.standardizedFileURL,
+              UUID(
+                  uuidString: url.deletingPathExtension().lastPathComponent
+              ) != nil
+        else {
+            return false
+        }
+        return true
+    }
+
+    @discardableResult
     fileprivate static func cleanupExpiredCopies(
         in root: URL,
         now: Date = Date(),
-        retentionInterval: TimeInterval = retentionInterval
+        retentionInterval: TimeInterval = retentionInterval,
+        excluding excludedPaths: Set<String> = []
     ) -> Int {
         guard let urls = try? FileManager.default.contentsOfDirectory(
             at: root,
@@ -250,6 +416,9 @@ enum SafePreviewOpenStore {
 
         var removedCount = 0
         for url in urls {
+            guard !excludedPaths.contains(url.standardizedFileURL.path) else {
+                continue
+            }
             let stem = url.deletingPathExtension().lastPathComponent
             guard UUID(uuidString: stem) != nil else { continue }
 
@@ -272,6 +441,26 @@ enum SafePreviewOpenStore {
         return removedCount
     }
 
+    fileprivate static func liveProtectedManagedCopyPaths() -> Set<String> {
+        protectedManagedCopyPaths = protectedManagedCopyPaths.filter {
+            FileManager.default.fileExists(atPath: $0)
+        }
+        // AppKit may restore documents from autosaved contents before Inflow's
+        // own opener has had a chance to rebuild its in-memory protection set.
+        // Treat every live native document's managed autosave as protected as
+        // well, including copies inherited from a previous process.
+        for document in NSDocumentController.shared.documents {
+            guard let url = document.autosavedContentsFileURL,
+                  isManagedCopy(url),
+                  FileManager.default.fileExists(atPath: url.path)
+            else {
+                continue
+            }
+            protectedManagedCopyPaths.insert(url.standardizedFileURL.path)
+        }
+        return protectedManagedCopyPaths
+    }
+
     @discardableResult
     private static func unlinkManagedCopy(at url: URL) -> Bool {
         url.withUnsafeFileSystemRepresentation { path in
@@ -286,6 +475,7 @@ final class SafePreviewOpenMaintenance {
     private let rootURL: URL?
     private let retentionInterval: TimeInterval
     private let intervalNanoseconds: UInt64
+    private let excludedPaths: () -> Set<String>
     private var task: Task<Void, Never>?
 
     var isRunning: Bool { task != nil }
@@ -293,11 +483,15 @@ final class SafePreviewOpenMaintenance {
     init(
         rootURL: URL? = nil,
         retentionInterval: TimeInterval = SafePreviewOpenStore.retentionInterval,
-        intervalNanoseconds: UInt64 = SafePreviewOpenStore.cleanupIntervalNanoseconds
+        intervalNanoseconds: UInt64 = SafePreviewOpenStore.cleanupIntervalNanoseconds,
+        excludedPaths: @escaping () -> Set<String> = {
+            SafePreviewOpenStore.liveProtectedManagedCopyPaths()
+        }
     ) {
         self.rootURL = rootURL
         self.retentionInterval = retentionInterval
         self.intervalNanoseconds = intervalNanoseconds
+        self.excludedPaths = excludedPaths
     }
 
     func start() {
@@ -333,7 +527,8 @@ final class SafePreviewOpenMaintenance {
             try SafePreviewOpenStore.prepareRoot(root)
             SafePreviewOpenStore.cleanupExpiredCopies(
                 in: root,
-                retentionInterval: retentionInterval
+                retentionInterval: retentionInterval,
+                excluding: excludedPaths()
             )
         } catch {
             // Maintenance is best effort. A later period or materialization retries it.
@@ -352,12 +547,14 @@ struct PreviewLocalLink: Equatable, Sendable {
     let kind: PreviewLocalLinkKind
     let snapshot: PreviewLocalFileSnapshot
     let projectRoot: URL?
+    let expectedProjectRootIdentity: FolderProjectDirectoryIdentity?
 }
 
 enum PreviewLinkFailureReason: Equatable, Sendable {
     case noLongerInDocument
     case invalidTarget
     case unsupportedScheme
+    case localTargetRequiresProject
     case relativeTargetNeedsSavedDocument
     case outsideProject
     case missingHeading
@@ -399,13 +596,15 @@ actor PreviewLinkWorker {
         markdown: String,
         target: String,
         documentURL: URL?,
-        projectRoot: URL? = nil
+        projectRoot: URL? = nil,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity? = nil
     ) -> PreviewLinkPlan {
         PreviewLinkPlanner.plan(
             markdown: markdown,
             target: target,
             documentURL: documentURL,
-            projectRoot: projectRoot
+            projectRoot: projectRoot,
+            expectedProjectRootIdentity: expectedProjectRootIdentity
         )
     }
 }
@@ -417,7 +616,8 @@ enum PreviewLinkPlanner {
         markdown: String,
         target: String,
         documentURL: URL?,
-        projectRoot: URL? = nil
+        projectRoot: URL? = nil,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity? = nil
     ) -> PreviewLinkPlan {
         let sourceUTF8 = Data(markdown.utf8)
         let safeTarget = safeDisplayTarget(target)
@@ -518,6 +718,25 @@ enum PreviewLinkPlanner {
                 safeTarget: safeTarget
             )
         }
+        guard projectRoot != nil else {
+            return blocked(
+                sourceUTF8: sourceUTF8,
+                target: target,
+                reason: .localTargetRequiresProject,
+                safeTarget: safeTarget
+            )
+        }
+        guard projectRootIsCurrent(
+            projectRoot,
+            expectedIdentity: expectedProjectRootIdentity
+        ) else {
+            return blocked(
+                sourceUTF8: sourceUTF8,
+                target: target,
+                reason: .outsideProject,
+                safeTarget: safeTarget
+            )
+        }
         let url: URL
         if parts.path.hasPrefix("/") {
             url = URL(fileURLWithPath: parts.path).standardizedFileURL
@@ -550,6 +769,10 @@ enum PreviewLinkPlanner {
                 )
             }
             guard let normalizedProjectRoot,
+                  projectRootIsCurrent(
+                      normalizedProjectRoot,
+                      expectedIdentity: expectedProjectRootIdentity
+                  ),
                   FolderProjectPathBoundary.resolvedURL(
                       url,
                       within: normalizedProjectRoot
@@ -578,7 +801,8 @@ enum PreviewLinkPlanner {
             url: url,
             fragment: parts.fragment,
             documentURL: documentURL,
-            projectRoot: normalizedProjectRoot
+            projectRoot: normalizedProjectRoot,
+            expectedProjectRootIdentity: expectedProjectRootIdentity
         )
     }
 
@@ -588,9 +812,17 @@ enum PreviewLinkPlanner {
     }
 
     static func localTargetIsCurrent(_ link: PreviewLocalLink) -> Bool {
-        if let projectRoot = link.projectRoot,
-           FolderProjectPathBoundary.resolvedURL(link.url, within: projectRoot) == nil
-        {
+        if let projectRoot = link.projectRoot {
+            guard projectRootIsCurrent(
+                projectRoot,
+                expectedIdentity: link.expectedProjectRootIdentity
+            ), FolderProjectPathBoundary.resolvedURL(
+                link.url,
+                within: projectRoot
+            ) != nil else {
+                return false
+            }
+        } else if link.expectedProjectRootIdentity != nil {
             return false
         }
         return (try? PreviewLocalFileSnapshot.capture(link.url)) == link.snapshot
@@ -602,8 +834,20 @@ enum PreviewLinkPlanner {
         url: URL,
         fragment: String?,
         documentURL: URL?,
-        projectRoot: URL?
+        projectRoot: URL?,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity?
     ) -> PreviewLinkPlan {
+        guard projectRootIsCurrent(
+            projectRoot,
+            expectedIdentity: expectedProjectRootIdentity
+        ) else {
+            return blocked(
+                sourceUTF8: sourceUTF8,
+                target: target,
+                reason: .outsideProject,
+                safeTarget: safeDisplayTarget(target)
+            )
+        }
         if let documentURL,
            url.standardizedFileURL.path == documentURL.standardizedFileURL.path
         {
@@ -683,6 +927,18 @@ enum PreviewLinkPlanner {
                 expectedURL: url
             )
         }
+        guard projectRootIsCurrent(
+            projectRoot,
+            expectedIdentity: expectedProjectRootIdentity
+        ) else {
+            return blocked(
+                sourceUTF8: sourceUTF8,
+                target: target,
+                reason: .outsideProject,
+                safeTarget: safeTarget,
+                expectedURL: url
+            )
+        }
 
         return PreviewLinkPlan(
             sourceUTF8: sourceUTF8,
@@ -693,10 +949,20 @@ enum PreviewLinkPlanner {
                     fragment: fragment,
                     kind: kind,
                     snapshot: snapshot,
-                    projectRoot: projectRoot
+                    projectRoot: projectRoot,
+                    expectedProjectRootIdentity: expectedProjectRootIdentity
                 )
             )
         )
+    }
+
+    private static func projectRootIsCurrent(
+        _ projectRoot: URL?,
+        expectedIdentity: FolderProjectDirectoryIdentity?
+    ) -> Bool {
+        guard let expectedIdentity else { return true }
+        guard let projectRoot else { return false }
+        return FolderProjectDirectoryIdentity.capture(projectRoot) == expectedIdentity
     }
 
     private static func containsExactLink(_ target: String, in markdown: String) -> Bool {
@@ -927,6 +1193,7 @@ struct PreviewLinkDecisionView: View {
                 Button("重新授权…") { onReauthorize(url) }
             } else if failure.reason == .unsupportedScheme
                 || failure.reason == .invalidTarget
+                || failure.reason == .localTargetRequiresProject
                 || failure.reason == .outsideProject
                 || failure.reason == .unsafeLocalTarget
                 || failure.reason == .cannotOpen
@@ -950,7 +1217,8 @@ struct PreviewLinkDecisionView: View {
                 "找不到链接目标"
             case .noLongerInDocument: "预览链接已过期"
             case .invalidTarget, .unsupportedScheme, .unsafeLocalTarget, .cannotOpen,
-                 .relativeTargetNeedsSavedDocument, .outsideProject:
+                 .localTargetRequiresProject, .relativeTargetNeedsSavedDocument,
+                 .outsideProject:
                 "为安全起见，未打开这个链接"
             }
         }
@@ -992,6 +1260,8 @@ struct PreviewLinkDecisionView: View {
                 "当前 Markdown 已不再包含你点击的链接，因此不会沿用旧预览结果。"
             case .invalidTarget, .unsupportedScheme:
                 "链接类型不受支持或无法安全确认。"
+            case .localTargetRequiresProject:
+                "独立单文件窗口不读取或打开本地路径链接。请通过项目入口打开所属目录后再操作。"
             case .relativeTargetNeedsSavedDocument:
                 "未命名文档没有可用于解析相对链接的目录。请先保存文档。"
             case .outsideProject:

@@ -44,13 +44,13 @@ final class InflowHelpTests: XCTestCase {
         let appMenu = try XCTUnwrap(mainMenu.items.first?.submenu)
         XCTAssertEqual(
             appMenu.items.filter { $0.title == "检查更新…" && $0.submenu == nil }.count,
-            1
+            0
         )
         XCTAssertEqual(
             appMenu.items.filter {
                 $0.title == "关于 Inflow（开发预览）" && $0.submenu == nil
             }.count,
-            1
+            0
         )
     }
 

@@ -1,10 +1,13 @@
 import AppKit
+import Combine
+import Darwin
 import XCTest
 @testable import Inflow
 
 @MainActor
 final class FolderBrowserTests: XCTestCase {
-    func testProjectDocumentSwitchGateRejectsConcurrentTransactions() throws {
+    func testProjectDocumentSwitchGateRejectsConcurrentTransactions() async throws {
+        _ = NSApplication.shared
         let gate = ProjectDocumentSwitchGate()
         let first = try XCTUnwrap(gate.begin())
 
@@ -76,18 +79,450 @@ final class FolderBrowserTests: XCTestCase {
                 isRegistered: true
             )
         )
+
+        let projectRoot = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: projectRoot) }
+        let projectTarget = projectRoot.appendingPathComponent("target.md")
+        let trustedData = Data("# Trusted\n".utf8)
+        try trustedData.write(to: projectTarget)
+        let browser = FolderBrowserController(
+            persistence: TestFolderBrowserPersistence(),
+            restoresSavedFolder: false,
+            bookmarkData: { _ in Data() },
+            startAccess: { _ in true },
+            stopAccess: { _ in }
+        )
+        browser.openFolder(projectRoot)
+        try await waitUntilReady(browser)
+
+        var pendingOpen: ProjectDocumentOpenCompletion?
+        var openedAuthorization: ProjectDocumentOpenAuthorization?
+        let detailedOpener = ProjectDocumentDetailedOpener { url, authorization, completion in
+            XCTAssertEqual(url.standardizedFileURL, projectTarget.standardizedFileURL)
+            openedAuthorization = authorization
+            pendingOpen = completion
+        }
+        let coordinator = LightweightProjectCoordinator(
+            browser: browser,
+            createProjectDocument: { ClosingTrackingDocument() },
+            detailedDocumentOpener: detailedOpener
+        )
+        XCTAssertEqual(
+            coordinator.editorNavigationState.resolve(
+                projectIdentity: browser.projectRootIdentity,
+                defaultProjectSidebarVisible: true,
+                defaultOutlineVisible: true
+            ),
+            EditorNavigationVisibilitySnapshot(
+                projectSidebarVisible: true,
+                outlineVisible: true
+            )
+        )
+        coordinator.editorNavigationState.setProjectSidebarVisible(false)
+        coordinator.editorNavigationState.setOutlineVisible(true)
+        let recentDocuments = RecentDocumentsController(
+            persistence: EmptyRecentDocumentPersistence(),
+            bookmarkData: { _ in nil },
+            systemSynchronizer: { _ in },
+            recordsOpenedDocuments: false
+        )
+        let oldDocument = ClosingTrackingDocument()
+        NSDocumentController.shared.addDocument(oldDocument)
+        browser.associateProjectWindow(with: oldDocument)
+        defer {
+            for document in NSDocumentController.shared.documents
+                where document === oldDocument
+            {
+                document.close()
+            }
+        }
+
+        let firstAuthorization = try XCTUnwrap(
+            ProjectDocumentOpenAuthorization.capture(
+                targetURL: projectTarget,
+                projectRoot: projectRoot
+            )
+        )
+        var firstResult: Result<Void, Error>?
+        coordinator.openDocument(
+            projectTarget,
+            replacing: oldDocument,
+            using: recentDocuments,
+            authorization: firstAuthorization
+        ) { firstResult = $0 }
+        XCTAssertTrue(coordinator.hasActiveDocumentSwitch)
+        XCTAssertNil(firstResult)
+        XCTAssertEqual(openedAuthorization, firstAuthorization)
+
+        let newDocument = ClosingTrackingDocument()
+        NSDocumentController.shared.addDocument(newDocument)
+        var firstMutationError: Error?
+        newDocument.onShow = {
+            newDocument.onShow = nil
+            do {
+                try FileManager.default.removeItem(at: projectTarget)
+                try Data("# Replacement during attach\n".utf8).write(to: projectTarget)
+            } catch {
+                firstMutationError = error
+            }
+        }
+        pendingOpen?(
+            .success(
+                OpenedDocumentResult(
+                    document: newDocument,
+                    wasAlreadyOpen: false,
+                    receipt: ProjectDocumentOpenReceipt(
+                        authorization: firstAuthorization,
+                        expectedData: trustedData
+                    )
+                )
+            )
+        )
+        XCTAssertNil(firstMutationError)
+        assertTargetChanged(firstResult)
+        XCTAssertFalse(coordinator.hasActiveDocumentSwitch)
+        XCTAssertEqual(oldDocument.closeCount, 0)
+        XCTAssertEqual(newDocument.closeCount, 1)
+        XCTAssertTrue(browser.isAssociatedProjectDocument(oldDocument))
+        XCTAssertFalse(browser.isAssociatedProjectDocument(newDocument))
+        XCTAssertEqual(coordinator.openedProjectURLs, [projectRoot])
+
+        try trustedData.write(to: projectTarget)
+        pendingOpen = nil
+        openedAuthorization = nil
+        let secondAuthorization = try XCTUnwrap(
+            ProjectDocumentOpenAuthorization.capture(
+                targetURL: projectTarget,
+                projectRoot: projectRoot
+            )
+        )
+        let alreadyOpenDocument = ClosingTrackingDocument()
+        NSDocumentController.shared.addDocument(alreadyOpenDocument)
+        defer {
+            for document in NSDocumentController.shared.documents
+                where document === alreadyOpenDocument
+            {
+                document.close()
+            }
+        }
+        var secondResult: Result<Void, Error>?
+        coordinator.openDocument(
+            projectTarget,
+            replacing: oldDocument,
+            using: recentDocuments,
+            authorization: secondAuthorization
+        ) { secondResult = $0 }
+        XCTAssertTrue(coordinator.hasActiveDocumentSwitch)
+        XCTAssertNil(secondResult)
+
+        alreadyOpenDocument.fileURL = projectTarget
+        var secondMutationError: Error?
+        alreadyOpenDocument.onShow = {
+            alreadyOpenDocument.onShow = nil
+            do {
+                try FileManager.default.removeItem(at: projectTarget)
+                try Data("# Replacement during focus\n".utf8).write(to: projectTarget)
+            } catch {
+                secondMutationError = error
+            }
+        }
+        pendingOpen?(
+            .success(
+                OpenedDocumentResult(
+                    document: alreadyOpenDocument,
+                    wasAlreadyOpen: true,
+                    receipt: ProjectDocumentOpenReceipt(
+                        authorization: secondAuthorization,
+                        expectedData: trustedData
+                    )
+                )
+            )
+        )
+        XCTAssertNil(secondMutationError)
+        assertTargetChanged(secondResult)
+        XCTAssertFalse(coordinator.hasActiveDocumentSwitch)
+        XCTAssertEqual(alreadyOpenDocument.closeCount, 0)
+        XCTAssertEqual(oldDocument.closeCount, 0)
+        XCTAssertTrue(browser.isAssociatedProjectDocument(oldDocument))
+
+        alreadyOpenDocument.close()
+        try trustedData.write(to: projectTarget)
+        pendingOpen = nil
+        let ordinaryDocument = ClosingTrackingDocument()
+        NSDocumentController.shared.addDocument(ordinaryDocument)
+        // Register the native document before assigning its represented URL.
+        // AppKit may perform asynchronous ctime-only bookkeeping during
+        // registration; the authorization must describe the settled target.
+        ordinaryDocument.fileURL = projectTarget
+        defer {
+            for document in NSDocumentController.shared.documents
+                where document === ordinaryDocument
+            {
+                document.close()
+            }
+        }
+        // AppKit may update filesystem metadata while registering a native
+        // document. Capture the project click only after that already-open
+        // window exists, matching the real user sequence.
+        let ordinaryAuthorization = try XCTUnwrap(
+            ProjectDocumentOpenAuthorization.capture(
+                targetURL: projectTarget,
+                projectRoot: projectRoot
+            )
+        )
+        XCTAssertTrue(
+            NativeDocumentLoadedFileRegistry.canFocusAlreadyOpen(
+                ordinaryDocument,
+                authorization: ordinaryAuthorization
+            ),
+            "a never-managed native document at the exact target must be focusable"
+        )
+        var ordinaryResult: Result<Void, Error>?
+        coordinator.openDocument(
+            projectTarget,
+            replacing: oldDocument,
+            using: recentDocuments,
+            authorization: ordinaryAuthorization
+        ) { ordinaryResult = $0 }
+        guard case .success? = ordinaryResult else {
+            return XCTFail(
+                "an ordinary single-file window must satisfy project deduplication; "
+                    + "result=\(String(describing: ordinaryResult)), "
+                    + "pendingClose=\(DocumentCloseAuthorization.hasPendingRequests), "
+                    + "openerInvoked=\(pendingOpen != nil), "
+                    + "authorizationCurrent=\(ordinaryAuthorization.isCurrent()), "
+                    + "rootCurrent=\(ProjectSessionBoundary.hasCurrentRoot(browser)), "
+                    + "representedURL=\(String(describing: ordinaryDocument.fileURL))"
+            )
+        }
+        XCTAssertNil(pendingOpen, "deduplication must not start a second native open")
+        XCTAssertEqual(ordinaryDocument.showCount, 1)
+        XCTAssertTrue(browser.isAssociatedProjectDocument(oldDocument))
+
+        let mutationAuthorization = try XCTUnwrap(
+            ProjectDocumentOpenAuthorization.capture(
+                targetURL: projectTarget,
+                projectRoot: projectRoot
+            )
+        )
+        var ordinaryMutationError: Error?
+        ordinaryDocument.onShow = {
+            ordinaryDocument.onShow = nil
+            do {
+                try FileManager.default.removeItem(at: projectTarget)
+                try Data("# Replacement during ordinary focus\n".utf8)
+                    .write(to: projectTarget)
+            } catch {
+                ordinaryMutationError = error
+            }
+        }
+        var ordinaryMutationResult: Result<Void, Error>?
+        coordinator.openDocument(
+            projectTarget,
+            replacing: oldDocument,
+            using: recentDocuments,
+            authorization: mutationAuthorization
+        ) { ordinaryMutationResult = $0 }
+        XCTAssertNil(ordinaryMutationError)
+        assertTargetChanged(ordinaryMutationResult)
+        XCTAssertNil(pendingOpen, "a focused ordinary window must not invoke the native opener")
+        XCTAssertEqual(ordinaryDocument.showCount, 2)
+        XCTAssertTrue(browser.isAssociatedProjectDocument(oldDocument))
+
+        ordinaryDocument.close()
+        try trustedData.write(to: projectTarget)
+        pendingOpen = nil
+        let successfulAuthorization = try XCTUnwrap(
+            ProjectDocumentOpenAuthorization.capture(
+                targetURL: projectTarget,
+                projectRoot: projectRoot
+            )
+        )
+        var successfulResult: Result<Void, Error>?
+        coordinator.openDocument(
+            projectTarget,
+            replacing: oldDocument,
+            using: recentDocuments,
+            authorization: successfulAuthorization
+        ) { successfulResult = $0 }
+        XCTAssertNotNil(pendingOpen)
+
+        let replacementDocument = ClosingTrackingDocument()
+        replacementDocument.fileURL = projectTarget
+        NSDocumentController.shared.addDocument(replacementDocument)
+        defer {
+            for document in NSDocumentController.shared.documents
+                where document === replacementDocument
+            {
+                document.close()
+            }
+        }
+        let refreshedSuccessfulAuthorization = try XCTUnwrap(
+            successfulAuthorization.refreshedAfterVerifiedRead(
+                expectedData: trustedData
+            )
+        )
+        var benignMetadataMutationError: Error?
+        replacementDocument.onShow = {
+            replacementDocument.onShow = nil
+            do {
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o600],
+                    ofItemAtPath: projectTarget.path
+                )
+            } catch {
+                benignMetadataMutationError = error
+            }
+        }
+        pendingOpen?(
+            .success(
+                OpenedDocumentResult(
+                    document: replacementDocument,
+                    wasAlreadyOpen: false,
+                    receipt: ProjectDocumentOpenReceipt(
+                        authorization: refreshedSuccessfulAuthorization,
+                        expectedData: trustedData
+                    )
+                )
+            )
+        )
+        XCTAssertNil(benignMetadataMutationError)
+        guard case .success? = successfulResult else {
+            return XCTFail(
+                "expected the final project document replacement to succeed, got "
+                    + String(describing: successfulResult)
+            )
+        }
+        XCTAssertTrue(browser.isAssociatedProjectDocument(replacementDocument))
+        XCTAssertEqual(
+            coordinator.editorNavigationState.resolve(
+                projectIdentity: browser.projectRootIdentity,
+                defaultProjectSidebarVisible: true,
+                defaultOutlineVisible: false
+            ),
+            EditorNavigationVisibilitySnapshot(
+                projectSidebarVisible: false,
+                outlineVisible: true
+            ),
+            "a replacement NSDocument must inherit the project window's independent toggles"
+        )
+    }
+
+    func testCoordinatorReleaseCleanupClosesOnlyUnownedNewHiddenDocuments() async throws {
+        _ = NSApplication.shared
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let browser = FolderBrowserController(
+            persistence: TestFolderBrowserPersistence(),
+            restoresSavedFolder: false,
+            startAccess: { _ in true },
+            stopAccess: { _ in }
+        )
+        browser.openFolder(root)
+        try await waitUntilReady(browser)
+
+        let newlyOpened = ClosingTrackingDocument()
+        NSDocumentController.shared.addDocument(newlyOpened)
+        LightweightProjectCoordinator.closeOpenedDocumentAfterCoordinatorReleaseIfSafe(
+            .success(
+                OpenedDocumentResult(
+                    document: newlyOpened,
+                    wasAlreadyOpen: false
+                )
+            ),
+            browser: browser
+        )
+        XCTAssertEqual(newlyOpened.closeCount, 1)
+        XCTAssertFalse(
+            NSDocumentController.shared.documents.contains { $0 === newlyOpened }
+        )
+
+        let alreadyOpen = ClosingTrackingDocument()
+        NSDocumentController.shared.addDocument(alreadyOpen)
+        defer {
+            if NSDocumentController.shared.documents.contains(where: {
+                $0 === alreadyOpen
+            }) {
+                alreadyOpen.close()
+            }
+        }
+        LightweightProjectCoordinator.closeOpenedDocumentAfterCoordinatorReleaseIfSafe(
+            .success(
+                OpenedDocumentResult(
+                    document: alreadyOpen,
+                    wasAlreadyOpen: true
+                )
+            ),
+            browser: browser
+        )
+        XCTAssertEqual(alreadyOpen.closeCount, 0)
+
+        let protected = ClosingTrackingDocument()
+        NSDocumentController.shared.addDocument(protected)
+        browser.associateProjectWindow(with: protected)
+        defer {
+            browser.associateProjectWindow(with: nil)
+            if NSDocumentController.shared.documents.contains(where: {
+                $0 === protected
+            }) {
+                protected.close()
+            }
+        }
+        LightweightProjectCoordinator.closeOpenedDocumentAfterCoordinatorReleaseIfSafe(
+            .success(
+                OpenedDocumentResult(
+                    document: protected,
+                    wasAlreadyOpen: false
+                )
+            ),
+            browser: browser
+        )
+        XCTAssertEqual(protected.closeCount, 0)
+    }
+
+    private func assertTargetChanged(
+        _ result: Result<Void, Error>?,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard case let .failure(error)? = result,
+              let openError = error as? DocumentOpenError,
+              case .targetChanged = openError
+        else {
+            XCTFail("expected targetChanged, got \(String(describing: result))", file: file, line: line)
+            return
+        }
     }
 
     func testLaunchPolicyCreatesAnEditableUntitledDocumentWithoutOpeningAFile() {
+        let application = NSApplication.shared
         var createdDocumentCount = 0
         let delegate = InflowApplicationDelegate { _ in
             createdDocumentCount += 1
         }
 
         XCTAssertTrue(InflowLaunchPolicy.presentsEditableDocumentFirst)
-        XCTAssertTrue(InflowLaunchPolicy.automaticallyOpensUntitledDocument)
-        XCTAssertTrue(delegate.applicationShouldOpenUntitledFile(NSApp))
-        XCTAssertTrue(delegate.applicationOpenUntitledFile(NSApp))
+        XCTAssertFalse(InflowLaunchPolicy.letsAppKitOpenUntitledDocument)
+        XCTAssertTrue(
+            InflowLaunchPolicy.shouldCreateInitialDocument(
+                hasReceivedExternalOpenRequest: false,
+                hasOpenDocuments: false
+            )
+        )
+        XCTAssertFalse(
+            InflowLaunchPolicy.shouldCreateInitialDocument(
+                hasReceivedExternalOpenRequest: true,
+                hasOpenDocuments: false
+            )
+        )
+        XCTAssertFalse(
+            InflowLaunchPolicy.shouldCreateInitialDocument(
+                hasReceivedExternalOpenRequest: false,
+                hasOpenDocuments: true
+            )
+        )
+        XCTAssertFalse(delegate.applicationShouldOpenUntitledFile(application))
+        XCTAssertTrue(delegate.applicationOpenUntitledFile(application))
         XCTAssertEqual(createdDocumentCount, 1)
 
         XCTAssertTrue(
@@ -116,10 +551,17 @@ final class FolderBrowserTests: XCTestCase {
         )
     }
 
-    func testLaunchIntegrationsWaitUntilApplicationDidFinishLaunching() {
+    func testLaunchIntegrationsWaitUntilApplicationDidFinishLaunching() async {
+        let application = NSApplication.shared
         var installationCount = 0
+        var createdDocumentCount = 0
+        let initialDocumentCreated = expectation(description: "initial document created")
         let delegate = InflowApplicationDelegate(
-            createUntitledDocument: { _ in },
+            createUntitledDocument: { _ in
+                createdDocumentCount += 1
+                initialDocumentCreated.fulfill()
+            },
+            hasOpenDocuments: { false },
             installLaunchIntegrations: { _ in
                 installationCount += 1
             }
@@ -129,26 +571,36 @@ final class FolderBrowserTests: XCTestCase {
 
         let notification = Notification(
             name: NSApplication.didFinishLaunchingNotification,
-            object: NSApp
+            object: application
         )
         delegate.applicationDidFinishLaunching(notification)
         delegate.applicationDidFinishLaunching(notification)
 
         XCTAssertEqual(installationCount, 1)
+        XCTAssertEqual(createdDocumentCount, 0)
+        await fulfillment(of: [initialDocumentCreated], timeout: 1)
+        XCTAssertEqual(createdDocumentCount, 1)
     }
 
     func testDockReopenCreatesAnUntitledDocumentOnlyWhenNoWindowIsVisible() {
+        let application = NSApplication.shared
         var createdDocumentCount = 0
         let delegate = InflowApplicationDelegate { _ in
             createdDocumentCount += 1
         }
 
         XCTAssertTrue(
-            delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: true)
+            delegate.applicationShouldHandleReopen(
+                application,
+                hasVisibleWindows: true
+            )
         )
         XCTAssertEqual(createdDocumentCount, 0)
         XCTAssertTrue(
-            delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false)
+            delegate.applicationShouldHandleReopen(
+                application,
+                hasVisibleWindows: false
+            )
         )
         XCTAssertEqual(createdDocumentCount, 1)
     }
@@ -168,6 +620,13 @@ final class FolderBrowserTests: XCTestCase {
         try Data("# A".utf8).write(to: root.appendingPathComponent("Alpha.MD"))
         try Data("ignored".utf8).write(to: root.appendingPathComponent("notes.txt"))
         try Data("hidden".utf8).write(to: hidden.appendingPathComponent("secret.md"))
+        let flaggedHidden = root.appendingPathComponent("finder-hidden.md")
+        try Data("hidden by flag".utf8).write(to: flaggedHidden)
+        let hiddenFlagResult = flaggedHidden.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return Darwin.chflags(path, UInt32(UF_HIDDEN))
+        }
+        XCTAssertEqual(hiddenFlagResult, 0)
 
         let outside = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: outside) }
@@ -196,6 +655,130 @@ final class FolderBrowserTests: XCTestCase {
         XCTAssertEqual(tree[1].children?.map(\.displayName), ["Beta.markdown"])
         XCTAssertTrue(tree[1].children?.first?.isMarkdown == true)
         XCTAssertFalse(tree.last?.isMarkdown == true)
+
+        let markdownItem = try XCTUnwrap(tree[1].children?.first)
+        XCTAssertEqual(
+            FolderBrowserActivation.markdownURL(
+                forSelectedItemID: markdownItem.id,
+                in: tree
+            ),
+            markdownItem.url
+        )
+        XCTAssertNil(
+            FolderBrowserActivation.markdownURL(
+                forSelectedItemID: tree[1].id,
+                in: tree
+            )
+        )
+        XCTAssertNil(
+            FolderBrowserActivation.markdownURL(
+                forSelectedItemID: tree.last?.id,
+                in: tree
+            )
+        )
+        XCTAssertNil(
+            FolderBrowserActivation.markdownURL(
+                forSelectedItemID: nil,
+                in: tree
+            )
+        )
+
+        let replaceable = root.appendingPathComponent("Replaceable", isDirectory: true)
+        let displaced = root.appendingPathComponent("Replaceable-original", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: replaceable,
+            withIntermediateDirectories: false
+        )
+        try Data("inside".utf8).write(
+            to: replaceable.appendingPathComponent("inside.md")
+        )
+        var replacementHookRan = false
+        XCTAssertThrowsError(
+            try FolderContentScanner.snapshot(
+                root,
+                beforeOpeningDirectory: { directory in
+                    guard directory == replaceable else { return }
+                    replacementHookRan = true
+                    try FileManager.default.moveItem(at: replaceable, to: displaced)
+                    try FileManager.default.createSymbolicLink(
+                        at: replaceable,
+                        withDestinationURL: outside
+                    )
+                }
+            )
+        ) { error in
+            XCTAssertEqual(error as? FolderBrowserError, .unavailable)
+        }
+        XCTAssertTrue(replacementHookRan)
+
+        let rootRaceContainer = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: rootRaceContainer) }
+        let replaceableRoot = rootRaceContainer.appendingPathComponent(
+            "Project",
+            isDirectory: true
+        )
+        let displacedRoot = rootRaceContainer.appendingPathComponent(
+            "Project-original",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: replaceableRoot,
+            withIntermediateDirectories: false
+        )
+        try Data("inside root".utf8).write(
+            to: replaceableRoot.appendingPathComponent("inside.md")
+        )
+        var rootReplacementHookRan = false
+        XCTAssertThrowsError(
+            try FolderContentScanner.snapshot(
+                replaceableRoot,
+                beforeOpeningDirectory: { directory in
+                    guard directory == replaceableRoot else { return }
+                    rootReplacementHookRan = true
+                    try FileManager.default.moveItem(
+                        at: replaceableRoot,
+                        to: displacedRoot
+                    )
+                    try FileManager.default.createSymbolicLink(
+                        at: replaceableRoot,
+                        withDestinationURL: outside
+                    )
+                }
+            )
+        ) { error in
+            XCTAssertEqual(error as? FolderBrowserError, .unavailable)
+        }
+        XCTAssertTrue(rootReplacementHookRan)
+
+        let abaContainer = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: abaContainer) }
+        let abaRoot = abaContainer.appendingPathComponent("Project", isDirectory: true)
+        let originalABARoot = abaContainer.appendingPathComponent(
+            "Project-A",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: abaRoot,
+            withIntermediateDirectories: false
+        )
+        try Data("A".utf8).write(to: abaRoot.appendingPathComponent("a.md"))
+        let expectedABAIdentity = try XCTUnwrap(
+            FolderProjectDirectoryIdentity.capture(abaRoot)
+        )
+        try FileManager.default.moveItem(at: abaRoot, to: originalABARoot)
+        try FileManager.default.createDirectory(
+            at: abaRoot,
+            withIntermediateDirectories: false
+        )
+        try Data("B".utf8).write(to: abaRoot.appendingPathComponent("b.md"))
+        XCTAssertThrowsError(
+            try FolderContentScanner.snapshot(
+                abaRoot,
+                expectedRootIdentity: expectedABAIdentity
+            )
+        ) { error in
+            XCTAssertEqual(error as? FolderBrowserError, .unavailable)
+        }
     }
 
     func testScannerRejectsFilesAndBoundsPathologicalFolderSize() throws {
@@ -205,10 +788,21 @@ final class FolderBrowserTests: XCTestCase {
         let second = root.appendingPathComponent("b.md")
         try Data().write(to: first)
         try Data().write(to: second)
+        let namedPipe = root.appendingPathComponent("events.pipe")
+        let pipeResult = namedPipe.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return Darwin.mkfifo(path, 0o600)
+        }
+        XCTAssertEqual(pipeResult, 0)
 
         XCTAssertThrowsError(try FolderContentScanner.scan(first)) { error in
             XCTAssertEqual(error as? FolderBrowserError, .unavailable)
         }
+        XCTAssertEqual(
+            try FolderContentScanner.scan(root, maximumFileCount: 2)
+                .map(\.relativePath),
+            ["a.md", "b.md"]
+        )
         XCTAssertThrowsError(
             try FolderContentScanner.scan(root, maximumFileCount: 1)
         ) { error in
@@ -545,6 +1139,10 @@ final class FolderBrowserTests: XCTestCase {
         try await waitUntilReady(controller)
 
         XCTAssertEqual(controller.folderURL?.path, root.path)
+        XCTAssertEqual(
+            controller.projectRootIdentity,
+            FolderProjectDirectoryIdentity.capture(root)
+        )
         XCTAssertEqual(controller.files.map(\.relativePath), ["one.md"])
         XCTAssertEqual(
             persistence.record,
@@ -577,7 +1175,36 @@ final class FolderBrowserTests: XCTestCase {
         XCTAssertEqual(preparation.snapshot.markdownFiles.map(\.relativePath), ["two.md"])
         XCTAssertTrue(controller.commitPreparedFolder(preparation))
         XCTAssertEqual(controller.folderURL?.path, candidate.path)
+        XCTAssertEqual(controller.projectRootIdentity, preparation.rootIdentity)
         XCTAssertEqual(controller.files.map(\.relativePath), ["two.md"])
+        XCTAssertTrue(ProjectSessionBoundary.hasCurrentRoot(controller))
+        let candidateAlias = candidate.deletingLastPathComponent()
+            .appendingPathComponent("alias-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createSymbolicLink(
+            at: candidateAlias,
+            withDestinationURL: candidate
+        )
+        defer { try? FileManager.default.removeItem(at: candidateAlias) }
+        XCTAssertTrue(
+            ProjectSessionBoundary.matchesRequestedProject(
+                candidateAlias,
+                browser: controller
+            )
+        )
+        let candidateTarget = candidate.appendingPathComponent("two.md")
+        let documentAuthorization = try XCTUnwrap(
+            ProjectDocumentOpenAuthorization.capture(
+                targetURL: candidateTarget,
+                projectRoot: candidate
+            )
+        )
+        XCTAssertTrue(
+            ProjectSessionBoundary.authorizationIsCurrent(
+                documentAuthorization,
+                targetURL: candidateTarget,
+                browser: controller
+            )
+        )
 
         let replacementContainer = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: replacementContainer) }
@@ -606,6 +1233,277 @@ final class FolderBrowserTests: XCTestCase {
         )
         XCTAssertFalse(controller.commitPreparedFolder(stalePreparation))
         XCTAssertEqual(controller.folderURL?.path, candidate.path)
+
+        let displacedCurrentProject = candidate
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                "displaced-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.moveItem(at: candidate, to: displacedCurrentProject)
+        defer { try? FileManager.default.removeItem(at: displacedCurrentProject) }
+        try FileManager.default.createDirectory(
+            at: candidate,
+            withIntermediateDirectories: false
+        )
+        try Data("replacement".utf8).write(
+            to: candidate.appendingPathComponent("two.md")
+        )
+
+        XCTAssertFalse(ProjectSessionBoundary.hasCurrentRoot(controller))
+        XCTAssertFalse(
+            ProjectSessionBoundary.matchesRequestedProject(
+                candidate,
+                browser: controller
+            )
+        )
+        XCTAssertFalse(
+            ProjectSessionBoundary.authorizationIsCurrent(
+                documentAuthorization,
+                targetURL: candidateTarget,
+                browser: controller
+            )
+        )
+
+        XCTAssertThrowsError(try controller.targetDirectory(for: .none)) { error in
+            XCTAssertEqual(
+                error as? FolderMarkdownCreationError,
+                .projectUnavailable
+            )
+        }
+        XCTAssertEqual(
+            controller.createMarkdownFile(
+                named: "must-not-create.md",
+                openDocument: { _ in XCTFail("replacement project must not open") }
+            ),
+            .notCreated(.projectUnavailable)
+        )
+        controller.refresh()
+        XCTAssertEqual(
+            controller.state,
+            .failed(FolderBrowserError.unavailable.localizedDescription)
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: candidate.appendingPathComponent("must-not-create.md").path
+            )
+        )
+    }
+
+    func testPreparedFolderCommitRollsBackWhenPublishedCandidateIsReplaced() async throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        let originalRoot = container.appendingPathComponent("original", isDirectory: true)
+        let candidateRoot = container.appendingPathComponent("candidate", isDirectory: true)
+        let displacedCandidate = container.appendingPathComponent(
+            "displaced-candidate",
+            isDirectory: true
+        )
+        let displacedOriginal = container.appendingPathComponent(
+            "displaced-original",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: originalRoot,
+            withIntermediateDirectories: false
+        )
+        try FileManager.default.createDirectory(
+            at: candidateRoot,
+            withIntermediateDirectories: false
+        )
+        try Data("# Original".utf8).write(
+            to: originalRoot.appendingPathComponent("original.md")
+        )
+        try Data("# Candidate".utf8).write(
+            to: candidateRoot.appendingPathComponent("candidate.md")
+        )
+
+        let controller = FolderBrowserController(
+            persistence: TestFolderBrowserPersistence(),
+            restoresSavedFolder: false,
+            bookmarkData: { _ in Data() },
+            startAccess: { _ in true },
+            stopAccess: { _ in }
+        )
+        controller.openFolder(originalRoot)
+        try await waitUntilReady(controller)
+        let associatedDocument = NSDocument()
+        controller.associateProjectWindow(with: associatedDocument)
+
+        let previousRoot = controller.folderURL
+        let previousIdentity = controller.projectRootIdentity
+        let previousItems = controller.items
+        let previousFiles = controller.files
+        let previousState = controller.state
+        let previousWarning = controller.restorationWarning
+        let preparation: FolderProjectOpenPreparation = try await withCheckedThrowingContinuation {
+            continuation in
+            _ = controller.prepareFolderForOpening(candidateRoot) {
+                continuation.resume(with: $0)
+            }
+        }
+
+        var replacementError: Error?
+        var didReplaceCandidate = false
+        let observation = controller.$folderURL.dropFirst().sink { publishedURL in
+            guard !didReplaceCandidate,
+                  publishedURL?.standardizedFileURL == candidateRoot.standardizedFileURL
+            else { return }
+            didReplaceCandidate = true
+            do {
+                try FileManager.default.moveItem(
+                    at: candidateRoot,
+                    to: displacedCandidate
+                )
+                try FileManager.default.createDirectory(
+                    at: candidateRoot,
+                    withIntermediateDirectories: false
+                )
+            } catch {
+                replacementError = error
+            }
+        }
+
+        XCTAssertFalse(controller.commitPreparedFolder(preparation))
+        observation.cancel()
+        if let replacementError { throw replacementError }
+        XCTAssertTrue(didReplaceCandidate)
+        XCTAssertEqual(controller.folderURL, previousRoot)
+        XCTAssertEqual(controller.projectRootIdentity, previousIdentity)
+        XCTAssertEqual(controller.items, previousItems)
+        XCTAssertEqual(controller.files, previousFiles)
+        XCTAssertEqual(controller.state, previousState)
+        XCTAssertEqual(controller.restorationWarning, previousWarning)
+        XCTAssertTrue(controller.isAssociatedProjectDocument(associatedDocument))
+        XCTAssertTrue(ProjectSessionBoundary.hasCurrentRoot(controller))
+        let originalDocumentURL = originalRoot.appendingPathComponent("original.md")
+        XCTAssertEqual(
+            ProjectSessionBoundary.activeEditorRoot(
+                for: originalDocumentURL,
+                document: associatedDocument,
+                browser: controller
+            ),
+            originalRoot
+        )
+
+        try FileManager.default.moveItem(at: originalRoot, to: displacedOriginal)
+        try FileManager.default.createDirectory(
+            at: originalRoot,
+            withIntermediateDirectories: false
+        )
+        try Data("# Replacement original".utf8).write(to: originalDocumentURL)
+        XCTAssertNil(
+            ProjectSessionBoundary.activeEditorRoot(
+                for: originalDocumentURL,
+                document: associatedDocument,
+                browser: controller
+            )
+        )
+    }
+
+    func testPreparedFolderFinalValidationRollsBackReentrantSwitchAndTargetMutation()
+        async throws
+    {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        let originalRoot = container.appendingPathComponent("original", isDirectory: true)
+        let candidateRoot = container.appendingPathComponent("candidate", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: originalRoot,
+            withIntermediateDirectories: false
+        )
+        try FileManager.default.createDirectory(
+            at: candidateRoot,
+            withIntermediateDirectories: false
+        )
+        try Data("# Original".utf8).write(
+            to: originalRoot.appendingPathComponent("original.md")
+        )
+        try Data("# Candidate".utf8).write(
+            to: candidateRoot.appendingPathComponent("candidate.md")
+        )
+
+        let controller = FolderBrowserController(
+            persistence: TestFolderBrowserPersistence(),
+            restoresSavedFolder: false,
+            bookmarkData: { _ in Data() },
+            startAccess: { _ in true },
+            stopAccess: { _ in }
+        )
+        controller.openFolder(originalRoot)
+        try await waitUntilReady(controller)
+        let associatedDocument = NSDocument()
+        controller.associateProjectWindow(with: associatedDocument)
+        let preparation: FolderProjectOpenPreparation = try await withCheckedThrowingContinuation {
+            continuation in
+            _ = controller.prepareFolderForOpening(candidateRoot) {
+                continuation.resume(with: $0)
+            }
+        }
+
+        let previousRoot = controller.folderURL
+        let previousIdentity = controller.projectRootIdentity
+        let previousItems = controller.items
+        let previousFiles = controller.files
+        let previousState = controller.state
+        let targetDocument = ClosingTrackingDocument()
+        NSDocumentController.shared.addDocument(targetDocument)
+        defer {
+            targetDocument.updateChangeCount(.changeCleared)
+            if NSDocumentController.shared.documents.contains(where: {
+                $0 === targetDocument
+            }) {
+                targetDocument.close()
+            }
+        }
+        let gate = ProjectDocumentSwitchGate()
+        let switchToken = try XCTUnwrap(gate.begin())
+        XCTAssertTrue(
+            ProjectDocumentTargetPolicy.isReusableShell(
+                targetDocument,
+                isAssociated: controller.isAssociatedProjectDocument(targetDocument),
+                isRegistered: true
+            )
+        )
+
+        var subscriberRan = false
+        let observation = controller.$folderURL.dropFirst().sink { publishedURL in
+            guard !subscriberRan,
+                  publishedURL?.standardizedFileURL
+                      == candidateRoot.standardizedFileURL
+            else { return }
+            subscriberRan = true
+            targetDocument.updateChangeCount(.changeDone)
+            XCTAssertTrue(gate.finish(switchToken))
+        }
+        let committed = controller.commitPreparedFolder(
+            preparation,
+            finalValidation: {
+                gate.isActive(switchToken)
+                    && ProjectDocumentTargetPolicy.isReusableShell(
+                        targetDocument,
+                        isAssociated: controller.isAssociatedProjectDocument(
+                            targetDocument
+                        ),
+                        isRegistered: NSDocumentController.shared.documents.contains {
+                            $0 === targetDocument
+                        }
+                    )
+            }
+        )
+        observation.cancel()
+
+        XCTAssertTrue(subscriberRan)
+        XCTAssertFalse(committed)
+        XCTAssertFalse(gate.isBusy)
+        XCTAssertTrue(targetDocument.isDocumentEdited)
+        XCTAssertEqual(controller.folderURL, previousRoot)
+        XCTAssertEqual(controller.projectRootIdentity, previousIdentity)
+        XCTAssertEqual(controller.items, previousItems)
+        XCTAssertEqual(controller.files, previousFiles)
+        XCTAssertEqual(controller.state, previousState)
+        XCTAssertTrue(controller.isAssociatedProjectDocument(associatedDocument))
+        XCTAssertTrue(ProjectSessionBoundary.hasCurrentRoot(controller))
     }
 
     func testControllerCreatesInAllSelectionModesAndImmediatelyUpdatesTree() async throws {
@@ -623,6 +1521,49 @@ final class FolderBrowserTests: XCTestCase {
         )
         controller.openFolder(root)
         try await waitUntilReady(controller)
+
+        let nestedSelection = FolderBrowserSelection.directory(nested)
+        let creationAuthorization = try controller.creationAuthorization(
+            for: nestedSelection
+        )
+        XCTAssertTrue(
+            controller.creationAuthorizationIsCurrent(
+                creationAuthorization,
+                for: nestedSelection
+            )
+        )
+        let displacedNested = root.appendingPathComponent(
+            "Notes-original",
+            isDirectory: true
+        )
+        try FileManager.default.moveItem(at: nested, to: displacedNested)
+        try FileManager.default.createDirectory(
+            at: nested,
+            withIntermediateDirectories: false
+        )
+        XCTAssertFalse(
+            controller.creationAuthorizationIsCurrent(
+                creationAuthorization,
+                for: nestedSelection
+            )
+        )
+        XCTAssertEqual(
+            controller.createMarkdownFile(
+                named: "must-not-create.md",
+                selection: nestedSelection,
+                expectedRootIdentity: creationAuthorization.projectIdentity,
+                expectedTargetIdentity: creationAuthorization.targetIdentity,
+                openDocument: { _ in XCTFail("replaced target must not open") }
+            ),
+            .notCreated(.targetDirectoryUnavailable)
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: nested.appendingPathComponent("must-not-create.md").path
+            )
+        )
+        try FileManager.default.removeItem(at: nested)
+        try FileManager.default.moveItem(at: displacedNested, to: nested)
 
         var opened: [URL] = []
         let rootResult = controller.createMarkdownFile(
@@ -817,7 +1758,6 @@ final class FolderBrowserTests: XCTestCase {
         let fileMenu = try XCTUnwrap(NSApp.mainMenu?.item(withTitle: "文件")?.submenu)
         XCTAssertEqual(fileMenu.items.filter { $0.title == "打开…" }.count, 1)
         XCTAssertTrue(fileMenu.items.filter { $0.title == "打开文件夹…" }.isEmpty)
-        XCTAssertEqual(fileMenu.items.filter { $0.title == "打开最近" }.count, 1)
     }
 
     private func temporaryDirectory() throws -> URL {
@@ -865,10 +1805,27 @@ private enum TestFolderOpenError: Error, LocalizedError {
 
 private final class ClosingTrackingDocument: NSDocument {
     private(set) var closeCount = 0
+    private(set) var showCount = 0
+    var onShow: (() -> Void)?
+
+    override func showWindows() {
+        showCount += 1
+        onShow?()
+        super.showWindows()
+    }
 
     override func close() {
         closeCount += 1
+        if NSDocumentController.shared.documents.contains(where: { $0 === self }) {
+            super.close()
+        }
     }
+}
+
+@MainActor
+private final class EmptyRecentDocumentPersistence: RecentDocumentPersistence {
+    func load() -> [RecentDocumentRecord] { [] }
+    func save(_: [RecentDocumentRecord]) {}
 }
 
 @MainActor

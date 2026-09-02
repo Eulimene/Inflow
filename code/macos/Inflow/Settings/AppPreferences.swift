@@ -263,7 +263,15 @@ final class AppPreferences: ObservableObject {
         static let mermaidRenderingEnabled = "preferences.preview.mermaidRenderingEnabled"
         static let increasedContrast = "preferences.accessibility.increasedContrast"
         static let reduceMotion = "preferences.accessibility.reduceMotion"
-        static let lastActiveEditorViewMode = "preferences.window.lastActiveEditorViewMode"
+        // Kept in the registry only so an older preview build's value remains a
+        // recognized migration artifact. The launch product never reads or
+        // rewrites a global "last active" editor mode: every new scene derives
+        // its starting mode from its document context.
+        static let legacyLastActiveEditorViewMode =
+            "preferences.window.lastActiveEditorViewMode"
+        static let defaultProjectSidebarVisible =
+            "preferences.window.defaultProjectSidebarVisible"
+        static let defaultOutlineVisible = "preferences.window.defaultOutlineVisible"
         static let defaultSplitFraction = "preferences.preview.defaultSplitFraction"
         static let autosaveEnabled = "preferences.documents.autosaveEnabled"
         static let autosaveDelay = "preferences.documents.autosaveDelay"
@@ -291,7 +299,9 @@ final class AppPreferences: ObservableObject {
             Key.mermaidRenderingEnabled,
             Key.increasedContrast,
             Key.reduceMotion,
-            Key.lastActiveEditorViewMode,
+            Key.legacyLastActiveEditorViewMode,
+            Key.defaultProjectSidebarVisible,
+            Key.defaultOutlineVisible,
             Key.defaultSplitFraction,
             Key.autosaveEnabled,
             Key.autosaveDelay,
@@ -332,7 +342,9 @@ final class AppPreferences: ObservableObject {
         static let increasedContrast = AccessibilityPreference.followSystem
         static let reduceMotion = AccessibilityPreference.followSystem
         static let recentDocumentCapacity = 20
-        static let markdownOpenBehavior = MarkdownOpenBehavior.newWindow
+        static let markdownOpenBehavior = MarkdownOpenBehavior.reuseBlankWindow
+        static let defaultProjectSidebarVisible = true
+        static let defaultOutlineVisible = true
         static let autosaveDelay = AutosaveDelay.oneSecond
         static let autosaveEnabled = false
         static let existingImagePlacement = ExistingImagePlacementPreference.copyToAssets
@@ -441,10 +453,17 @@ final class AppPreferences: ObservableObject {
         didSet { persist(reduceMotion.rawValue, forKey: Key.reduceMotion) }
     }
 
-    @Published private(set) var lastActiveEditorViewMode: EditorViewMode {
+    @Published var defaultProjectSidebarVisible: Bool {
         didSet {
-            persist(lastActiveEditorViewMode.rawValue, forKey: Key.lastActiveEditorViewMode)
+            persist(
+                defaultProjectSidebarVisible,
+                forKey: Key.defaultProjectSidebarVisible
+            )
         }
+    }
+
+    @Published var defaultOutlineVisible: Bool {
+        didSet { persist(defaultOutlineVisible, forKey: Key.defaultOutlineVisible) }
     }
 
     @Published var defaultSplitFraction: Double {
@@ -554,11 +573,15 @@ final class AppPreferences: ObservableObject {
         mermaidRenderingEnabled = LaunchFixed.mermaidRenderingEnabled
         increasedContrast = LaunchFixed.increasedContrast
         reduceMotion = LaunchFixed.reduceMotion
-        lastActiveEditorViewMode = Self.enumeration(
-            EditorViewMode.self,
-            forKey: Key.lastActiveEditorViewMode,
+        defaultProjectSidebarVisible = Self.bool(
+            forKey: Key.defaultProjectSidebarVisible,
             in: defaults,
-            defaultValue: .split
+            defaultValue: LaunchFixed.defaultProjectSidebarVisible
+        )
+        defaultOutlineVisible = Self.bool(
+            forKey: Key.defaultOutlineVisible,
+            in: defaults,
+            defaultValue: LaunchFixed.defaultOutlineVisible
         )
         defaultSplitFraction = Self.number(
             forKey: Key.defaultSplitFraction,
@@ -610,10 +633,6 @@ final class AppPreferences: ObservableObject {
         )
     }
 
-    func recordActiveEditorViewMode(_ mode: EditorViewMode) {
-        lastActiveEditorViewMode = mode
-    }
-
     func applyAutosavePolicy(to documentController: NSDocumentController = .shared) {
         // The personal validation milestone is deliberately manual-save only.
         // Keep AppKit automatic saving disabled even if a development build left
@@ -626,10 +645,11 @@ final class AppPreferences: ObservableObject {
         case .general:
             autosaveEnabled = LaunchFixed.autosaveEnabled
             autosaveDelay = .oneSecond
-            lastActiveEditorViewMode = .split
+            defaultProjectSidebarVisible = LaunchFixed.defaultProjectSidebarVisible
+            defaultOutlineVisible = LaunchFixed.defaultOutlineVisible
             defaultSplitFraction = EditorSplitLayout.defaultFraction
             recentDocumentCapacity = RecentDocumentPolicy.defaultCapacity
-            markdownOpenBehavior = .newWindow
+            markdownOpenBehavior = LaunchFixed.markdownOpenBehavior
         case .writing:
             resetWriting()
         case .preview:
@@ -694,7 +714,8 @@ final class AppPreferences: ObservableObject {
                 Key.mermaidRenderingEnabled: mermaidRenderingEnabled,
                 Key.increasedContrast: increasedContrast.rawValue,
                 Key.reduceMotion: reduceMotion.rawValue,
-                Key.lastActiveEditorViewMode: lastActiveEditorViewMode.rawValue,
+                Key.defaultProjectSidebarVisible: defaultProjectSidebarVisible,
+                Key.defaultOutlineVisible: defaultOutlineVisible,
                 Key.defaultSplitFraction: defaultSplitFraction,
                 RecentDocumentPolicy.capacityKey: recentDocumentCapacity,
                 RecentDocumentPolicy.openBehaviorKey: markdownOpenBehavior.rawValue,
@@ -734,8 +755,12 @@ final class AppPreferences: ObservableObject {
         in defaults: UserDefaults,
         defaultValue: Bool
     ) -> Bool {
-        guard defaults.object(forKey: key) != nil else { return defaultValue }
-        return defaults.bool(forKey: key)
+        guard let value = defaults.object(forKey: key) as? NSNumber,
+              CFGetTypeID(value) == CFBooleanGetTypeID()
+        else {
+            return defaultValue
+        }
+        return value.boolValue
     }
 
     private static func enumeration<Value: RawRepresentable>(

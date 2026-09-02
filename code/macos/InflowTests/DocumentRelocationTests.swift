@@ -328,6 +328,56 @@ final class DocumentRelocationTests: XCTestCase {
         } catch {
             XCTAssertEqual((error as? CocoaError)?.code, .fileWriteNoPermission)
         }
+
+        let sourceURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "inflow-native-revert-\(UUID().uuidString).md"
+        )
+        defer { try? FileManager.default.removeItem(at: sourceURL) }
+        let verifiedData = Data("verified descriptor bytes\n".utf8)
+        try verifiedData.write(to: sourceURL)
+        let sourceModificationDate = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes(
+            [.modificationDate: sourceModificationDate],
+            ofItemAtPath: sourceURL.path
+        )
+        document.fileURL = sourceURL
+        let stagingURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "inflow-native-revert-staging-\(UUID().uuidString).md"
+        )
+        defer { try? FileManager.default.removeItem(at: stagingURL) }
+        let revertPreparation = try NativeDocumentSaveCoordinator.prepareRevert(
+            from: sourceURL,
+            verifiedData: verifiedData,
+            materialize: { data, _ in
+                try data.write(to: stagingURL)
+                try FileManager.default.setAttributes(
+                    [.modificationDate: Date(timeIntervalSince1970: 1_800_000_000)],
+                    ofItemAtPath: stagingURL.path
+                )
+                return stagingURL
+            }
+        )
+        defer {
+            NativeDocumentSaveCoordinator.discardRevertPreparation(revertPreparation)
+        }
+        try Data("untrusted path bytes\n".utf8).write(to: sourceURL)
+        try NativeDocumentSaveCoordinator.revert(
+            document: document,
+            using: revertPreparation
+        )
+        XCTAssertEqual(document.lastRevertData, verifiedData)
+        XCTAssertNotEqual(document.lastRevertURL, sourceURL)
+        XCTAssertEqual(document.fileURL, sourceURL.standardizedFileURL)
+        XCTAssertEqual(
+            try XCTUnwrap(document.fileModificationDate).timeIntervalSince1970,
+            sourceModificationDate.timeIntervalSince1970,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: sourceURL),
+            Data("untrusted path bytes\n".utf8),
+            "native revert must not reopen or rewrite the mutable represented path"
+        )
     }
 
     @MainActor
@@ -368,7 +418,6 @@ final class DocumentRelocationTests: XCTestCase {
             "打开工作区…",
             "打印…",
             "浏览本地版本时间线…",
-            "即时渲染编辑",
             "快速打开…",
             "工作区搜索…",
             "结构洞察",
@@ -389,6 +438,7 @@ final class DocumentRelocationTests: XCTestCase {
         for title in postLaunchTitles {
             XCTAssertTrue(items.filter { $0.title == title }.isEmpty, title)
         }
+        XCTAssertEqual(items.filter { $0.title == "即时渲染编辑" }.count, 1)
         XCTAssertTrue(items.filter {
             $0.keyEquivalent == "p"
                 && $0.keyEquivalentModifierMask.contains(.command)
@@ -450,6 +500,8 @@ final class DocumentRelocationTests: XCTestCase {
 private final class RecordingDocument: NSDocument {
     private(set) var lastURL: URL?
     private(set) var lastOperation: NSDocument.SaveOperationType?
+    private(set) var lastRevertURL: URL?
+    private(set) var lastRevertData: Data?
     var nextError: Error?
 
     override func save(
@@ -462,5 +514,12 @@ private final class RecordingDocument: NSDocument {
         lastOperation = saveOperation
         completionHandler(nextError)
         nextError = nil
+    }
+
+    override func revert(toContentsOf url: URL, ofType typeName: String) throws {
+        lastRevertURL = url
+        lastRevertData = try Data(contentsOf: url)
+        fileURL = url
+        fileType = typeName
     }
 }

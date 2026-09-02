@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import Foundation
 import ObjectiveC
+import UniformTypeIdentifiers
 
 enum MarkdownOpenBehavior: String, CaseIterable, Identifiable, Sendable {
     case newWindow
@@ -162,15 +163,488 @@ enum MarkdownOpenPreflight: Equatable, Sendable {
 }
 
 actor MarkdownOpenPreflightWorker {
-    func inspect(_ url: URL) throws -> MarkdownOpenPreflight {
-        let data = try Data(contentsOf: url)
-        return try MarkdownOpenPreflight.inspect(data)
+    struct Inspection: Sendable {
+        let preflight: MarkdownOpenPreflight
+        let authorizedData: Data?
+    }
+
+    func inspect(
+        _ url: URL,
+        authorization: ProjectDocumentOpenAuthorization? = nil
+    ) throws -> Inspection {
+        let data: Data
+        if let authorization {
+            guard authorization.targetURL.standardizedFileURL == url.standardizedFileURL,
+                  authorization.isCurrent()
+            else {
+                throw DocumentOpenError.targetChanged
+            }
+            do {
+                data = try PreviewLocalFileReader.read(
+                    url,
+                    expected: authorization.snapshot
+                ).data
+            } catch let error as PreviewLocalFileError {
+                switch error {
+                case .tooLarge:
+                    throw DocumentOpenError.tooLarge
+                case .missing, .unavailable:
+                    throw DocumentOpenError.fileUnavailable
+                case .notRegularFile, .unsafeContent:
+                    throw DocumentOpenError.unsupportedTarget
+                case .changedDuringRead:
+                    throw DocumentOpenError.targetChanged
+                }
+            } catch {
+                throw DocumentOpenError.fileUnavailable
+            }
+        } else {
+            data = try Data(contentsOf: url)
+        }
+        return Inspection(
+            preflight: try MarkdownOpenPreflight.inspect(data),
+            authorizedData: authorization == nil ? nil : data
+        )
+    }
+}
+
+@MainActor
+enum AuthorizedMarkdownDocumentOpener {
+    private typealias Completion = @MainActor (
+        Result<OpenedDocumentResult, Error>
+    ) -> Void
+
+    private struct PendingRequest {
+        let data: Data
+        let authorization: ProjectDocumentOpenAuthorization
+        let documentController: NSDocumentController
+        let completion: Completion
+    }
+
+    private static var pendingByRepresentedPath: [String: [PendingRequest]] = [:]
+
+    static func open(
+        from data: Data,
+        authorization: ProjectDocumentOpenAuthorization,
+        documentController: NSDocumentController = .shared,
+        completion: @escaping @MainActor (
+            Result<OpenedDocumentResult, Error>
+        ) -> Void
+    ) {
+        let representedPath = authorization.targetURL.standardizedFileURL.path
+        let request = PendingRequest(
+            data: data,
+            authorization: authorization,
+            documentController: documentController,
+            completion: completion
+        )
+        if pendingByRepresentedPath[representedPath] != nil {
+            pendingByRepresentedPath[representedPath]?.append(request)
+            return
+        }
+        pendingByRepresentedPath[representedPath] = [request]
+        startNextOpen(representedPath: representedPath)
+    }
+
+    private static func startNextOpen(representedPath: String) {
+        guard let request = pendingByRepresentedPath[representedPath]?.first else {
+            pendingByRepresentedPath.removeValue(forKey: representedPath)
+            return
+        }
+        let originalURL = request.authorization.targetURL
+        let snapshot = request.authorization.snapshot
+        let typeName = UTType.inflowMarkdown.identifier
+        let stagingURL: URL
+        do {
+            // `reopenDocument` distinguishes the represented URL from the
+            // contents URL. The pending registry above serializes concurrent
+            // requests by the original path while SwiftUI reads only
+            // descriptor-frozen bytes from this app-owned randomized copy.
+            stagingURL = try SafePreviewOpenStore.materialize(
+                FrozenPreviewLocalFile(data: request.data, snapshot: snapshot),
+                extension: originalURL.pathExtension
+            )
+        } catch {
+            finishCurrentOpen(
+                representedPath: representedPath,
+                result: .failure(error)
+            )
+            return
+        }
+        // Protect the copy before handing it to AppKit. The callback may be
+        // delayed indefinitely, and periodic maintenance must not race the
+        // native document while it is still consuming this URL.
+        guard SafePreviewOpenStore.protectManagedCopy(at: stagingURL) else {
+            SafePreviewOpenStore.discardManagedCopy(at: stagingURL)
+            finishCurrentOpen(
+                representedPath: representedPath,
+                result: .failure(PreviewLocalFileError.unavailable)
+            )
+            return
+        }
+        request.documentController.reopenDocument(
+            for: originalURL,
+            withContentsOf: stagingURL,
+            display: false
+        ) { document, wasAlreadyOpen, error in
+            if let error {
+                SafePreviewOpenStore.discardManagedCopy(at: stagingURL)
+                finishCurrentOpen(
+                    representedPath: representedPath,
+                    result: .failure(error)
+                )
+                return
+            }
+            guard let document else {
+                SafePreviewOpenStore.discardManagedCopy(at: stagingURL)
+                finishCurrentOpen(
+                    representedPath: representedPath,
+                    result: .failure(DocumentOpenError.unsupportedTarget)
+                )
+                return
+            }
+            if !wasAlreadyOpen {
+                // AppKit adopts `withContentsOf` as the document's autosaved
+                // contents and removes it when the document closes. Keep the
+                // immutable copy alive for that ownership window and only let
+                // startup/periodic maintenance remove abandoned copies.
+                document.fileType = typeName
+                document.fileModificationDate = snapshot.modificationDate
+                document.updateChangeCount(.changeCleared)
+                NativeDocumentLoadedFileRegistry.register(
+                    document,
+                    authorization: request.authorization
+                )
+            } else {
+                SafePreviewOpenStore.discardManagedCopy(at: stagingURL)
+                if !NativeDocumentLoadedFileRegistry.canFocusAlreadyOpen(
+                    document,
+                    authorization: request.authorization,
+                    documentController: request.documentController
+                ) {
+                    finishCurrentOpen(
+                        representedPath: representedPath,
+                        result: .failure(DocumentOpenError.targetChanged)
+                    )
+                    return
+                }
+            }
+            finishCurrentOpen(
+                representedPath: representedPath,
+                result: .success(
+                    OpenedDocumentResult(
+                        document: document,
+                        wasAlreadyOpen: wasAlreadyOpen,
+                        receipt: ProjectDocumentOpenReceipt(
+                            authorization: request.authorization,
+                            expectedData: request.data
+                        )
+                    )
+                )
+            )
+        }
+    }
+
+    private static func finishCurrentOpen(
+        representedPath: String,
+        result: Result<OpenedDocumentResult, Error>
+    ) {
+        guard var pending = pendingByRepresentedPath[representedPath],
+              !pending.isEmpty
+        else {
+            pendingByRepresentedPath.removeValue(forKey: representedPath)
+            return
+        }
+        let completed = pending.removeFirst()
+        // Keep an empty sentinel while invoking the callback so a re-entrant
+        // request queues behind this transaction instead of starting another
+        // native open before ownership and cleanup have settled.
+        pendingByRepresentedPath[representedPath] = pending
+        completed.completion(result)
+        if pendingByRepresentedPath[representedPath]?.isEmpty == true {
+            pendingByRepresentedPath.removeValue(forKey: representedPath)
+            return
+        }
+
+        // AppKit does not reliably coalesce two back-to-back
+        // `reopenDocument` calls. Reuse the first result ourselves, but only
+        // after its callback has returned: that callback is allowed to close
+        // the document, in which case the next request must perform a fresh
+        // native open rather than receive an already-closed shared object.
+        if case let .success(opened) = result,
+           let next = pendingByRepresentedPath[representedPath]?.first,
+           next.documentController.documents.contains(where: {
+               $0 === opened.document
+           }),
+           NativeDocumentLoadedFileRegistry.matches(
+               opened.document,
+               authorization: next.authorization
+           )
+        {
+            finishCurrentOpen(
+                representedPath: representedPath,
+                result: .success(
+                    OpenedDocumentResult(
+                        document: opened.document,
+                        wasAlreadyOpen: true,
+                        receipt: ProjectDocumentOpenReceipt(
+                            authorization: next.authorization,
+                            expectedData: next.data
+                        )
+                    )
+                )
+            )
+            return
+        }
+        startNextOpen(representedPath: representedPath)
+    }
+}
+
+@MainActor
+private final class NativeDocumentLoadedFileRecord: NSObject {
+    let resolvedURL: URL
+    let projectIdentity: FolderProjectDirectoryIdentity
+    let snapshot: PreviewLocalFileSnapshot
+
+    init(
+        resolvedURL: URL,
+        projectIdentity: FolderProjectDirectoryIdentity,
+        snapshot: PreviewLocalFileSnapshot
+    ) {
+        self.resolvedURL = resolvedURL
+        self.projectIdentity = projectIdentity
+        self.snapshot = snapshot
+    }
+}
+
+/// Distinguishes a document whose managed identity failed verification from a
+/// document that has never participated in a project-authorized open. A nil
+/// association is intentionally reserved for the latter (and for a successful
+/// Save As outside the original project).
+@MainActor
+private final class NativeDocumentLoadedFileInvalidation: NSObject {}
+
+@MainActor
+enum NativeDocumentLoadedFileRegistry {
+    nonisolated(unsafe) private static var associationKey: UInt8 = 0
+
+    static func register(
+        _ document: NSDocument,
+        authorization: ProjectDocumentOpenAuthorization
+    ) {
+        objc_setAssociatedObject(
+            document,
+            &associationKey,
+            NativeDocumentLoadedFileRecord(
+                resolvedURL: authorization.resolvedTargetURL,
+                projectIdentity: authorization.projectIdentity,
+                snapshot: authorization.snapshot
+            ),
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
+    }
+
+    static func matches(
+        _ document: NSDocument,
+        authorization: ProjectDocumentOpenAuthorization
+    ) -> Bool {
+        guard let representedURL = document.fileURL,
+              let resolvedRepresentedURL = FolderProjectPathBoundary.resolvedURL(
+                  representedURL,
+                  within: authorization.projectRoot
+              ),
+              resolvedRepresentedURL == authorization.resolvedTargetURL
+        else {
+            return false
+        }
+        guard let record = objc_getAssociatedObject(
+            document,
+            &associationKey
+        ) as? NativeDocumentLoadedFileRecord else {
+            return false
+        }
+        return record.resolvedURL == authorization.resolvedTargetURL
+            && record.projectIdentity == authorization.projectIdentity
+            && record.snapshot == authorization.snapshot
+    }
+
+    static func representsTarget(
+        _ document: NSDocument,
+        authorization: ProjectDocumentOpenAuthorization,
+        documentController: NSDocumentController = .shared
+    ) -> Bool {
+        guard documentController.documents.contains(where: { $0 === document }),
+              let representedURL = document.fileURL,
+              let resolvedRepresentedURL = FolderProjectPathBoundary.resolvedURL(
+                  representedURL,
+                  within: authorization.projectRoot
+              )
+        else {
+            return false
+        }
+        return resolvedRepresentedURL == authorization.resolvedTargetURL
+    }
+
+    static func canFocusAlreadyOpen(
+        _ document: NSDocument,
+        authorization: ProjectDocumentOpenAuthorization,
+        documentController: NSDocumentController = .shared
+    ) -> Bool {
+        guard representsTarget(
+            document,
+            authorization: authorization,
+            documentController: documentController
+        ) else {
+            return false
+        }
+        let association = objc_getAssociatedObject(
+            document,
+            &associationKey
+        )
+        if association is NativeDocumentLoadedFileRecord {
+            return matches(document, authorization: authorization)
+        }
+        // Unknown non-nil state is also rejected so a future registry value
+        // cannot accidentally inherit the ordinary-document fast path.
+        return association == nil
+    }
+
+    static func focusableDocument(
+        authorization: ProjectDocumentOpenAuthorization,
+        excluding excludedDocument: NSDocument? = nil,
+        documentController: NSDocumentController = .shared
+    ) -> NSDocument? {
+        documentController.documents.first { document in
+            document !== excludedDocument
+                && canFocusAlreadyOpen(
+                    document,
+                    authorization: authorization,
+                    documentController: documentController
+                )
+        }
+    }
+
+    /// Refreshes a project document's trusted identity only after the caller's
+    /// save/reload transaction has committed, then independently verifies the
+    /// same expected bytes through a descriptor before publishing the record.
+    /// A failed refresh is conservative: the document remains open but can no
+    /// longer satisfy a project fast path until it is safely reopened.
+    @discardableResult
+    static func refreshAfterVerifiedWrite(
+        _ document: NSDocument,
+        targetURL: URL,
+        expectedData: Data
+    ) -> Bool {
+        guard let record = objc_getAssociatedObject(
+            document,
+            &associationKey
+        ) as? NativeDocumentLoadedFileRecord else {
+            return false
+        }
+        guard let representedURL = document.fileURL,
+              representedURL.standardizedFileURL == targetURL.standardizedFileURL
+        else {
+            invalidate(document)
+            return false
+        }
+
+        guard let authorization = ProjectDocumentOpenAuthorization.capture(
+                  targetURL: representedURL,
+                  projectRoot: record.projectIdentity.resolvedURL
+              )
+        else {
+            if isLexicallyContained(
+                representedURL,
+                in: record.projectIdentity.resolvedURL
+            ) {
+                // A path still spelled inside the original project but now
+                // resolving outside it is a boundary failure, not Save As.
+                invalidate(document)
+            } else {
+                // A successful Save As to a visibly different location leaves
+                // project management and becomes an ordinary native document.
+                clear(document)
+            }
+            return false
+        }
+
+        guard authorization.projectIdentity == record.projectIdentity,
+              let frozen = try? PreviewLocalFileReader.read(
+                  representedURL,
+                  expected: authorization.snapshot
+              ),
+              frozen.data == expectedData,
+              authorization.isCurrent()
+        else {
+            invalidate(document)
+            return false
+        }
+        register(document, authorization: authorization)
+        return true
+    }
+
+    static func clear(_ document: NSDocument) {
+        objc_setAssociatedObject(
+            document,
+            &associationKey,
+            nil,
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
+    }
+
+    /// Keeps an already managed document aligned with a ctime-only identity
+    /// refresh without turning an ordinary native window into project state.
+    static func refreshManagedRegistration(
+        _ document: NSDocument,
+        authorization: ProjectDocumentOpenAuthorization
+    ) {
+        guard objc_getAssociatedObject(
+            document,
+            &associationKey
+        ) is NativeDocumentLoadedFileRecord else {
+            return
+        }
+        register(document, authorization: authorization)
+    }
+
+    private static func invalidate(_ document: NSDocument) {
+        objc_setAssociatedObject(
+            document,
+            &associationKey,
+            NativeDocumentLoadedFileInvalidation(),
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
+    }
+
+    private static func isLexicallyContained(
+        _ candidateURL: URL,
+        in rootURL: URL
+    ) -> Bool {
+        guard candidateURL.isFileURL, rootURL.isFileURL else { return false }
+        let rootComponents = rootURL.standardizedFileURL.pathComponents
+        let candidateComponents = candidateURL.standardizedFileURL.pathComponents
+        guard candidateComponents.count >= rootComponents.count else { return false }
+        return Array(candidateComponents.prefix(rootComponents.count)) == rootComponents
+    }
+
+    static func matchingDocument(
+        authorization: ProjectDocumentOpenAuthorization,
+        excluding excludedDocument: NSDocument? = nil,
+        documentController: NSDocumentController = .shared
+    ) -> NSDocument? {
+        documentController.documents.first { document in
+            document !== excludedDocument
+                && matches(document, authorization: authorization)
+        }
     }
 }
 
 enum DocumentOpenError: Error, LocalizedError {
     case unsupportedTarget
     case unsupportedEncoding
+    case tooLarge
+    case fileUnavailable
+    case targetChanged
     case cancelled
     case timedOut
 
@@ -180,6 +654,12 @@ enum DocumentOpenError: Error, LocalizedError {
             "只能在 Inflow 中编辑 .md 或 .markdown 文件。"
         case .unsupportedEncoding:
             "这个文件不是可编辑的 UTF-8 Markdown。"
+        case .tooLarge:
+            "这个 Markdown 文件过大，当前版本无法安全打开。原文件没有被修改。"
+        case .fileUnavailable:
+            "当前无法读取这个 Markdown 文件。请检查访问权限或文件是否仍然可用。"
+        case .targetChanged:
+            "目标文件或项目边界在打开期间发生了变化。为避免读取错误内容，本次没有打开。"
         case .cancelled:
             "已取消切换。"
         case .timedOut:
@@ -192,6 +672,17 @@ enum DocumentOpenError: Error, LocalizedError {
 struct OpenedDocumentResult {
     let document: NSDocument
     let wasAlreadyOpen: Bool
+    let receipt: ProjectDocumentOpenReceipt?
+
+    init(
+        document: NSDocument,
+        wasAlreadyOpen: Bool,
+        receipt: ProjectDocumentOpenReceipt? = nil
+    ) {
+        self.document = document
+        self.wasAlreadyOpen = wasAlreadyOpen
+        self.receipt = receipt
+    }
 }
 
 /// Uses AppKit's native Save / Don't Save / Cancel close review without closing
@@ -501,10 +992,12 @@ enum DocumentOpenRouter {
         struct Candidate {
             let inputIndex: Int
             let url: URL
+            let pathIdentity: String
             let kind: DocumentOpenTargetKind
         }
         enum InputIdentity: Hashable {
-            case filePath(String)
+            case supportedFilePath(String)
+            case unsupportedFilePath(String)
             case other(String)
         }
 
@@ -527,8 +1020,10 @@ enum DocumentOpenRouter {
             }
 
             let url = normalizedFileURL(inputURL)
-            guard seenInputs.insert(.filePath(url.path)).inserted else { continue }
             guard let kind = classifyTarget(url) else {
+                guard seenInputs.insert(.unsupportedFilePath(url.path)).inserted else {
+                    continue
+                }
                 indexedRejections.append((
                     index,
                     DocumentOpenRouteRejection(
@@ -538,7 +1033,18 @@ enum DocumentOpenRouter {
                 ))
                 continue
             }
-            candidates.append(Candidate(inputIndex: index, url: url, kind: kind))
+            let pathIdentity = canonicalPathIdentity(for: url)
+            guard seenInputs.insert(.supportedFilePath(pathIdentity)).inserted else {
+                continue
+            }
+            candidates.append(
+                Candidate(
+                    inputIndex: index,
+                    url: url,
+                    pathIdentity: pathIdentity,
+                    kind: kind
+                )
+            )
         }
 
         let files = candidates.filter { $0.kind == .markdownFile }
@@ -570,17 +1076,17 @@ enum DocumentOpenRouter {
             supportedCandidates = candidates
         }
 
-        let openedDocuments = normalizedPathSet(openedDocumentURLs)
-        let openedProjects = normalizedPathSet(openedProjectURLs)
+        let openedDocuments = canonicalPathSet(openedDocumentURLs)
+        let openedProjects = canonicalPathSet(openedProjectURLs)
         var blankTokenIsAvailable = hasReusableBlankWindow
         var actions: [DocumentOpenRouteAction] = []
         actions.reserveCapacity(supportedCandidates.count)
 
         for candidate in supportedCandidates {
             switch candidate.kind {
-            case .markdownFile where openedDocuments.contains(candidate.url.path):
+            case .markdownFile where openedDocuments.contains(candidate.pathIdentity):
                 actions.append(.focusExistingFile(candidate.url))
-            case .projectDirectory where openedProjects.contains(candidate.url.path):
+            case .projectDirectory where openedProjects.contains(candidate.pathIdentity):
                 actions.append(.focusExistingProject(candidate.url))
             case .markdownFile:
                 let token: DocumentOpenRouteBlankToken? = blankTokenIsAvailable
@@ -609,6 +1115,13 @@ enum DocumentOpenRouter {
         url.standardizedFileURL
     }
 
+    static func canonicalPathIdentity(for url: URL) -> String {
+        normalizedFileURL(url)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
+    }
+
     static func supportedTargetKind(for url: URL) -> DocumentOpenTargetKind? {
         guard url.isFileURL else { return nil }
 
@@ -627,8 +1140,8 @@ enum DocumentOpenRouter {
         }
     }
 
-    private static func normalizedPathSet(_ urls: [URL]) -> Set<String> {
-        Set(urls.lazy.filter(\.isFileURL).map { normalizedFileURL($0).path })
+    private static func canonicalPathSet(_ urls: [URL]) -> Set<String> {
+        Set(urls.lazy.filter(\.isFileURL).map { canonicalPathIdentity(for: $0) })
     }
 }
 
@@ -818,7 +1331,10 @@ final class RecentDocumentsController: NSObject, ObservableObject {
     }
 
     func openDocumentFromFolder(_ url: URL) {
-        openDocumentFromFolder(url) { _ in }
+        openDocumentFromFolderDetailed(
+            url,
+            presentsErrors: true
+        ) { _ in }
     }
 
     func openDocumentFromFolder(
@@ -832,7 +1348,9 @@ final class RecentDocumentsController: NSObject, ObservableObject {
 
     func openDocumentFromFolderDetailed(
         _ url: URL,
+        authorization: ProjectDocumentOpenAuthorization? = nil,
         display: Bool = true,
+        presentsErrors: Bool = false,
         completion: @escaping @MainActor (Result<OpenedDocumentResult, Error>) -> Void
     ) {
         guard Self.supportedExternalDocumentURLs(from: [url]).count == 1 else {
@@ -842,7 +1360,9 @@ final class RecentDocumentsController: NSObject, ObservableObject {
         open(
             url,
             reusableDocument: nil,
+            authorization: authorization,
             display: display,
+            presentsErrors: presentsErrors,
             completion: completion
         )
     }
@@ -948,7 +1468,9 @@ final class RecentDocumentsController: NSObject, ObservableObject {
     private func open(
         _ url: URL,
         reusableDocument: NSDocument?,
+        authorization: ProjectDocumentOpenAuthorization? = nil,
         display: Bool = true,
+        presentsErrors: Bool = true,
         completion: @escaping @MainActor (Result<OpenedDocumentResult, Error>) -> Void = { _ in }
     ) {
         let accessed = url.startAccessingSecurityScopedResource()
@@ -958,12 +1480,19 @@ final class RecentDocumentsController: NSObject, ObservableObject {
                 return
             }
             do {
-                switch try await openPreflightWorker.inspect(url) {
+                let inspection = try await openPreflightWorker.inspect(
+                    url,
+                    authorization: authorization
+                )
+                switch inspection.preflight {
                 case .supported:
                     openVerifiedDocument(
                         url,
                         reusableDocument: reusableDocument,
+                        authorization: authorization,
+                        authorizedData: inspection.authorizedData,
                         display: display,
+                        presentsErrors: presentsErrors,
                         securityScopeIsActive: accessed,
                         completion: completion
                     )
@@ -971,17 +1500,21 @@ final class RecentDocumentsController: NSObject, ObservableObject {
                     if accessed { url.stopAccessingSecurityScopedResource() }
                     failureRecorder(.opening, .unsupportedEncoding)
                     completion(.failure(DocumentOpenError.unsupportedEncoding))
-                    await UnsupportedEncodingRecoveryUI.present(
-                        sourceURL: url,
-                        originalData: originalData,
-                        attachedTo: NSApp.keyWindow ?? NSApp.mainWindow
-                    )
+                    if presentsErrors {
+                        await UnsupportedEncodingRecoveryUI.present(
+                            sourceURL: url,
+                            originalData: originalData,
+                            attachedTo: NSApp.keyWindow ?? NSApp.mainWindow
+                        )
+                    }
                 }
             } catch {
                 if accessed { url.stopAccessingSecurityScopedResource() }
                 failureRecorder(.opening, .fileUnavailable)
                 completion(.failure(error))
-                NSDocumentController.shared.presentError(error)
+                if presentsErrors {
+                    NSDocumentController.shared.presentError(error)
+                }
             }
         }
     }
@@ -989,10 +1522,31 @@ final class RecentDocumentsController: NSObject, ObservableObject {
     private func openVerifiedDocument(
         _ url: URL,
         reusableDocument: NSDocument?,
+        authorization: ProjectDocumentOpenAuthorization?,
+        authorizedData: Data?,
         display: Bool,
+        presentsErrors: Bool,
         securityScopeIsActive: Bool,
         completion: @escaping @MainActor (Result<OpenedDocumentResult, Error>) -> Void
     ) {
+        guard authorization?.isCurrent() != false else {
+            if securityScopeIsActive { url.stopAccessingSecurityScopedResource() }
+            completion(.failure(DocumentOpenError.targetChanged))
+            return
+        }
+        if let authorization, let authorizedData {
+            openAuthorizedDocument(
+                url,
+                reusableDocument: reusableDocument,
+                authorization: authorization,
+                data: authorizedData,
+                display: display,
+                presentsErrors: presentsErrors,
+                securityScopeIsActive: securityScopeIsActive,
+                completion: completion
+            )
+            return
+        }
         NSDocumentController.shared.openDocument(
             withContentsOf: url,
             display: display
@@ -1001,7 +1555,9 @@ final class RecentDocumentsController: NSObject, ObservableObject {
                 if securityScopeIsActive { url.stopAccessingSecurityScopedResource() }
                 self?.failureRecorder(.opening, .fileUnavailable)
                 completion(.failure(error))
-                NSDocumentController.shared.presentError(error)
+                if presentsErrors {
+                    NSDocumentController.shared.presentError(error)
+                }
                 return
             }
             guard let self, let document else {
@@ -1010,33 +1566,225 @@ final class RecentDocumentsController: NSObject, ObservableObject {
                 completion(.failure(DocumentOpenError.unsupportedTarget))
                 return
             }
-            if securityScopeIsActive {
-                SecurityScopedDocumentLeaseRegistry.retainActiveAccess(
-                    to: url,
-                    for: document
-                )
+            guard authorization?.isCurrent() != false else {
+                if securityScopeIsActive { url.stopAccessingSecurityScopedResource() }
+                if !wasAlreadyOpen,
+                   !document.isDocumentEdited,
+                   document.windowControllers.allSatisfy({ $0.window?.isVisible != true })
+                {
+                    document.close()
+                }
+                self.failureRecorder(.opening, .fileUnavailable)
+                completion(.failure(DocumentOpenError.targetChanged))
+                return
             }
-            self.note(url)
-            if !wasAlreadyOpen,
-               let reusableDocument,
-               reusableDocument !== document,
-               // The preflight and native open are asynchronous. Consume the
-               // originally selected blank only if it is *still* the one that
-               // satisfies the complete reuse policy at commit time; the user
-               // may have edited, saved, closed, or attached it to a project.
-               self.reusableBlankDocument() === reusableDocument
-            {
-                reusableDocument.close()
-            }
-            completion(
-                .success(
-                    OpenedDocumentResult(
-                        document: document,
-                        wasAlreadyOpen: wasAlreadyOpen
-                    )
-                )
+            self.finishSuccessfulOpen(
+                document,
+                wasAlreadyOpen: wasAlreadyOpen,
+                receipt: nil,
+                url: url,
+                reusableDocument: reusableDocument,
+                securityScopeIsActive: securityScopeIsActive,
+                completion: completion
             )
         }
+    }
+
+    private func openAuthorizedDocument(
+        _ url: URL,
+        reusableDocument: NSDocument?,
+        authorization: ProjectDocumentOpenAuthorization,
+        data: Data,
+        display: Bool,
+        presentsErrors: Bool,
+        securityScopeIsActive: Bool,
+        completion: @escaping @MainActor (Result<OpenedDocumentResult, Error>) -> Void
+    ) {
+        let documentController = NSDocumentController.shared
+        guard authorization.isCurrent() else {
+            if securityScopeIsActive { url.stopAccessingSecurityScopedResource() }
+            failureRecorder(.opening, .fileUnavailable)
+            completion(.failure(DocumentOpenError.targetChanged))
+            return
+        }
+        if let existing = NativeDocumentLoadedFileRegistry.focusableDocument(
+            authorization: authorization,
+            documentController: documentController
+        ) {
+            guard authorization.isCurrent() else {
+                if securityScopeIsActive { url.stopAccessingSecurityScopedResource() }
+                failureRecorder(.opening, .fileUnavailable)
+                completion(.failure(DocumentOpenError.targetChanged))
+                return
+            }
+            if display {
+                existing.showWindows()
+                existing.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            guard let currentAuthorization = authorization.refreshedAfterVerifiedRead(
+                expectedData: data
+            ) else {
+                if securityScopeIsActive { url.stopAccessingSecurityScopedResource() }
+                failureRecorder(.opening, .fileUnavailable)
+                completion(.failure(DocumentOpenError.targetChanged))
+                return
+            }
+            NativeDocumentLoadedFileRegistry.refreshManagedRegistration(
+                existing,
+                authorization: currentAuthorization
+            )
+            finishSuccessfulOpen(
+                existing,
+                wasAlreadyOpen: true,
+                receipt: ProjectDocumentOpenReceipt(
+                    authorization: currentAuthorization,
+                    expectedData: data
+                ),
+                url: url,
+                reusableDocument: reusableDocument,
+                securityScopeIsActive: securityScopeIsActive,
+                completion: completion
+            )
+            return
+        }
+        AuthorizedMarkdownDocumentOpener.open(
+            from: data,
+            authorization: authorization,
+            documentController: documentController
+        ) { [weak self] result in
+            guard let self else {
+                if securityScopeIsActive {
+                    url.stopAccessingSecurityScopedResource()
+                }
+                if case let .success(opened) = result, !opened.wasAlreadyOpen {
+                    opened.document.close()
+                }
+                return
+            }
+            guard case let .success(opened) = result else {
+                if securityScopeIsActive {
+                    url.stopAccessingSecurityScopedResource()
+                }
+                self.failureRecorder(.opening, .fileUnavailable)
+                if case let .failure(error) = result {
+                    completion(.failure(error))
+                    if presentsErrors {
+                        documentController.presentError(error)
+                    }
+                }
+                return
+            }
+            guard let currentAuthorization = authorization.refreshedAfterVerifiedRead(
+                expectedData: data
+            ) else {
+                if securityScopeIsActive {
+                    url.stopAccessingSecurityScopedResource()
+                }
+                if !opened.wasAlreadyOpen { opened.document.close() }
+                self.failureRecorder(.opening, .fileUnavailable)
+                completion(.failure(DocumentOpenError.targetChanged))
+                return
+            }
+            if opened.wasAlreadyOpen {
+                guard NativeDocumentLoadedFileRegistry.canFocusAlreadyOpen(
+                    opened.document,
+                    authorization: currentAuthorization,
+                    documentController: documentController
+                ) else {
+                    if securityScopeIsActive {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                    self.failureRecorder(.opening, .fileUnavailable)
+                    completion(.failure(DocumentOpenError.targetChanged))
+                    return
+                }
+            } else {
+                NativeDocumentLoadedFileRegistry.register(
+                    opened.document,
+                    authorization: currentAuthorization
+                )
+            }
+            if display {
+                if opened.document.windowControllers.isEmpty {
+                    opened.document.makeWindowControllers()
+                }
+                opened.document.showWindows()
+                opened.document.windowControllers.first?.window?
+                    .makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            guard let displayedAuthorization = currentAuthorization.refreshedAfterVerifiedRead(
+                expectedData: data
+            ) else {
+                if securityScopeIsActive {
+                    url.stopAccessingSecurityScopedResource()
+                }
+                if !opened.wasAlreadyOpen { opened.document.close() }
+                self.failureRecorder(.opening, .fileUnavailable)
+                completion(.failure(DocumentOpenError.targetChanged))
+                return
+            }
+            if opened.wasAlreadyOpen {
+                NativeDocumentLoadedFileRegistry.refreshManagedRegistration(
+                    opened.document,
+                    authorization: displayedAuthorization
+                )
+            } else {
+                NativeDocumentLoadedFileRegistry.register(
+                    opened.document,
+                    authorization: displayedAuthorization
+                )
+            }
+            self.finishSuccessfulOpen(
+                opened.document,
+                wasAlreadyOpen: opened.wasAlreadyOpen,
+                receipt: ProjectDocumentOpenReceipt(
+                    authorization: displayedAuthorization,
+                    expectedData: data
+                ),
+                url: url,
+                reusableDocument: reusableDocument,
+                securityScopeIsActive: securityScopeIsActive,
+                completion: completion
+            )
+        }
+    }
+
+    private func finishSuccessfulOpen(
+        _ document: NSDocument,
+        wasAlreadyOpen: Bool,
+        receipt: ProjectDocumentOpenReceipt?,
+        url: URL,
+        reusableDocument: NSDocument?,
+        securityScopeIsActive: Bool,
+        completion: @escaping @MainActor (Result<OpenedDocumentResult, Error>) -> Void
+    ) {
+        if securityScopeIsActive {
+            SecurityScopedDocumentLeaseRegistry.retainActiveAccess(
+                to: url,
+                for: document
+            )
+        }
+        note(url)
+        if !wasAlreadyOpen,
+           let reusableDocument,
+           reusableDocument !== document,
+           // The preflight and document construction are asynchronous. Consume
+           // the selected blank only if it is still fully reusable at commit.
+           self.reusableBlankDocument() === reusableDocument
+        {
+            reusableDocument.close()
+        }
+        completion(
+            .success(
+                OpenedDocumentResult(
+                    document: document,
+                    wasAlreadyOpen: wasAlreadyOpen,
+                    receipt: receipt
+                )
+            )
+        )
     }
 
     private func reusableBlankDocument() -> NSDocument? {
@@ -1049,10 +1797,10 @@ final class RecentDocumentsController: NSObject, ObservableObject {
     }
 
     private func focusExistingDocument(at url: URL) {
-        let identity = DocumentOpenRouter.normalizedFileURL(url).path
+        let identity = DocumentOpenRouter.canonicalPathIdentity(for: url)
         guard let document = NSDocumentController.shared.documents.first(where: {
             guard let fileURL = $0.fileURL else { return false }
-            return DocumentOpenRouter.normalizedFileURL(fileURL).path == identity
+            return DocumentOpenRouter.canonicalPathIdentity(for: fileURL) == identity
         }) else {
             return
         }

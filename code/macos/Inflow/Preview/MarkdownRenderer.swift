@@ -63,6 +63,8 @@ enum MarkdownRenderer {
         for markdown: String,
         documentDirectory: URL? = nil,
         projectRoot: URL? = nil,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity? = nil,
+        requiresProjectBoundary: Bool = false,
         configuration: PreviewAppearanceConfiguration = .default,
         navigationHeadings: [DocumentHeading] = []
     ) -> String {
@@ -70,6 +72,8 @@ enum MarkdownRenderer {
             for: markdown,
             documentDirectory: documentDirectory,
             projectRoot: projectRoot,
+            expectedProjectRootIdentity: expectedProjectRootIdentity,
+            requiresProjectBoundary: requiresProjectBoundary,
             configuration: configuration,
             navigationHeadings: navigationHeadings
         ).html
@@ -79,6 +83,8 @@ enum MarkdownRenderer {
         for markdown: String,
         documentDirectory: URL? = nil,
         projectRoot: URL? = nil,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity? = nil,
+        requiresProjectBoundary: Bool = false,
         configuration: PreviewAppearanceConfiguration = .default,
         navigationHeadings: [DocumentHeading] = []
     ) -> MarkdownPreviewDocument {
@@ -86,6 +92,8 @@ enum MarkdownRenderer {
             for: markdown,
             documentDirectory: documentDirectory,
             projectRoot: projectRoot,
+            expectedProjectRootIdentity: expectedProjectRootIdentity,
+            requiresProjectBoundary: requiresProjectBoundary,
             configuration: configuration,
             navigationHeadings: navigationHeadings,
             fragmentRenderer: htmlFragment
@@ -96,6 +104,8 @@ enum MarkdownRenderer {
         for markdown: String,
         documentDirectory: URL?,
         projectRoot: URL? = nil,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity? = nil,
+        requiresProjectBoundary: Bool = false,
         configuration: PreviewAppearanceConfiguration,
         navigationHeadings: [DocumentHeading],
         fragmentRenderer: (String, PreviewAppearanceConfiguration) throws -> String
@@ -119,7 +129,9 @@ enum MarkdownRenderer {
                         in: fragment,
                         documentDirectory: documentDirectory,
                         imageReferences: references.filter { $0.kind == .image },
-                        projectRoot: projectRoot
+                        projectRoot: projectRoot,
+                        expectedProjectRootIdentity: expectedProjectRootIdentity,
+                        requiresProjectBoundary: requiresProjectBoundary
                     ),
                     configuration: configuration
                 ),

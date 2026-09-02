@@ -539,6 +539,7 @@ final class ProjectDocumentReservationRegistry {
     }
 }
 
+@MainActor
 enum ProjectDocumentTargetPolicy {
     static func isReusableShell(
         _ document: NSDocument,
@@ -564,10 +565,108 @@ enum ProjectDocumentTargetPolicy {
 }
 
 @MainActor
+enum ProjectSessionBoundary {
+    static func hasCurrentRoot(_ browser: FolderBrowserController) -> Bool {
+        guard let root = browser.folderURL,
+              let identity = browser.projectRootIdentity
+        else {
+            return false
+        }
+        return FolderProjectDirectoryIdentity.capture(root) == identity
+    }
+
+    static func activeEditorRoot(
+        for documentURL: URL?,
+        document: NSDocument?,
+        browser: FolderBrowserController
+    ) -> URL? {
+        guard let root = browser.folderURL,
+              let identity = browser.projectRootIdentity,
+              FolderProjectDirectoryIdentity.capture(root) == identity,
+              browser.isAssociatedProjectDocument(document)
+        else {
+            return nil
+        }
+        if let documentURL,
+           !FolderProjectPathBoundary.contains(documentURL, in: root)
+        {
+            return nil
+        }
+        guard FolderProjectDirectoryIdentity.capture(root) == identity else {
+            return nil
+        }
+        return root
+    }
+
+    static func matchesRequestedProject(
+        _ requestedURL: URL,
+        browser: FolderBrowserController
+    ) -> Bool {
+        guard hasCurrentRoot(browser), let root = browser.folderURL else {
+            return false
+        }
+        return FolderProjectPathBoundary.normalizedResolvedURL(requestedURL)
+            == FolderProjectPathBoundary.normalizedResolvedURL(root)
+    }
+
+    static func authorizationIsCurrent(
+        _ authorization: ProjectDocumentOpenAuthorization,
+        targetURL: URL,
+        browser: FolderBrowserController
+    ) -> Bool {
+        guard hasCurrentRoot(browser),
+              let root = browser.folderURL,
+              let identity = browser.projectRootIdentity,
+              FolderProjectPathBoundary.contains(targetURL, in: root),
+              authorization.targetURL.standardizedFileURL
+                  == targetURL.standardizedFileURL,
+              authorization.projectIdentity == identity,
+              authorization.isCurrent()
+        else {
+            return false
+        }
+        return true
+    }
+}
+
+typealias ProjectDocumentOpenCompletion = @MainActor (
+    Result<OpenedDocumentResult, Error>
+) -> Void
+
+@MainActor
+struct ProjectDocumentDetailedOpener {
+    private let handler: @MainActor (
+        URL,
+        ProjectDocumentOpenAuthorization,
+        @escaping ProjectDocumentOpenCompletion
+    ) -> Void
+
+    init(
+        _ handler: @escaping @MainActor (
+            URL,
+            ProjectDocumentOpenAuthorization,
+            @escaping ProjectDocumentOpenCompletion
+        ) -> Void
+    ) {
+        self.handler = handler
+    }
+
+    func open(
+        _ url: URL,
+        authorization: ProjectDocumentOpenAuthorization,
+        completion: @escaping ProjectDocumentOpenCompletion
+    ) {
+        handler(url, authorization, completion)
+    }
+}
+
+@MainActor
 final class LightweightProjectCoordinator {
     let browser: FolderBrowserController
+    let editorNavigationState = ProjectEditorNavigationState()
     private weak var projectDocument: NSDocument?
     private let createProjectDocument: () throws -> NSDocument
+    private let detailedDocumentOpener: ProjectDocumentDetailedOpener?
     private let documentSwitchGate = ProjectDocumentSwitchGate()
     private let reservationRegistry = ProjectDocumentReservationRegistry()
     private var projectPreparationTasks: [UUID: Task<Void, Never>] = [:]
@@ -575,10 +674,12 @@ final class LightweightProjectCoordinator {
 
     init(
         browser: FolderBrowserController,
-        createProjectDocument: @escaping () throws -> NSDocument
+        createProjectDocument: @escaping () throws -> NSDocument,
+        detailedDocumentOpener: ProjectDocumentDetailedOpener? = nil
     ) {
         self.browser = browser
         self.createProjectDocument = createProjectDocument
+        self.detailedDocumentOpener = detailedDocumentOpener
     }
 
     var openedProjectURLs: [URL] {
@@ -747,7 +848,30 @@ final class LightweightProjectCoordinator {
                 )
                 return
             }
-            guard self.browser.commitPreparedFolder(preparation) else {
+            guard self.browser.commitPreparedFolder(
+                preparation,
+                finalValidation: {
+                    self.documentSwitchGate.isActive(switchToken)
+                        && self.isReusableProjectShell(targetDocument)
+                }
+            ) else {
+                if closesTargetOnCancellation {
+                    self.closeUncommittedDocumentIfSafe(targetDocument)
+                }
+                self.restoreProject(document: previousDocument)
+                self.finishSwitchToken(switchToken)
+                LocalFailureLogController.shared.record(
+                    .project,
+                    code: .projectUnavailable
+                )
+                NSDocumentController.shared.presentError(
+                    FolderBrowserError.unavailable
+                )
+                return
+            }
+            guard self.browser.projectRootIdentity == preparation.rootIdentity,
+                  ProjectSessionBoundary.hasCurrentRoot(self.browser)
+            else {
                 if closesTargetOnCancellation {
                     self.closeUncommittedDocumentIfSafe(targetDocument)
                 }
@@ -763,6 +887,11 @@ final class LightweightProjectCoordinator {
                 return
             }
 
+            // A committed project open starts a new project-window session,
+            // even when it reopens the same directory identity. Seed its
+            // navigation from current preferences; project-file replacement
+            // below deliberately does not reset this state.
+            self.editorNavigationState.reset()
             self.attach(to: targetDocument)
             if let previousDocument, previousDocument !== targetDocument {
                 previousDocument.close()
@@ -771,8 +900,9 @@ final class LightweightProjectCoordinator {
         }
     }
 
-    func focusProject(_: URL) {
-        guard !DocumentCloseAuthorization.hasPendingRequests,
+    func focusProject(_ url: URL) {
+        guard ProjectSessionBoundary.matchesRequestedProject(url, browser: browser),
+              !DocumentCloseAuthorization.hasPendingRequests,
               let switchToken = documentSwitchGate.begin()
         else { return }
         defer { finishSwitchToken(switchToken) }
@@ -801,13 +931,37 @@ final class LightweightProjectCoordinator {
         _ url: URL,
         replacing candidate: NSDocument?,
         using recentDocuments: RecentDocumentsController,
+        authorization: ProjectDocumentOpenAuthorization? = nil,
         requiresCloseAuthorization: Bool = true,
         completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }
     ) {
         guard let root = browser.folderURL,
-              FolderProjectPathBoundary.contains(url, in: root)
+              let committedProjectIdentity = browser.projectRootIdentity
         else {
             completion(.failure(DocumentOpenError.unsupportedTarget))
+            return
+        }
+        guard FolderProjectDirectoryIdentity.capture(root)
+                  == committedProjectIdentity
+        else {
+            completion(.failure(DocumentOpenError.targetChanged))
+            return
+        }
+        guard FolderProjectPathBoundary.contains(url, in: root) else {
+            completion(.failure(DocumentOpenError.unsupportedTarget))
+            return
+        }
+        guard let effectiveAuthorization = authorization
+                  ?? ProjectDocumentOpenAuthorization.capture(
+                      targetURL: url,
+                      projectRoot: root
+                  ),
+              effectiveAuthorization.isCurrent(),
+              effectiveAuthorization.targetURL.standardizedFileURL
+                  == url.standardizedFileURL,
+              effectiveAuthorization.projectIdentity == committedProjectIdentity
+        else {
+            completion(.failure(DocumentOpenError.targetChanged))
             return
         }
 
@@ -819,22 +973,60 @@ final class LightweightProjectCoordinator {
         }
 
         let current = currentProjectDocument(candidate)
-        if let currentURL = current?.fileURL,
-           DocumentRelocationAnalyzer.isSameFile(currentURL, url)
+        if let current,
+           NSDocumentController.shared.documents.contains(where: { $0 === current }),
+           NativeDocumentLoadedFileRegistry.matches(
+               current,
+               authorization: effectiveAuthorization
+           )
         {
-            current?.showWindows()
-            current?.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
+            guard let receipt = ProjectDocumentOpenReceipt.capture(
+                authorization: effectiveAuthorization
+            ) else {
+                completion(.failure(DocumentOpenError.targetChanged))
+                return
+            }
+            current.showWindows()
+            current.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
+            guard let refreshedReceipt = refreshedProjectDocumentReceipt(
+                receipt,
+                targetURL: url
+            ) else {
+                completion(.failure(DocumentOpenError.targetChanged))
+                return
+            }
+            NativeDocumentLoadedFileRegistry.register(
+                current,
+                authorization: refreshedReceipt.authorization
+            )
             completion(.success(()))
             return
         }
 
-        if let existing = NativeDocumentSaveCoordinator.documentAlreadyOpen(
-            at: url,
+        if let existing = NativeDocumentLoadedFileRegistry.focusableDocument(
+            authorization: effectiveAuthorization,
             excluding: current
         ) {
+            guard let receipt = ProjectDocumentOpenReceipt.capture(
+                authorization: effectiveAuthorization
+            ) else {
+                completion(.failure(DocumentOpenError.targetChanged))
+                return
+            }
             existing.showWindows()
             existing.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            guard let refreshedReceipt = refreshedProjectDocumentReceipt(
+                receipt,
+                targetURL: url
+            ) else {
+                completion(.failure(DocumentOpenError.targetChanged))
+                return
+            }
+            NativeDocumentLoadedFileRegistry.refreshManagedRegistration(
+                existing,
+                authorization: refreshedReceipt.authorization
+            )
             completion(.success(()))
             return
         }
@@ -856,12 +1048,16 @@ final class LightweightProjectCoordinator {
                 completion: completion
             )
         }
-        recentDocuments.openDocumentFromFolderDetailed(
-            url,
-            display: false
-        ) { [weak self, weak current] result in
+        let handleOpenResult: ProjectDocumentOpenCompletion = {
+            [weak self, weak current, weak browser = browser] result in
             timeoutTask.cancel()
-            guard let self else { return }
+            guard let self else {
+                Self.closeOpenedDocumentAfterCoordinatorReleaseIfSafe(
+                    result,
+                    browser: browser
+                )
+                return
+            }
             guard self.documentSwitchGate.isActive(switchToken) else {
                 self.closeAbandonedNewDocumentIfSafe(result, targetURL: url)
                 return
@@ -872,11 +1068,46 @@ final class LightweightProjectCoordinator {
                     document: opened.document,
                     owner: switchToken
                 )
+                // Native document construction, showing, and activation can each
+                // update only ctime. Carry the opener's frozen bytes through every
+                // commit boundary so those benign updates can be reverified while
+                // replacement or content changes still fail closed.
+                guard let openedReceipt = opened.receipt,
+                      let currentReceipt = self.refreshedProjectDocumentReceipt(
+                          openedReceipt,
+                          targetURL: url
+                      )
+                else {
+                    if !opened.wasAlreadyOpen {
+                        self.closeUncommittedDocumentIfSafe(opened.document)
+                    }
+                    self.finishDocumentSwitch(
+                        switchToken,
+                        result: .failure(DocumentOpenError.targetChanged),
+                        completion: completion
+                    )
+                    return
+                }
                 guard !opened.wasAlreadyOpen else {
                     opened.document.showWindows()
                     opened.document.windowControllers.first?.window?
                         .makeKeyAndOrderFront(nil)
                     NSApp.activate(ignoringOtherApps: true)
+                    guard let focusedReceipt = self.refreshedProjectDocumentReceipt(
+                        currentReceipt,
+                        targetURL: url
+                    ) else {
+                        self.finishDocumentSwitch(
+                            switchToken,
+                            result: .failure(DocumentOpenError.targetChanged),
+                            completion: completion
+                        )
+                        return
+                    }
+                    NativeDocumentLoadedFileRegistry.refreshManagedRegistration(
+                        opened.document,
+                        authorization: focusedReceipt.authorization
+                    )
                     self.finishDocumentSwitch(
                         switchToken,
                         result: .success(()),
@@ -893,6 +1124,8 @@ final class LightweightProjectCoordinator {
                     self.completeDocumentReplacement(
                         opened.document,
                         replacing: current,
+                        targetURL: url,
+                        receipt: currentReceipt,
                         switchToken: switchToken,
                         completion: completion
                     )
@@ -927,6 +1160,8 @@ final class LightweightProjectCoordinator {
                     self.completeDocumentReplacement(
                         opened.document,
                         replacing: current,
+                        targetURL: url,
+                        receipt: currentReceipt,
                         switchToken: switchToken,
                         completion: completion
                     )
@@ -939,11 +1174,26 @@ final class LightweightProjectCoordinator {
                 )
             }
         }
+        if let detailedDocumentOpener {
+            detailedDocumentOpener.open(
+                url,
+                authorization: effectiveAuthorization,
+                completion: handleOpenResult
+            )
+        } else {
+            recentDocuments.openDocumentFromFolderDetailed(
+                url,
+                authorization: effectiveAuthorization,
+                display: false,
+                completion: handleOpenResult
+            )
+        }
     }
 
     private var activeProjectDocument: NSDocument? {
         guard let document = projectDocument,
               NSDocumentController.shared.documents.contains(where: { $0 === document }),
+              ProjectSessionBoundary.hasCurrentRoot(browser),
               let root = browser.folderURL
         else {
             return nil
@@ -1008,14 +1258,62 @@ final class LightweightProjectCoordinator {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    private func refreshedProjectDocumentReceipt(
+        _ receipt: ProjectDocumentOpenReceipt,
+        targetURL: URL
+    ) -> ProjectDocumentOpenReceipt? {
+        guard let refreshedReceipt = receipt.refreshed(),
+              ProjectSessionBoundary.authorizationIsCurrent(
+                  refreshedReceipt.authorization,
+                  targetURL: targetURL,
+                  browser: browser
+              )
+        else {
+            return nil
+        }
+        return refreshedReceipt
+    }
+
     private func completeDocumentReplacement(
         _ openedDocument: NSDocument,
         replacing current: NSDocument?,
+        targetURL: URL,
+        receipt: ProjectDocumentOpenReceipt,
         switchToken: UUID,
         completion: @escaping @MainActor (Result<Void, Error>) -> Void
     ) {
         guard documentSwitchGate.isActive(switchToken) else { return }
+        guard let currentReceipt = refreshedProjectDocumentReceipt(
+            receipt,
+            targetURL: targetURL
+        ) else {
+            closeUncommittedDocumentIfSafe(openedDocument)
+            restoreProject(document: current)
+            finishDocumentSwitch(
+                switchToken,
+                result: .failure(DocumentOpenError.targetChanged),
+                completion: completion
+            )
+            return
+        }
         attach(to: openedDocument)
+        guard let attachedReceipt = refreshedProjectDocumentReceipt(
+            currentReceipt,
+            targetURL: targetURL
+        ) else {
+            restoreProject(document: current)
+            closeUncommittedDocumentIfSafe(openedDocument)
+            finishDocumentSwitch(
+                switchToken,
+                result: .failure(DocumentOpenError.targetChanged),
+                completion: completion
+            )
+            return
+        }
+        NativeDocumentLoadedFileRegistry.register(
+            openedDocument,
+            authorization: attachedReceipt.authorization
+        )
         if let current, current !== openedDocument {
             current.close()
         }
@@ -1050,6 +1348,27 @@ final class LightweightProjectCoordinator {
         )
     }
 
+    /// An authorized open may finish after the coordinator that requested it
+    /// has gone away. Close only a genuinely new, still-hidden blank native
+    /// result; never take ownership of an existing or project-associated one.
+    static func closeOpenedDocumentAfterCoordinatorReleaseIfSafe(
+        _ result: Result<OpenedDocumentResult, Error>,
+        browser: FolderBrowserController?
+    ) {
+        guard case let .success(opened) = result,
+              !opened.wasAlreadyOpen,
+              browser?.isAssociatedProjectDocument(opened.document) != true
+        else { return }
+        let isRegistered = NSDocumentController.shared.documents.contains {
+            $0 === opened.document
+        }
+        guard ProjectDocumentTargetPolicy.canCloseUncommitted(
+            opened.document,
+            isRegistered: isRegistered
+        ) else { return }
+        opened.document.close()
+    }
+
     @discardableResult
     private func finishSwitchToken(_ switchToken: UUID) -> Bool {
         guard documentSwitchGate.finish(switchToken) else { return false }
@@ -1071,14 +1390,27 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     let folderBrowser: FolderBrowserController
     let projectCoordinator: LightweightProjectCoordinator
     private let createUntitledDocument: (Any?) -> Void
+    private let hasOpenDocuments: () -> Bool
     private let installLaunchIntegrations: (RecentDocumentsController) -> Void
     private var hasInstalledLaunchIntegrations = false
+    private var hasReceivedExternalOpenRequest = false
+    private var hasRequestedInitialDocument = false
+    private var initialDocumentPresentationTask: Task<Void, Never>?
     private var isReviewingTermination = false
 
     override convenience init() {
         self.init(
-            createUntitledDocument: { sender in
-                NSDocumentController.shared.newDocument(sender)
+            createUntitledDocument: { _ in
+                do {
+                    _ = try NSDocumentController.shared
+                        .openUntitledDocumentAndDisplay(true)
+                } catch {
+                    LocalFailureLogController.shared.record(
+                        .opening,
+                        code: .fileUnavailable
+                    )
+                    NSDocumentController.shared.presentError(error)
+                }
             },
             createProjectDocument: {
                 try NSDocumentController.shared.openUntitledDocumentAndDisplay(false)
@@ -1090,6 +1422,9 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
         createUntitledDocument: @escaping (Any?) -> Void,
         createProjectDocument: @escaping () throws -> NSDocument = {
             try NSDocumentController.shared.openUntitledDocumentAndDisplay(false)
+        },
+        hasOpenDocuments: @escaping () -> Bool = {
+            !NSDocumentController.shared.documents.isEmpty
         },
         installLaunchIntegrations: ((RecentDocumentsController) -> Void)? = nil
     ) {
@@ -1118,6 +1453,7 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
         self.folderBrowser = folderBrowser
         self.projectCoordinator = projectCoordinator
         self.createUntitledDocument = createUntitledDocument
+        self.hasOpenDocuments = hasOpenDocuments
         self.installLaunchIntegrations = installLaunchIntegrations ?? { controller in
             NSDocumentController.shared.autosavingDelay = 0
             controller.installMenuIntegration()
@@ -1129,19 +1465,55 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
         guard !hasInstalledLaunchIntegrations else { return }
         hasInstalledLaunchIntegrations = true
         installLaunchIntegrations(recentDocuments)
+        scheduleInitialDocumentIfNeeded()
     }
 
     func application(_: NSApplication, open urls: [URL]) {
+        if !urls.isEmpty {
+            hasReceivedExternalOpenRequest = true
+            initialDocumentPresentationTask?.cancel()
+            initialDocumentPresentationTask = nil
+        }
         recentDocuments.openExternalDocuments(urls)
     }
 
     func applicationShouldOpenUntitledFile(_: NSApplication) -> Bool {
-        InflowLaunchPolicy.automaticallyOpensUntitledDocument
+        InflowLaunchPolicy.letsAppKitOpenUntitledDocument
     }
 
     func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
         createUntitledDocument(sender)
         return true
+    }
+
+    private func scheduleInitialDocumentIfNeeded() {
+        guard initialDocumentPresentationTask == nil,
+              !hasRequestedInitialDocument
+        else {
+            return
+        }
+        initialDocumentPresentationTask = Task { @MainActor [weak self] in
+            // Finder/open-file delivery may follow didFinishLaunching. Give
+            // that callback one main-actor turn to cancel the fallback before
+            // any untitled window is constructed.
+            await Task.yield()
+            guard !Task.isCancelled, let self else { return }
+            self.initialDocumentPresentationTask = nil
+            self.presentInitialDocumentIfNeeded()
+        }
+    }
+
+    private func presentInitialDocumentIfNeeded() {
+        guard !hasRequestedInitialDocument,
+              InflowLaunchPolicy.shouldCreateInitialDocument(
+                  hasReceivedExternalOpenRequest: hasReceivedExternalOpenRequest,
+                  hasOpenDocuments: hasOpenDocuments()
+              )
+        else {
+            return
+        }
+        hasRequestedInitialDocument = true
+        createUntitledDocument(nil)
     }
 
     func applicationShouldHandleReopen(
@@ -1260,7 +1632,7 @@ private struct InflowPrimaryCommands: Commands {
         EditorViewModeCommands()
         CommandGroup(after: .sidebar) {
             Toggle(
-                "显示项目侧栏",
+                "显示目录树",
                 isOn: projectSidebarVisibility ?? .constant(false)
             )
             .disabled(projectSidebarVisibility == nil)
@@ -1312,6 +1684,10 @@ struct InflowApp: App {
                 folderBrowser: applicationDelegate.folderBrowser
             )
             InflowEditingCommands(failureLog: failureLog)
+        }
+
+        Settings {
+            InflowSettingsView(preferences: preferences)
         }
 
         Window("Inflow 帮助", id: InflowHelpWindow.identifier) {

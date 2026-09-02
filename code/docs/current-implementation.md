@@ -1,6 +1,6 @@
 # Inflow 当前实现基线
 
-> 对齐日期：2026-09-01
+> 对齐日期：2026-09-02
 >
 > 适用里程碑：个人首版（内部验证版）
 >
@@ -18,7 +18,7 @@
 
 当前工作树面向一位内部用户完成本地 Markdown 写作闭环：
 
-- 普通启动、Finder、应用内命令或拖到应用图标后进入独立文档或普通文件夹项目；
+- 无待打开目标时，普通启动或在 Finder 中双击 Inflow App 都不弹文件选择器，直接进入可编辑的未命名文档；带外部目标的 Finder、应用内命令或拖到应用图标请求则沿统一路由进入独立文档或普通文件夹项目；
 - 在项目树中新建和切换 Markdown；
 - 在源码、分栏和即时渲染编辑之间使用同一份正文；
 - 只由用户手动保存，并处理简单外部变化和单快照恢复；
@@ -32,13 +32,15 @@
 ### 2.1 入口、文档与轻量项目
 
 - InflowApp 使用原生文档生命周期创建未命名 Markdown。在允许编辑前，ManualSaveDocumentHostPolicy 将当前 DocumentGroup 宿主的就地自动保存、草稿自动保存和版本保留策略统一关闭，并将定时保存延迟设为 0；若宿主策略无法覆盖或复核，文档保持只读并记录本地错误，而不承受未确认写入。
+- InflowLaunchPolicy 禁止 AppKit 自行弹出打开面板；应用委托在普通启动或 Finder 双击 App 且没有待处理外部目标时，显式创建并聚焦可编辑的未命名文档。带文件或文件夹目标的启动继续交给统一打开路由，不额外留下空白窗口。
 - RecentDocumentsController 当前用于统一应用内与外部目标的规范化、去重、空白窗口复用和多文件打开；recordsOpenedDocuments 为 false，因此不把它描述成 Inflow 管理的最近文档能力。
 - “打开项目…”把普通文件夹交给 LightweightProjectCoordinator 与 FolderBrowserController。项目不导入、不复制，也不创建私有项目文件。
 - FolderBrowser 负责递归目录树、隐藏项过滤、手动刷新、项目边界和安全新建 Markdown。新建使用不覆盖语义，并在执行前重新核对目标目录与符号链接边界。
 - 打开项目时先在不改动当前界面的情况下完成首轮目录扫描，并绑定目录 dev/inode 身份；只有扫描、旧文档关闭确认和提交点复核全部成功后，才附着新项目宿主并关闭旧文档。异步打开的隐藏目标在事务期间会被预留，超时迟到的回调不会关闭其他流程已采用的文档。
 - 项目上下文附着在一个原生文档窗口上；选择另一份 Markdown 前复用系统的未保存内容确认。取消切换时，只清理仍未修改且不可见的未提交目标；已被其他窗口显示或修改的文档保留为独立窗口。项目外另存成功后，当前窗口退出项目上下文。
+- MarkdownEditorView 以左侧项目目录树、中间编辑区、右侧当前文档大纲承载项目窗口；没有当前文档时大纲不可用。工具栏与“显示”菜单中的两侧开关只改变当前窗口。AppPreferences 和 InflowSettingsView 的“新窗口布局”保存目录树、大纲与分栏起点，只为之后新建窗口播种，不追改已打开窗口。
 
-上述代码入口仍必须由 UAT-PERSONAL-01、08 和 09 在真实 Finder、Dock、沙箱与文件系统上验证。
+上述启动与布局入口仍必须由 UAT-PERSONAL-01、04、08 和 09 在真实 Finder、Dock、沙箱、窗口与文件系统上验证；这四项及其他 UAT 当前均未执行。
 
 ### 2.2 单一正文与三种视图
 
@@ -109,7 +111,7 @@
 
 - ManualUpdateCheck、InflowReleaseProfileCommands 与发布/公证/封签脚本；
 - HTML 导出 API、面板、写入器及相关历史测试；
-- 自动保存偏好 key、旧延迟枚举和完整设置页代码；
+- 自动保存偏好 key、旧延迟枚举，以及当前 Settings 场景未暴露的其余完整设置矩阵；
 - Inflow 管理的最近文档记录、完整恢复中心、多快照、复杂冲突与比较界面；
 - 公式、脚注、额外 Mermaid 图类、删除线/围栏代码等未安装菜单动作；
 - 深色 PDF、专业后验、固定性能门槛、30 次协议和发布证据链；
@@ -117,7 +119,7 @@
 
 判断当前能力时，以已批准的个人首版范围、实际安装的菜单和主流程、以及 UAT-PERSONAL-01 至 10 为准，而不是以某个源文件或测试名称是否存在为准。
 
-自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 361 个 XCTest method：255 个 `current-direct`、13 个依赖真实 `NSApplication` 菜单或生命周期的 `current-host`、88 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
+自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 366 个 XCTest method：260 个 `current-direct`、13 个依赖真实 `NSApplication` 菜单或生命周期的 `current-host`、88 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
 
 ## 4. 人工 UAT 状态
 

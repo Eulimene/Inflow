@@ -178,6 +178,57 @@ final class HTMLExporterTests: XCTestCase {
         }
     }
 
+    func testFrozenExportRejectsImagesFromAReplacementProjectRoot() throws {
+        try withTemporaryDirectory { directory in
+            let project = directory.appendingPathComponent("project", isDirectory: true)
+            let displacedProject = directory.appendingPathComponent(
+                "displaced-project",
+                isDirectory: true
+            )
+            let notes = project.appendingPathComponent("notes", isDirectory: true)
+            let assets = project.appendingPathComponent("assets", isDirectory: true)
+            for target in [notes, assets] {
+                try FileManager.default.createDirectory(
+                    at: target,
+                    withIntermediateDirectories: true
+                )
+            }
+            let imageURL = assets.appendingPathComponent("photo.png")
+            try testPNGData().write(to: imageURL)
+            let projectIdentity = try XCTUnwrap(
+                FolderProjectDirectoryIdentity.capture(project)
+            )
+            let frozen = HTMLExportSnapshot(
+                markdown: "![project image](../assets/photo.png)",
+                documentDirectory: notes,
+                projectRoot: project,
+                expectedProjectRootIdentity: projectIdentity,
+                requiresProjectBoundary: true
+            )
+
+            try FileManager.default.moveItem(at: project, to: displacedProject)
+            for target in [notes, assets] {
+                try FileManager.default.createDirectory(
+                    at: target,
+                    withIntermediateDirectories: true
+                )
+            }
+            try testPNGData().write(to: imageURL)
+
+            let preparation = try HTMLExporter.prepare(snapshot: frozen)
+            let html = try XCTUnwrap(String(data: preparation.data, encoding: .utf8))
+            XCTAssertEqual(preparation.warnings, [.image])
+            XCTAssertTrue(html.contains("无法读取项目外图片"), html)
+            XCTAssertFalse(html.contains("data:image/png;base64,"), html)
+            XCTAssertThrowsError(try HTMLExporter.generate(snapshot: frozen)) { error in
+                guard case let HTMLExportError.unsupportedContent(issues) = error else {
+                    return XCTFail("Unexpected error: \(error)")
+                }
+                XCTAssertEqual(issues, [.image])
+            }
+        }
+    }
+
     func testPreparedExportWarnsAndDoesNotReadImageOutsideProjectBoundary() throws {
         try withTemporaryDirectory { directory in
             let project = directory.appendingPathComponent("project", isDirectory: true)

@@ -573,6 +573,28 @@ final class DocumentFileSafetyTests: XCTestCase {
         XCTAssertEqual(snapshot.diskText, "external 🌍\n")
         XCTAssertTrue(snapshot.localHasChanges)
 
+        let reloadEnvelope = try await session.prepareReload(snapshot)
+        let outsideURL = fixture.root
+            .deletingLastPathComponent()
+            .appendingPathComponent("outside-\(UUID().uuidString).md")
+        defer { try? FileManager.default.removeItem(at: outsideURL) }
+        try Data("outside marker\n".utf8).write(to: outsideURL)
+        try FileManager.default.removeItem(at: fixture.documentURL)
+        try FileManager.default.createSymbolicLink(
+            at: fixture.documentURL,
+            withDestinationURL: outsideURL
+        )
+        do {
+            _ = try await session.commitReload(reloadEnvelope)
+            XCTFail("Expected a replaced reload path to invalidate the decision")
+        } catch {
+            XCTAssertEqual(error as? DocumentFileSafetyError, .staleDecision)
+        }
+        XCTAssertTrue(session.hasUncommittedChanges)
+
+        try FileManager.default.removeItem(at: fixture.documentURL)
+        try external.write(to: fixture.documentURL)
+
         let result = try await session.reload(snapshot)
         XCTAssertEqual(result.data, external)
         XCTAssertEqual(result.decoded.text, "external 🌍\n")

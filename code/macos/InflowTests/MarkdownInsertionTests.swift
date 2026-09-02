@@ -213,6 +213,26 @@ final class MarkdownInsertionTests: XCTestCase {
 
         let worker = ImageAssetWorker()
         let image = try await worker.loadSource(at: sourceURL)
+
+        let changingSourceURL = root.appendingPathComponent("changing.png")
+        try testPNGData().write(to: changingSourceURL)
+        XCTAssertThrowsError(
+            try LocalImageValidator.load(
+                at: changingSourceURL,
+                afterRead: {
+                    let handle = try FileHandle(forWritingTo: changingSourceURL)
+                    try handle.truncate(atOffset: 0)
+                    try handle.write(contentsOf: Data("changed after descriptor read".utf8))
+                    try handle.close()
+                }
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? LocalImageValidationError,
+                .notRegularOrUnreadable
+            )
+        }
+
         let missingDestination = try await worker.destinationSnapshot(
             documentDirectory: documentDirectory,
             originalFilename: sourceURL.lastPathComponent
@@ -338,6 +358,99 @@ final class MarkdownInsertionTests: XCTestCase {
             )
         }
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: outsideDirectory.path).isEmpty)
+
+        let project = root.appendingPathComponent("project", isDirectory: true)
+        let projectAssets = project.appendingPathComponent("assets", isDirectory: true)
+        let external = root.appendingPathComponent("external", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: projectAssets,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: external,
+            withIntermediateDirectories: true
+        )
+        let requestedImage = projectAssets.appendingPathComponent("preview.png")
+        let externalImage = external.appendingPathComponent("preview.png")
+        try testPNGData().write(to: requestedImage)
+        try Data("outside bytes must never be read".utf8).write(to: externalImage)
+
+        let capturedAssets = project.appendingPathComponent(
+            "captured-assets",
+            isDirectory: true
+        )
+        var readAfterPrevalidationDirectorySwap = false
+        XCTAssertThrowsError(
+            try ProjectBoundLocalImageLoader.load(
+                at: requestedImage,
+                projectRoot: project,
+                afterIdentityCapture: {
+                    try FileManager.default.moveItem(at: projectAssets, to: capturedAssets)
+                    try FileManager.default.createSymbolicLink(
+                        at: projectAssets,
+                        withDestinationURL: external
+                    )
+                },
+                onWillRead: {
+                    readAfterPrevalidationDirectorySwap = true
+                }
+            )
+        ) { error in
+            XCTAssertEqual(error as? ProjectBoundLocalImageError, .outsideProject)
+        }
+        XCTAssertFalse(readAfterPrevalidationDirectorySwap)
+        try FileManager.default.removeItem(at: projectAssets)
+        try FileManager.default.moveItem(at: capturedAssets, to: projectAssets)
+
+        var readAfterPreopenDirectorySwap = false
+        XCTAssertThrowsError(
+            try ProjectBoundLocalImageLoader.load(
+                at: requestedImage,
+                projectRoot: project,
+                beforeOpen: {
+                    try FileManager.default.moveItem(at: projectAssets, to: capturedAssets)
+                    try FileManager.default.createSymbolicLink(
+                        at: projectAssets,
+                        withDestinationURL: external
+                    )
+                },
+                onWillRead: {
+                    readAfterPreopenDirectorySwap = true
+                }
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? LocalImageValidationError,
+                .notRegularOrUnreadable
+            )
+        }
+        XCTAssertFalse(readAfterPreopenDirectorySwap)
+        try FileManager.default.removeItem(at: projectAssets)
+        try FileManager.default.moveItem(at: capturedAssets, to: projectAssets)
+
+        var readAfterTargetSwap = false
+        XCTAssertThrowsError(
+            try ProjectBoundLocalImageLoader.load(
+                at: requestedImage,
+                projectRoot: project,
+                beforeOpen: {
+                    try FileManager.default.removeItem(at: requestedImage)
+                    try FileManager.default.createSymbolicLink(
+                        at: requestedImage,
+                        withDestinationURL: externalImage
+                    )
+                },
+                onWillRead: {
+                    readAfterTargetSwap = true
+                }
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? LocalImageValidationError,
+                .notRegularOrUnreadable
+            )
+        }
+        XCTAssertFalse(readAfterTargetSwap)
     }
 
     func testImageWorkerCopiesIntoSelectedRelativeDirectoryWithEncodedReference() async throws {

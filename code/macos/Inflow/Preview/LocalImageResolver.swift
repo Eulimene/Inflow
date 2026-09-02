@@ -2,6 +2,94 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
+enum ProjectBoundLocalImageError: Error, Equatable {
+    case outsideProject
+}
+
+enum ProjectBoundLocalImageLoader {
+    static func load(
+        at requestedURL: URL,
+        projectRoot: URL?,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity? = nil,
+        requiresProjectBoundary: Bool = false,
+        afterIdentityCapture: (() throws -> Void)? = nil,
+        beforeOpen: (() throws -> Void)? = nil,
+        onWillRead: (() throws -> Void)? = nil
+    ) throws -> ValidatedLocalImage {
+        let accessed = requestedURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessed { requestedURL.stopAccessingSecurityScopedResource() }
+        }
+
+        guard let projectRoot else {
+            guard !requiresProjectBoundary else {
+                throw ProjectBoundLocalImageError.outsideProject
+            }
+            return try LocalImageValidator.load(
+                at: requestedURL,
+                onWillRead: onWillRead
+            )
+        }
+        guard !requiresProjectBoundary || expectedProjectRootIdentity != nil else {
+            throw ProjectBoundLocalImageError.outsideProject
+        }
+        guard let normalizedRoot = try? FolderProjectPathBoundary.normalizedProjectRoot(
+            projectRoot
+        ), let capturedURL = FolderProjectPathBoundary.resolvedURL(
+            requestedURL,
+            within: normalizedRoot
+        ), projectRootIsCurrent(
+            normalizedRoot,
+            expectedIdentity: expectedProjectRootIdentity
+        ) else {
+            throw ProjectBoundLocalImageError.outsideProject
+        }
+
+        let expectedIdentity = try LocalImageDescriptorReader.captureIdentity(at: capturedURL)
+        try afterIdentityCapture?()
+
+        guard projectRootIsCurrent(
+            normalizedRoot,
+            expectedIdentity: expectedProjectRootIdentity
+        ), let revalidatedURL = FolderProjectPathBoundary.resolvedURL(
+            requestedURL,
+            within: normalizedRoot
+        ), revalidatedURL.standardizedFileURL.path == capturedURL.standardizedFileURL.path
+        else {
+            throw ProjectBoundLocalImageError.outsideProject
+        }
+
+        try beforeOpen?()
+        guard projectRootIsCurrent(
+            normalizedRoot,
+            expectedIdentity: expectedProjectRootIdentity
+        ) else {
+            throw ProjectBoundLocalImageError.outsideProject
+        }
+        return try LocalImageValidator.load(
+            at: revalidatedURL,
+            expectedIdentity: expectedIdentity,
+            onWillRead: {
+                guard projectRootIsCurrent(
+                    normalizedRoot,
+                    expectedIdentity: expectedProjectRootIdentity
+                ) else {
+                    throw ProjectBoundLocalImageError.outsideProject
+                }
+                try onWillRead?()
+            }
+        )
+    }
+
+    private static func projectRootIsCurrent(
+        _ projectRoot: URL,
+        expectedIdentity: FolderProjectDirectoryIdentity?
+    ) -> Bool {
+        guard let expectedIdentity else { return true }
+        return FolderProjectDirectoryIdentity.capture(projectRoot) == expectedIdentity
+    }
+}
+
 enum LocalImageResolver {
     struct ExportResolution: Sendable {
         let html: String
@@ -16,13 +104,17 @@ enum LocalImageResolver {
         in fragment: String,
         documentDirectory: URL?,
         imageReferences: [MarkdownReference] = [],
-        projectRoot: URL? = nil
+        projectRoot: URL? = nil,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity? = nil,
+        requiresProjectBoundary: Bool = false
     ) -> String {
         resolution(
             in: fragment,
             documentDirectory: documentDirectory,
             imageReferences: imageReferences,
-            projectRoot: projectRoot
+            projectRoot: projectRoot,
+            expectedProjectRootIdentity: expectedProjectRootIdentity,
+            requiresProjectBoundary: requiresProjectBoundary
         ).html
     }
 
@@ -31,6 +123,8 @@ enum LocalImageResolver {
         documentDirectory: URL?,
         imageReferences: [MarkdownReference] = [],
         projectRoot: URL? = nil,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity? = nil,
+        requiresProjectBoundary: Bool = false,
         sanitizesImageMetadata: Bool = false
     ) -> (html: String, hasFailure: Bool) {
         let fullRange = NSRange(location: 0, length: (fragment as NSString).length)
@@ -76,6 +170,8 @@ enum LocalImageResolver {
                 alternative: alternative,
                 documentDirectory: documentDirectory,
                 projectRoot: projectRoot,
+                expectedProjectRootIdentity: expectedProjectRootIdentity,
+                requiresProjectBoundary: requiresProjectBoundary,
                 warningContext: warningContext,
                 sanitizesMetadata: sanitizesImageMetadata
             )
@@ -90,12 +186,16 @@ enum LocalImageResolver {
     static func resolveSlotsForExport(
         in fragment: String,
         documentDirectory: URL?,
-        projectRoot: URL? = nil
+        projectRoot: URL? = nil,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity? = nil,
+        requiresProjectBoundary: Bool = false
     ) throws -> String {
         let result = resolution(
             in: fragment,
             documentDirectory: documentDirectory,
             projectRoot: projectRoot,
+            expectedProjectRootIdentity: expectedProjectRootIdentity,
+            requiresProjectBoundary: requiresProjectBoundary,
             sanitizesImageMetadata: true
         )
         guard !result.hasFailure else {
@@ -107,12 +207,16 @@ enum LocalImageResolver {
     static func resolveSlotsForPreparedExport(
         in fragment: String,
         documentDirectory: URL?,
-        projectRoot: URL? = nil
+        projectRoot: URL? = nil,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity? = nil,
+        requiresProjectBoundary: Bool = false
     ) -> ExportResolution {
         let result = resolution(
             in: fragment,
             documentDirectory: documentDirectory,
             projectRoot: projectRoot,
+            expectedProjectRootIdentity: expectedProjectRootIdentity,
+            requiresProjectBoundary: requiresProjectBoundary,
             sanitizesImageMetadata: true
         )
         return ExportResolution(html: result.html, hasWarnings: result.hasFailure)
@@ -123,6 +227,8 @@ enum LocalImageResolver {
         alternative: String,
         documentDirectory: URL?,
         projectRoot: URL?,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity?,
+        requiresProjectBoundary: Bool,
         warningContext: WarningContext?,
         sanitizesMetadata: Bool
     ) -> String {
@@ -152,16 +258,13 @@ enum LocalImageResolver {
                     context: warningContext
                 )
             }
-            guard let boundedURL = projectBoundURL(absolute, projectRoot: projectRoot) else {
-                return outsideProjectWarning(
-                    target: target,
-                    warningContext: warningContext
-                )
-            }
             return loadImage(
-                at: boundedURL,
+                at: absolute,
                 target: target,
                 alternative: alternative,
+                projectRoot: projectRoot,
+                expectedProjectRootIdentity: expectedProjectRootIdentity,
+                requiresProjectBoundary: requiresProjectBoundary,
                 warningContext: warningContext,
                 sanitizesMetadata: sanitizesMetadata
             )
@@ -185,29 +288,16 @@ enum LocalImageResolver {
                 context: warningContext
             )
         }
-        guard let boundedURL = projectBoundURL(resolvedURL, projectRoot: projectRoot) else {
-            return outsideProjectWarning(
-                target: target,
-                warningContext: warningContext
-            )
-        }
         return loadImage(
-            at: boundedURL,
+            at: resolvedURL,
             target: target,
             alternative: alternative,
+            projectRoot: projectRoot,
+            expectedProjectRootIdentity: expectedProjectRootIdentity,
+            requiresProjectBoundary: requiresProjectBoundary,
             warningContext: warningContext,
             sanitizesMetadata: sanitizesMetadata
         )
-    }
-
-    private static func projectBoundURL(_ url: URL, projectRoot: URL?) -> URL? {
-        guard let projectRoot else { return url }
-        guard let normalizedRoot = try? FolderProjectPathBoundary.normalizedProjectRoot(
-            projectRoot
-        ) else {
-            return nil
-        }
-        return FolderProjectPathBoundary.resolvedURL(url, within: normalizedRoot)
     }
 
     private static func outsideProjectWarning(
@@ -226,19 +316,25 @@ enum LocalImageResolver {
         at url: URL,
         target: String,
         alternative: String,
+        projectRoot: URL?,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity?,
+        requiresProjectBoundary: Bool,
         warningContext: WarningContext?,
         sanitizesMetadata: Bool
     ) -> String {
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer {
-            if accessed {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-
         let image: ValidatedLocalImage
         do {
-            image = try LocalImageValidator.load(at: url)
+            image = try ProjectBoundLocalImageLoader.load(
+                at: url,
+                projectRoot: projectRoot,
+                expectedProjectRootIdentity: expectedProjectRootIdentity,
+                requiresProjectBoundary: requiresProjectBoundary
+            )
+        } catch ProjectBoundLocalImageError.outsideProject {
+            return outsideProjectWarning(
+                target: target,
+                warningContext: warningContext
+            )
         } catch LocalImageValidationError.tooLarge {
             return warning(
                 title: "图片过大，未载入预览",

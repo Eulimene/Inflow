@@ -92,7 +92,7 @@ struct PersistentHorizontalSplitView<Leading: View, Trailing: View>: NSViewRepre
         let splitView = FractionSplitView()
         splitView.isVertical = true
         splitView.dividerStyle = .thin
-        splitView.delegate = context.coordinator
+        splitView.desiredFraction = EditorSplitLayout.normalized(fraction)
         splitView.setAccessibilityLabel("源码与预览分栏")
 
         let leadingHost = NSHostingView(rootView: leading)
@@ -104,6 +104,11 @@ struct PersistentHorizontalSplitView<Leading: View, Trailing: View>: NSViewRepre
             leadingHost: leadingHost,
             trailingHost: trailingHost
         )
+        // Installing arranged subviews emits transient resize callbacks while
+        // AppKit still holds its 50/50 bootstrap geometry. Attach the delegate
+        // only after the configured fraction has been applied so that bootstrap
+        // geometry can never overwrite a new scene's first-frame value.
+        splitView.delegate = context.coordinator
         return splitView
     }
 
@@ -128,6 +133,8 @@ struct PersistentHorizontalSplitView<Leading: View, Trailing: View>: NSViewRepre
         private weak var splitView: FractionSplitView?
         private var leadingHost: NSHostingView<Leading>?
         private var trailingHost: NSHostingView<Trailing>?
+        private var acceptsResizePersistence = false
+        private var resizePersistenceActivationTask: Task<Void, Never>?
 
         init(fraction: Binding<Double>) {
             self.fraction = fraction
@@ -142,6 +149,16 @@ struct PersistentHorizontalSplitView<Leading: View, Trailing: View>: NSViewRepre
             self.leadingHost = leadingHost
             self.trailingHost = trailingHost
             applyStoredFraction(to: splitView)
+            resizePersistenceActivationTask?.cancel()
+            resizePersistenceActivationTask = Task { @MainActor [weak self] in
+                // Initial SwiftUI/AppKit mounting can emit several synthetic
+                // resize callbacks. No pointer interaction is possible before
+                // the next actor turn, so persistence can safely begin there.
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                self?.acceptsResizePersistence = true
+                self?.resizePersistenceActivationTask = nil
+            }
         }
 
         fileprivate func update(
@@ -157,6 +174,9 @@ struct PersistentHorizontalSplitView<Leading: View, Trailing: View>: NSViewRepre
         }
 
         func detach() {
+            resizePersistenceActivationTask?.cancel()
+            resizePersistenceActivationTask = nil
+            acceptsResizePersistence = false
             splitView = nil
             leadingHost = nil
             trailingHost = nil
@@ -187,6 +207,7 @@ struct PersistentHorizontalSplitView<Leading: View, Trailing: View>: NSViewRepre
 
         func splitViewDidResizeSubviews(_ notification: Notification) {
             guard let splitView = notification.object as? FractionSplitView,
+                  acceptsResizePersistence,
                   !splitView.isApplyingProgrammaticLayout,
                   let firstPane = splitView.subviews.first
             else {
