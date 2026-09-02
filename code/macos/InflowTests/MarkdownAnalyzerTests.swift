@@ -221,6 +221,10 @@ final class MarkdownAnalyzerTests: XCTestCase {
             generation: 1,
             utf8Range: heading.sourceUTF8Range
         )
+        XCTAssertFalse(
+            try XCTUnwrap(model.selectionRequest).style.showsTransientMatchIndicator,
+            "outline navigation moves a caret without highlighting the heading as a search match"
+        )
         model.mode = .split
         renderPendingUI()
 

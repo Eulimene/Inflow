@@ -554,6 +554,9 @@ final class MarkdownSearcherTests: XCTestCase {
             style: .match,
             focusesEditor: false
         )
+        XCTAssertTrue(
+            try XCTUnwrap(model.selectionRequest).style.showsTransientMatchIndicator
+        )
         renderPendingUI()
 
         XCTAssertTrue(window.firstResponder === findField.currentEditor())

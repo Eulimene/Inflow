@@ -5,6 +5,19 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class RecentDocumentsTests: XCTestCase {
+    func testProjectDocumentsReuseTheSelectedFolderSecurityScope() {
+        XCTAssertFalse(
+            DocumentSecurityScopePolicy.shouldStartFileScopedAccess(
+                hasProjectAuthorization: true
+            )
+        )
+        XCTAssertTrue(
+            DocumentSecurityScopePolicy.shouldStartFileScopedAccess(
+                hasProjectAuthorization: false
+            )
+        )
+    }
+
     func testSecurityScopedAccessLivesWithDocumentAndReleasesExactlyOnce() {
         let document = NSDocument()
         let firstURL = URL(fileURLWithPath: "/tmp/first.md")

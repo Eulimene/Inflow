@@ -69,6 +69,14 @@ enum ManualSaveDocumentHostPolicy {
     private static var processState = ProcessState.unconfigured
     private static let swiftUIBundleIdentifier = "com.apple.SwiftUI"
 
+    /// The runtime override is installed on the concrete SwiftUI document
+    /// class, so every later document scene in this process can enter its
+    /// editor immediately without flashing the one-time preparation screen.
+    static var isProcessConfigured: Bool {
+        if case .configured = processState { return true }
+        return false
+    }
+
     static func apply(to document: NSDocument) throws {
         let documentClass: NSDocument.Type = type(of: document)
         let classID = ObjectIdentifier(documentClass)

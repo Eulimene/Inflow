@@ -529,6 +529,102 @@ private struct EmptyMarkdownPreviewView: View {
     }
 }
 
+/// Keeps the scene's native document identity available even while SwiftUI
+/// temporarily detaches the source editor during project-tab switches or while
+/// the project shell is showing its empty-workspace guidance.
+@MainActor
+private final class MarkdownEditorNativeDocumentHost: ObservableObject {
+    weak private(set) var document: NSDocument?
+
+    func attach(_ document: NSDocument) {
+        guard self.document !== document else { return }
+        objectWillChange.send()
+        self.document = document
+    }
+}
+
+private struct MarkdownEditorNativeDocumentResolver: NSViewRepresentable {
+    let onResolve: @MainActor (NSDocument) -> Void
+
+    func makeNSView(context _: Context) -> ResolverView {
+        ResolverView(onResolve: onResolve)
+    }
+
+    func updateNSView(_ view: ResolverView, context _: Context) {
+        view.onResolve = onResolve
+        view.resolveIfPossible()
+    }
+
+    final class ResolverView: NSView {
+        var onResolve: @MainActor (NSDocument) -> Void
+        private weak var candidateWindow: NSWindow?
+        private weak var resolvedDocument: NSDocument?
+        private var resolutionTask: Task<Void, Never>?
+
+        init(onResolve: @escaping @MainActor (NSDocument) -> Void) {
+            self.onResolve = onResolve
+            super.init(frame: .zero)
+        }
+
+        @available(*, unavailable)
+        required init?(coder _: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        deinit {
+            resolutionTask?.cancel()
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil {
+                resolutionTask?.cancel()
+                resolutionTask = nil
+                candidateWindow = nil
+                return
+            }
+            resolveIfPossible()
+        }
+
+        @MainActor
+        func resolveIfPossible() {
+            guard let window else { return }
+            if let document = window.windowController?.document as? NSDocument {
+                resolutionTask?.cancel()
+                resolutionTask = nil
+                candidateWindow = window
+                if resolvedDocument !== document {
+                    resolvedDocument = document
+                    onResolve(document)
+                }
+                return
+            }
+            guard resolutionTask == nil else { return }
+            candidateWindow = window
+            resolutionTask = Task { @MainActor [weak self, weak window] in
+                guard let self, let window else { return }
+                for attempt in 0 ..< 50 {
+                    await Task.yield()
+                    guard !Task.isCancelled,
+                          self.window === window,
+                          self.candidateWindow === window
+                    else { return }
+                    if let document = window.windowController?.document as? NSDocument {
+                        self.resolvedDocument = document
+                        self.resolutionTask = nil
+                        self.onResolve(document)
+                        return
+                    }
+                    if attempt < 49 {
+                        try? await Task.sleep(for: .milliseconds(20))
+                    }
+                }
+                self.resolutionTask = nil
+            }
+        }
+    }
+}
+
 struct MarkdownEditorView: View {
     @Environment(\.newDocument) private var newDocument
     @Binding var document: MarkdownDocument
@@ -604,6 +700,7 @@ struct MarkdownEditorView: View {
     @State private var incomingHeadingFragment: String?
     @State private var incomingNavigationIsPending = false
     @StateObject private var sourceEditorSession = MarkdownSourceEditorSession()
+    @StateObject private var nativeDocumentHost = MarkdownEditorNativeDocumentHost()
     @State private var selectedHeadingID: DocumentHeading.ID?
     @State private var sourceSelectionRequest: SourceSelectionRequest?
     @State private var sourceSelectionGeneration = 0
@@ -781,6 +878,12 @@ struct MarkdownEditorView: View {
 
     var body: some View {
         presentationLayer
+            .background {
+                MarkdownEditorNativeDocumentResolver { document in
+                    nativeDocumentHost.attach(document)
+                    projectCoordinator?.activateProjectDocument(document)
+                }
+            }
             .alert(
                 "上次项目需要重新选择",
                 isPresented: Binding(
@@ -1065,7 +1168,8 @@ struct MarkdownEditorView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) {
             notification in
             guard let window = notification.object as? NSWindow,
-                  window === sourceEditorSession.textView.window
+                  let windowDocument = window.windowController?.document as? NSDocument,
+                  windowDocument === nativeDocument
             else { return }
             projectCoordinator?.activateProjectDocument(nativeDocument)
         }
@@ -1205,14 +1309,27 @@ struct MarkdownEditorView: View {
             }
         }
         .onDisappear {
-            derivedContentTask?.cancel()
-            previewLinkTask?.cancel()
-            findSearchTask?.cancel()
-            abandonExportTracking()
-            pendingFindNavigation.removeAll()
-            findSession.cancelSearch()
-            fileSafetySession.stopMonitoring()
-            recoveryCoordinator?.close(recoveryRecordID)
+            // A native project-tab switch temporarily removes the inactive
+            // scene from the visible hierarchy. Keep its derived content,
+            // recovery protection and file monitoring alive so switching back
+            // changes only the workspace content instead of reloading it.
+            guard let nativeDocument,
+                  NSDocumentController.shared.documents.contains(where: {
+                      $0 === nativeDocument
+                  })
+            else {
+                tearDownDocumentSession()
+                return
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) {
+            notification in
+            guard let closingWindow = notification.object as? NSWindow,
+                  let closingDocument = closingWindow.windowController?.document as? NSDocument,
+                  closingDocument === nativeDocument
+            else { return }
+            tearDownDocumentSession()
+            folderBrowser.dissociateProjectWindow(closingDocument)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) {
             _ in
@@ -1429,85 +1546,108 @@ struct MarkdownEditorView: View {
 
     @ViewBuilder
     private var content: some View {
-        if workspacePanes.first == .projectSidebar {
-            HSplitView {
-                FolderBrowserSidebar(
-                    controller: folderBrowser,
-                    currentDocumentURL: fileURL,
-                    onOpenDocument: { url in
-                        guard let recentDocuments else {
-                            throw DocumentOpenError.unsupportedTarget
-                        }
-                        if let projectCoordinator {
-                            projectCoordinator.openDocument(
-                                url,
-                                replacing: nativeDocument,
-                                using: recentDocuments
-                            )
-                        } else {
-                            recentDocuments.openDocumentFromFolder(url)
-                        }
-                    },
-                    onOpenDocumentWithCompletion: { url, completion in
-                        guard let recentDocuments else {
-                            completion(.failure(DocumentOpenError.unsupportedTarget))
-                            return
-                        }
-                        if let projectCoordinator {
-                            projectCoordinator.openDocument(
-                                url,
-                                replacing: nativeDocument,
-                                using: recentDocuments,
+        Group {
+            if workspacePanes.first == .projectSidebar {
+                HSplitView {
+                    FolderBrowserSidebar(
+                        controller: folderBrowser,
+                        currentDocumentURL: fileURL,
+                        onOpenDocument: { url in
+                            guard let recentDocuments else {
+                                throw DocumentOpenError.unsupportedTarget
+                            }
+                            if let projectCoordinator {
+                                projectCoordinator.openDocument(
+                                    url,
+                                    replacing: nativeDocument,
+                                    using: recentDocuments
+                                )
+                            } else {
+                                recentDocuments.openDocumentFromFolder(url)
+                            }
+                        },
+                        onOpenDocumentWithCompletion: { url, completion in
+                            guard let recentDocuments else {
+                                completion(.failure(DocumentOpenError.unsupportedTarget))
+                                return
+                            }
+                            if let projectCoordinator {
+                                projectCoordinator.openDocument(
+                                    url,
+                                    replacing: nativeDocument,
+                                    using: recentDocuments,
+                                    completion: completion
+                                )
+                            } else {
+                                recentDocuments.openDocumentFromFolder(
+                                    url,
+                                    completion: completion
+                                )
+                            }
+                        },
+                        onOpenCreatedDocument: { url, completion in
+                            guard let recentDocuments else {
+                                completion(.failure(DocumentOpenError.unsupportedTarget))
+                                return
+                            }
+                            if let projectCoordinator {
+                                projectCoordinator.openDocument(
+                                    url,
+                                    replacing: nativeDocument,
+                                    using: recentDocuments,
+                                    completion: completion
+                                )
+                            } else {
+                                recentDocuments.openDocumentFromFolder(
+                                    url,
+                                    completion: completion
+                                )
+                            }
+                        },
+                        onPrepareToReplaceCurrentDocument: { completion in
+                            guard let projectCoordinator else {
+                                completion(true)
+                                return
+                            }
+                            projectCoordinator.prepareToReplaceCurrentDocument(
+                                nativeDocument,
                                 completion: completion
                             )
-                        } else {
-                            recentDocuments.openDocumentFromFolder(
-                                url,
-                                completion: completion
-                            )
-                        }
-                    },
-                    onOpenCreatedDocument: { url, completion in
-                        guard let recentDocuments else {
-                            completion(.failure(DocumentOpenError.unsupportedTarget))
-                            return
-                        }
-                        if let projectCoordinator {
-                            projectCoordinator.openDocument(
-                                url,
-                                replacing: nativeDocument,
-                                using: recentDocuments,
-                                completion: completion
-                            )
-                        } else {
-                            recentDocuments.openDocumentFromFolder(
-                                url,
-                                completion: completion
-                            )
-                        }
-                    },
-                    onPrepareToReplaceCurrentDocument: { completion in
-                        guard let projectCoordinator else {
-                            completion(true)
-                            return
-                        }
-                        projectCoordinator.prepareToReplaceCurrentDocument(
-                            nativeDocument,
-                            completion: completion
-                        )
-                    }
-                )
-                .frame(
-                    minWidth: EditorWorkspaceMetrics.projectSidebarMinimumWidth,
-                    idealWidth: EditorWorkspaceMetrics.projectSidebarIdealWidth,
-                    maxWidth: EditorWorkspaceMetrics.projectSidebarMaximumWidth
-                )
+                        },
+                        onCollapse: { isProjectSidebarVisible = false }
+                    )
+                    .frame(
+                        minWidth: EditorWorkspaceMetrics.projectSidebarMinimumWidth,
+                        idealWidth: EditorWorkspaceMetrics.projectSidebarIdealWidth,
+                        maxWidth: EditorWorkspaceMetrics.projectSidebarMaximumWidth
+                    )
 
+                    documentContent
+                        .frame(minWidth: EditorWorkspaceMetrics.editorMinimumWidth)
+                }
+            } else {
                 documentContent
-                    .frame(minWidth: EditorWorkspaceMetrics.editorMinimumWidth)
             }
-        } else {
-            documentContent
+        }
+        .overlay(alignment: .topLeading) {
+            if hasProjectContext && !isProjectSidebarVisible {
+                collapsedPaneButton(
+                    label: "展开目录树",
+                    systemImage: "chevron.right"
+                ) {
+                    isProjectSidebarVisible = true
+                }
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if !isProjectShell && !usesSourceOnlyExperience && !isOutlineVisible {
+                collapsedPaneButton(
+                    label: "展开文档大纲",
+                    systemImage: "chevron.left"
+                ) {
+                    isOutlineVisible = true
+                }
+            }
         }
     }
 
@@ -1553,7 +1693,8 @@ struct MarkdownEditorView: View {
     }
 
     private var nativeDocument: NSDocument? {
-        sourceEditorSession.textView.window?.windowController?.document as? NSDocument
+        nativeDocumentHost.document
+            ?? sourceEditorSession.textView.window?.windowController?.document as? NSDocument
     }
 
     @ViewBuilder
@@ -1584,7 +1725,8 @@ struct MarkdownEditorView: View {
                     analysisState: analysisState,
                     selectedHeadingID: selectedHeadingID,
                     focusGeneration: outlineFocusGeneration,
-                    onSelect: selectHeading
+                    onSelect: selectHeading,
+                    onCollapse: { isOutlineVisible = false }
                 )
                 .frame(
                     minWidth: EditorWorkspaceMetrics.outlineMinimumWidth,
@@ -1595,6 +1737,23 @@ struct MarkdownEditorView: View {
         } else {
             editorContent
         }
+    }
+
+    private func collapsedPaneButton(
+        label: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .padding(8)
+        .help(label)
+        .accessibilityLabel(label)
     }
 
     @ViewBuilder
@@ -2298,6 +2457,17 @@ struct MarkdownEditorView: View {
             generation: sourceSelectionGeneration,
             utf8Range: heading.sourceUTF8Range
         )
+    }
+
+    private func tearDownDocumentSession() {
+        derivedContentTask?.cancel()
+        previewLinkTask?.cancel()
+        findSearchTask?.cancel()
+        abandonExportTracking()
+        pendingFindNavigation.removeAll()
+        findSession.cancelSearch()
+        fileSafetySession.stopMonitoring()
+        recoveryCoordinator?.close(recoveryRecordID)
     }
 
     private func activatePreviewHeading(sourceUTF8Offset: Int) {

@@ -1394,6 +1394,7 @@ struct FolderBrowserSidebar: View {
     private let onOpenDocumentWithCompletion: FolderDocumentOpener
     private let onOpenCreatedDocument: FolderDocumentOpener
     private let onPrepareToReplaceCurrentDocument: (@escaping (Bool) -> Void) -> Void
+    private let onCollapse: () -> Void
 
     @State private var selectedItemID: String?
     @State private var creationSelection = FolderBrowserSelection.none
@@ -1412,7 +1413,8 @@ struct FolderBrowserSidebar: View {
         onOpenCreatedDocument: FolderDocumentOpener? = nil,
         onPrepareToReplaceCurrentDocument: @escaping (
             @escaping (Bool) -> Void
-        ) -> Void = { completion in completion(true) }
+        ) -> Void = { completion in completion(true) },
+        onCollapse: @escaping () -> Void = {}
     ) {
         self.controller = controller
         self.currentDocumentURL = currentDocumentURL
@@ -1434,6 +1436,7 @@ struct FolderBrowserSidebar: View {
             }
         }
         self.onPrepareToReplaceCurrentDocument = onPrepareToReplaceCurrentDocument
+        self.onCollapse = onCollapse
     }
 
     var body: some View {
@@ -1482,6 +1485,12 @@ struct FolderBrowserSidebar: View {
                 .font(.headline)
                 .lineLimit(1)
             Spacer(minLength: 4)
+            Button(action: onCollapse) {
+                Image(systemName: "chevron.left")
+            }
+            .buttonStyle(.borderless)
+            .help("折叠目录树")
+            .accessibilityLabel("折叠目录树")
             Button {
                 beginCreatingMarkdown(
                     in: controller.selection(forItemID: selectedItemID)

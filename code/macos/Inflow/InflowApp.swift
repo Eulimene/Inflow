@@ -64,8 +64,9 @@ final class ManualSaveDocumentGateRegistry {
 
 /// Keeps the entire editor tree out of the hierarchy until the concrete
 /// DocumentGroup host has adopted and verified the manual-save policy.
+@MainActor
 private struct ManualSaveDocumentGate<Content: View>: View {
-    @State private var state = ManualSaveDocumentGateState.pending
+    @State private var state: ManualSaveDocumentGateState
     @State private var blockedWindow: NSWindow?
     @State private var blockedDocument: NSDocument?
     @State private var isConfirmingDiscard = false
@@ -74,6 +75,11 @@ private struct ManualSaveDocumentGate<Content: View>: View {
 
     init(@ViewBuilder content: @escaping () -> Content) {
         self.content = content
+        _state = State(
+            initialValue: ManualSaveDocumentHostPolicy.isProcessConfigured
+                ? .ready
+                : .pending
+        )
     }
 
     @ViewBuilder

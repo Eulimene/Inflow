@@ -148,6 +148,14 @@ enum SecurityScopedDocumentLeaseRegistry {
     }
 }
 
+enum DocumentSecurityScopePolicy {
+    static func shouldStartFileScopedAccess(
+        hasProjectAuthorization: Bool
+    ) -> Bool {
+        !hasProjectAuthorization
+    }
+}
+
 enum MarkdownOpenPreflight: Equatable, Sendable {
     case supported
     case unsupportedEncoding(originalData: Data)
@@ -1473,7 +1481,15 @@ final class RecentDocumentsController: NSObject, ObservableObject {
         presentsErrors: Bool = true,
         completion: @escaping @MainActor (Result<OpenedDocumentResult, Error>) -> Void = { _ in }
     ) {
-        let accessed = url.startAccessingSecurityScopedResource()
+        // A project authorization is backed by the retained security-scoped
+        // lease for the user-selected root. Starting a second lease on the
+        // child file can update Finder's last-used metadata (and therefore
+        // ctime) after the click snapshot was frozen, making a safe file look
+        // as though it changed before preflight even reads it.
+        let accessed = DocumentSecurityScopePolicy.shouldStartFileScopedAccess(
+            hasProjectAuthorization: authorization != nil
+        )
+            && url.startAccessingSecurityScopedResource()
         Task { @MainActor [weak self] in
             guard let self else {
                 if accessed { url.stopAccessingSecurityScopedResource() }

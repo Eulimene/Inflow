@@ -225,23 +225,66 @@ struct ProjectDocumentOpenAuthorization: Equatable, Sendable {
     /// project, inode, size, modification time, and descriptor-read bytes all
     /// still match the data authorized before opening.
     func refreshedAfterVerifiedRead(expectedData: Data) -> Self? {
-        guard let refreshed = Self.capture(
-                  targetURL: targetURL,
-                  projectRoot: projectRoot
-              ),
-              refreshed.projectIdentity == projectIdentity,
-              refreshed.resolvedTargetURL == resolvedTargetURL,
-              snapshot.hasSameFileAndContentMetadata(as: refreshed.snapshot),
-              let frozen = try? PreviewLocalFileReader.read(
-                  targetURL,
-                  expected: refreshed.snapshot
-              ),
-              frozen.data == expectedData,
-              refreshed.isCurrent()
-        else {
-            return nil
+        // Finder/AppKit can publish more than one last-used xattr update while
+        // a native document is being constructed. Each update changes ctime
+        // without changing the file object or its bytes. Retry only that exact
+        // case; every attempt revalidates the path, stable content metadata,
+        // and descriptor-read bytes, so replacement or content changes still
+        // fail closed.
+        for _ in 0 ..< 16 {
+            guard let refreshed = Self.capture(
+                      targetURL: targetURL,
+                      projectRoot: projectRoot
+                  ),
+                  refreshed.projectIdentity == projectIdentity,
+                  refreshed.resolvedTargetURL == resolvedTargetURL,
+                  snapshot.hasSameFileAndContentMetadata(as: refreshed.snapshot)
+            else {
+                return nil
+            }
+
+            let frozen: FrozenPreviewLocalFile
+            do {
+                frozen = try PreviewLocalFileReader.read(
+                    targetURL,
+                    expected: refreshed.snapshot
+                )
+            } catch PreviewLocalFileError.changedDuringRead {
+                guard let retrySnapshot = Self.capture(
+                          targetURL: targetURL,
+                          projectRoot: projectRoot
+                      ),
+                      retrySnapshot.projectIdentity == projectIdentity,
+                      retrySnapshot.resolvedTargetURL == resolvedTargetURL,
+                      snapshot.hasSameFileAndContentMetadata(
+                          as: retrySnapshot.snapshot
+                      )
+                else {
+                    return nil
+                }
+                continue
+            } catch {
+                return nil
+            }
+
+            guard frozen.data == expectedData,
+                  let verifiedCurrent = Self.capture(
+                      targetURL: targetURL,
+                      projectRoot: projectRoot
+                  ),
+                  verifiedCurrent.projectIdentity == projectIdentity,
+                  verifiedCurrent.resolvedTargetURL == resolvedTargetURL,
+                  snapshot.hasSameFileAndContentMetadata(
+                      as: verifiedCurrent.snapshot
+                  )
+            else {
+                return nil
+            }
+            if verifiedCurrent.snapshot == refreshed.snapshot {
+                return verifiedCurrent
+            }
         }
-        return refreshed
+        return nil
     }
 }
 

@@ -5,6 +5,21 @@ struct DocumentOutlineView: View {
     let selectedHeadingID: DocumentHeading.ID?
     let focusGeneration: Int
     let onSelect: (DocumentHeading) -> Void
+    let onCollapse: () -> Void
+
+    init(
+        analysisState: DocumentAnalysisState,
+        selectedHeadingID: DocumentHeading.ID?,
+        focusGeneration: Int,
+        onSelect: @escaping (DocumentHeading) -> Void,
+        onCollapse: @escaping () -> Void = {}
+    ) {
+        self.analysisState = analysisState
+        self.selectedHeadingID = selectedHeadingID
+        self.focusGeneration = focusGeneration
+        self.onSelect = onSelect
+        self.onCollapse = onCollapse
+    }
 
     @FocusState private var focusedHeadingID: DocumentHeading.ID?
     @State private var handledFocusGeneration = 0
@@ -24,6 +39,12 @@ struct DocumentOutlineView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("\(analysis.headings.count) 个标题")
+                Button(action: onCollapse) {
+                    Image(systemName: "chevron.right")
+                }
+                .buttonStyle(.borderless)
+                .help("折叠文档大纲")
+                .accessibilityLabel("折叠文档大纲")
             }
             .padding(.horizontal, 12)
             .frame(height: EditorWorkspaceMetrics.navigationHeaderHeight)

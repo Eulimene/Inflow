@@ -344,7 +344,7 @@ final class AppPreferences: ObservableObject {
         static let recentDocumentCapacity = 20
         static let markdownOpenBehavior = MarkdownOpenBehavior.reuseBlankWindow
         static let defaultProjectSidebarVisible = true
-        static let defaultOutlineVisible = true
+        static let defaultOutlineVisible = false
         static let autosaveDelay = AutosaveDelay.oneSecond
         static let autosaveEnabled = false
         static let existingImagePlacement = ExistingImagePlacementPreference.copyToAssets

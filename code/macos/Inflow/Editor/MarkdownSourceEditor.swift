@@ -28,6 +28,8 @@ struct SourceSelectionRequest: Equatable {
 enum SourceSelectionStyle: Equatable {
     case caret
     case match
+
+    var showsTransientMatchIndicator: Bool { self == .match }
 }
 
 struct SourceNavigationTarget: Equatable {
@@ -1282,7 +1284,9 @@ struct MarkdownSourceEditor: NSViewRepresentable {
                 request.style == .caret ? target.caretRange : target.revealRange
             )
             textView.scrollRangeToVisible(target.revealRange)
-            textView.showFindIndicator(for: target.revealRange)
+            if request.style.showsTransientMatchIndicator {
+                textView.showFindIndicator(for: target.revealRange)
+            }
             completeApplication(for: request, textView: textView)
         }
 
