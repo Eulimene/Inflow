@@ -2,6 +2,7 @@ import SwiftUI
 
 enum InflowSettingsSection: String, CaseIterable, Identifiable, Sendable {
     case general
+    case workspace
     case writing
     case preview
 
@@ -10,6 +11,7 @@ enum InflowSettingsSection: String, CaseIterable, Identifiable, Sendable {
     var label: String {
         switch self {
         case .general: "通用"
+        case .workspace: "工作区"
         case .writing: "写作"
         case .preview: "预览"
         }
@@ -58,6 +60,10 @@ struct InflowSettingsView: View {
                 .tabItem { Label("通用", systemImage: "gearshape") }
                 .tag(InflowSettingsSection.general)
 
+            workspaceSettings
+                .tabItem { Label("工作区", systemImage: "rectangle.3.group") }
+                .tag(InflowSettingsSection.workspace)
+
             writingSettings
                 .tabItem { Label("写作", systemImage: "pencil") }
                 .tag(InflowSettingsSection.writing)
@@ -68,7 +74,7 @@ struct InflowSettingsView: View {
 
         }
         .padding(20)
-        .frame(width: 620, height: 520)
+        .frame(width: 680, height: 560)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Menu("恢复默认…") {
@@ -137,38 +143,67 @@ struct InflowSettingsView: View {
 
     private var generalSettings: some View {
         Form {
-            Section("新窗口布局") {
-                Toggle(
-                    "项目默认显示目录树",
-                    isOn: $preferences.defaultProjectSidebarVisible
-                )
-                Toggle(
-                    "默认显示文档大纲",
-                    isOn: $preferences.defaultOutlineVisible
-                )
-                SettingSliderRow(
-                    title: "新窗口分栏比例",
-                    value: $preferences.defaultSplitFraction,
-                    range: EditorSplitLayout.allowedFraction,
-                    step: 0.05,
-                    valueText: preferences.defaultSplitFraction.formatted(
-                        .percent.precision(.fractionLength(0))
-                    )
-                )
-                Text(
-                    "目录树固定在项目窗口左侧，大纲固定在编辑区右侧。"
-                        + "默认显示目录树、折叠大纲；这些选项只决定新窗口起点。"
-                        + "当前窗口可在两栏对应位置或从工具栏、“显示”菜单独立展开和折叠。"
-                )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
             Section("保存") {
                 LabeledContent("正文保存方式", value: "手动保存")
                 Text("使用 ⌘S 保存；异常恢复保护独立运行，不会自动写回用户文件。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var workspaceSettings: some View {
+        Form {
+            Section("视图与面板") {
+                Picker("写作视图", selection: $preferences.workspaceViewMode) {
+                    ForEach(WorkspaceViewModePreference.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                Toggle(
+                    "显示项目目录树",
+                    isOn: $preferences.workspaceProjectSidebarVisible
+                )
+                Toggle(
+                    "显示文档大纲",
+                    isOn: $preferences.workspaceOutlineVisible
+                )
+                Text(
+                    "工具栏、显示菜单以及目录树和大纲自身的展开/折叠操作"
+                        + "都会立即保存；之后打开文件、项目或重新启动 Inflow 时继续使用。"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Section("区域宽度") {
+                SettingSliderRow(
+                    title: "目录树宽度",
+                    value: $preferences.workspaceProjectSidebarWidth,
+                    range: AppPreferences.Limits.projectSidebarWidth,
+                    step: 4,
+                    valueText: "\(Int(preferences.workspaceProjectSidebarWidth.rounded())) 点"
+                )
+                SettingSliderRow(
+                    title: "大纲宽度",
+                    value: $preferences.workspaceOutlineWidth,
+                    range: AppPreferences.Limits.outlineWidth,
+                    step: 4,
+                    valueText: "\(Int(preferences.workspaceOutlineWidth.rounded())) 点"
+                )
+                SettingSliderRow(
+                    title: "实时预览源码占比",
+                    value: $preferences.workspaceSplitFraction,
+                    range: EditorSplitLayout.allowedFraction,
+                    step: 0.05,
+                    valueText: preferences.workspaceSplitFraction.formatted(
+                        .percent.precision(.fractionLength(0))
+                    )
+                )
+                Text("直接拖拽任一分隔线也会更新这里的长期偏好。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

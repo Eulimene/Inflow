@@ -4,10 +4,11 @@ import XCTest
 @testable import Inflow
 
 final class EditorViewModeCommandsTests: XCTestCase {
-    func testStoredViewModeFallsBackToSplitForUnknownValue() {
-        XCTAssertEqual(EditorViewMode.resolve(storedValue: EditorViewMode.source.rawValue), .source)
-        XCTAssertEqual(EditorViewMode.resolve(storedValue: EditorViewMode.preview.rawValue), .preview)
-        XCTAssertEqual(EditorViewMode.resolve(storedValue: "removed-mode"), .split)
+    func testWorkspaceViewModePreferenceMapsEveryExplicitMode() {
+        XCTAssertEqual(WorkspaceViewModePreference(mode: .source), .source)
+        XCTAssertEqual(WorkspaceViewModePreference(mode: .split), .split)
+        XCTAssertEqual(WorkspaceViewModePreference(mode: .preview), .preview)
+        XCTAssertNil(WorkspaceViewModePreference(rawValue: "removed-mode"))
     }
 
     func testSplitFractionDefaultsAndClampsToLaunchRange() {
@@ -39,7 +40,7 @@ final class EditorViewModeCommandsTests: XCTestCase {
     }
 
     @MainActor
-    func testHostedSplitRestoresFractionAndConstrainsDivider() throws {
+    func testHostedSplitsRestorePersistedGeometryAndConstrainDividers() throws {
         var storedFraction = 0.6
         let root = PersistentHorizontalSplitView(
             fraction: Binding(
@@ -82,47 +83,68 @@ final class EditorViewModeCommandsTests: XCTestCase {
             accuracy: 0.01
         )
 
-        var uninitializedFraction = EditorSplitSceneState.uninitialized
-        let firstFrameRoot = PersistentHorizontalSplitView(
-            fraction: Binding(
-                get: {
-                    EditorSplitSceneState.effectiveFraction(
-                        storedValue: uninitializedFraction,
-                        defaultValue: 0.65
-                    )
-                },
-                set: { uninitializedFraction = EditorSplitLayout.normalized($0) }
-            )
+        var storedLeadingWidth = 264.0
+        let edgeRoot = PersistentEdgeSplitView(
+            edge: .leading,
+            width: Binding(
+                get: { storedLeadingWidth },
+                set: { storedLeadingWidth = $0 }
+            ),
+            allowedWidth: 200 ... 300,
+            accessibilityLabel: "Test edge split"
         ) {
-            Text("First-frame source")
+            Text("Sidebar")
         } trailing: {
-            Text("First-frame preview")
+            Text("Workspace")
         }
-        let firstFrameHost = NSHostingView(rootView: firstFrameRoot)
-        firstFrameHost.frame = NSRect(x: 0, y: 0, width: 1_002, height: 500)
-        firstFrameHost.layoutSubtreeIfNeeded()
+        let edgeHost = NSHostingView(rootView: edgeRoot)
+        edgeHost.frame = NSRect(x: 0, y: 0, width: 1_002, height: 500)
+        edgeHost.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
 
-        let firstFrameSplit = try XCTUnwrap(
-            descendants(of: firstFrameHost).compactMap { $0 as? NSSplitView }.first
+        let edgeSplit = try XCTUnwrap(
+            descendants(of: edgeHost).compactMap { $0 as? NSSplitView }.first
         )
-        let firstFrameAvailableWidth =
-            firstFrameSplit.bounds.width - firstFrameSplit.dividerThickness
+        XCTAssertEqual(edgeSplit.subviews[0].frame.width, 264, accuracy: 1)
+        edgeSplit.setPosition(900, ofDividerAt: 0)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        XCTAssertEqual(edgeSplit.subviews[0].frame.width, 300, accuracy: 1)
+        XCTAssertEqual(storedLeadingWidth, 300, accuracy: 1)
+
+        var storedTrailingWidth = 236.0
+        let trailingRoot = PersistentEdgeSplitView(
+            edge: .trailing,
+            width: Binding(
+                get: { storedTrailingWidth },
+                set: { storedTrailingWidth = $0 }
+            ),
+            allowedWidth: 200 ... 288,
+            accessibilityLabel: "Test trailing split"
+        ) {
+            Text("Workspace")
+        } trailing: {
+            Text("Outline")
+        }
+        let trailingHost = NSHostingView(rootView: trailingRoot)
+        trailingHost.frame = NSRect(x: 0, y: 0, width: 1_002, height: 500)
+        trailingHost.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        let trailingSplit = try XCTUnwrap(
+            descendants(of: trailingHost).compactMap { $0 as? NSSplitView }.first
+        )
         XCTAssertEqual(
-            firstFrameSplit.subviews[0].frame.width / firstFrameAvailableWidth,
-            0.65,
-            accuracy: 0.01,
-            "the configured default must be effective before onAppear persists the scene value"
+            trailingSplit.subviews[1].frame.width,
+            236,
+            accuracy: 1
         )
-        XCTAssertEqual(
-            uninitializedFraction,
-            EditorSplitSceneState.uninitialized,
-            "synthetic bootstrap resizes must not overwrite SceneStorage"
-        )
+        trailingSplit.setPosition(0, ofDividerAt: 0)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        XCTAssertEqual(trailingSplit.subviews[1].frame.width, 288, accuracy: 1)
+        XCTAssertEqual(storedTrailingWidth, 288, accuracy: 1)
     }
 
     @MainActor
-    func testDocumentContextDefaultsAndSceneNavigationStateRemainScoped() {
+    func testDocumentContextDefaultsAndWorkspacePreferencesRemainGlobal() {
         XCTAssertEqual(
             EditorViewModeLaunchContext.resolve(
                 fileURL: nil,
@@ -145,155 +167,22 @@ final class EditorViewModeCommandsTests: XCTestCase {
             .recoverySnapshot
         )
         XCTAssertEqual(
-            EditorViewMode.initialMode(storedValue: "", context: .untitled),
+            WorkspaceViewModePreference.automatic.resolve(context: .untitled),
             .source
         )
         XCTAssertEqual(
-            EditorViewMode.initialMode(storedValue: "", context: .existingDocument),
+            WorkspaceViewModePreference.automatic.resolve(context: .existingDocument),
             .split
         )
         XCTAssertEqual(
-            EditorViewMode.initialMode(storedValue: "", context: .recoverySnapshot),
+            WorkspaceViewModePreference.preview.resolve(context: .untitled),
+            .preview,
+            "an explicit user preference remains authoritative across document contexts"
+        )
+        XCTAssertEqual(
+            WorkspaceViewModePreference(mode: .source),
             .source
         )
-        XCTAssertEqual(
-            EditorViewMode.initialMode(
-                storedValue: EditorViewMode.preview.rawValue,
-                context: .existingDocument
-            ),
-            .preview,
-            "a valid value restored for the same scene remains authoritative"
-        )
-        XCTAssertEqual(
-            EditorViewMode.initialMode(storedValue: "retired-mode", context: .untitled),
-            .source,
-            "an invalid nonempty scene value is frozen to the document-context default"
-        )
-
-        XCTAssertFalse(
-            EditorNavigationVisibilityState.resolve(
-                storedValue: "",
-                defaultValue: false
-            )
-        )
-        XCTAssertTrue(
-            EditorNavigationVisibilityState.resolve(
-                storedValue: "",
-                defaultValue: true
-            )
-        )
-        XCTAssertTrue(
-            EditorNavigationVisibilityState.resolve(
-                storedValue: EditorNavigationVisibilityState.storedValue(isVisible: true),
-                defaultValue: false
-            )
-        )
-        XCTAssertFalse(
-            EditorNavigationVisibilityState.resolve(
-                storedValue: EditorNavigationVisibilityState.storedValue(isVisible: false),
-                defaultValue: true
-            )
-        )
-
-        let normalizedInvalidVisibility =
-            EditorNavigationVisibilityState.normalizedStoredValue(
-                "retired-visibility",
-                defaultValue: false
-            )
-        XCTAssertFalse(
-            EditorNavigationVisibilityState.resolve(
-                storedValue: normalizedInvalidVisibility,
-                defaultValue: true
-            ),
-            "normalization must keep an existing scene independent of later preference changes"
-        )
-
-        let projectState = ProjectEditorNavigationState()
-        let projectA = FolderProjectDirectoryIdentity(
-            resolvedURL: URL(fileURLWithPath: "/tmp/project-a"),
-            device: 1,
-            inode: 10,
-            generation: 1
-        )
-        let projectB = FolderProjectDirectoryIdentity(
-            resolvedURL: URL(fileURLWithPath: "/tmp/project-b"),
-            device: 1,
-            inode: 11,
-            generation: 1
-        )
-        XCTAssertEqual(
-            projectState.resolve(
-                projectIdentity: projectA,
-                defaultProjectSidebarVisible: false,
-                defaultOutlineVisible: true
-            ),
-            EditorNavigationVisibilitySnapshot(
-                projectSidebarVisible: false,
-                outlineVisible: true
-            )
-        )
-        let editorSession = MarkdownSourceEditorSession()
-        editorSession.textView.string = "project draft"
-        editorSession.textView.setSelectedRange(NSRange(location: 7, length: 5))
-        editorSession.textView.insertText(
-            "note",
-            replacementRange: editorSession.textView.selectedRange()
-        )
-        let textBeforeNavigationToggle = editorSession.textView.string
-        let selectionBeforeNavigationToggle = editorSession.textView.selectedRange()
-        let undoBeforeNavigationToggle = editorSession.textView.undoManager?.canUndo
-        projectState.setProjectSidebarVisible(true)
-        projectState.setOutlineVisible(false)
-        XCTAssertEqual(
-            projectState.resolve(
-                projectIdentity: projectA,
-                defaultProjectSidebarVisible: true,
-                defaultOutlineVisible: false
-            ),
-            EditorNavigationVisibilitySnapshot(
-                projectSidebarVisible: true,
-                outlineVisible: false
-            ),
-            "a replacement project document must inherit its window's navigation state"
-        )
-        XCTAssertEqual(
-            projectState.resolve(
-                projectIdentity: projectB,
-                defaultProjectSidebarVisible: true,
-                defaultOutlineVisible: false
-            ),
-            EditorNavigationVisibilitySnapshot(
-                projectSidebarVisible: true,
-                outlineVisible: false
-            ),
-            "a different project starts from current defaults instead of project A or blank-scene storage"
-        )
-        projectState.setProjectSidebarVisible(false)
-        projectState.setOutlineVisible(true)
-        projectState.reset()
-        XCTAssertEqual(
-            projectState.resolve(
-                projectIdentity: projectB,
-                defaultProjectSidebarVisible: true,
-                defaultOutlineVisible: false
-            ),
-            EditorNavigationVisibilitySnapshot(
-                projectSidebarVisible: true,
-                outlineVisible: false
-            ),
-            "closing and reopening the same directory starts a fresh project-window session"
-        )
-        XCTAssertTrue(
-            UTF8Text.isExactlyEqual(
-                editorSession.textView.string,
-                textBeforeNavigationToggle
-            )
-        )
-        XCTAssertEqual(
-            editorSession.textView.selectedRange(),
-            selectionBeforeNavigationToggle
-        )
-        XCTAssertEqual(editorSession.textView.undoManager?.canUndo, undoBeforeNavigationToggle)
 
         XCTAssertEqual(
             EditorWorkspaceLayout.panes(

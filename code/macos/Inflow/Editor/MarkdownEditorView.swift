@@ -2,81 +2,6 @@ import AppKit
 import CoreGraphics
 import SwiftUI
 
-enum EditorNavigationVisibilityState {
-    private static let visible = "visible"
-    private static let hidden = "hidden"
-
-    static func resolve(storedValue: String, defaultValue: Bool) -> Bool {
-        switch storedValue {
-        case visible: true
-        case hidden: false
-        default: defaultValue
-        }
-    }
-
-    static func storedValue(isVisible: Bool) -> String {
-        isVisible ? visible : hidden
-    }
-
-    static func normalizedStoredValue(
-        _ storedValue: String,
-        defaultValue: Bool
-    ) -> String {
-        self.storedValue(
-            isVisible: resolve(storedValue: storedValue, defaultValue: defaultValue)
-        )
-    }
-}
-
-struct EditorNavigationVisibilitySnapshot: Equatable, Sendable {
-    var projectSidebarVisible: Bool
-    var outlineVisible: Bool
-}
-
-/// Navigation belongs to the project window rather than to the transient
-/// NSDocument that currently supplies its editor. Project file replacement
-/// therefore reuses this snapshot while ordinary document scenes continue to
-/// use their own SceneStorage values.
-@MainActor
-final class ProjectEditorNavigationState {
-    private var projectIdentity: FolderProjectDirectoryIdentity?
-    private var snapshot: EditorNavigationVisibilitySnapshot?
-
-    func resolve(
-        projectIdentity: FolderProjectDirectoryIdentity?,
-        defaultProjectSidebarVisible: Bool,
-        defaultOutlineVisible: Bool
-    ) -> EditorNavigationVisibilitySnapshot {
-        if self.projectIdentity == projectIdentity, let snapshot {
-            return snapshot
-        }
-        let resolved = EditorNavigationVisibilitySnapshot(
-            projectSidebarVisible: defaultProjectSidebarVisible,
-            outlineVisible: defaultOutlineVisible
-        )
-        self.projectIdentity = projectIdentity
-        snapshot = resolved
-        return resolved
-    }
-
-    func setProjectSidebarVisible(_ isVisible: Bool) {
-        guard var snapshot else { return }
-        snapshot.projectSidebarVisible = isVisible
-        self.snapshot = snapshot
-    }
-
-    func setOutlineVisible(_ isVisible: Bool) {
-        guard var snapshot else { return }
-        snapshot.outlineVisible = isVisible
-        self.snapshot = snapshot
-    }
-
-    func reset() {
-        projectIdentity = nil
-        snapshot = nil
-    }
-}
-
 enum EditorWorkspacePane: Equatable {
     case projectSidebar
     case editor
@@ -118,17 +43,6 @@ enum EditorWorkspaceMetrics {
 
     static let navigationHeaderHeight: CGFloat = 40
     static let statusBarHeight: CGFloat = 30
-}
-
-enum EditorSplitSceneState {
-    static let uninitialized = -1.0
-
-    static func effectiveFraction(storedValue: Double, defaultValue: Double) -> Double {
-        guard storedValue.isFinite, storedValue >= 0 else {
-            return EditorSplitLayout.normalized(defaultValue)
-        }
-        return EditorSplitLayout.normalized(storedValue)
-    }
 }
 
 enum ExportFormat: String, Sendable {
@@ -404,17 +318,6 @@ enum EditorViewMode: String, CaseIterable, Identifiable {
         self
     }
 
-    static func resolve(storedValue: String) -> EditorViewMode {
-        EditorViewMode(rawValue: storedValue) ?? .split
-    }
-
-    static func initialMode(
-        storedValue: String,
-        context: EditorViewModeLaunchContext
-    ) -> EditorViewMode {
-        guard !storedValue.isEmpty else { return context.defaultMode }
-        return EditorViewMode(rawValue: storedValue) ?? context.defaultMode
-    }
 }
 
 enum EditorViewModeLaunchContext: Equatable {
@@ -436,6 +339,44 @@ enum EditorViewModeLaunchContext: Equatable {
             return .recoverySnapshot
         }
         return fileURL == nil ? .untitled : .existingDocument
+    }
+}
+
+/// One application-wide workspace preference replaces per-document scene
+/// storage. `automatic` preserves the original context-sensitive first-launch
+/// behavior until the user explicitly selects a writing view.
+enum WorkspaceViewModePreference: String, CaseIterable, Identifiable, Sendable {
+    case automatic
+    case source
+    case split
+    case preview
+
+    var id: Self { self }
+
+    var label: String {
+        switch self {
+        case .automatic: "自动（按文档类型）"
+        case .source: EditorViewMode.source.label
+        case .split: EditorViewMode.split.label
+        case .preview: EditorViewMode.preview.label
+        }
+    }
+
+    init(mode: EditorViewMode) {
+        switch mode {
+        case .source: self = .source
+        case .split: self = .split
+        case .preview: self = .preview
+        }
+    }
+
+    func resolve(context: EditorViewModeLaunchContext) -> EditorViewMode {
+        switch self {
+        case .automatic: context.defaultMode
+        case .source: .source
+        case .split: .split
+        case .preview: .preview
+        }
     }
 }
 
@@ -666,11 +607,6 @@ struct MarkdownEditorView: View {
         )
     }
 
-    @SceneStorage("editorViewMode") private var storedViewMode = ""
-    @SceneStorage("editor.navigation.outlineVisibility.v2")
-    private var storedOutlineVisibility = ""
-    @SceneStorage("editor.navigation.projectSidebarVisibility.v2")
-    private var storedProjectSidebarVisibility = ""
     @SceneStorage("editorStatisticMode") private var storedStatisticMode =
         EditorStatisticMode.words.rawValue
     // These keys existed in development previews. The launch product does not expose
@@ -679,10 +615,6 @@ struct MarkdownEditorView: View {
     @SceneStorage("isTypewriterModeEnabled") private var restoredTypewriterModeEnabled = false
     private var isFocusModeEnabled: Bool { false }
     private var isTypewriterModeEnabled: Bool { false }
-    // A negative sentinel distinguishes a brand-new scene from one whose own
-    // fraction was restored. The global preference seeds only the former.
-    @SceneStorage("editorSplitFraction")
-    private var editorSplitFraction = EditorSplitSceneState.uninitialized
     @State private var previewHTML = MarkdownRenderer.htmlDocument(for: "")
     @State private var previewSourceSnapshot = ""
     @State private var previewFailureMessage: String?
@@ -747,14 +679,11 @@ struct MarkdownEditorView: View {
             if usesSourceOnlyExperience {
                 return .source
             }
-            return EditorViewMode.initialMode(
-                storedValue: storedViewMode,
-                context: initialViewModeContext
-            )
+            return preferences.workspaceViewMode.resolve(context: initialViewModeContext)
         }
         nonmutating set {
             guard !usesSourceOnlyExperience || newValue == .source else { return }
-            storedViewMode = newValue.rawValue
+            preferences.workspaceViewMode = WorkspaceViewModePreference(mode: newValue)
         }
     }
 
@@ -767,71 +696,22 @@ struct MarkdownEditorView: View {
 
     private var editorSplitFractionBinding: Binding<Double> {
         Binding(
-            get: {
-                EditorSplitSceneState.effectiveFraction(
-                    storedValue: editorSplitFraction,
-                    defaultValue: preferences.defaultSplitFraction
-                )
-            },
-            set: { editorSplitFraction = EditorSplitLayout.normalized($0) }
+            get: { preferences.workspaceSplitFraction },
+            set: { preferences.workspaceSplitFraction = EditorSplitLayout.normalized($0) }
         )
     }
 
     private var isOutlineVisible: Bool {
-        get {
-            if hasProjectContext, let projectCoordinator {
-                return projectCoordinator.editorNavigationState.resolve(
-                    projectIdentity: folderBrowser.projectRootIdentity,
-                    defaultProjectSidebarVisible: preferences.defaultProjectSidebarVisible,
-                    defaultOutlineVisible: preferences.defaultOutlineVisible
-                ).outlineVisible
-            }
-            return EditorNavigationVisibilityState.resolve(
-                storedValue: storedOutlineVisibility,
-                defaultValue: preferences.defaultOutlineVisible
-            )
-        }
+        get { preferences.workspaceOutlineVisible }
         nonmutating set {
-            storedOutlineVisibility = EditorNavigationVisibilityState.storedValue(
-                isVisible: newValue
-            )
-            if hasProjectContext, let projectCoordinator {
-                _ = projectCoordinator.editorNavigationState.resolve(
-                    projectIdentity: folderBrowser.projectRootIdentity,
-                    defaultProjectSidebarVisible: preferences.defaultProjectSidebarVisible,
-                    defaultOutlineVisible: preferences.defaultOutlineVisible
-                )
-                projectCoordinator.editorNavigationState.setOutlineVisible(newValue)
-            }
+            preferences.workspaceOutlineVisible = newValue
         }
     }
 
     private var isProjectSidebarVisible: Bool {
-        get {
-            if hasProjectContext, let projectCoordinator {
-                return projectCoordinator.editorNavigationState.resolve(
-                    projectIdentity: folderBrowser.projectRootIdentity,
-                    defaultProjectSidebarVisible: preferences.defaultProjectSidebarVisible,
-                    defaultOutlineVisible: preferences.defaultOutlineVisible
-                ).projectSidebarVisible
-            }
-            return EditorNavigationVisibilityState.resolve(
-                storedValue: storedProjectSidebarVisibility,
-                defaultValue: preferences.defaultProjectSidebarVisible
-            )
-        }
+        get { preferences.workspaceProjectSidebarVisible }
         nonmutating set {
-            storedProjectSidebarVisibility = EditorNavigationVisibilityState.storedValue(
-                isVisible: newValue
-            )
-            if hasProjectContext, let projectCoordinator {
-                _ = projectCoordinator.editorNavigationState.resolve(
-                    projectIdentity: folderBrowser.projectRootIdentity,
-                    defaultProjectSidebarVisible: preferences.defaultProjectSidebarVisible,
-                    defaultOutlineVisible: preferences.defaultOutlineVisible
-                )
-                projectCoordinator.editorNavigationState.setProjectSidebarVisible(newValue)
-            }
+            preferences.workspaceProjectSidebarVisible = newValue
         }
     }
 
@@ -1045,23 +925,12 @@ struct MarkdownEditorView: View {
             // SwiftUI creates its document controller while the app is launching.
             // Apply the host policy only after this document scene is attached.
             preferences.applyAutosavePolicy()
-            initializeNavigationVisibilityIfNeeded()
-            let effectiveSplitFraction = EditorSplitSceneState.effectiveFraction(
-                storedValue: editorSplitFraction,
-                defaultValue: preferences.defaultSplitFraction
-            )
-            if !editorSplitFraction.isFinite
-                || editorSplitFraction != effectiveSplitFraction
-            {
-                editorSplitFraction = effectiveSplitFraction
-            }
             registerSelectedProjectDirectory(folderBrowser.folderURL)
             restoreRelativeResourceDirectoryAccess(for: fileURL)
             if let fileURL {
                 recentDocuments?.note(fileURL)
             }
             applyRestorationStateIfNeeded()
-            initializeViewModeIfNeeded()
             prepareFreshUntitledDocumentForEditingIfNeeded()
             scheduleDerivedContent(
                 for: document.text,
@@ -1154,7 +1023,6 @@ struct MarkdownEditorView: View {
         }
         .onChange(of: folderBrowser.folderURL) { _, newURL in
             registerSelectedProjectDirectory(newURL)
-            initializeNavigationVisibilityIfNeeded()
             scheduleDerivedContent(
                 for: document.text,
                 documentDirectory: fileURL?.deletingLastPathComponent(),
@@ -1194,7 +1062,7 @@ struct MarkdownEditorView: View {
                 await recoveryCoordinator?.flush(recoveryRecordID)
             }
         }
-        .onChange(of: storedViewMode) { _, _ in
+        .onChange(of: preferences.workspaceViewMode) { _, _ in
             updateRecoveryProtection()
         }
         .onChange(of: preferences.previewConfiguration) { _, configuration in
@@ -1548,7 +1416,12 @@ struct MarkdownEditorView: View {
     private var content: some View {
         Group {
             if workspacePanes.first == .projectSidebar {
-                HSplitView {
+                PersistentEdgeSplitView(
+                    edge: .leading,
+                    width: $preferences.workspaceProjectSidebarWidth,
+                    allowedWidth: AppPreferences.Limits.projectSidebarWidth,
+                    accessibilityLabel: "目录树与工作区分栏"
+                ) {
                     FolderBrowserSidebar(
                         controller: folderBrowser,
                         currentDocumentURL: fileURL,
@@ -1618,10 +1491,9 @@ struct MarkdownEditorView: View {
                     )
                     .frame(
                         minWidth: EditorWorkspaceMetrics.projectSidebarMinimumWidth,
-                        idealWidth: EditorWorkspaceMetrics.projectSidebarIdealWidth,
                         maxWidth: EditorWorkspaceMetrics.projectSidebarMaximumWidth
                     )
-
+                } trailing: {
                     documentContent
                         .frame(minWidth: EditorWorkspaceMetrics.editorMinimumWidth)
                 }
@@ -1717,10 +1589,15 @@ struct MarkdownEditorView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if workspacePanes.last == .outline {
-            HSplitView {
+            PersistentEdgeSplitView(
+                edge: .trailing,
+                width: $preferences.workspaceOutlineWidth,
+                allowedWidth: AppPreferences.Limits.outlineWidth,
+                accessibilityLabel: "工作区与文档大纲分栏"
+            ) {
                 editorContent
                     .frame(minWidth: EditorWorkspaceMetrics.editorMinimumWidth)
-
+            } trailing: {
                 DocumentOutlineView(
                     analysisState: analysisState,
                     selectedHeadingID: selectedHeadingID,
@@ -1730,7 +1607,6 @@ struct MarkdownEditorView: View {
                 )
                 .frame(
                     minWidth: EditorWorkspaceMetrics.outlineMinimumWidth,
-                    idealWidth: EditorWorkspaceMetrics.outlineIdealWidth,
                     maxWidth: EditorWorkspaceMetrics.outlineMaximumWidth
                 )
             }
@@ -1998,44 +1874,7 @@ struct MarkdownEditorView: View {
             return
         }
         didApplyRestorationState = true
-        if storedViewMode.isEmpty {
-            storedViewMode = EditorViewMode.source.rawValue
-        }
         sourceEditorSession.requestRestoration(restorationState)
-    }
-
-    private func initializeNavigationVisibilityIfNeeded() {
-        if hasProjectContext, let projectCoordinator {
-            let snapshot = projectCoordinator.editorNavigationState.resolve(
-                projectIdentity: folderBrowser.projectRootIdentity,
-                defaultProjectSidebarVisible: preferences.defaultProjectSidebarVisible,
-                defaultOutlineVisible: preferences.defaultOutlineVisible
-            )
-            storedProjectSidebarVisibility = EditorNavigationVisibilityState.storedValue(
-                isVisible: snapshot.projectSidebarVisible
-            )
-            storedOutlineVisibility = EditorNavigationVisibilityState.storedValue(
-                isVisible: snapshot.outlineVisible
-            )
-            return
-        }
-
-        storedProjectSidebarVisibility =
-            EditorNavigationVisibilityState.normalizedStoredValue(
-                storedProjectSidebarVisibility,
-                defaultValue: preferences.defaultProjectSidebarVisible
-            )
-        storedOutlineVisibility = EditorNavigationVisibilityState.normalizedStoredValue(
-            storedOutlineVisibility,
-            defaultValue: preferences.defaultOutlineVisible
-        )
-    }
-
-    private func initializeViewModeIfNeeded() {
-        storedViewMode = EditorViewMode.initialMode(
-            storedValue: storedViewMode,
-            context: initialViewModeContext
-        ).rawValue
     }
 
     private func prepareFreshUntitledDocumentForEditingIfNeeded() {

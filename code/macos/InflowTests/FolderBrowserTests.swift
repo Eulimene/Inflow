@@ -119,19 +119,6 @@ final class FolderBrowserTests: XCTestCase {
             createProjectDocument: { ClosingTrackingDocument() },
             detailedDocumentOpener: detailedOpener
         )
-        XCTAssertEqual(
-            coordinator.editorNavigationState.resolve(
-                projectIdentity: browser.projectRootIdentity,
-                defaultProjectSidebarVisible: true,
-                defaultOutlineVisible: true
-            ),
-            EditorNavigationVisibilitySnapshot(
-                projectSidebarVisible: true,
-                outlineVisible: true
-            )
-        )
-        coordinator.editorNavigationState.setProjectSidebarVisible(false)
-        coordinator.editorNavigationState.setOutlineVisible(true)
         let recentDocuments = RecentDocumentsController(
             persistence: EmptyRecentDocumentPersistence(),
             bookmarkData: { _ in nil },
@@ -414,18 +401,6 @@ final class FolderBrowserTests: XCTestCase {
             )
         }
         XCTAssertTrue(browser.isAssociatedProjectDocument(replacementDocument))
-        XCTAssertEqual(
-            coordinator.editorNavigationState.resolve(
-                projectIdentity: browser.projectRootIdentity,
-                defaultProjectSidebarVisible: true,
-                defaultOutlineVisible: false
-            ),
-            EditorNavigationVisibilitySnapshot(
-                projectSidebarVisible: false,
-                outlineVisible: true
-            ),
-            "a replacement NSDocument must inherit the project window's independent toggles"
-        )
     }
 
     func testCoordinatorReleaseCleanupClosesOnlyUnownedNewHiddenDocuments() async throws {

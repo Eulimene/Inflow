@@ -25,23 +25,26 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertTrue(preferences.mermaidRenderingEnabled)
             XCTAssertEqual(preferences.increasedContrast, .followSystem)
             XCTAssertEqual(preferences.reduceMotion, .followSystem)
-            XCTAssertTrue(preferences.defaultProjectSidebarVisible)
-            XCTAssertFalse(preferences.defaultOutlineVisible)
-            XCTAssertEqual(preferences.defaultSplitFraction, 0.5)
+            XCTAssertEqual(preferences.workspaceViewMode, .automatic)
+            XCTAssertTrue(preferences.workspaceProjectSidebarVisible)
+            XCTAssertFalse(preferences.workspaceOutlineVisible)
+            XCTAssertEqual(preferences.workspaceSplitFraction, 0.5)
+            XCTAssertEqual(preferences.workspaceProjectSidebarWidth, 228)
+            XCTAssertEqual(preferences.workspaceOutlineWidth, 228)
             XCTAssertEqual(preferences.recentDocumentCapacity, 20)
             XCTAssertEqual(preferences.markdownOpenBehavior, .reuseBlankWindow)
             XCTAssertFalse(preferences.autosaveEnabled)
             XCTAssertEqual(preferences.autosaveDelay, .oneSecond)
             XCTAssertEqual(preferences.existingImagePlacement, .copyToAssets)
             XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
-            XCTAssertNil(
-                defaults.object(forKey: "preferences.window.lastActiveEditorViewMode"),
-                "the launch product must not create a global recent editor-mode preference"
+            XCTAssertEqual(
+                defaults.string(forKey: "preferences.workspace.viewMode"),
+                WorkspaceViewModePreference.automatic.rawValue
             )
         }
     }
 
-    func testVisibleLaunchPreferencesPersistWhileHiddenGrowthValuesReturnToFixedContract() {
+    func testWorkspacePreferencesPersistAcrossPreferenceInstancesAndClampToBounds() {
         withDefaults { defaults in
             let first = AppPreferences(defaults: defaults)
             first.editorFontSize = 24
@@ -60,9 +63,12 @@ final class AppPreferencesTests: XCTestCase {
             first.mermaidRenderingEnabled = false
             first.increasedContrast = .enabled
             first.reduceMotion = .disabled
-            first.defaultProjectSidebarVisible = false
-            first.defaultOutlineVisible = false
-            first.defaultSplitFraction = 0.65
+            first.workspaceViewMode = .preview
+            first.workspaceProjectSidebarVisible = false
+            first.workspaceOutlineVisible = true
+            first.workspaceSplitFraction = 0.65
+            first.workspaceProjectSidebarWidth = 276
+            first.workspaceOutlineWidth = 252
             first.recentDocumentCapacity = 42
             first.markdownOpenBehavior = .newWindow
             first.autosaveEnabled = false
@@ -87,9 +93,12 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertTrue(second.mermaidRenderingEnabled)
             XCTAssertEqual(second.increasedContrast, .followSystem)
             XCTAssertEqual(second.reduceMotion, .followSystem)
-            XCTAssertFalse(second.defaultProjectSidebarVisible)
-            XCTAssertFalse(second.defaultOutlineVisible)
-            XCTAssertEqual(second.defaultSplitFraction, 0.65)
+            XCTAssertEqual(second.workspaceViewMode, .preview)
+            XCTAssertFalse(second.workspaceProjectSidebarVisible)
+            XCTAssertTrue(second.workspaceOutlineVisible)
+            XCTAssertEqual(second.workspaceSplitFraction, 0.65)
+            XCTAssertEqual(second.workspaceProjectSidebarWidth, 276)
+            XCTAssertEqual(second.workspaceOutlineWidth, 252)
             XCTAssertEqual(second.recentDocumentCapacity, 20)
             XCTAssertEqual(second.markdownOpenBehavior, .reuseBlankWindow)
             XCTAssertFalse(second.autosaveEnabled)
@@ -101,13 +110,17 @@ final class AppPreferencesTests: XCTestCase {
             second.editorLineHeight = -4
             second.previewContentWidth = 50
             second.previewZoom = 9
-            second.defaultSplitFraction = 0.9
+            second.workspaceSplitFraction = 0.9
+            second.workspaceProjectSidebarWidth = 1_000
+            second.workspaceOutlineWidth = -10
             second.recentDocumentCapacity = 500
             XCTAssertEqual(second.editorFontSize, 28)
             XCTAssertEqual(second.editorLineHeight, 1.2)
             XCTAssertEqual(second.previewContentWidth, 600)
             XCTAssertEqual(second.previewZoom, 2)
-            XCTAssertEqual(second.defaultSplitFraction, 0.75)
+            XCTAssertEqual(second.workspaceSplitFraction, 0.75)
+            XCTAssertEqual(second.workspaceProjectSidebarWidth, 300)
+            XCTAssertEqual(second.workspaceOutlineWidth, 200)
             XCTAssertEqual(second.recentDocumentCapacity, 50)
 
             let third = AppPreferences(defaults: defaults)
@@ -115,9 +128,12 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(third.editorLineHeight, 1.6)
             XCTAssertEqual(third.previewContentWidth, 600)
             XCTAssertEqual(third.previewZoom, 1)
-            XCTAssertFalse(third.defaultProjectSidebarVisible)
-            XCTAssertFalse(third.defaultOutlineVisible)
-            XCTAssertEqual(third.defaultSplitFraction, 0.75)
+            XCTAssertEqual(third.workspaceViewMode, .preview)
+            XCTAssertFalse(third.workspaceProjectSidebarVisible)
+            XCTAssertTrue(third.workspaceOutlineVisible)
+            XCTAssertEqual(third.workspaceSplitFraction, 0.75)
+            XCTAssertEqual(third.workspaceProjectSidebarWidth, 300)
+            XCTAssertEqual(third.workspaceOutlineWidth, 200)
             XCTAssertEqual(third.recentDocumentCapacity, 20)
         }
     }
@@ -135,6 +151,8 @@ final class AppPreferencesTests: XCTestCase {
             )
             defaults.set(7, forKey: "preferences.window.defaultOutlineVisible")
             defaults.set(Double.nan, forKey: "preferences.preview.defaultSplitFraction")
+            defaults.set(Double.nan, forKey: "preferences.workspace.projectSidebarWidth")
+            defaults.set(9_000, forKey: "preferences.workspace.outlineWidth")
             defaults.set(-40, forKey: RecentDocumentPolicy.capacityKey)
             defaults.set("retired-open", forKey: RecentDocumentPolicy.openBehaviorKey)
             defaults.set("retired-delay", forKey: "preferences.documents.autosaveDelay")
@@ -149,9 +167,12 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.editorLineHeight, 1.6)
             XCTAssertEqual(preferences.previewContentWidth, 1_200)
             XCTAssertEqual(preferences.previewTheme, .standard)
-            XCTAssertTrue(preferences.defaultProjectSidebarVisible)
-            XCTAssertFalse(preferences.defaultOutlineVisible)
-            XCTAssertEqual(preferences.defaultSplitFraction, 0.5)
+            XCTAssertEqual(preferences.workspaceViewMode, .automatic)
+            XCTAssertTrue(preferences.workspaceProjectSidebarVisible)
+            XCTAssertFalse(preferences.workspaceOutlineVisible)
+            XCTAssertEqual(preferences.workspaceSplitFraction, 0.5)
+            XCTAssertEqual(preferences.workspaceProjectSidebarWidth, 228)
+            XCTAssertEqual(preferences.workspaceOutlineWidth, 288)
             XCTAssertEqual(preferences.recentDocumentCapacity, 20)
             XCTAssertEqual(preferences.markdownOpenBehavior, .reuseBlankWindow)
             XCTAssertEqual(preferences.autosaveDelay, .oneSecond)
@@ -160,7 +181,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(
                 defaults.string(forKey: "preferences.window.lastActiveEditorViewMode"),
                 "retired-view",
-                "a legacy value may remain for migration but must never be read or rewritten"
+                "an invalid legacy value remains available for diagnostics"
             )
         }
     }
@@ -174,9 +195,12 @@ final class AppPreferencesTests: XCTestCase {
             preferences.syntaxHighlightingEnabled = false
             preferences.scrollSyncEnabled = false
             preferences.increasedContrast = .enabled
-            preferences.defaultProjectSidebarVisible = false
-            preferences.defaultOutlineVisible = false
-            preferences.defaultSplitFraction = 0.7
+            preferences.workspaceViewMode = .source
+            preferences.workspaceProjectSidebarVisible = false
+            preferences.workspaceOutlineVisible = true
+            preferences.workspaceSplitFraction = 0.7
+            preferences.workspaceProjectSidebarWidth = 284
+            preferences.workspaceOutlineWidth = 244
             preferences.recentDocumentCapacity = 31
             preferences.markdownOpenBehavior = .newWindow
             preferences.autosaveEnabled = false
@@ -190,9 +214,12 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.previewZoom, 1.8)
             XCTAssertFalse(preferences.scrollSyncEnabled)
             XCTAssertEqual(preferences.increasedContrast, .enabled)
-            XCTAssertFalse(preferences.defaultProjectSidebarVisible)
-            XCTAssertFalse(preferences.defaultOutlineVisible)
-            XCTAssertEqual(preferences.defaultSplitFraction, 0.7)
+            XCTAssertEqual(preferences.workspaceViewMode, .source)
+            XCTAssertFalse(preferences.workspaceProjectSidebarVisible)
+            XCTAssertTrue(preferences.workspaceOutlineVisible)
+            XCTAssertEqual(preferences.workspaceSplitFraction, 0.7)
+            XCTAssertEqual(preferences.workspaceProjectSidebarWidth, 284)
+            XCTAssertEqual(preferences.workspaceOutlineWidth, 244)
             XCTAssertEqual(preferences.recentDocumentCapacity, 31)
             XCTAssertEqual(preferences.markdownOpenBehavior, .newWindow)
             XCTAssertFalse(preferences.autosaveEnabled)
@@ -203,14 +230,24 @@ final class AppPreferencesTests: XCTestCase {
 
             preferences.reset(.general)
 
-            XCTAssertTrue(preferences.defaultProjectSidebarVisible)
-            XCTAssertFalse(preferences.defaultOutlineVisible)
-            XCTAssertEqual(preferences.defaultSplitFraction, 0.5)
+            XCTAssertEqual(preferences.workspaceViewMode, .source)
+            XCTAssertFalse(preferences.workspaceProjectSidebarVisible)
+            XCTAssertTrue(preferences.workspaceOutlineVisible)
+            XCTAssertEqual(preferences.workspaceSplitFraction, 0.7)
             XCTAssertEqual(preferences.markdownOpenBehavior, .reuseBlankWindow)
             XCTAssertFalse(preferences.scrollSyncEnabled)
             XCTAssertEqual(preferences.increasedContrast, .enabled)
             XCTAssertEqual(preferences.existingImagePlacement, .keepOriginal)
             XCTAssertEqual(defaults.string(forKey: "document.recovery.record"), "recovery-sentinel")
+
+            preferences.reset(.workspace)
+
+            XCTAssertEqual(preferences.workspaceViewMode, .automatic)
+            XCTAssertTrue(preferences.workspaceProjectSidebarVisible)
+            XCTAssertFalse(preferences.workspaceOutlineVisible)
+            XCTAssertEqual(preferences.workspaceSplitFraction, 0.5)
+            XCTAssertEqual(preferences.workspaceProjectSidebarWidth, 228)
+            XCTAssertEqual(preferences.workspaceOutlineWidth, 228)
         }
     }
 
@@ -235,9 +272,12 @@ final class AppPreferencesTests: XCTestCase {
             preferences.mermaidRenderingEnabled = false
             preferences.increasedContrast = .enabled
             preferences.reduceMotion = .disabled
-            preferences.defaultProjectSidebarVisible = false
-            preferences.defaultOutlineVisible = false
-            preferences.defaultSplitFraction = 0.7
+            preferences.workspaceViewMode = .split
+            preferences.workspaceProjectSidebarVisible = false
+            preferences.workspaceOutlineVisible = true
+            preferences.workspaceSplitFraction = 0.7
+            preferences.workspaceProjectSidebarWidth = 292
+            preferences.workspaceOutlineWidth = 268
             preferences.recentDocumentCapacity = 31
             preferences.markdownOpenBehavior = .newWindow
             preferences.autosaveEnabled = false
@@ -262,9 +302,12 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertTrue(preferences.mermaidRenderingEnabled)
             XCTAssertEqual(preferences.increasedContrast, .followSystem)
             XCTAssertEqual(preferences.reduceMotion, .followSystem)
-            XCTAssertTrue(preferences.defaultProjectSidebarVisible)
-            XCTAssertFalse(preferences.defaultOutlineVisible)
-            XCTAssertEqual(preferences.defaultSplitFraction, 0.5)
+            XCTAssertEqual(preferences.workspaceViewMode, .automatic)
+            XCTAssertTrue(preferences.workspaceProjectSidebarVisible)
+            XCTAssertFalse(preferences.workspaceOutlineVisible)
+            XCTAssertEqual(preferences.workspaceSplitFraction, 0.5)
+            XCTAssertEqual(preferences.workspaceProjectSidebarWidth, 228)
+            XCTAssertEqual(preferences.workspaceOutlineWidth, 228)
             XCTAssertEqual(preferences.recentDocumentCapacity, 20)
             XCTAssertEqual(preferences.markdownOpenBehavior, .reuseBlankWindow)
             XCTAssertFalse(preferences.autosaveEnabled)
@@ -290,17 +333,32 @@ final class AppPreferencesTests: XCTestCase {
         )
         XCTAssertEqual(SettingsResetScope.all.menuTitle, "恢复全部默认设置…")
         XCTAssertEqual(InflowSettingsSection.preview.preferenceGroup, .preview)
-        XCTAssertEqual(InflowSettingsSection.allCases, [.general, .writing, .preview])
+        XCTAssertEqual(InflowSettingsSection.workspace.preferenceGroup, .workspace)
+        XCTAssertEqual(
+            InflowSettingsSection.allCases,
+            [.general, .workspace, .writing, .preview]
+        )
     }
 
-    func testVersionedSettingsRegistryKeepsKnownKeysButLaunchProfileOverridesHiddenValue() {
+    func testVersionedSettingsRegistryMigratesLegacyWorkspacePreferences() {
         withDefaults { defaults in
             defaults.set(1.7, forKey: "preferences.preview.zoom")
+            defaults.set(
+                EditorViewMode.preview.rawValue,
+                forKey: "preferences.window.lastActiveEditorViewMode"
+            )
+            defaults.set(false, forKey: "preferences.window.defaultProjectSidebarVisible")
+            defaults.set(true, forKey: "preferences.window.defaultOutlineVisible")
+            defaults.set(0.65, forKey: "preferences.preview.defaultSplitFraction")
             defaults.set("keep-me", forKey: "unrelated.document-state")
 
             let preferences = AppPreferences(defaults: defaults)
 
             XCTAssertEqual(preferences.previewZoom, 1)
+            XCTAssertEqual(preferences.workspaceViewMode, .preview)
+            XCTAssertFalse(preferences.workspaceProjectSidebarVisible)
+            XCTAssertTrue(preferences.workspaceOutlineVisible)
+            XCTAssertEqual(preferences.workspaceSplitFraction, 0.65)
             XCTAssertEqual(defaults.double(forKey: "preferences.preview.zoom"), 1)
             XCTAssertEqual(
                 defaults.integer(forKey: AppPreferences.Registry.schemaVersionKey),
@@ -324,6 +382,21 @@ final class AppPreferencesTests: XCTestCase {
                     "preferences.window.defaultOutlineVisible"
                 )
             )
+            XCTAssertTrue(
+                AppPreferences.Registry.knownKeys.contains(
+                    "preferences.workspace.viewMode"
+                )
+            )
+            XCTAssertTrue(
+                AppPreferences.Registry.knownKeys.contains(
+                    "preferences.workspace.projectSidebarWidth"
+                )
+            )
+            XCTAssertTrue(
+                AppPreferences.Registry.knownKeys.contains(
+                    "preferences.workspace.outlineWidth"
+                )
+            )
             XCTAssertEqual(defaults.string(forKey: "unrelated.document-state"), "keep-me")
         }
     }
@@ -340,12 +413,12 @@ final class AppPreferencesTests: XCTestCase {
 
             persistence.shouldFail = true
             preferences.previewContentWidth = 900
-            preferences.defaultOutlineVisible = false
+            preferences.workspaceOutlineVisible = true
 
             XCTAssertEqual(preferences.previewContentWidth, 900)
-            XCTAssertFalse(preferences.defaultOutlineVisible)
+            XCTAssertTrue(preferences.workspaceOutlineVisible)
             XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 760)
-            XCTAssertFalse(defaults.bool(forKey: "preferences.window.defaultOutlineVisible"))
+            XCTAssertFalse(defaults.bool(forKey: "preferences.workspace.outlineVisible"))
             XCTAssertNotNil(preferences.persistenceFailure)
             XCTAssertEqual(SettingsPersistencePrompt.title, "暂时无法保存设置")
             XCTAssertEqual(
@@ -369,7 +442,7 @@ final class AppPreferencesTests: XCTestCase {
 
             XCTAssertNil(preferences.persistenceFailure)
             XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 900)
-            XCTAssertFalse(defaults.bool(forKey: "preferences.window.defaultOutlineVisible"))
+            XCTAssertTrue(defaults.bool(forKey: "preferences.workspace.outlineVisible"))
             XCTAssertEqual(
                 defaults.string(forKey: "preferences.preview.colorScheme"),
                 PreviewColorScheme.dark.rawValue

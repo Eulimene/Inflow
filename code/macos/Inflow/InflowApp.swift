@@ -687,7 +687,6 @@ struct ProjectDocumentDetailedOpener {
 @MainActor
 final class LightweightProjectCoordinator {
     let browser: FolderBrowserController
-    let editorNavigationState = ProjectEditorNavigationState()
     private weak var projectDocument: NSDocument?
     private let createProjectDocument: () throws -> NSDocument
     private let detailedDocumentOpener: ProjectDocumentDetailedOpener?
@@ -911,11 +910,6 @@ final class LightweightProjectCoordinator {
                 return
             }
 
-            // A committed project open starts a new project-window session,
-            // even when it reopens the same directory identity. Seed its
-            // navigation from current preferences; project-file replacement
-            // below deliberately does not reset this state.
-            self.editorNavigationState.reset()
             self.browser.associateProjectWindow(with: nil)
             self.attach(targetDocument)
             if let previousDocument, previousDocument !== targetDocument {

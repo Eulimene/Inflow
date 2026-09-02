@@ -119,6 +119,7 @@ enum AccessibilityPreference: String, CaseIterable, Identifiable, Sendable {
 
 enum AppPreferenceGroup: String, CaseIterable, Identifiable, Sendable {
     case general
+    case workspace
     case writing
     case preview
     case resources
@@ -129,6 +130,7 @@ enum AppPreferenceGroup: String, CaseIterable, Identifiable, Sendable {
     var label: String {
         switch self {
         case .general: "通用"
+        case .workspace: "工作区"
         case .writing: "写作"
         case .preview: "预览"
         case .resources: "资源"
@@ -243,7 +245,13 @@ final class AppPreferences: ObservableObject {
         static let editorLineHeight = 1.2 ... 2.0
         static let previewContentWidth = 600.0 ... 1_200.0
         static let previewZoom = 0.5 ... 2.0
-        static let defaultSplitFraction = EditorSplitLayout.allowedFraction
+        static let workspaceSplitFraction = EditorSplitLayout.allowedFraction
+        static let projectSidebarWidth =
+            Double(EditorWorkspaceMetrics.projectSidebarMinimumWidth)
+                ... Double(EditorWorkspaceMetrics.projectSidebarMaximumWidth)
+        static let outlineWidth =
+            Double(EditorWorkspaceMetrics.outlineMinimumWidth)
+                ... Double(EditorWorkspaceMetrics.outlineMaximumWidth)
     }
 
     private enum Key {
@@ -263,23 +271,28 @@ final class AppPreferences: ObservableObject {
         static let mermaidRenderingEnabled = "preferences.preview.mermaidRenderingEnabled"
         static let increasedContrast = "preferences.accessibility.increasedContrast"
         static let reduceMotion = "preferences.accessibility.reduceMotion"
-        // Kept in the registry only so an older preview build's value remains a
-        // recognized migration artifact. The launch product never reads or
-        // rewrites a global "last active" editor mode: every new scene derives
-        // its starting mode from its document context.
+        // Version-1 layout keys remain registered as migration artifacts.
         static let legacyLastActiveEditorViewMode =
             "preferences.window.lastActiveEditorViewMode"
-        static let defaultProjectSidebarVisible =
+        static let legacyDefaultProjectSidebarVisible =
             "preferences.window.defaultProjectSidebarVisible"
-        static let defaultOutlineVisible = "preferences.window.defaultOutlineVisible"
-        static let defaultSplitFraction = "preferences.preview.defaultSplitFraction"
+        static let legacyDefaultOutlineVisible = "preferences.window.defaultOutlineVisible"
+        static let legacyDefaultSplitFraction = "preferences.preview.defaultSplitFraction"
+        static let workspaceViewMode = "preferences.workspace.viewMode"
+        static let workspaceProjectSidebarVisible =
+            "preferences.workspace.projectSidebarVisible"
+        static let workspaceOutlineVisible = "preferences.workspace.outlineVisible"
+        static let workspaceSplitFraction = "preferences.workspace.splitFraction"
+        static let workspaceProjectSidebarWidth =
+            "preferences.workspace.projectSidebarWidth"
+        static let workspaceOutlineWidth = "preferences.workspace.outlineWidth"
         static let autosaveEnabled = "preferences.documents.autosaveEnabled"
         static let autosaveDelay = "preferences.documents.autosaveDelay"
         static let existingImagePlacement = "preferences.resources.existingImagePlacement"
     }
 
     enum Registry {
-        static let currentSchemaVersion = 1
+        static let currentSchemaVersion = 2
         static let schemaVersionKey = "preferences.schemaVersion"
         static let knownKeys: Set<String> = [
             schemaVersionKey,
@@ -300,9 +313,15 @@ final class AppPreferences: ObservableObject {
             Key.increasedContrast,
             Key.reduceMotion,
             Key.legacyLastActiveEditorViewMode,
-            Key.defaultProjectSidebarVisible,
-            Key.defaultOutlineVisible,
-            Key.defaultSplitFraction,
+            Key.legacyDefaultProjectSidebarVisible,
+            Key.legacyDefaultOutlineVisible,
+            Key.legacyDefaultSplitFraction,
+            Key.workspaceViewMode,
+            Key.workspaceProjectSidebarVisible,
+            Key.workspaceOutlineVisible,
+            Key.workspaceSplitFraction,
+            Key.workspaceProjectSidebarWidth,
+            Key.workspaceOutlineWidth,
             Key.autosaveEnabled,
             Key.autosaveDelay,
             Key.existingImagePlacement,
@@ -310,26 +329,62 @@ final class AppPreferences: ObservableObject {
             RecentDocumentPolicy.openBehaviorKey,
         ]
 
-        /// Version 1 adopts the pre-registry keys without renaming them. This
-        /// makes existing installations forward-compatible while giving every
-        /// later rename or type conversion an explicit migration entry point.
+        /// Version 1 adopted pre-registry keys. Version 2 moves every workspace
+        /// choice into one application-wide namespace; existing layout choices
+        /// are copied once and remain valid after upgrading.
         static func migrate(_ defaults: UserDefaults) {
             let storedVersion = defaults.object(forKey: schemaVersionKey) == nil
                 ? 0
                 : defaults.integer(forKey: schemaVersionKey)
-            guard storedVersion >= 0,
-                  storedVersion < currentSchemaVersion
-            else {
+            guard storedVersion >= 0, storedVersion < currentSchemaVersion else {
                 return
+            }
+            if storedVersion < 2 {
+                copyIfMissing(
+                    from: Key.legacyDefaultProjectSidebarVisible,
+                    to: Key.workspaceProjectSidebarVisible,
+                    in: defaults
+                )
+                copyIfMissing(
+                    from: Key.legacyDefaultOutlineVisible,
+                    to: Key.workspaceOutlineVisible,
+                    in: defaults
+                )
+                copyIfMissing(
+                    from: Key.legacyDefaultSplitFraction,
+                    to: Key.workspaceSplitFraction,
+                    in: defaults
+                )
+                if defaults.object(forKey: Key.workspaceViewMode) == nil,
+                   let legacyMode = defaults.string(
+                       forKey: Key.legacyLastActiveEditorViewMode
+                   ),
+                   let mode = EditorViewMode(rawValue: legacyMode)
+                {
+                    defaults.set(
+                        WorkspaceViewModePreference(mode: mode).rawValue,
+                        forKey: Key.workspaceViewMode
+                    )
+                }
             }
             defaults.set(currentSchemaVersion, forKey: schemaVersionKey)
         }
+
+        private static func copyIfMissing(
+            from sourceKey: String,
+            to targetKey: String,
+            in defaults: UserDefaults
+        ) {
+            guard defaults.object(forKey: targetKey) == nil,
+                  let value = defaults.object(forKey: sourceKey)
+            else { return }
+            defaults.set(value, forKey: targetKey)
+        }
     }
 
-    /// Values that are deliberately fixed in the single-document launch
-    /// profile. The stored keys remain registered for forward migration, but
-    /// stale values from development previews must not activate hidden growth
-    /// settings when their controls and commands are absent.
+    /// Defaults for the personal launch profile. Most growth settings remain
+    /// fixed, while the workspace values seed durable user preferences when no
+    /// saved value exists.
     enum LaunchFixed {
         static let editorLineHeight = 1.6
         static let spellingEnabled = true
@@ -343,8 +398,13 @@ final class AppPreferences: ObservableObject {
         static let reduceMotion = AccessibilityPreference.followSystem
         static let recentDocumentCapacity = 20
         static let markdownOpenBehavior = MarkdownOpenBehavior.reuseBlankWindow
-        static let defaultProjectSidebarVisible = true
-        static let defaultOutlineVisible = false
+        static let workspaceViewMode = WorkspaceViewModePreference.automatic
+        static let workspaceProjectSidebarVisible = true
+        static let workspaceOutlineVisible = false
+        static let workspaceSplitFraction = EditorSplitLayout.defaultFraction
+        static let workspaceProjectSidebarWidth =
+            Double(EditorWorkspaceMetrics.projectSidebarIdealWidth)
+        static let workspaceOutlineWidth = Double(EditorWorkspaceMetrics.outlineIdealWidth)
         static let autosaveDelay = AutosaveDelay.oneSecond
         static let autosaveEnabled = false
         static let existingImagePlacement = ExistingImagePlacementPreference.copyToAssets
@@ -453,31 +513,65 @@ final class AppPreferences: ObservableObject {
         didSet { persist(reduceMotion.rawValue, forKey: Key.reduceMotion) }
     }
 
-    @Published var defaultProjectSidebarVisible: Bool {
+    @Published var workspaceViewMode: WorkspaceViewModePreference {
+        didSet { persist(workspaceViewMode.rawValue, forKey: Key.workspaceViewMode) }
+    }
+
+    @Published var workspaceProjectSidebarVisible: Bool {
         didSet {
             persist(
-                defaultProjectSidebarVisible,
-                forKey: Key.defaultProjectSidebarVisible
+                workspaceProjectSidebarVisible,
+                forKey: Key.workspaceProjectSidebarVisible
             )
         }
     }
 
-    @Published var defaultOutlineVisible: Bool {
-        didSet { persist(defaultOutlineVisible, forKey: Key.defaultOutlineVisible) }
+    @Published var workspaceOutlineVisible: Bool {
+        didSet { persist(workspaceOutlineVisible, forKey: Key.workspaceOutlineVisible) }
     }
 
-    @Published var defaultSplitFraction: Double {
+    @Published var workspaceSplitFraction: Double {
         didSet {
             let clamped = Self.clamped(
-                defaultSplitFraction,
-                range: Limits.defaultSplitFraction
+                workspaceSplitFraction,
+                range: Limits.workspaceSplitFraction
             )
-            guard clamped == defaultSplitFraction else {
-                defaultSplitFraction = clamped
-                persist(clamped, forKey: Key.defaultSplitFraction)
+            guard clamped == workspaceSplitFraction else {
+                workspaceSplitFraction = clamped
+                persist(clamped, forKey: Key.workspaceSplitFraction)
                 return
             }
-            persist(clamped, forKey: Key.defaultSplitFraction)
+            persist(clamped, forKey: Key.workspaceSplitFraction)
+        }
+    }
+
+    @Published var workspaceProjectSidebarWidth: Double {
+        didSet {
+            let clamped = Self.clamped(
+                workspaceProjectSidebarWidth,
+                range: Limits.projectSidebarWidth
+            )
+            guard clamped == workspaceProjectSidebarWidth else {
+                workspaceProjectSidebarWidth = clamped
+                persist(clamped, forKey: Key.workspaceProjectSidebarWidth)
+                return
+            }
+            persist(clamped, forKey: Key.workspaceProjectSidebarWidth)
+        }
+    }
+
+    @Published var workspaceOutlineWidth: Double {
+        didSet {
+            let clamped = Self.clamped(
+                workspaceOutlineWidth,
+                range: Limits.outlineWidth
+            )
+            guard clamped == workspaceOutlineWidth else {
+                workspaceOutlineWidth = clamped
+                persist(clamped, forKey: Key.workspaceOutlineWidth)
+                return
+            }
+            persist(clamped, forKey: Key.workspaceOutlineWidth)
         }
     }
 
@@ -573,21 +667,39 @@ final class AppPreferences: ObservableObject {
         mermaidRenderingEnabled = LaunchFixed.mermaidRenderingEnabled
         increasedContrast = LaunchFixed.increasedContrast
         reduceMotion = LaunchFixed.reduceMotion
-        defaultProjectSidebarVisible = Self.bool(
-            forKey: Key.defaultProjectSidebarVisible,
+        workspaceViewMode = Self.enumeration(
+            WorkspaceViewModePreference.self,
+            forKey: Key.workspaceViewMode,
             in: defaults,
-            defaultValue: LaunchFixed.defaultProjectSidebarVisible
+            defaultValue: LaunchFixed.workspaceViewMode
         )
-        defaultOutlineVisible = Self.bool(
-            forKey: Key.defaultOutlineVisible,
+        workspaceProjectSidebarVisible = Self.bool(
+            forKey: Key.workspaceProjectSidebarVisible,
             in: defaults,
-            defaultValue: LaunchFixed.defaultOutlineVisible
+            defaultValue: LaunchFixed.workspaceProjectSidebarVisible
         )
-        defaultSplitFraction = Self.number(
-            forKey: Key.defaultSplitFraction,
+        workspaceOutlineVisible = Self.bool(
+            forKey: Key.workspaceOutlineVisible,
             in: defaults,
-            defaultValue: EditorSplitLayout.defaultFraction,
-            range: Limits.defaultSplitFraction
+            defaultValue: LaunchFixed.workspaceOutlineVisible
+        )
+        workspaceSplitFraction = Self.number(
+            forKey: Key.workspaceSplitFraction,
+            in: defaults,
+            defaultValue: LaunchFixed.workspaceSplitFraction,
+            range: Limits.workspaceSplitFraction
+        )
+        workspaceProjectSidebarWidth = Self.number(
+            forKey: Key.workspaceProjectSidebarWidth,
+            in: defaults,
+            defaultValue: LaunchFixed.workspaceProjectSidebarWidth,
+            range: Limits.projectSidebarWidth
+        )
+        workspaceOutlineWidth = Self.number(
+            forKey: Key.workspaceOutlineWidth,
+            in: defaults,
+            defaultValue: LaunchFixed.workspaceOutlineWidth,
+            range: Limits.outlineWidth
         )
         recentDocumentCapacity = LaunchFixed.recentDocumentCapacity
         markdownOpenBehavior = LaunchFixed.markdownOpenBehavior
@@ -645,11 +757,15 @@ final class AppPreferences: ObservableObject {
         case .general:
             autosaveEnabled = LaunchFixed.autosaveEnabled
             autosaveDelay = .oneSecond
-            defaultProjectSidebarVisible = LaunchFixed.defaultProjectSidebarVisible
-            defaultOutlineVisible = LaunchFixed.defaultOutlineVisible
-            defaultSplitFraction = EditorSplitLayout.defaultFraction
             recentDocumentCapacity = RecentDocumentPolicy.defaultCapacity
             markdownOpenBehavior = LaunchFixed.markdownOpenBehavior
+        case .workspace:
+            workspaceViewMode = LaunchFixed.workspaceViewMode
+            workspaceProjectSidebarVisible = LaunchFixed.workspaceProjectSidebarVisible
+            workspaceOutlineVisible = LaunchFixed.workspaceOutlineVisible
+            workspaceSplitFraction = LaunchFixed.workspaceSplitFraction
+            workspaceProjectSidebarWidth = LaunchFixed.workspaceProjectSidebarWidth
+            workspaceOutlineWidth = LaunchFixed.workspaceOutlineWidth
         case .writing:
             resetWriting()
         case .preview:
@@ -714,9 +830,12 @@ final class AppPreferences: ObservableObject {
                 Key.mermaidRenderingEnabled: mermaidRenderingEnabled,
                 Key.increasedContrast: increasedContrast.rawValue,
                 Key.reduceMotion: reduceMotion.rawValue,
-                Key.defaultProjectSidebarVisible: defaultProjectSidebarVisible,
-                Key.defaultOutlineVisible: defaultOutlineVisible,
-                Key.defaultSplitFraction: defaultSplitFraction,
+                Key.workspaceViewMode: workspaceViewMode.rawValue,
+                Key.workspaceProjectSidebarVisible: workspaceProjectSidebarVisible,
+                Key.workspaceOutlineVisible: workspaceOutlineVisible,
+                Key.workspaceSplitFraction: workspaceSplitFraction,
+                Key.workspaceProjectSidebarWidth: workspaceProjectSidebarWidth,
+                Key.workspaceOutlineWidth: workspaceOutlineWidth,
                 RecentDocumentPolicy.capacityKey: recentDocumentCapacity,
                 RecentDocumentPolicy.openBehaviorKey: markdownOpenBehavior.rawValue,
                 Key.autosaveEnabled: autosaveEnabled,

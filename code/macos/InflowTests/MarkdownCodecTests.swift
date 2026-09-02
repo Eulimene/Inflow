@@ -234,15 +234,27 @@ private final class MarkdownDocumentHarness: ObservableObject {
 
 private struct MarkdownDocumentEditorHarness: View {
     @ObservedObject var model: MarkdownDocumentHarness
+    @StateObject private var preferences: AppPreferences
     @StateObject private var folderBrowser = FolderBrowserController(
         restoresSavedFolder: false
     )
+
+    init(model: MarkdownDocumentHarness) {
+        self.model = model
+        let suiteName = "MarkdownDocumentEditorHarness.preferences"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        _preferences = StateObject(
+            wrappedValue: AppPreferences(defaults: defaults)
+        )
+    }
 
     var body: some View {
         MarkdownEditorView(
             document: $model.document,
             fileURL: nil,
             isEditable: true,
+            preferences: preferences,
             folderBrowser: folderBrowser
         )
     }
