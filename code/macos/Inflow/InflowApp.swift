@@ -563,6 +563,23 @@ enum ProjectDocumentTargetPolicy {
                 $0.window?.isVisible != true
             }
     }
+
+    static func shouldCloseAfterOpeningProjectTab(_ document: NSDocument?) -> Bool {
+        guard let document else { return false }
+        return document.fileURL == nil && !document.isDocumentEdited
+    }
+}
+
+@MainActor
+enum ProjectWindowTabbing {
+    static func group(_ documentWindow: NSWindow, beside currentWindow: NSWindow) {
+        guard currentWindow !== documentWindow,
+              documentWindow.tabbedWindows?.contains(where: { $0 === currentWindow }) != true
+        else { return }
+        currentWindow.tabbingMode = .preferred
+        documentWindow.tabbingMode = .preferred
+        currentWindow.addTabbedWindow(documentWindow, ordered: .above)
+    }
 }
 
 @MainActor
@@ -893,7 +910,8 @@ final class LightweightProjectCoordinator {
             // navigation from current preferences; project-file replacement
             // below deliberately does not reset this state.
             self.editorNavigationState.reset()
-            self.attach(to: targetDocument)
+            self.browser.associateProjectWindow(with: nil)
+            self.attach(targetDocument)
             if let previousDocument, previousDocument !== targetDocument {
                 previousDocument.close()
             }
@@ -909,23 +927,21 @@ final class LightweightProjectCoordinator {
         defer { finishSwitchToken(switchToken) }
         let document = activeProjectDocument
         guard let document else { return }
-        attach(to: document)
+        attach(document)
     }
 
     func prepareToReplaceCurrentDocument(
         _ candidate: NSDocument?,
         completion: @escaping (Bool) -> Void
     ) {
+        _ = candidate
         guard !documentSwitchGate.isBusy,
               !DocumentCloseAuthorization.hasPendingRequests
         else {
             completion(false)
             return
         }
-        DocumentCloseAuthorization.request(
-            for: currentProjectDocument(candidate),
-            completion: completion
-        )
+        completion(true)
     }
 
     func openDocument(
@@ -933,7 +949,6 @@ final class LightweightProjectCoordinator {
         replacing candidate: NSDocument?,
         using recentDocuments: RecentDocumentsController,
         authorization: ProjectDocumentOpenAuthorization? = nil,
-        requiresCloseAuthorization: Bool = true,
         completion: @escaping @MainActor (Result<Void, Error>) -> Void = { _ in }
     ) {
         guard let root = browser.folderURL,
@@ -1000,6 +1015,7 @@ final class LightweightProjectCoordinator {
                 current,
                 authorization: refreshedReceipt.authorization
             )
+            activateProjectDocument(current)
             completion(.success(()))
             return
         }
@@ -1028,6 +1044,8 @@ final class LightweightProjectCoordinator {
                 existing,
                 authorization: refreshedReceipt.authorization
             )
+            activateProjectDocument(existing)
+            groupWindow(for: existing, asTabBeside: current)
             completion(.success(()))
             return
         }
@@ -1109,6 +1127,8 @@ final class LightweightProjectCoordinator {
                         opened.document,
                         authorization: focusedReceipt.authorization
                     )
+                    self.activateProjectDocument(opened.document)
+                    self.groupWindow(for: opened.document, asTabBeside: current)
                     self.finishDocumentSwitch(
                         switchToken,
                         result: .success(()),
@@ -1117,56 +1137,17 @@ final class LightweightProjectCoordinator {
                     return
                 }
 
-                guard requiresCloseAuthorization else {
-                    // This path is used only by project-tree creation. Its
-                    // still-present sheet keeps the old editor modal after
-                    // the pre-creation close review, so no new user edit can
-                    // appear between that review and this replacement.
-                    self.completeDocumentReplacement(
-                        opened.document,
-                        replacing: current,
-                        targetURL: url,
-                        receipt: currentReceipt,
-                        switchToken: switchToken,
-                        completion: completion
-                    )
-                    return
-                }
-
-                // Opening is asynchronous, so the old editor may have
-                // changed after the click. Review it only now, immediately
-                // before replacement. Keep the freshly opened window hidden
-                // until the user decides which document remains current.
-                opened.document.windowControllers.forEach {
-                    $0.window?.orderOut(nil)
-                }
-                current?.showWindows()
-                current?.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
-                DocumentCloseAuthorization.request(for: current) { [weak self, weak current] shouldReplace in
-                    guard let self,
-                          self.documentSwitchGate.isActive(switchToken)
-                    else { return }
-                    guard shouldReplace else {
-                        self.closeUncommittedDocumentIfSafe(opened.document)
-                        current?.showWindows()
-                        current?.windowControllers.first?.window?
-                            .makeKeyAndOrderFront(nil)
-                        self.finishDocumentSwitch(
-                            switchToken,
-                            result: .failure(DocumentOpenError.cancelled),
-                            completion: completion
-                        )
-                        return
-                    }
-                    self.completeDocumentReplacement(
-                        opened.document,
-                        replacing: current,
-                        targetURL: url,
-                        receipt: currentReceipt,
-                        switchToken: switchToken,
-                        completion: completion
-                    )
-                }
+                // Project files remain open in one native tab group. The
+                // directory tree selects a document tab instead of replacing
+                // and closing the document that was visible before it.
+                self.completeDocumentTabOpen(
+                    opened.document,
+                    replacing: current,
+                    targetURL: url,
+                    receipt: currentReceipt,
+                    switchToken: switchToken,
+                    completion: completion
+                )
             case let .failure(error):
                 self.finishDocumentSwitch(
                     switchToken,
@@ -1214,15 +1195,41 @@ final class LightweightProjectCoordinator {
         return activeProjectDocument
     }
 
-    private func attach(to document: NSDocument?) {
+    func activateProjectDocument(_ document: NSDocument?) {
+        guard let document,
+              ProjectSessionBoundary.hasCurrentRoot(browser),
+              let root = browser.folderURL,
+              document.fileURL.map({
+                  FolderProjectPathBoundary.contains($0, in: root)
+              }) ?? browser.isAssociatedProjectDocument(document)
+        else { return }
+        projectDocument = document
+        browser.associateProjectWindow(with: document)
+    }
+
+    private func attach(
+        _ document: NSDocument?,
+        asTabBeside current: NSDocument? = nil
+    ) {
         projectDocument = document
         browser.associateProjectWindow(with: document)
         if let document, document.windowControllers.isEmpty {
             document.makeWindowControllers()
         }
+        groupWindow(for: document, asTabBeside: current)
         document?.showWindows()
         document?.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func groupWindow(
+        for document: NSDocument?,
+        asTabBeside current: NSDocument?
+    ) {
+        guard let currentWindow = current?.windowControllers.first?.window,
+              let documentWindow = document?.windowControllers.first?.window
+        else { return }
+        ProjectWindowTabbing.group(documentWindow, beside: currentWindow)
     }
 
     private func restoreProject(document: NSDocument?) {
@@ -1275,7 +1282,7 @@ final class LightweightProjectCoordinator {
         return refreshedReceipt
     }
 
-    private func completeDocumentReplacement(
+    private func completeDocumentTabOpen(
         _ openedDocument: NSDocument,
         replacing current: NSDocument?,
         targetURL: URL,
@@ -1297,11 +1304,12 @@ final class LightweightProjectCoordinator {
             )
             return
         }
-        attach(to: openedDocument)
+        attach(openedDocument, asTabBeside: current)
         guard let attachedReceipt = refreshedProjectDocumentReceipt(
             currentReceipt,
             targetURL: targetURL
         ) else {
+            browser.dissociateProjectWindow(openedDocument)
             restoreProject(document: current)
             closeUncommittedDocumentIfSafe(openedDocument)
             finishDocumentSwitch(
@@ -1315,7 +1323,10 @@ final class LightweightProjectCoordinator {
             openedDocument,
             authorization: attachedReceipt.authorization
         )
-        if let current, current !== openedDocument {
+        if let current,
+           current !== openedDocument,
+           ProjectDocumentTargetPolicy.shouldCloseAfterOpeningProjectTab(current)
+        {
             current.close()
         }
         finishDocumentSwitch(

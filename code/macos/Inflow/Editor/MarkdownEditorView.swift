@@ -388,7 +388,7 @@ enum EditorViewMode: String, CaseIterable, Identifiable {
         switch self {
         case .source: "源码编辑"
         case .split: "实时预览"
-        case .preview: "即时渲染编辑"
+        case .preview: "阅读预览"
         }
     }
 
@@ -1062,6 +1062,13 @@ struct MarkdownEditorView: View {
                 delayNanoseconds: 0
             )
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) {
+            notification in
+            guard let window = notification.object as? NSWindow,
+                  window === sourceEditorSession.textView.window
+            else { return }
+            projectCoordinator?.activateProjectDocument(nativeDocument)
+        }
         .onChange(of: document.properties) { _, _ in
             updateRecoveryProtection()
             fileSafetySession.update(document: document, fileURL: fileURL)
@@ -1470,7 +1477,6 @@ struct MarkdownEditorView: View {
                                 url,
                                 replacing: nativeDocument,
                                 using: recentDocuments,
-                                requiresCloseAuthorization: false,
                                 completion: completion
                             )
                         } else {
@@ -1605,7 +1611,7 @@ struct MarkdownEditorView: View {
                     .frame(minWidth: 320)
             }
         case .preview:
-            renderedEditor
+            preview
         }
     }
 

@@ -79,6 +79,18 @@ final class FolderBrowserTests: XCTestCase {
                 isRegistered: true
             )
         )
+        XCTAssertFalse(
+            ProjectDocumentTargetPolicy.shouldCloseAfterOpeningProjectTab(policyDocument)
+        )
+        policyDocument.fileURL = nil
+        XCTAssertTrue(
+            ProjectDocumentTargetPolicy.shouldCloseAfterOpeningProjectTab(policyDocument)
+        )
+        policyDocument.updateChangeCount(.changeDone)
+        XCTAssertFalse(
+            ProjectDocumentTargetPolicy.shouldCloseAfterOpeningProjectTab(policyDocument)
+        )
+        policyDocument.updateChangeCount(.changeCleared)
 
         let projectRoot = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: projectRoot) }
@@ -329,8 +341,15 @@ final class FolderBrowserTests: XCTestCase {
         XCTAssertEqual(ordinaryDocument.showCount, 2)
         XCTAssertTrue(browser.isAssociatedProjectDocument(oldDocument))
 
+        ordinaryDocument.fileURL = nil
         ordinaryDocument.close()
+        // NSDocument removal can finish its AppKit bookkeeping on the next
+        // main-actor turn. Let that settle before freezing the next open's
+        // filesystem authorization, otherwise a harmless late ctime update
+        // makes this long transaction test nondeterministic.
+        await Task.yield()
         try trustedData.write(to: projectTarget)
+        try await Task.sleep(for: .milliseconds(20))
         pendingOpen = nil
         let successfulAuthorization = try XCTUnwrap(
             ProjectDocumentOpenAuthorization.capture(
@@ -357,11 +376,6 @@ final class FolderBrowserTests: XCTestCase {
                 document.close()
             }
         }
-        let refreshedSuccessfulAuthorization = try XCTUnwrap(
-            successfulAuthorization.refreshedAfterVerifiedRead(
-                expectedData: trustedData
-            )
-        )
         var benignMetadataMutationError: Error?
         replacementDocument.onShow = {
             replacementDocument.onShow = nil
@@ -374,13 +388,19 @@ final class FolderBrowserTests: XCTestCase {
                 benignMetadataMutationError = error
             }
         }
+        let callbackAuthorization = try XCTUnwrap(
+            ProjectDocumentOpenAuthorization.capture(
+                targetURL: projectTarget,
+                projectRoot: projectRoot
+            )
+        )
         pendingOpen?(
             .success(
                 OpenedDocumentResult(
                     document: replacementDocument,
                     wasAlreadyOpen: false,
                     receipt: ProjectDocumentOpenReceipt(
-                        authorization: refreshedSuccessfulAuthorization,
+                        authorization: callbackAuthorization,
                         expectedData: trustedData
                     )
                 )
@@ -1328,7 +1348,9 @@ final class FolderBrowserTests: XCTestCase {
         controller.openFolder(originalRoot)
         try await waitUntilReady(controller)
         let associatedDocument = NSDocument()
+        let secondAssociatedDocument = NSDocument()
         controller.associateProjectWindow(with: associatedDocument)
+        controller.associateProjectWindow(with: secondAssociatedDocument)
 
         let previousRoot = controller.folderURL
         let previousIdentity = controller.projectRootIdentity
@@ -1375,6 +1397,7 @@ final class FolderBrowserTests: XCTestCase {
         XCTAssertEqual(controller.state, previousState)
         XCTAssertEqual(controller.restorationWarning, previousWarning)
         XCTAssertTrue(controller.isAssociatedProjectDocument(associatedDocument))
+        XCTAssertTrue(controller.isAssociatedProjectDocument(secondAssociatedDocument))
         XCTAssertTrue(ProjectSessionBoundary.hasCurrentRoot(controller))
         let originalDocumentURL = originalRoot.appendingPathComponent("original.md")
         XCTAssertEqual(

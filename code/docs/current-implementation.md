@@ -19,8 +19,8 @@
 当前工作树面向一位内部用户完成本地 Markdown 写作闭环：
 
 - 无待打开目标时，普通启动或在 Finder 中双击 Inflow App 都不弹文件选择器，直接进入可编辑的未命名文档；带外部目标的 Finder、应用内命令或拖到应用图标请求则沿统一路由进入独立文档或普通文件夹项目；
-- 在项目树中新建和切换 Markdown；
-- 在源码、分栏和即时渲染编辑之间使用同一份正文；
+- 在项目树中新建 Markdown，并用原生窗口标签保留和切换已打开文档；
+- 在源码、分栏和只读阅读预览之间使用同一份正文；
 - 只由用户手动保存，并处理简单外部变化和单快照恢复；
 - 加入本地 PNG/JPEG、打开受限本地链接并导出基础浅色 PDF；
 - 在本机记录最小故障信息，由用户主动导出。
@@ -37,7 +37,7 @@
 - “打开项目…”把普通文件夹交给 LightweightProjectCoordinator 与 FolderBrowserController。项目不导入、不复制，也不创建私有项目文件。
 - FolderBrowser 负责递归目录树、隐藏项过滤、手动刷新、项目边界和安全新建 Markdown。新建使用不覆盖语义，并在执行前重新核对目标目录与符号链接边界。
 - 打开项目时先在不改动当前界面的情况下完成首轮目录扫描，并绑定目录 dev/inode 身份；只有扫描、旧文档关闭确认和提交点复核全部成功后，才附着新项目宿主并关闭旧文档。异步打开的隐藏目标在事务期间会被预留，超时迟到的回调不会关闭其他流程已采用的文档。
-- 项目上下文附着在一个原生文档窗口上；选择另一份 Markdown 前复用系统的未保存内容确认。取消切换时，只清理仍未修改且不可见的未提交目标；已被其他窗口显示或修改的文档保留为独立窗口。项目外另存成功后，当前窗口退出项目上下文。
+- 项目上下文可附着到同一原生标签组中的多份文档；从目录树选择 Markdown 时聚焦已有标签或把新打开文档加入标签组，不关闭当前文档，也不因切换要求保存。关闭带修改的标签时仍使用系统未保存内容确认。项目外另存成功后，该文档退出项目上下文。
 - MarkdownEditorView 以左侧项目目录树、中间编辑区、右侧当前文档大纲承载项目窗口；没有当前文档时大纲不可用。新窗口采用 1,200 × 760 pt、最小 820 × 520 pt，目录树和大纲使用受限导航宽度，把主要空间留给编辑与预览。空目录树或空大纲也必须占满窗口可用高度，不能凭固有内容高度压缩编辑器或在状态栏下方留下空白。工具栏与“显示”菜单中的两侧开关只改变当前窗口。AppPreferences 和 InflowSettingsView 的“新窗口布局”保存目录树、大纲与分栏起点，只为之后新建窗口播种，不追改已打开窗口。
 
 上述启动与布局入口仍必须由 UAT-PERSONAL-01、04、08 和 09 在真实 Finder、Dock、沙箱、窗口与文件系统上验证；这四项及其他 UAT 当前均未执行。
@@ -45,20 +45,17 @@
 ### 2.2 单一正文与三种视图
 
 - MarkdownDocument.text 是 SwiftUI 文档模型中的正文事实；MarkdownSourceEditorSession 持有一个持久 NSTextView。
-- 源码编辑和实时预览分栏使用同一个 MarkdownSourceEditor；即时渲染编辑也把同一 session 以 rendered presentation 重新挂载，不创建第二个可编辑模型。
+- 源码编辑和实时预览分栏使用同一个 MarkdownSourceEditor；阅读预览使用当前内存正文生成只读 WebKit 结果，不创建第二个可编辑模型。
 - 文本修改由 NSTextView 发布回同一个绑定，撤销与重做继续使用同一个 UndoManager。展示属性更新不登记正文 undo。
-- EditorViewMode 的历史内部 case 名 preview 现在对应用户可见的“即时渲染编辑”，不代表个人首版存在独立持久纯预览。
+- EditorViewMode 的历史内部 case 名 preview 现在对应用户可见的“阅读预览”。
 - 视图切换复用同一选区与源范围导航入口；产品只承诺回到同一语义块，不承诺逐像素或逐字符位置一致。
 
-### 2.3 即时渲染编辑
+### 2.3 阅读预览
 
-- RenderedMarkdownEditor 为同一源字符串同步生成只读展示计划；计划包含 Markdown 标记范围、内容样式、局部源码块以及链接文字与目标范围。
-- 计划不插入、删除、替换或规范化任何源字符。UTF-8 源范围会严格映射到 TextKit 使用的 UTF-16 范围。
-- 段落、H1–H6、粗体、斜体、删除线、引用、无序/有序/任务列表、行内代码和普通链接文字可直接呈现。
-- 表格、围栏代码、Mermaid、图片、原始 HTML、复杂嵌套、带标题或其他歧义链接以及无法可靠解析的结构保留为非重叠局部源码块。
-- 解析失败采用保守局部源码，不猜测性改写原文。
-- NSTextView 存在 marked text 时，请求保持现有展示；组合完成后再重建计划。
-- 普通鼠标点击继续用于编辑。只有 Command+点击命中当前、未过期的可见链接文字范围时，才把目标交给既有链接激活路径。
+- MarkdownPreviewView 使用 MarkdownRenderer 把当前内存正文生成自包含 HTML，并在禁用页面脚本和网络请求的 WKWebView 中展示。
+- 段落、标题、强调、删除线、引用、列表、任务、代码块、表格、链接、图片和受支持 Mermaid 走同一完整解析路径；不再用 NSTextView 展示属性冒充预览。
+- 阅读预览只读。用户切回源码或分栏继续编辑，正文、修改状态、保存路径和撤销历史保持不变。
+- 链接导航、本地图片和失败降级继续受项目边界、当前内容快照与封闭宿主消息约束。
 
 对应组件入口在 RenderedMarkdownEditorTests；这些测试不能代替 UAT-PERSONAL-10 的中文输入法、富文本粘贴、跨视图撤销与真实链接操作。
 
@@ -86,7 +83,7 @@
 ### 2.6 手动保存、外部变化与轻量恢复
 
 - AppPreferences.applyAutosavePolicy 和应用委托都把 NSDocumentController.autosavingDelay 设为 0；ManualSaveDocumentHostPolicy 还在启用编辑前关闭具体文档宿主的 autosavesInPlace、autosavesDrafts 与 preservesVersions，并动态复核三个结果。
-- 关闭已修改文档、项目内切换文档和退出应用继续由 AppKit 的原生 Save / Don't Save / Cancel 审查处理；只有选择 Save 才会写回。
+- 关闭已修改标签、关闭窗口和退出应用继续由 AppKit 的原生 Save / Don't Save / Cancel 审查处理；项目内切换标签不会触发写回或关闭确认。
 - 当前主 App 未安装自动保存开关。宿主策略兼容层只服务个人内部版；未经真实进程 UAT 不得推导为公开发布架构证据。
 - 已命名文档的保存动作经原生文档 API 完成。失败保留当前编辑，不显示成功。当前文件菜单只暴露保存与另存为；保存副本的底层路径仅作为后续延期实现保留，不属于个人首版界面能力。
 - 外部变化提示当前只承诺重新加载或暂不处理；本地也有未保存修改时，后续手动保存要求明确覆盖确认。
@@ -135,7 +132,7 @@
 | UAT-PERSONAL-07 | 本地最小日志与无自动遥测 | 未执行 |
 | UAT-PERSONAL-08 | 一个真实项目端到端与基础烟测 | 未执行 |
 | UAT-PERSONAL-09 | 项目目录树、新建与相对资源 | 未执行 |
-| UAT-PERSONAL-10 | 即时渲染编辑基础范围 | 未执行 |
+| UAT-PERSONAL-10 | 阅读预览正确性与安全边界 | 未执行 |
 
 没有产品负责人签署的实际记录前，不得把任一项改为“通过”，也不得使用“候选已闭环”“个人首版完成”或“发布就绪”等表述。
 
@@ -146,6 +143,6 @@
 - 技术责任边界：[architecture.md](architecture.md)
 - 当前 UAT 对照：[launch-acceptance.md](launch-acceptance.md)
 - 已废止旧记录：[launch-candidate-0.1.0-build-1.md](launch-candidate-0.1.0-build-1.md)
-- 即时渲染核心：[../macos/Inflow/Editor/RenderedMarkdownEditor.swift](../macos/Inflow/Editor/RenderedMarkdownEditor.swift)
+- 阅读预览核心：[../macos/Inflow/Preview/MarkdownPreviewView.swift](../macos/Inflow/Preview/MarkdownPreviewView.swift)
 - 三视图接线：[../macos/Inflow/Editor/MarkdownEditorView.swift](../macos/Inflow/Editor/MarkdownEditorView.swift)
 - 同一 NSTextView 宿主：[../macos/Inflow/Editor/MarkdownSourceEditor.swift](../macos/Inflow/Editor/MarkdownSourceEditor.swift)

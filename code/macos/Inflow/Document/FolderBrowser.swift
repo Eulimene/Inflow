@@ -802,7 +802,7 @@ final class FolderBrowserController: ObservableObject {
     @Published private(set) var files: [FolderMarkdownFile] = []
     @Published private(set) var state = FolderBrowserState.idle
     @Published private(set) var restorationWarning: String?
-    @Published private(set) var projectDocumentIdentifier: ObjectIdentifier?
+    private let projectDocuments = NSHashTable<NSDocument>.weakObjects()
 
     private let persistence: FolderBrowserPersistence
     private let bookmarkData: (URL) -> Data?
@@ -1256,12 +1256,21 @@ final class FolderBrowserController: ObservableObject {
     }
 
     func associateProjectWindow(with document: NSDocument?) {
-        projectDocumentIdentifier = document.map(ObjectIdentifier.init)
+        guard let document else {
+            projectDocuments.removeAllObjects()
+            return
+        }
+        projectDocuments.add(document)
     }
 
     func isAssociatedProjectDocument(_ document: NSDocument?) -> Bool {
         guard let document else { return false }
-        return projectDocumentIdentifier == ObjectIdentifier(document)
+        return projectDocuments.allObjects.contains { $0 === document }
+    }
+
+    func dissociateProjectWindow(_ document: NSDocument?) {
+        guard let document else { return }
+        projectDocuments.remove(document)
     }
 
     private func retainAccess(to directory: URL) {
