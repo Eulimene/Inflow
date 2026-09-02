@@ -1032,11 +1032,26 @@ final class ImageAssetDirectoryAccess: ObservableObject {
     }
 
     func authorize(_ url: URL) {
-        let key = url.standardizedFileURL.path
+        let exactURL = url.standardizedFileURL
+        let key = exactURL.path
         guard accesses[key] == nil else { return }
         accesses[key] = Access(
-            url: url,
-            isSecurityScopeActive: beginAccess(url)
+            url: exactURL,
+            isSecurityScopeActive: beginAccess(exactURL)
+        )
+        authorizationVersion &+= 1
+    }
+
+    /// Registers a directory that is already covered by the security-scoped
+    /// lease retained by the system picker owner, such as a selected project.
+    /// Selecting the directory is the user decision; no second app-level
+    /// authorization is required.
+    func registerUserSelectedDirectory(_ directory: URL) {
+        let exactURL = directory.standardizedFileURL
+        guard accesses[exactURL.path] == nil else { return }
+        accesses[exactURL.path] = Access(
+            url: exactURL,
+            isSecurityScopeActive: false
         )
         authorizationVersion &+= 1
     }
@@ -1086,7 +1101,10 @@ final class ImageAssetDirectoryAccess: ObservableObject {
     }
 
     func isAuthorized(_ directory: URL) -> Bool {
-        accesses[directory.standardizedFileURL.path] != nil
+        let exactURL = directory.standardizedFileURL
+        return accesses.values.contains {
+            FolderProjectPathBoundary.contains(exactURL, in: $0.url)
+        }
     }
 
     deinit {
@@ -1100,8 +1118,10 @@ final class ImageAssetDirectoryAccess: ObservableObject {
 
 @MainActor
 enum ImageAssetPicker {
-    static let resourceDirectoryPromptMessage =
-        "访问该目录后，Inflow 才能显示相对图片、打开链接或创建冲突副本。"
+    static let documentDirectoryPanelTitle = "选择文档所在文件夹"
+    static let documentDirectoryPanelMessage =
+        "请选择当前 Markdown 文档所在的文件夹，用于创建或更新 assets。"
+    static let documentDirectoryPanelPrompt = "使用此文件夹"
 
     static func chooseSource(attachedTo window: NSWindow?) async -> URL? {
         let panel = NSOpenPanel()
@@ -1158,14 +1178,14 @@ enum ImageAssetPicker {
         return await run(alert, attachedTo: window) == .alertFirstButtonReturn
     }
 
-    static func authorizeDocumentDirectory(
+    static func chooseDocumentDirectory(
         _ documentDirectory: URL,
         attachedTo window: NSWindow?
     ) async throws -> URL? {
         let panel = NSOpenPanel()
-        panel.title = "授权 assets 文件夹"
-        panel.message = "请选择当前 Markdown 文档所在的文件夹。Inflow 只会在其中创建或更新 assets。"
-        panel.prompt = "授权此文件夹"
+        panel.title = documentDirectoryPanelTitle
+        panel.message = documentDirectoryPanelMessage
+        panel.prompt = documentDirectoryPanelPrompt
         panel.directoryURL = documentDirectory
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -1177,36 +1197,6 @@ enum ImageAssetPicker {
             throw ImageAssetImportError.unauthorizedDirectory
         }
         return selected
-    }
-
-    static func authorizeRelativeResources(
-        in documentDirectory: URL,
-        attachedTo window: NSWindow?
-    ) async throws -> URL? {
-        let expected = documentDirectory.standardizedFileURL
-        let panel = NSOpenPanel()
-        panel.title = "允许访问「\(expected.lastPathComponent)」？"
-        panel.message = resourceDirectoryPromptMessage
-        panel.prompt = "选择目录…"
-        panel.directoryURL = expected
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = false
-        guard await run(panel, attachedTo: window) == .OK, let selected = panel.url else {
-            return nil
-        }
-        let selectedURL = selected.standardizedFileURL
-        let values = try selectedURL.resourceValues(forKeys: [
-            .isDirectoryKey,
-            .isSymbolicLinkKey,
-        ])
-        guard selectedURL.path == expected.path,
-              values.isDirectory == true,
-              values.isSymbolicLink != true
-        else {
-            throw ImageAssetImportError.unauthorizedDirectory
-        }
-        return selectedURL
     }
 
     static func chooseRelativeAssetDirectory(

@@ -480,47 +480,6 @@ enum MixedLineEndingPrompt {
     }
 }
 
-private struct RelativeResourceDirectoryAccessBanner: View {
-    let directory: URL
-    let onAuthorize: () -> Void
-    let onDefer: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "folder.badge.questionmark")
-                .foregroundStyle(.orange)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("允许访问「\(directory.lastPathComponent)」？")
-                    .font(.headline)
-                Text(ImageAssetPicker.resourceDirectoryPromptMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 12)
-            Button("选择目录…", action: onAuthorize)
-            Button("暂不", action: onDefer)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.orange.opacity(0.08))
-        .accessibilityElement(children: .contain)
-    }
-}
-
-private enum DocumentDirectoryAccessDecisionError: Error, LocalizedError {
-    case declined
-
-    var errorDescription: String? {
-        "未授权当前 Markdown 文档所在目录，因此没有执行文件操作。当前编辑和磁盘内容均未丢失。"
-    }
-}
-
-private struct DocumentDirectoryAccessRequest {
-    let directory: URL
-    let conflictSnapshotID: DocumentFileConflictSnapshot.ID?
-}
-
 enum DeferredImageInsertion: Equatable {
     case chooseExistingImage
     case paste(ClipboardImagePayload)
@@ -631,8 +590,6 @@ struct MarkdownEditorView: View {
     @State private var previewHTML = MarkdownRenderer.htmlDocument(for: "")
     @State private var previewSourceSnapshot = ""
     @State private var previewFailureMessage: String?
-    @State private var relativeResourceSourceSnapshot = ""
-    @State private var hasRelativeResources = false
     @State private var analysisState = DocumentAnalysisState.updating(previous: .empty)
     @State private var derivedContentGeneration = 0
     @State private var derivedContentTask: Task<Void, Never>?
@@ -673,10 +630,6 @@ struct MarkdownEditorView: View {
     @State private var deferredImageInsertionQueue = DeferredImageInsertionQueue()
     @State private var imageAssetWorker = ImageAssetWorker()
     @StateObject private var imageDirectoryAccess = ImageAssetDirectoryAccess()
-    @State private var deferredResourceDirectoryPath: String?
-    @State private var deferredDirectoryConflictSnapshotID:
-        DocumentFileConflictSnapshot.ID?
-    @State private var resourceDirectoryAccessErrorMessage: String?
     @State private var recoveryRecordID = UUID()
     @State private var isRecoveryCenterPresented = false
     @State private var didApplyRestorationState = false
@@ -826,31 +779,10 @@ struct MarkdownEditorView: View {
         return fileSafetySession.state
     }
 
-    private var pendingResourceDirectoryAuthorization: DocumentDirectoryAccessRequest? {
-        guard let fileURL else { return nil }
-        let directory = fileURL.deletingLastPathComponent().standardizedFileURL
-        guard !imageDirectoryAccess.isAuthorized(directory) else { return nil }
-
-        let conflictSnapshotID = fileSafetySession.state.directoryMutationSnapshotID
-        let needsConflictAccess = conflictSnapshotID != nil
-            && conflictSnapshotID != deferredDirectoryConflictSnapshotID
-        let needsRelativeResourceAccess = UTF8Text.isExactlyEqual(
-            relativeResourceSourceSnapshot,
-            document.text
-        ) && hasRelativeResources
-            && deferredResourceDirectoryPath != directory.path
-        guard needsConflictAccess || needsRelativeResourceAccess else { return nil }
-
-        return DocumentDirectoryAccessRequest(
-            directory: directory,
-            conflictSnapshotID: conflictSnapshotID
-        )
-    }
-
     var body: some View {
         presentationLayer
             .alert(
-                "文件夹访问需要确认",
+                "上次项目需要重新选择",
                 isPresented: Binding(
                     get: { folderBrowser.restorationWarning != nil },
                     set: { if !$0 { folderBrowser.dismissRestorationWarning() } }
@@ -895,20 +827,6 @@ struct MarkdownEditorView: View {
                     )
                 }
             )
-
-            if let request = pendingResourceDirectoryAuthorization {
-                RelativeResourceDirectoryAccessBanner(
-                    directory: request.directory,
-                    onAuthorize: {
-                        authorizeRelativeResourceDirectory(request.directory)
-                    },
-                    onDefer: {
-                        deferredResourceDirectoryPath = request.directory.path
-                        deferredDirectoryConflictSnapshotID = request.conflictSnapshotID
-                    }
-                )
-                Divider()
-            }
 
             if let activeExportProgress {
                 ExportProgressBanner(
@@ -1034,6 +952,7 @@ struct MarkdownEditorView: View {
             {
                 editorSplitFraction = effectiveSplitFraction
             }
+            registerSelectedProjectDirectory(folderBrowser.folderURL)
             restoreRelativeResourceDirectoryAccess(for: fileURL)
             if let fileURL {
                 recentDocuments?.note(fileURL)
@@ -1114,8 +1033,6 @@ struct MarkdownEditorView: View {
         }
         .onChange(of: fileURL) { _, newURL in
             releaseStaleDocumentSecurityScope(for: newURL)
-            deferredResourceDirectoryPath = nil
-            deferredDirectoryConflictSnapshotID = nil
             restoreRelativeResourceDirectoryAccess(for: newURL)
             if let newURL {
                 recentDocuments?.note(newURL)
@@ -1132,7 +1049,8 @@ struct MarkdownEditorView: View {
             updateRecoveryProtection()
             fileSafetySession.update(document: document, fileURL: newURL)
         }
-        .onChange(of: folderBrowser.folderURL) { _, _ in
+        .onChange(of: folderBrowser.folderURL) { _, newURL in
+            registerSelectedProjectDirectory(newURL)
             initializeNavigationVisibilityIfNeeded()
             scheduleDerivedContent(
                 for: document.text,
@@ -1499,17 +1417,6 @@ struct MarkdownEditorView: View {
             Button("好", role: .cancel) {}
         } message: {
             Text(markdownFormatErrorMessage ?? "正文未被修改。")
-        }
-        .alert(
-            "未能保留目录访问权限",
-            isPresented: Binding(
-                get: { resourceDirectoryAccessErrorMessage != nil },
-                set: { if !$0 { resourceDirectoryAccessErrorMessage = nil } }
-            )
-        ) {
-            Button("好", role: .cancel) {}
-        } message: {
-            Text(resourceDirectoryAccessErrorMessage ?? "文档和资源未被修改。")
         }
     }
 
@@ -2939,55 +2846,9 @@ struct MarkdownEditorView: View {
         _ = imageDirectoryAccess.restoreAuthorization(for: directory)
     }
 
-    private func authorizeRelativeResourceDirectory(_ directory: URL) {
-        let window = sourceEditorSession.textView.window ?? NSApp.keyWindow
-        Task { @MainActor in
-            do {
-                _ = try await requestDocumentDirectoryAccess(
-                    directory,
-                    attachedTo: window
-                )
-            } catch {
-                resourceDirectoryAccessErrorMessage =
-                    "请选择当前 Markdown 文档所在的精确目录。文档和资源未被修改。"
-            }
-        }
-    }
-
-    private func requestDocumentDirectoryAccessIfNeeded(
-        for snapshot: DocumentFileConflictSnapshot
-    ) async throws -> Bool {
-        let directory = snapshot.url.deletingLastPathComponent().standardizedFileURL
-        guard !imageDirectoryAccess.isAuthorized(directory) else { return true }
-        let keyWindow = NSApp.keyWindow
-        let attachmentWindow: NSWindow? = if keyWindow?.sheetParent == nil,
-                                             keyWindow?.attachedSheet == nil
-        {
-            keyWindow
-        } else {
-            nil
-        }
-        return try await requestDocumentDirectoryAccess(
-            directory,
-            attachedTo: attachmentWindow
-        )
-    }
-
-    private func requestDocumentDirectoryAccess(
-        _ directory: URL,
-        attachedTo window: NSWindow?
-    ) async throws -> Bool {
-        guard let authorized = try await ImageAssetPicker.authorizeRelativeResources(
-            in: directory,
-            attachedTo: window
-        ) else {
-            return false
-        }
-        try imageDirectoryAccess.authorizePersistently(authorized)
-        deferredResourceDirectoryPath = nil
-        deferredDirectoryConflictSnapshotID = nil
-        retryPreview()
-        return true
+    private func registerSelectedProjectDirectory(_ directory: URL?) {
+        guard let directory else { return }
+        imageDirectoryAccess.registerUserSelectedDirectory(directory)
     }
 
     private func dropImage(_ sourceURL: URL) {
@@ -3169,14 +3030,17 @@ struct MarkdownEditorView: View {
     ) async throws -> ImageAssetDirectoryPlan? {
         switch placement {
         case .copyToAssets:
-            guard let authorizedDirectory = try await ImageAssetPicker.authorizeDocumentDirectory(
+            if imageDirectoryAccess.isAuthorized(documentDirectory) {
+                return .assets(in: documentDirectory)
+            }
+            guard let selectedDirectory = try await ImageAssetPicker.chooseDocumentDirectory(
                 documentDirectory,
                 attachedTo: window
             ) else {
                 return nil
             }
-            try imageDirectoryAccess.authorizePersistently(authorizedDirectory)
-            return .assets(in: authorizedDirectory)
+            try imageDirectoryAccess.authorizePersistently(selectedDirectory)
+            return .assets(in: selectedDirectory)
         case .copyToRelativeDirectory:
             guard let plan = try await ImageAssetPicker.chooseRelativeAssetDirectory(
                 relativeTo: documentDirectory,
@@ -3184,7 +3048,7 @@ struct MarkdownEditorView: View {
             ) else {
                 return nil
             }
-            imageDirectoryAccess.authorize(plan.directoryURL)
+            try imageDirectoryAccess.authorizePersistently(plan.directoryURL)
             return plan
         case .keepOriginal:
             return nil
@@ -4054,8 +3918,6 @@ struct MarkdownEditorView: View {
             previewHTML = MarkdownRenderer.htmlDocument(for: "")
             previewSourceSnapshot = ""
             previewFailureMessage = nil
-            relativeResourceSourceSnapshot = ""
-            hasRelativeResources = false
             analysisState = .ready(.empty)
             selectedHeadingID = nil
             incomingNavigationIsPending = false
@@ -4088,8 +3950,6 @@ struct MarkdownEditorView: View {
             previewHTML = content.html
             previewSourceSnapshot = content.sourceSnapshot
             previewFailureMessage = content.previewFailureMessage
-            relativeResourceSourceSnapshot = content.sourceSnapshot
-            hasRelativeResources = content.hasRelativeResources
             _ = sourceEditorSession.applySyntaxHighlighting(
                 content.syntaxHighlighting,
                 source: markdown,
@@ -4201,7 +4061,6 @@ private struct DerivedDocumentContent: Sendable {
     let sourceSnapshot: String
     let html: String
     let previewFailureMessage: String?
-    let hasRelativeResources: Bool
     let analysis: DocumentAnalysisOutcome
     let syntaxHighlighting: [MarkdownSyntaxSpan]
 }
@@ -4260,7 +4119,6 @@ private actor DocumentContentDeriver {
             sourceSnapshot: markdown,
             html: previewDocument.html,
             previewFailureMessage: previewDocument.failureMessage,
-            hasRelativeResources: previewDocument.hasRelativeResources,
             analysis: analysis,
             syntaxHighlighting: syntaxHighlighting
         )

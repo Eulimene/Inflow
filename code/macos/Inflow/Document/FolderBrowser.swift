@@ -898,7 +898,7 @@ final class FolderBrowserController: ObservableObject {
             )
             if bookmark == nil {
                 restorationWarning =
-                    "本次可以浏览，但未能保存文件夹访问权限；下次启动时可能需要重新选择。"
+                    "本次可以正常使用，但未能记住该项目；下次启动时可能需要重新选择。"
             }
         }
         refresh()
@@ -1245,7 +1245,7 @@ final class FolderBrowserController: ObservableObject {
         ) else {
             persistence.save(nil)
             restorationWarning =
-                "上次打开的文件夹已移动、不可用或权限已过期，请重新选择。"
+                "上次打开的项目已移动或不可用，请重新选择。"
             return
         }
         openFolder(directory, remember: false)

@@ -4,7 +4,7 @@ import XCTest
 
 final class MarkdownInsertionTests: XCTestCase {
     @MainActor
-    func testRelativeResourceDirectoryPolicyAndFrozenPermissionCopy() {
+    func testRelativeResourceDirectoryPolicy() {
         XCTAssertFalse(RelativeResourceDirectoryPolicy.hasRelativeResources(in: "# Title"))
         XCTAssertFalse(RelativeResourceDirectoryPolicy.hasRelativeResources(
             in: "![remote](https://example.com/image.png) [heading](#part)"
@@ -12,14 +12,14 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertTrue(RelativeResourceDirectoryPolicy.hasRelativeResources(
             in: "![local](assets/image.png) [guide](guide/readme.md)"
         ))
-        XCTAssertEqual(
-            ImageAssetPicker.resourceDirectoryPromptMessage,
-            "访问该目录后，Inflow 才能显示相对图片、打开链接或创建冲突副本。"
-        )
+        XCTAssertEqual(ImageAssetPicker.documentDirectoryPanelTitle, "选择文档所在文件夹")
+        XCTAssertEqual(ImageAssetPicker.documentDirectoryPanelPrompt, "使用此文件夹")
+        XCTAssertFalse(ImageAssetPicker.documentDirectoryPanelTitle.contains("授权"))
+        XCTAssertFalse(ImageAssetPicker.documentDirectoryPanelPrompt.contains("授权"))
     }
 
     @MainActor
-    func testDirectoryAuthorizationPersistsRestoresAndRejectsMovedBookmark() throws {
+    func testPersistedDirectorySelectionRestoresAndRejectsMovedBookmark() throws {
         let exact = URL(fileURLWithPath: "/tmp/inflow-resources/document")
         let moved = URL(fileURLWithPath: "/tmp/inflow-resources/moved")
         let persistence = TestResourceDirectoryAuthorizationPersistence()
@@ -66,6 +66,29 @@ final class MarkdownInsertionTests: XCTestCase {
         )
         XCTAssertFalse(rejected.restoreAuthorization(for: exact))
         XCTAssertFalse(rejected.isAuthorized(exact))
+        XCTAssertTrue(persistence.records.isEmpty)
+
+        let root = URL(fileURLWithPath: "/tmp/inflow-selected-project")
+        let child = root.appendingPathComponent("notes/chapter")
+        let sibling = URL(fileURLWithPath: "/tmp/inflow-selected-project-copy")
+        started.removeAll()
+        let selectedDirectoryManager = ImageAssetDirectoryAccess(
+            persistence: persistence,
+            bookmarkData: { _ in Data([1]) },
+            resolveBookmark: { _ in nil },
+            beginAccess: {
+                started.append($0)
+                return true
+            },
+            endAccess: { _ in }
+        )
+
+        selectedDirectoryManager.registerUserSelectedDirectory(root)
+
+        XCTAssertTrue(selectedDirectoryManager.isAuthorized(root))
+        XCTAssertTrue(selectedDirectoryManager.isAuthorized(child))
+        XCTAssertFalse(selectedDirectoryManager.isAuthorized(sibling))
+        XCTAssertTrue(started.isEmpty)
         XCTAssertTrue(persistence.records.isEmpty)
     }
 
