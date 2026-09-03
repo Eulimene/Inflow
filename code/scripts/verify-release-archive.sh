@@ -105,6 +105,7 @@ verify_entitlement_contract() {
   sandbox_key='com\.apple\.security\.app-sandbox'
   user_files_key='com\.apple\.security\.files\.user-selected\.read-write'
   bookmarks_key='com\.apple\.security\.files\.bookmarks\.app-scope'
+  network_client_key='com\.apple\.security\.network\.client'
   team_key='com\.apple\.developer\.team-identifier'
   application_identifier_key='com\.apple\.application-identifier'
 
@@ -115,7 +116,8 @@ verify_entitlement_contract() {
   for required_entitlement_key in \
     "${sandbox_key}" \
     "${user_files_key}" \
-    "${bookmarks_key}"
+    "${bookmarks_key}" \
+    "${network_client_key}"
   do
     if [ "$(
       plist_raw_value "${entitlement_path}" "${required_entitlement_key}" bool || true
@@ -167,6 +169,7 @@ verify_entitlement_contract() {
       "${sandbox_key}" \
       "${user_files_key}" \
       "${bookmarks_key}" \
+      "${network_client_key}" \
       "${team_key}" \
       "${application_identifier_key}"
     return
@@ -176,7 +179,8 @@ verify_entitlement_contract() {
     "${entitlement_path}" entitlements \
     "${sandbox_key}" \
     "${user_files_key}" \
-    "${bookmarks_key}"
+    "${bookmarks_key}" \
+    "${network_client_key}"
 }
 
 assert_contract_rejects() {
@@ -267,8 +271,15 @@ run_contract_self_test() {
     verify_zero_collection_privacy_manifest "${privacy_extra}"
 
   verify_entitlement_contract "${entitlement_source}" local '' com.inflow.desktop
+  entitlement_missing_webkit_client="${TEMPORARY_ROOT}/entitlement-missing-webkit-client.plist"
+  /bin/cp -f "${entitlement_source}" "${entitlement_missing_webkit_client}"
+  /usr/bin/plutil -remove 'com\.apple\.security\.network\.client' \
+    "${entitlement_missing_webkit_client}"
+  assert_contract_rejects \
+    'missing WebKit client entitlement' \
+    verify_entitlement_contract \
+      "${entitlement_missing_webkit_client}" local '' com.inflow.desktop
   for extra_entitlement in \
-    'com\.apple\.security\.network\.client' \
     'com\.apple\.security\.network\.server' \
     'com\.apple\.security\.application-groups' \
     'com\.apple\.security\.temporary-exception\.mach-lookup\.global-name'

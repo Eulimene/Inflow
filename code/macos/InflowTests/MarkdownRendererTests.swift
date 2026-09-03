@@ -959,6 +959,25 @@ final class MarkdownRendererTests: XCTestCase {
 
     @MainActor
     func testPreviewCoordinatorRoutesHeadingAndManualScrollWithoutDocumentContent() {
+        XCTAssertTrue(
+            PreviewWebNavigationPolicy.allows(
+                navigationType: .other,
+                scheme: "applewebdata"
+            )
+        )
+        XCTAssertTrue(
+            PreviewWebNavigationPolicy.allows(navigationType: .other, scheme: "about")
+        )
+        XCTAssertFalse(
+            PreviewWebNavigationPolicy.allows(navigationType: .other, scheme: "https")
+        )
+        XCTAssertFalse(
+            PreviewWebNavigationPolicy.allows(
+                navigationType: .linkActivated,
+                scheme: "applewebdata"
+            )
+        )
+
         let coordinator = MarkdownPreviewView.Coordinator()
         let webView = WKWebView()
         var selectedOffset: Int?
@@ -1291,9 +1310,46 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(link.fragment, "target")
         XCTAssertEqual(link.url.standardizedFileURL, targetURL.standardizedFileURL)
         XCTAssertTrue(PreviewLinkPlanner.localTargetIsCurrent(link))
+        XCTAssertFalse(
+            PreviewLinkActivationPolicy.opensWithoutConfirmation(plan),
+            "a path alone must not be treated as a selected-project authorization"
+        )
+
+        let projectIdentity = try XCTUnwrap(
+            FolderProjectDirectoryIdentity.capture(directory)
+        )
+        let trustedProjectPlan = PreviewLinkPlanner.plan(
+            markdown: markdown,
+            target: "guide.md#target",
+            documentURL: sourceURL,
+            projectRoot: directory,
+            expectedProjectRootIdentity: projectIdentity
+        )
+        XCTAssertTrue(
+            PreviewLinkActivationPolicy.opensWithoutConfirmation(trustedProjectPlan),
+            "a current Markdown target inside the user-selected project opens directly"
+        )
+
+        let trustedImageURL = directory.appendingPathComponent("cover.png")
+        try pngData().write(to: trustedImageURL)
+        let trustedImagePlan = PreviewLinkPlanner.plan(
+            markdown: "[cover](cover.png)",
+            target: "cover.png",
+            documentURL: sourceURL,
+            projectRoot: directory,
+            expectedProjectRootIdentity: projectIdentity
+        )
+        XCTAssertFalse(
+            PreviewLinkActivationPolicy.opensWithoutConfirmation(trustedImagePlan),
+            "external-viewer and temporary-copy behavior keeps its explicit action"
+        )
 
         try Data("# Replaced with different bytes\n".utf8).write(to: targetURL)
         XCTAssertFalse(PreviewLinkPlanner.localTargetIsCurrent(link))
+        XCTAssertFalse(
+            PreviewLinkActivationPolicy.opensWithoutConfirmation(trustedProjectPlan),
+            "a target changed after planning must never use the direct project path"
+        )
 
         let independentRelative = PreviewLinkPlanner.plan(
             markdown: markdown,

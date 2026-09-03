@@ -974,6 +974,7 @@ struct MarkdownEditorView: View {
                     }
                 }
             }
+            focusProjectEditorAfterNavigation(in: sourceEditorSession.textView.window)
         }
         .onChange(of: Data(document.text.utf8)) { _, _ in
             let markdown = document.text
@@ -1040,6 +1041,7 @@ struct MarkdownEditorView: View {
                   windowDocument === nativeDocument
             else { return }
             projectCoordinator?.activateProjectDocument(nativeDocument)
+            focusProjectEditorAfterNavigation(in: window)
         }
         .onChange(of: document.properties) { _, _ in
             updateRecoveryProtection()
@@ -1229,7 +1231,6 @@ struct MarkdownEditorView: View {
                     NSWorkspace.shared.activateFileViewerSelecting([url])
                     previewLinkPlan = nil
                 },
-                onReauthorize: { url in reauthorizePreviewLink(plan, expectedURL: url) },
                 onCopyTarget: { copyPreviewLinkTarget(plan) }
             )
         }
@@ -2426,9 +2427,35 @@ struct MarkdownEditorView: View {
             switch plan.destination {
             case let .currentDocument(fragment):
                 navigateInCurrentDocument(to: fragment)
+            case .local where PreviewLinkActivationPolicy.opensWithoutConfirmation(plan):
+                // The project picker already authorized this root. Revalidate
+                // the frozen target and switch tabs without asking the user to
+                // approve the same directory again.
+                performResolvedPreviewLink(plan)
             case .external, .local, .blocked:
                 previewLinkPlan = plan
             }
+        }
+    }
+
+    private func focusProjectEditorAfterNavigation(in candidateWindow: NSWindow?) {
+        guard InflowLaunchPolicy.shouldFocusProjectDocumentAfterNavigation(
+            fileURL: fileURL,
+            hasProjectContext: hasProjectContext,
+            sourceIsVisible: viewMode != .preview,
+            isEditable: canEditDocument
+        )
+        else { return }
+
+        Task { @MainActor in
+            // Let the destination tab finish its atomic presentation before
+            // moving first responder away from the directory tree.
+            await Task.yield()
+            guard let editorWindow = sourceEditorSession.textView.window,
+                  editorWindow === candidateWindow || candidateWindow == nil,
+                  editorWindow.isKeyWindow
+            else { return }
+            _ = sourceEditorSession.focusEditor()
         }
     }
 
@@ -2717,48 +2744,6 @@ struct MarkdownEditorView: View {
             return false
         }
         return true
-    }
-
-    private func reauthorizePreviewLink(_ plan: PreviewLinkPlan, expectedURL: URL) {
-        previewLinkPlan = nil
-        Task { @MainActor in
-            await Task.yield()
-            guard let chosen = await PreviewLinkAuthorization.chooseExactTarget(
-                expectedURL,
-                attachedTo: sourceEditorSession.textView.window ?? NSApp.keyWindow
-            ) else {
-                return
-            }
-            let accessed = chosen.startAccessingSecurityScopedResource()
-            defer {
-                if accessed { chosen.stopAccessingSecurityScopedResource() }
-            }
-            let candidateProjectRoot = activeProjectRoot
-            let projectRootIdentity = currentProjectRootIdentity(for: candidateProjectRoot)
-            let projectRoot = projectRootIdentity == nil ? nil : candidateProjectRoot
-            let refreshed = await previewLinkWorker.plan(
-                markdown: document.text,
-                target: plan.target,
-                documentURL: fileURL,
-                projectRoot: projectRoot,
-                expectedProjectRootIdentity: projectRootIdentity
-            )
-            guard PreviewLinkPlanner.isCurrent(refreshed, markdown: document.text) else {
-                previewLinkPlan = blockedPreviewLinkPlan(
-                    target: plan.target,
-                    reason: .noLongerInDocument,
-                    safeTarget: "该预览链接"
-                )
-                return
-            }
-            guard case let .local(link) = refreshed.destination,
-                  link.url.standardizedFileURL.path == chosen.standardizedFileURL.path
-            else {
-                previewLinkPlan = refreshed
-                return
-            }
-            performResolvedPreviewLink(refreshed, authorizedURL: chosen)
-        }
     }
 
     private func copyPreviewLinkTarget(_ plan: PreviewLinkPlan) {

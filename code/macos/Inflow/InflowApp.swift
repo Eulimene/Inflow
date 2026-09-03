@@ -582,9 +582,20 @@ enum ProjectWindowTabbing {
         guard currentWindow !== documentWindow,
               documentWindow.tabbedWindows?.contains(where: { $0 === currentWindow }) != true
         else { return }
+        // Build and lay out the destination while the current project tab is
+        // still visible. Matching the existing frame and suppressing the
+        // window animation prevents a newly opened project document from
+        // looking like one app window closed and another one launched.
+        documentWindow.animationBehavior = .none
+        documentWindow.setFrame(currentWindow.frame, display: false)
+        documentWindow.contentView?.layoutSubtreeIfNeeded()
         currentWindow.tabbingMode = .preferred
         documentWindow.tabbingMode = .preferred
-        currentWindow.addTabbedWindow(documentWindow, ordered: .above)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            currentWindow.addTabbedWindow(documentWindow, ordered: .above)
+        }
     }
 }
 
@@ -1219,7 +1230,12 @@ final class LightweightProjectCoordinator {
         groupWindow(for: document, asTabBeside: current)
         document?.showWindows()
         document?.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        // Directory-tree and project-link navigation already happens inside
+        // the active app. Re-activating NSApp on every tab switch produces a
+        // visible resign/activate pulse on some macOS versions.
+        if !NSApp.isActive {
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     private func groupWindow(
@@ -1327,6 +1343,7 @@ final class LightweightProjectCoordinator {
            current !== openedDocument,
            ProjectDocumentTargetPolicy.shouldCloseAfterOpeningProjectTab(current)
         {
+            current.windowControllers.first?.window?.animationBehavior = .none
             current.close()
         }
         finishDocumentSwitch(

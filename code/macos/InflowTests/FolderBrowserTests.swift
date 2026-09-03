@@ -544,6 +544,31 @@ final class FolderBrowserTests: XCTestCase {
                 isEditable: true
             )
         )
+
+        let projectFileURL = URL(fileURLWithPath: "/tmp/project/note.md")
+        XCTAssertTrue(
+            InflowLaunchPolicy.shouldFocusProjectDocumentAfterNavigation(
+                fileURL: projectFileURL,
+                hasProjectContext: true,
+                sourceIsVisible: true,
+                isEditable: true
+            )
+        )
+        for state in [
+            (fileURL: nil, project: true, source: true, editable: true),
+            (fileURL: projectFileURL, project: false, source: true, editable: true),
+            (fileURL: projectFileURL, project: true, source: false, editable: true),
+            (fileURL: projectFileURL, project: true, source: true, editable: false),
+        ] {
+            XCTAssertFalse(
+                InflowLaunchPolicy.shouldFocusProjectDocumentAfterNavigation(
+                    fileURL: state.fileURL,
+                    hasProjectContext: state.project,
+                    sourceIsVisible: state.source,
+                    isEditable: state.editable
+                )
+            )
+        }
     }
 
     func testLaunchIntegrationsWaitUntilApplicationDidFinishLaunching() async {

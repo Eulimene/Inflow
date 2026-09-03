@@ -86,29 +86,31 @@ private final class EdgeWidthSplitView: NSSplitView {
     private var isApplyingDesiredWidth = false
 
     func applyDesiredWidth() {
-        guard subviews.count == 2, bounds.width > dividerThickness else { return }
+        let totalWidth = max(0, bounds.width)
+        let totalHeight = max(0, bounds.height)
+        guard subviews.count == 2, totalWidth > dividerThickness else { return }
         isApplyingDesiredWidth = true
         defer { isApplyingDesiredWidth = false }
 
         let position = WorkspaceEdgeSplitLayout.position(
             for: desiredEdgeWidth,
             edge: edge,
-            totalWidth: bounds.width,
+            totalWidth: totalWidth,
             dividerThickness: dividerThickness,
             allowedWidth: allowedWidth
         )
-        let availableWidth = max(0, bounds.width - dividerThickness)
+        let availableWidth = max(0, totalWidth - dividerThickness)
         subviews[0].frame = NSRect(
             x: bounds.minX,
             y: bounds.minY,
             width: position,
-            height: bounds.height
+            height: totalHeight
         )
         subviews[1].frame = NSRect(
             x: bounds.minX + position + dividerThickness,
             y: bounds.minY,
             width: max(0, availableWidth - position),
-            height: bounds.height
+            height: totalHeight
         )
     }
 
@@ -324,27 +326,29 @@ private final class FractionSplitView: NSSplitView {
     private var isApplyingDesiredFraction = false
 
     func applyDesiredFraction() {
-        guard subviews.count == 2, bounds.width > dividerThickness else { return }
+        let totalWidth = max(0, bounds.width)
+        let totalHeight = max(0, bounds.height)
+        guard subviews.count == 2, totalWidth > dividerThickness else { return }
         isApplyingDesiredFraction = true
         defer { isApplyingDesiredFraction = false }
 
         let position = EditorSplitLayout.position(
             for: desiredFraction,
-            totalWidth: bounds.width,
+            totalWidth: totalWidth,
             dividerThickness: dividerThickness
         )
-        let availableWidth = max(0, bounds.width - dividerThickness)
+        let availableWidth = max(0, totalWidth - dividerThickness)
         subviews[0].frame = NSRect(
             x: bounds.minX,
             y: bounds.minY,
             width: position,
-            height: bounds.height
+            height: totalHeight
         )
         subviews[1].frame = NSRect(
             x: bounds.minX + position + dividerThickness,
             y: bounds.minY,
             width: max(0, availableWidth - position),
-            height: bounds.height
+            height: totalHeight
         )
     }
 

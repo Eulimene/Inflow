@@ -34,6 +34,18 @@ enum InflowLaunchPolicy {
             && !hasRestorationState
             && isEditable
     }
+
+    static func shouldFocusProjectDocumentAfterNavigation(
+        fileURL: URL?,
+        hasProjectContext: Bool,
+        sourceIsVisible: Bool,
+        isEditable: Bool
+    ) -> Bool {
+        fileURL != nil
+            && hasProjectContext
+            && sourceIsVisible
+            && isEditable
+    }
 }
 
 enum FolderBrowserPolicy {
@@ -206,7 +218,7 @@ enum FolderBrowserError: Error, Equatable, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unavailable:
-            "这个文件夹当前不可读取。请重新选择文件夹并确认访问权限。"
+            "这个文件夹当前不可读取。请确认文件夹仍存在且未被移动，然后重试。"
         case let .tooManyMarkdownFiles(limit):
             "这个文件夹包含超过 \(limit) 个文件。为避免界面失去响应，本次没有载入。"
         }

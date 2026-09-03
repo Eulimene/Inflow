@@ -634,6 +634,21 @@ struct PreviewLinkPlan: Identifiable, Equatable, Sendable {
     }
 }
 
+/// A folder selected as a project is the user's authorization boundary for
+/// Markdown navigation inside that exact directory identity. Valid internal
+/// documents can therefore open directly; destinations that leave the root,
+/// change identity, or are not Markdown keep the existing confirmation and
+/// failure paths.
+enum PreviewLinkActivationPolicy {
+    static func opensWithoutConfirmation(_ plan: PreviewLinkPlan) -> Bool {
+        guard case let .local(link) = plan.destination else { return false }
+        return link.kind == .markdown
+            && link.projectRoot != nil
+            && link.expectedProjectRootIdentity != nil
+            && PreviewLinkPlanner.localTargetIsCurrent(link)
+    }
+}
+
 actor PreviewLinkWorker {
     func plan(
         markdown: String,
@@ -1153,43 +1168,11 @@ enum PreviewHeadingAnchorResolver {
     }
 }
 
-@MainActor
-enum PreviewLinkAuthorization {
-    static func chooseExactTarget(_ expectedURL: URL, attachedTo window: NSWindow?) async -> URL? {
-        let panel = NSOpenPanel()
-        panel.title = "重新授权链接目标"
-        panel.message = "请选择同一文件。选择其他路径不会改写 Markdown 链接。"
-        panel.prompt = "重新授权并打开"
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.directoryURL = expectedURL.deletingLastPathComponent()
-        panel.nameFieldStringValue = expectedURL.lastPathComponent
-
-        let response: NSApplication.ModalResponse
-        if let window {
-            response = await withCheckedContinuation { continuation in
-                panel.beginSheetModal(for: window) { continuation.resume(returning: $0) }
-            }
-        } else {
-            response = panel.runModal()
-        }
-        guard response == .OK,
-              let chosen = panel.url,
-              chosen.standardizedFileURL.path == expectedURL.standardizedFileURL.path
-        else {
-            return nil
-        }
-        return chosen
-    }
-}
-
 struct PreviewLinkDecisionView: View {
     let plan: PreviewLinkPlan
     let onCancel: () -> Void
     let onConfirm: () -> Void
     let onReveal: (URL) -> Void
-    let onReauthorize: (URL) -> Void
     let onCopyTarget: () -> Void
 
     var body: some View {
@@ -1229,12 +1212,9 @@ struct PreviewLinkDecisionView: View {
         case let .local(link):
             Button("在 Finder 中显示") { onReveal(link.url) }
         case let .blocked(failure):
-            if let url = failure.expectedURL,
-               failure.reason == .missingLocalTarget
-                    || failure.reason == .unavailableLocalTarget
-            {
-                Button("重新授权…") { onReauthorize(url) }
-            } else if failure.reason == .unsupportedScheme
+            if failure.reason == .missingLocalTarget
+                || failure.reason == .unavailableLocalTarget
+                || failure.reason == .unsupportedScheme
                 || failure.reason == .invalidTarget
                 || failure.reason == .localTargetRequiresProject
                 || failure.reason == .outsideProject
@@ -1314,7 +1294,7 @@ struct PreviewLinkDecisionView: View {
             case .missingLocalTarget:
                 "\(failure.safeTarget)不存在、已被移动，或当前位置不可达。"
             case .unavailableLocalTarget:
-                "\(failure.safeTarget)当前未授权或无法读取。重新授权时必须选择同一路径。"
+                "\(failure.safeTarget)已移动、发生变化或当前无法读取。请检查项目中的原路径后重试。"
             case .unsafeLocalTarget:
                 "\(failure.safeTarget)不是可信的普通文件，或其内容与声明类型不一致。"
             case .cannotOpen:

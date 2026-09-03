@@ -18,6 +18,17 @@ enum PreviewImageIssueAction: String, Equatable, Sendable {
     case ignore
 }
 
+enum PreviewWebNavigationPolicy {
+    static func allows(navigationType: WKNavigationType, scheme: String?) -> Bool {
+        guard navigationType != .linkActivated else { return false }
+        guard let scheme = scheme?.lowercased() else { return true }
+        // WKWebView uses the private applewebdata scheme for documents created
+        // by loadHTMLString on some macOS releases. It is an in-memory document
+        // origin, not permission to read a file or contact the network.
+        return scheme == "about" || scheme == "data" || scheme == "applewebdata"
+    }
+}
+
 enum PreviewNavigationMessage: Equatable {
     case heading(sourceUTF8Offset: Int)
     case link(target: String)
@@ -210,10 +221,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
 
         context.coordinator.lastHTML = html
         context.coordinator.lastBaseURL = baseURL
-        context.coordinator.willLoadDocument()
-        // All accepted local images have already been validated and converted
-        // to data URLs. Never give WebKit a filesystem origin or read scope.
-        webView.loadHTMLString(html, baseURL: nil)
+        context.coordinator.scheduleDocumentLoad(html, in: webView)
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -225,7 +233,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
         )
         coordinator.lastHTML = nil
         coordinator.lastBaseURL = nil
-        coordinator.willLoadDocument()
+        coordinator.cancelDocumentLoad()
     }
 
     @MainActor
@@ -235,6 +243,8 @@ struct MarkdownPreviewView: NSViewRepresentable {
         private var requestedScroll: PreviewScrollRequest?
         private var appliedScrollGeneration: Int?
         private var isDocumentLoaded = false
+        private var documentLoadTask: Task<Void, Never>?
+        private var documentLoadGeneration = 0
         private var onHeadingActivated: (Int) -> Void = { _ in }
         private var onLinkActivated: (String) -> Void = { _ in }
         private var onPreviewIssueAction: (PreviewIssueAction, Int) -> Void = { _, _ in }
@@ -259,14 +269,85 @@ struct MarkdownPreviewView: NSViewRepresentable {
             applyScrollIfPossible(to: webView)
         }
 
-        func willLoadDocument() {
+        func scheduleDocumentLoad(_ html: String, in webView: WKWebView) {
+            documentLoadTask?.cancel()
+            documentLoadGeneration &+= 1
+            let generation = documentLoadGeneration
+            isDocumentLoaded = false
+            appliedScrollGeneration = nil
+            documentLoadTask = Task { @MainActor [weak self, weak webView] in
+                // Loading synchronously from updateNSView can ask WebKit to
+                // publish navigation state while SwiftUI is updating its view
+                // graph. Waiting one run-loop turn also lets the preview pane
+                // receive its final size before its first document is loaded.
+                await Task.yield()
+                guard !Task.isCancelled,
+                      let self,
+                      self.documentLoadGeneration == generation,
+                      let webView
+                else {
+                    return
+                }
+
+                for _ in 0..<60 {
+                    if webView.window != nil,
+                       webView.bounds.width > 0,
+                       webView.bounds.height > 0
+                    {
+                        break
+                    }
+                    try? await Task.sleep(nanoseconds: 16_000_000)
+                    guard !Task.isCancelled,
+                          self.documentLoadGeneration == generation
+                    else {
+                        return
+                    }
+                }
+                guard webView.window != nil,
+                      webView.bounds.width > 0,
+                      webView.bounds.height > 0
+                else {
+                    webView.setAccessibilityValue("Markdown 预览尚未就绪")
+                    return
+                }
+                webView.setAccessibilityValue("正在加载 Markdown 预览")
+                // All accepted local images have already been validated and
+                // converted to data URLs. Never give WebKit a filesystem origin
+                // or read scope.
+                webView.loadHTMLString(html, baseURL: nil)
+            }
+        }
+
+        func cancelDocumentLoad() {
+            documentLoadTask?.cancel()
+            documentLoadTask = nil
+            documentLoadGeneration &+= 1
             isDocumentLoaded = false
             appliedScrollGeneration = nil
         }
 
         func webView(_ webView: WKWebView, didFinish _: WKNavigation?) {
             isDocumentLoaded = true
+            webView.setAccessibilityValue("Markdown 预览已加载")
             applyScrollIfPossible(to: webView)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            didFail _: WKNavigation?,
+            withError _: Error
+        ) {
+            isDocumentLoaded = false
+            webView.setAccessibilityValue("Markdown 预览加载失败")
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            didFailProvisionalNavigation _: WKNavigation?,
+            withError _: Error
+        ) {
+            isDocumentLoaded = false
+            webView.setAccessibilityValue("Markdown 预览加载失败")
         }
 
         func userContentController(
@@ -302,16 +383,12 @@ struct MarkdownPreviewView: NSViewRepresentable {
             decidePolicyFor navigationAction: WKNavigationAction,
             decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
         ) {
-            if navigationAction.navigationType == .linkActivated {
-                decisionHandler(.cancel)
-                return
-            }
-
-            let scheme = navigationAction.request.url?.scheme
+            let isAllowed = PreviewWebNavigationPolicy.allows(
+                navigationType: navigationAction.navigationType,
+                scheme: navigationAction.request.url?.scheme
+            )
             decisionHandler(
-                scheme == nil || scheme == "about" || scheme == "data"
-                    ? .allow
-                    : .cancel
+                isAllowed ? .allow : .cancel
             )
         }
 
