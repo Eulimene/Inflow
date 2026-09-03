@@ -491,6 +491,28 @@ final class ProjectDocumentSurface: Identifiable {
     var title: String { fileURL.lastPathComponent }
 }
 
+enum ProjectDocumentTabSelection {
+    static func activeIDAfterClosing(
+        _ closingID: ObjectIdentifier,
+        orderedIDs: [ObjectIdentifier],
+        activeID: ObjectIdentifier?
+    ) -> ObjectIdentifier? {
+        guard let closingIndex = orderedIDs.firstIndex(of: closingID) else {
+            return activeID
+        }
+        guard activeID == closingID else {
+            return activeID.flatMap { orderedIDs.contains($0) ? $0 : nil }
+        }
+        if orderedIDs.indices.contains(closingIndex + 1) {
+            return orderedIDs[closingIndex + 1]
+        }
+        if closingIndex > 0 {
+            return orderedIDs[closingIndex - 1]
+        }
+        return nil
+    }
+}
+
 @MainActor
 enum ProjectSessionBoundary {
     static func hasCurrentRoot(_ browser: FolderBrowserController) -> Bool {
@@ -1229,6 +1251,56 @@ final class LightweightProjectCoordinator: ObservableObject {
         focusEditorWhenMounted(surface)
     }
 
+    func closeDocumentSurface(_ identifier: ObjectIdentifier) {
+        guard !documentSwitchGate.isBusy,
+              let surface = documentSurfaces.first(where: { $0.id == identifier })
+        else { return }
+
+        DocumentCloseAuthorization.request(for: surface.nativeDocument) {
+            [weak self, weak surface] shouldClose in
+            guard shouldClose, let self, let surface,
+                  let currentIndex = self.documentSurfaces.firstIndex(where: {
+                      $0.id == identifier && $0 === surface
+                  })
+            else { return }
+
+            let orderedIDs = self.documentSurfaces.map(\.id)
+            let nextActiveID = ProjectDocumentTabSelection.activeIDAfterClosing(
+                identifier,
+                orderedIDs: orderedIDs,
+                activeID: self.activeSurfaceID
+            )
+            var nextState = self.workspaceSurfaceState
+            nextState.surfaces.remove(at: currentIndex)
+            nextState.activeID = nextActiveID.flatMap { candidate in
+                nextState.surfaces.contains(where: { $0.id == candidate })
+                    ? candidate
+                    : nil
+            }
+
+            // Remove the editor surface and choose its successor in one
+            // publication so the workspace never renders a blank transition.
+            self.workspaceSurfaceState = nextState
+            if self.pendingSurfaceActivation == identifier {
+                self.pendingSurfaceActivation = nil
+            }
+            self.browser.dissociateProjectWindow(surface.nativeDocument)
+            NativeDocumentLoadedFileRegistry.clear(surface.nativeDocument)
+            surface.nativeDocument.close()
+
+            if let nextID = nextState.activeID,
+               let nextSurface = nextState.surfaces.first(where: { $0.id == nextID })
+            {
+                self.projectDocument = nextSurface.nativeDocument
+                self.focusProjectHostWindow()
+                self.focusEditorWhenMounted(nextSurface)
+            } else {
+                self.projectDocument = self.projectHostDocument
+                self.focusProjectHostWindow()
+            }
+        }
+    }
+
     private func attachProjectHost(_ document: NSDocument?) {
         projectHostDocument = document
         projectDocument = document
@@ -1583,16 +1655,14 @@ private struct ProjectWorkspaceScene: View {
 
     private var collapsedProjectSidebarRail: some View {
         VStack(spacing: 0) {
-            Button {
+            Spacer(minLength: 0)
+            WorkspacePaneVisibilityButton(
+                paneName: "目录树",
+                systemImage: "sidebar.left",
+                isExpanded: false
+            ) {
                 preferences.workspaceProjectSidebarVisible = true
-            } label: {
-                Image(systemName: "sidebar.left")
-                    .frame(width: 24, height: 24)
             }
-            .buttonStyle(.borderless)
-            .help("展开目录树")
-            .accessibilityLabel("展开目录树")
-            .padding(.top, 8)
             Spacer(minLength: 0)
         }
         .frame(width: 40)
@@ -1676,6 +1746,10 @@ private struct ProjectWorkspaceScene: View {
                         .zIndex(isActive ? 1 : 0)
                 }
             }
+            .transaction { transaction in
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
         }
     }
 
@@ -1732,6 +1806,14 @@ private struct ProjectDocumentTabBar: View {
                     .accessibilityValue(
                         projectCoordinator.activeSurfaceID == surface.id ? "当前" : "后台"
                     )
+                    .contextMenu {
+                        Button("关闭标签页") {
+                            projectCoordinator.closeDocumentSurface(surface.id)
+                        }
+                    }
+                    .accessibilityAction(named: "关闭标签页") {
+                        projectCoordinator.closeDocumentSurface(surface.id)
+                    }
                 }
             }
             .padding(.horizontal, 8)

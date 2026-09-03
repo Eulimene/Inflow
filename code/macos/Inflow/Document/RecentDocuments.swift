@@ -1294,6 +1294,7 @@ final class RecentDocumentsController: NSObject, ObservableObject {
         panel.title = "打开项目"
         panel.message = "选择一个普通文件夹。Inflow 不会导入、复制或重组其中内容。"
         panel.prompt = "打开"
+        panel.allowedContentTypes = [.folder]
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false

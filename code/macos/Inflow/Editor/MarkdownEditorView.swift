@@ -45,6 +45,32 @@ enum EditorWorkspaceMetrics {
     static let statusBarHeight: CGFloat = 30
 }
 
+/// One consistent, reversible control is used at the vertical midpoint of
+/// each workspace edge. Its location and icon stay stable when the pane is
+/// shown or hidden; only the action and accessible label change.
+struct WorkspacePaneVisibilityButton: View {
+    let paneName: String
+    let systemImage: String
+    let isExpanded: Bool
+    let action: () -> Void
+
+    private var label: String {
+        "\(isExpanded ? "折叠" : "展开")\(paneName)"
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .help(label)
+        .accessibilityLabel(label)
+    }
+}
+
 enum ExportFormat: String, Sendable {
     case html = "HTML"
     case pdf = "PDF"
@@ -302,7 +328,7 @@ enum EditorViewMode: String, CaseIterable, Identifiable {
         switch self {
         case .source: "源码编辑"
         case .split: "实时预览"
-        case .preview: "即时渲染编辑"
+        case .preview: "即时编辑"
         }
     }
 
@@ -1576,24 +1602,28 @@ struct MarkdownEditorView: View {
                 documentContent
             }
         }
-        .overlay(alignment: .topLeading) {
+        .overlay(alignment: .leading) {
             if showsProjectSidebar && hasProjectContext && !isProjectSidebarVisible {
-                collapsedPaneButton(
-                    label: "展开目录树",
-                    systemImage: "chevron.right"
+                WorkspacePaneVisibilityButton(
+                    paneName: "目录树",
+                    systemImage: "sidebar.left",
+                    isExpanded: false
                 ) {
                     isProjectSidebarVisible = true
                 }
+                .padding(.leading, 8)
             }
         }
-        .overlay(alignment: .topTrailing) {
+        .overlay(alignment: .trailing) {
             if !isProjectShell && !usesSourceOnlyExperience && !isOutlineVisible {
-                collapsedPaneButton(
-                    label: "展开文档大纲",
-                    systemImage: "chevron.left"
+                WorkspacePaneVisibilityButton(
+                    paneName: "文档大纲",
+                    systemImage: "sidebar.right",
+                    isExpanded: false
                 ) {
                     isOutlineVisible = true
                 }
+                .padding(.trailing, 8)
             }
         }
     }
@@ -1689,23 +1719,6 @@ struct MarkdownEditorView: View {
         } else {
             editorContent
         }
-    }
-
-    private func collapsedPaneButton(
-        label: String,
-        systemImage: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .frame(width: 24, height: 24)
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
-        .padding(8)
-        .help(label)
-        .accessibilityLabel(label)
     }
 
     @ViewBuilder

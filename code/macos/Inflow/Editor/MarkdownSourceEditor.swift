@@ -1,6 +1,22 @@
 import AppKit
 import SwiftUI
 
+private extension RenderedMarkdownMarkerKind {
+    /// Structural prefixes carry meaning of their own. Keeping them visible
+    /// prevents inactive list, task, and quote blocks from collapsing into
+    /// visually indistinguishable paragraphs while inline punctuation can
+    /// still recede until the user edits that paragraph.
+    var remainsVisibleWhenInactive: Bool {
+        switch self {
+        case .blockQuote, .unorderedList, .orderedList, .taskList:
+            true
+        case .heading, .emphasis, .strong, .strikethrough, .inlineCode,
+             .linkDelimiter, .linkDestination:
+            false
+        }
+    }
+}
+
 enum MarkdownEditorPresentation: Equatable {
     case source
     case rendered
@@ -274,7 +290,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             textView.setAccessibilityLabel("Markdown 源码编辑器")
             applySourceAppearance(sourceAppearance, force: changed)
         case .rendered:
-            textView.setAccessibilityLabel("Markdown 即时渲染编辑器")
+            textView.setAccessibilityLabel("Markdown 即时编辑器")
             textView.commandClickHandler = { [weak self] location, modifiers in
                 guard let self,
                       let renderedPlan = self.renderedPlan,
@@ -397,7 +413,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             else {
                 continue
             }
-            if NSIntersectionRange(paragraphRange, range).length > 0 {
+            if NSIntersectionRange(paragraphRange, range).length > 0
+                || marker.kind.remainsVisibleWhenInactive
+            {
                 storage.addAttributes(
                     [
                         .font: NSFont.monospacedSystemFont(
@@ -1074,17 +1092,18 @@ final class WindowAwareTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
-           let window,
            commandClickHandler?(
-               characterIndexForInsertion(
-                   at: window.convertPoint(toScreen: event.locationInWindow)
-               ),
+               characterIndexForInsertion(at: localPoint(forWindowPoint: event.locationInWindow)),
                event.modifierFlags
            ) == true
         {
             return
         }
         super.mouseDown(with: event)
+    }
+
+    func localPoint(forWindowPoint point: NSPoint) -> NSPoint {
+        convert(point, from: nil)
     }
 
     @discardableResult
@@ -1284,6 +1303,9 @@ struct MarkdownSourceEditor: NSViewRepresentable {
                 request.style == .caret ? target.caretRange : target.revealRange
             )
             textView.scrollRangeToVisible(target.revealRange)
+            if request.style == .caret {
+                textView.centerSelectionInVisibleArea(nil)
+            }
             if request.style.showsTransientMatchIndicator {
                 textView.showFindIndicator(for: target.revealRange)
             }

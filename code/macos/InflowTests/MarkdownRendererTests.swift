@@ -468,14 +468,32 @@ final class MarkdownRendererTests: XCTestCase {
     }
 
     func testRendersCommonMarkdownAndExtensions() throws {
+        let source = """
+        # Title
+
+        **Bold** and ~~old~~
+
+        - [x] Done
+
+        ```mermaid
+        flowchart LR
+        F[个性化] -.贯穿.-> A[内容]
+        G[扩展] -.服务.-> A
+        ```
+        """
         let html = try MarkdownRenderer.htmlFragment(
-            for: "# Title\n\n**Bold** and ~~old~~\n\n- [x] Done\n"
+            for: source
         )
 
         XCTAssertTrue(html.contains("<h1>Title</h1>"))
         XCTAssertTrue(html.contains("<strong>Bold</strong>"))
         XCTAssertTrue(html.contains("<del>old</del>"))
         XCTAssertTrue(html.contains("type=\"checkbox\""))
+        XCTAssertTrue(html.contains("class=\"mermaid-diagram\""))
+        XCTAssertTrue(html.contains("stroke-dasharray=\"6 5\""))
+        XCTAssertTrue(html.contains(">贯穿</text>"))
+        XCTAssertTrue(html.contains(">服务</text>"))
+        XCTAssertFalse(html.contains("mermaid-error"))
     }
 
     func testRawHTMLIsEscaped() throws {

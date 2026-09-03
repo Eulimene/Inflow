@@ -6,6 +6,41 @@ import XCTest
 
 @MainActor
 final class FolderBrowserTests: XCTestCase {
+    func testClosingAnActiveTabSelectsItsNearestNeighbor() {
+        let firstObject = NSObject()
+        let secondObject = NSObject()
+        let thirdObject = NSObject()
+        let first = ObjectIdentifier(firstObject)
+        let second = ObjectIdentifier(secondObject)
+        let third = ObjectIdentifier(thirdObject)
+        let ordered = [first, second, third]
+
+        XCTAssertEqual(
+            ProjectDocumentTabSelection.activeIDAfterClosing(
+                second,
+                orderedIDs: ordered,
+                activeID: second
+            ),
+            third
+        )
+        XCTAssertEqual(
+            ProjectDocumentTabSelection.activeIDAfterClosing(
+                third,
+                orderedIDs: ordered,
+                activeID: third
+            ),
+            second
+        )
+        XCTAssertEqual(
+            ProjectDocumentTabSelection.activeIDAfterClosing(
+                first,
+                orderedIDs: ordered,
+                activeID: third
+            ),
+            third
+        )
+    }
+
     func testProjectDocumentSwitchGateRejectsConcurrentTransactions() async throws {
         _ = NSApplication.shared
         let gate = ProjectDocumentSwitchGate()
@@ -452,6 +487,18 @@ final class FolderBrowserTests: XCTestCase {
         )
         XCTAssertEqual(replacementDocument.showCount, 0)
         XCTAssertEqual(secondDocument.showCount, 0)
+
+        coordinator.closeDocumentSurface(ObjectIdentifier(replacementDocument))
+        XCTAssertEqual(replacementDocument.closeCount, 1)
+        XCTAssertEqual(coordinator.documentSurfaces.count, 1)
+        XCTAssertTrue(coordinator.activeDocumentSurface?.nativeDocument === secondDocument)
+        XCTAssertFalse(browser.isAssociatedProjectDocument(replacementDocument))
+
+        coordinator.closeDocumentSurface(ObjectIdentifier(secondDocument))
+        XCTAssertEqual(secondDocument.closeCount, 1)
+        XCTAssertTrue(coordinator.documentSurfaces.isEmpty)
+        XCTAssertNil(coordinator.activeSurfaceID)
+        XCTAssertTrue(coordinator.isProjectHostDocument(oldDocument))
     }
 
     func testCoordinatorReleaseCleanupClosesOnlyUnownedNewHiddenDocuments() async throws {
@@ -729,6 +776,17 @@ final class FolderBrowserTests: XCTestCase {
         XCTAssertEqual(
             FolderProjectTreeState.directoryIDs(in: tree),
             Set(["Empty", "Guide"])
+        )
+        XCTAssertEqual(
+            FolderProjectTreeState.toggledExpansion(current: [], in: tree),
+            Set(["Empty", "Guide"])
+        )
+        XCTAssertEqual(
+            FolderProjectTreeState.toggledExpansion(
+                current: Set(["Empty", "Guide"]),
+                in: tree
+            ),
+            []
         )
 
         let markdownItem = try XCTUnwrap(tree[1].children?.first)

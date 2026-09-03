@@ -1,6 +1,27 @@
 import AppKit
 import SwiftUI
 
+/// Updating an `NSHostingView.rootView` replaces the root of that SwiftUI tree
+/// and can discard local state in a sidebar while an unrelated editor changes.
+/// This stable relay keeps the hosting root fixed and lets SwiftUI diff only
+/// the changed descendants.
+@MainActor
+private final class PersistentHostingContent<Content: View>: ObservableObject {
+    @Published var content: Content
+
+    init(_ content: Content) {
+        self.content = content
+    }
+}
+
+private struct PersistentHostingRoot<Content: View>: View {
+    @ObservedObject var relay: PersistentHostingContent<Content>
+
+    var body: some View {
+        relay.content
+    }
+}
+
 enum EditorSplitLayout {
     static let allowedFraction = 0.25 ... 0.75
     static let defaultFraction = 0.5
@@ -163,14 +184,20 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
         )
         splitView.setAccessibilityLabel(accessibilityLabel)
 
-        let leadingHost = NSHostingView(rootView: leading)
-        let trailingHost = NSHostingView(rootView: trailing)
+        let leadingRelay = PersistentHostingContent(leading)
+        let trailingRelay = PersistentHostingContent(trailing)
+        let leadingHost = NSHostingView(
+            rootView: PersistentHostingRoot(relay: leadingRelay)
+        )
+        let trailingHost = NSHostingView(
+            rootView: PersistentHostingRoot(relay: trailingRelay)
+        )
         splitView.addArrangedSubview(leadingHost)
         splitView.addArrangedSubview(trailingHost)
         context.coordinator.install(
             splitView: splitView,
-            leadingHost: leadingHost,
-            trailingHost: trailingHost,
+            leadingRelay: leadingRelay,
+            trailingRelay: trailingRelay,
             allowedWidth: allowedWidth,
             edge: edge
         )
@@ -199,10 +226,11 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
     final class Coordinator: NSObject, NSSplitViewDelegate {
         private var width: Binding<Double>
         private weak var splitView: EdgeWidthSplitView?
-        private var leadingHost: NSHostingView<Leading>?
-        private var trailingHost: NSHostingView<Trailing>?
+        private var leadingRelay: PersistentHostingContent<Leading>?
+        private var trailingRelay: PersistentHostingContent<Trailing>?
         private var acceptsResizePersistence = false
         private var resizePersistenceActivationTask: Task<Void, Never>?
+        private var contentUpdateTask: Task<Void, Never>?
 
         init(width: Binding<Double>) {
             self.width = width
@@ -210,14 +238,14 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
 
         fileprivate func install(
             splitView: EdgeWidthSplitView,
-            leadingHost: NSHostingView<Leading>,
-            trailingHost: NSHostingView<Trailing>,
+            leadingRelay: PersistentHostingContent<Leading>,
+            trailingRelay: PersistentHostingContent<Trailing>,
             allowedWidth: ClosedRange<Double>,
             edge: WorkspaceSplitEdge
         ) {
             self.splitView = splitView
-            self.leadingHost = leadingHost
-            self.trailingHost = trailingHost
+            self.leadingRelay = leadingRelay
+            self.trailingRelay = trailingRelay
             configure(splitView, allowedWidth: allowedWidth, edge: edge)
             applyStoredWidth(to: splitView)
             resizePersistenceActivationTask?.cancel()
@@ -238,8 +266,14 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
             edge: WorkspaceSplitEdge
         ) {
             self.width = width
-            leadingHost?.rootView = leading
-            trailingHost?.rootView = trailing
+            contentUpdateTask?.cancel()
+            contentUpdateTask = Task { @MainActor [weak self] in
+                await Task.yield()
+                guard !Task.isCancelled, let self else { return }
+                self.leadingRelay?.content = leading
+                self.trailingRelay?.content = trailing
+                self.contentUpdateTask = nil
+            }
             configure(splitView, allowedWidth: allowedWidth, edge: edge)
             applyStoredWidth(to: splitView)
         }
@@ -247,10 +281,12 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
         func detach() {
             resizePersistenceActivationTask?.cancel()
             resizePersistenceActivationTask = nil
+            contentUpdateTask?.cancel()
+            contentUpdateTask = nil
             acceptsResizePersistence = false
             splitView = nil
-            leadingHost = nil
-            trailingHost = nil
+            leadingRelay = nil
+            trailingRelay = nil
         }
 
         func splitView(
@@ -387,14 +423,20 @@ struct PersistentHorizontalSplitView<Leading: View, Trailing: View>: NSViewRepre
         splitView.desiredFraction = EditorSplitLayout.normalized(fraction)
         splitView.setAccessibilityLabel("源码与预览分栏")
 
-        let leadingHost = NSHostingView(rootView: leading)
-        let trailingHost = NSHostingView(rootView: trailing)
+        let leadingRelay = PersistentHostingContent(leading)
+        let trailingRelay = PersistentHostingContent(trailing)
+        let leadingHost = NSHostingView(
+            rootView: PersistentHostingRoot(relay: leadingRelay)
+        )
+        let trailingHost = NSHostingView(
+            rootView: PersistentHostingRoot(relay: trailingRelay)
+        )
         splitView.addArrangedSubview(leadingHost)
         splitView.addArrangedSubview(trailingHost)
         context.coordinator.install(
             splitView: splitView,
-            leadingHost: leadingHost,
-            trailingHost: trailingHost
+            leadingRelay: leadingRelay,
+            trailingRelay: trailingRelay
         )
         // Installing arranged subviews emits transient resize callbacks while
         // AppKit still holds its 50/50 bootstrap geometry. Attach the delegate
@@ -423,10 +465,11 @@ struct PersistentHorizontalSplitView<Leading: View, Trailing: View>: NSViewRepre
     final class Coordinator: NSObject, NSSplitViewDelegate {
         private var fraction: Binding<Double>
         private weak var splitView: FractionSplitView?
-        private var leadingHost: NSHostingView<Leading>?
-        private var trailingHost: NSHostingView<Trailing>?
+        private var leadingRelay: PersistentHostingContent<Leading>?
+        private var trailingRelay: PersistentHostingContent<Trailing>?
         private var acceptsResizePersistence = false
         private var resizePersistenceActivationTask: Task<Void, Never>?
+        private var contentUpdateTask: Task<Void, Never>?
 
         init(fraction: Binding<Double>) {
             self.fraction = fraction
@@ -434,12 +477,12 @@ struct PersistentHorizontalSplitView<Leading: View, Trailing: View>: NSViewRepre
 
         fileprivate func install(
             splitView: FractionSplitView,
-            leadingHost: NSHostingView<Leading>,
-            trailingHost: NSHostingView<Trailing>
+            leadingRelay: PersistentHostingContent<Leading>,
+            trailingRelay: PersistentHostingContent<Trailing>
         ) {
             self.splitView = splitView
-            self.leadingHost = leadingHost
-            self.trailingHost = trailingHost
+            self.leadingRelay = leadingRelay
+            self.trailingRelay = trailingRelay
             applyStoredFraction(to: splitView)
             resizePersistenceActivationTask?.cancel()
             resizePersistenceActivationTask = Task { @MainActor [weak self] in
@@ -460,18 +503,26 @@ struct PersistentHorizontalSplitView<Leading: View, Trailing: View>: NSViewRepre
             splitView: FractionSplitView
         ) {
             self.fraction = fraction
-            leadingHost?.rootView = leading
-            trailingHost?.rootView = trailing
+            contentUpdateTask?.cancel()
+            contentUpdateTask = Task { @MainActor [weak self] in
+                await Task.yield()
+                guard !Task.isCancelled, let self else { return }
+                self.leadingRelay?.content = leading
+                self.trailingRelay?.content = trailing
+                self.contentUpdateTask = nil
+            }
             applyStoredFraction(to: splitView)
         }
 
         func detach() {
             resizePersistenceActivationTask?.cancel()
             resizePersistenceActivationTask = nil
+            contentUpdateTask?.cancel()
+            contentUpdateTask = nil
             acceptsResizePersistence = false
             splitView = nil
-            leadingHost = nil
-            trailingHost = nil
+            leadingRelay = nil
+            trailingRelay = nil
         }
 
         func splitView(

@@ -9,7 +9,7 @@ final class EditorViewModeCommandsTests: XCTestCase {
         XCTAssertEqual(WorkspaceViewModePreference(mode: .split), .split)
         XCTAssertEqual(WorkspaceViewModePreference(mode: .preview), .preview)
         XCTAssertNil(WorkspaceViewModePreference(rawValue: "removed-mode"))
-        XCTAssertEqual(EditorViewMode.preview.label, "即时渲染编辑")
+        XCTAssertEqual(EditorViewMode.preview.label, "即时编辑")
     }
 
     func testSplitFractionDefaultsAndClampsToLaunchRange() {

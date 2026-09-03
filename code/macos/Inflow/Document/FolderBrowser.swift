@@ -3,6 +3,7 @@ import Combine
 import Darwin
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum InflowLaunchPolicy {
     /// Launch directly into an editable untitled Markdown document. Creating
@@ -217,6 +218,15 @@ enum FolderProjectTreeState {
             item.isMarkdown
                 && FolderProjectPathBoundary.normalizedResolvedURL(item.url) == target
         }?.id
+    }
+
+    static func toggledExpansion(
+        current: Set<String>,
+        in items: [FolderProjectItem]
+    ) -> Set<String> {
+        let all = directoryIDs(in: items)
+        guard !all.isEmpty else { return [] }
+        return current == all ? [] : all
     }
 
     private static func collectDirectoryIDs(
@@ -902,6 +912,7 @@ final class FolderBrowserController: ObservableObject {
         panel.title = "打开项目"
         panel.message = "选择一个普通文件夹作为项目。Inflow 不会导入、复制或重组其中内容。"
         panel.prompt = "打开"
+        panel.allowedContentTypes = [.folder]
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
@@ -1498,6 +1509,15 @@ struct FolderBrowserSidebar: View {
         .background(Color(nsColor: .controlBackgroundColor))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("项目侧栏")
+        .overlay(alignment: .trailing) {
+            WorkspacePaneVisibilityButton(
+                paneName: "目录树",
+                systemImage: "sidebar.left",
+                isExpanded: true,
+                action: onCollapse
+            )
+            .padding(.trailing, 8)
+        }
         .onAppear { synchronizeSelectionWithCurrentDocument() }
         .onChange(of: currentDocumentURL) { _, _ in
             synchronizeSelectionWithCurrentDocument()
@@ -1545,29 +1565,21 @@ struct FolderBrowserSidebar: View {
                 .lineLimit(1)
             Spacer(minLength: 4)
             Button {
-                expandedDirectoryIDs = allDirectoryIDs
+                expandedDirectoryIDs = FolderProjectTreeState.toggledExpansion(
+                    current: expandedDirectoryIDs,
+                    in: controller.items
+                )
             } label: {
-                Image(systemName: "chevron.down.2")
+                Image(
+                    systemName: allDirectoriesAreExpanded
+                        ? "chevron.up.2"
+                        : "chevron.down.2"
+                )
             }
             .buttonStyle(.borderless)
-            .help("展开所有文件夹")
-            .disabled(allDirectoryIDs.isEmpty || expandedDirectoryIDs == allDirectoryIDs)
-            .accessibilityLabel("展开所有文件夹")
-            Button {
-                expandedDirectoryIDs.removeAll()
-            } label: {
-                Image(systemName: "chevron.up.2")
-            }
-            .buttonStyle(.borderless)
-            .help("折叠所有文件夹")
-            .disabled(expandedDirectoryIDs.isEmpty)
-            .accessibilityLabel("折叠所有文件夹")
-            Button(action: onCollapse) {
-                Image(systemName: "chevron.left")
-            }
-            .buttonStyle(.borderless)
-            .help("折叠目录树")
-            .accessibilityLabel("折叠目录树")
+            .help(treeExpansionActionLabel)
+            .disabled(allDirectoryIDs.isEmpty)
+            .accessibilityLabel(treeExpansionActionLabel)
             Button {
                 beginCreatingMarkdown(
                     in: controller.selection(forItemID: selectedItemID)
@@ -1675,6 +1687,14 @@ struct FolderBrowserSidebar: View {
 
     private var allDirectoryIDs: Set<String> {
         FolderProjectTreeState.directoryIDs(in: controller.items)
+    }
+
+    private var allDirectoriesAreExpanded: Bool {
+        !allDirectoryIDs.isEmpty && expandedDirectoryIDs == allDirectoryIDs
+    }
+
+    private var treeExpansionActionLabel: String {
+        allDirectoriesAreExpanded ? "折叠所有文件夹" : "展开所有文件夹"
     }
 
     private func synchronizeSelectionWithCurrentDocument() {

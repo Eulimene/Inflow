@@ -71,18 +71,41 @@ fn parse_flowchart(header: &str, lines: &[&str]) -> Result<Diagram, MermaidError
         if statement.is_empty() {
             continue;
         }
-        let (left, operator, right) = split_relation(statement, &["-.->", "==>", "-->", "---"])?;
-        let (right, label) = flow_edge_label(right);
+        let (left, operator, right, inline_label) = split_flow_relation(statement)?;
+        let (right, trailing_label) = flow_edge_label(right);
         let from = add_node_spec(&mut diagram, left)?;
         let to = add_node_spec(&mut diagram, right)?;
         diagram.edges.push(Edge {
             from,
             to,
-            label,
+            label: inline_label.unwrap_or(trailing_label),
             dashed: operator == "-.->",
         });
     }
     require_content(diagram)
+}
+
+fn split_flow_relation(
+    statement: &str,
+) -> Result<(&str, &'static str, &str, Option<String>), MermaidError> {
+    // Mermaid's labelled dashed edge places its label inside the operator:
+    // `A -.label.-> B`. Treat it as the same safe, static dashed relation as
+    // `A -.-> B`, while retaining the label for the generated SVG.
+    if let Some(opening) = statement.find("-.") {
+        let label_start = opening + 2;
+        if let Some(relative_closing) = statement[label_start..].find(".->") {
+            let closing = label_start + relative_closing;
+            let left = statement[..opening].trim();
+            let right = statement[closing + 3..].trim();
+            let label = statement[label_start..closing].trim();
+            if !left.is_empty() && !right.is_empty() && !label.is_empty() {
+                return Ok((left, "-.->", right, Some(label.to_owned())));
+            }
+        }
+    }
+
+    let (left, operator, right) = split_relation(statement, &["-.->", "==>", "-->", "---"])?;
+    Ok((left, operator, right, None))
 }
 
 fn parse_state(lines: &[&str]) -> Result<Diagram, MermaidError> {
@@ -351,6 +374,23 @@ mod tests {
             assert!(output.contains("marker-end"));
             assert!(!output.contains("<script"));
         }
+    }
+
+    #[test]
+    fn renders_repository_flowcharts_with_labelled_dashed_edges() {
+        let source = r#"flowchart LR
+    A["content"] --> B["result"]
+    F["personalization"] -.贯穿.-> A
+    F -.贯穿.-> B
+    G["extensions"] -.服务.-> B"#;
+
+        let output = svg(source).expect("repository flowchart syntax");
+
+        assert!(output.contains("stroke-dasharray=\"6 5\""));
+        assert_eq!(output.matches("class=\"edge-label\"").count(), 3);
+        assert!(output.contains(">贯穿</text>"));
+        assert!(output.contains(">服务</text>"));
+        assert!(!output.contains("mermaid-error"));
     }
 
     #[test]

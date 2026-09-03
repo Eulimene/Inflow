@@ -444,29 +444,6 @@ private struct RenderedMarkdownPlanner {
             return $0.utf8Range.upperBound > $1.utf8Range.upperBound
         }
 
-        var groupRange: Range<Int>?
-        var groupCount = 0
-        func finishOverlapGroup() {
-            guard let groupRange, groupCount > 1 else { return }
-            appendLocal(
-                enclosingParagraphRange(containing: groupRange),
-                reason: .complexOrAmbiguous,
-                to: &candidates
-            )
-        }
-
-        for span in inlineSpans {
-            if let current = groupRange, span.utf8Range.lowerBound < current.upperBound {
-                groupRange = current.lowerBound..<max(current.upperBound, span.utf8Range.upperBound)
-                groupCount += 1
-            } else {
-                finishOverlapGroup()
-                groupRange = span.utf8Range
-                groupCount = 1
-            }
-        }
-        finishOverlapGroup()
-
         for span in inlineSpans {
             let parts: InlineParts?
             switch span.kind {
@@ -514,7 +491,11 @@ private struct RenderedMarkdownPlanner {
                     let isParsed = acceptedKinds.contains { kind in
                         semanticRange(of: kind, covers: occurrence)
                     }
-                    if !isParsed {
+                    let isCombinedEmphasisDelimiter = (needle == [0x2A, 0x2A]
+                        || needle == [0x5F, 0x5F])
+                        && semanticRange(of: .emphasis, covers: occurrence)
+                        && semanticRange(of: .strong, overlaps: occurrence)
+                    if !isParsed && !isCombinedEmphasisDelimiter {
                         appendLocal(
                             enclosingParagraphRange(containing: line.contentRange),
                             reason: .complexOrAmbiguous,
@@ -1122,6 +1103,17 @@ private struct RenderedMarkdownPlanner {
         let candidate = ranges[lower - 1]
         return candidate.lowerBound <= requestedRange.lowerBound
             && candidate.upperBound >= requestedRange.upperBound
+    }
+
+    private func semanticRange(
+        of kind: MarkdownSyntaxKind,
+        overlaps requestedRange: Range<Int>
+    ) -> Bool {
+        guard let ranges = semanticRangesByKind[kind.rawValue] else { return false }
+        return ranges.contains { range in
+            range.lowerBound < requestedRange.upperBound
+                && range.upperBound > requestedRange.lowerBound
+        }
     }
 
     private func containsLineEnding(in range: Range<Int>) -> Bool {

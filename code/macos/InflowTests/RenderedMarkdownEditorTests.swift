@@ -143,7 +143,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         }
     }
 
-    func testNestedAndMalformedInlineSyntaxIsNotGuessed() {
+    func testNestedInlineSyntaxRendersWhileMalformedSyntaxFallsBackLocally() {
         let source = """
         ***nested***
 
@@ -151,14 +151,19 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         """
 
         let plan = RenderedMarkdownEditor.plan(for: source)
-
-        XCTAssertEqual(plan.localSourceBlocks.count, 2)
-        XCTAssertTrue(plan.localSourceBlocks.allSatisfy {
-            $0.reasons.contains(.complexOrAmbiguous)
-        })
-        XCTAssertFalse(plan.contentStyles.contains {
-            $0.kind == .strong || $0.kind == .emphasis || $0.kind == .link
-        })
+        XCTAssertEqual(plan.localSourceBlocks.count, 1)
+        XCTAssertTrue(plan.localSourceBlocks[0].reasons.contains(.complexOrAmbiguous))
+        XCTAssertEqual(
+            utf8Text(plan.localSourceBlocks[0].sourceRange, source: source),
+            "[broken](unterminated"
+        )
+        XCTAssertTrue(hasStyle(.strong, text: "nested", source: source, plan: plan))
+        XCTAssertTrue(
+            plan.contentStyles.contains { style in
+                style.kind == .emphasis
+                    && utf8Text(style.sourceRange, source: source).contains("nested")
+            }
+        )
         XCTAssertTrue(plan.links.isEmpty)
         XCTAssertEqual(Data(plan.sourceSnapshot.utf8), Data(source.utf8))
     }
@@ -301,6 +306,46 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertFalse(session.scrollView.hasVerticalRuler)
         XCTAssertEqual(Data(session.textView.string.utf8), Data(source.utf8))
         XCTAssertFalse(session.textView.undoManager?.canUndo == true)
+    }
+
+    @MainActor
+    func testRenderedSessionKeepsStructuralMarkdownMarkersVisible() throws {
+        let source = "> quote\n- item\n1. ordered\n- [x] done\n\nparagraph"
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        session.textView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        session.setPresentation(.rendered, source: source, onCommandClickLink: nil)
+
+        for marker in ["> ", "- ", "1. ", "[x] "] {
+            let location = try XCTUnwrap((source as NSString).range(of: marker).nonEmptyLocation)
+            let font = try XCTUnwrap(
+                session.textView.textStorage?.attribute(
+                    .font,
+                    at: location,
+                    effectiveRange: nil
+                ) as? NSFont
+            )
+            XCTAssertGreaterThan(font.pointSize, 1, "\(marker) must remain visible")
+        }
+    }
+
+    @MainActor
+    func testCommandClickConvertsWindowCoordinatesIntoTheTextView() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 300),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let container = NSView(frame: window.contentView?.bounds ?? .zero)
+        window.contentView = container
+        let textView = WindowAwareTextView(frame: NSRect(x: 90, y: 40, width: 300, height: 160))
+        container.addSubview(textView)
+
+        XCTAssertEqual(
+            textView.localPoint(forWindowPoint: NSPoint(x: 110, y: 70)),
+            NSPoint(x: 20, y: 130)
+        )
     }
 
     private func hasMarker(
