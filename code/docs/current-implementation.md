@@ -85,12 +85,13 @@
 ### 2.6 手动保存、外部变化与轻量恢复
 
 - AppPreferences.applyAutosavePolicy 和应用委托都把 NSDocumentController.autosavingDelay 设为 0；ManualSaveDocumentHostPolicy 还在启用编辑前关闭具体文档宿主的 autosavesInPlace、autosavesDrafts 与 preservesVersions，并动态复核三个结果。
-- 关闭已修改标签、关闭窗口和退出应用继续由 AppKit 的原生 Save / Don't Save / Cancel 审查处理；项目内切换标签不会触发写回或关闭确认。
+- 关闭已修改标签、关闭窗口和退出应用继续由 AppKit 的原生 Save / Don't Save / Cancel 审查处理；`NSApplication` 在调用应用委托前已经完成退出审查，应用委托不会再次启动第二轮 `reviewUnsavedDocuments`。选择 Don't Save 后直接完成原退出事务；项目内切换标签不会触发写回或关闭确认。
 - 当前主 App 未安装自动保存开关。宿主策略兼容层只服务个人内部版；未经真实进程 UAT 不得推导为公开发布架构证据。
 - 已命名文档的保存动作经原生文档 API 完成。失败保留当前编辑，不显示成功。当前文件菜单只暴露保存与另存为；保存副本的底层路径仅作为后续延期实现保留，不属于个人首版界面能力。
 - 外部变化提示当前只承诺重新加载或暂不处理；本地也有未保存修改时，后续手动保存要求明确覆盖确认。
 - 当前里程碑不承诺三版本比较、自动合并、无竞态 compare-and-replace 或删除文件原位重建。
 - DocumentRecovery 后端仍包含较完整的存储与迁移实现，但当前 UI 只使用 LightweightRecoveryPromptView：每份文档最多呈现一个最新快照，操作只有恢复为未命名文档或放弃。
+- 正式 Release 恢复密钥继续存入 Keychain。Xcode Debug 使用独立的 DevelopmentRecovery 目录和该目录内随机、权限为 `0600` 的开发密钥；XCTest 再使用每次运行独立的临时目录与固定测试密钥。开发或自动化构建不读取 `com.inflow.desktop.recovery`，避免 ad-hoc 签名每次变化时反复请求“登录”钥匙串密码，也不接触正式恢复内容。
 - 当前不把 RecoveryCenterView 中保留的比较、批量和历史管理代码描述成个人首版能力。
 
 真实外部编辑器参与的覆盖流程和真实强制退出仍分别由 UAT-PERSONAL-02 与 03 判定。

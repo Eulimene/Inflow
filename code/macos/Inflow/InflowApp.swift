@@ -1788,6 +1788,22 @@ private struct ProjectWorkspaceWindowTitle: NSViewRepresentable {
     }
 }
 
+enum InflowTerminationPolicy {
+    static func reply(
+        hasBlockedDocumentGate: Bool,
+        hasActiveDocumentSwitch: Bool,
+        hasPendingCloseAuthorization: Bool
+    ) -> NSApplication.TerminateReply {
+        guard !hasBlockedDocumentGate,
+              !hasActiveDocumentSwitch,
+              !hasPendingCloseAuthorization
+        else {
+            return .terminateCancel
+        }
+        return .terminateNow
+    }
+}
+
 @MainActor
 final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     let recentDocuments: RecentDocumentsController
@@ -1800,7 +1816,6 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     private var hasReceivedExternalOpenRequest = false
     private var hasRequestedInitialDocument = false
     private var initialDocumentPresentationTask: Task<Void, Never>?
-    private var isReviewingTermination = false
 
     override convenience init() {
         self.init(
@@ -1930,54 +1945,28 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
-        guard !ManualSaveDocumentGateRegistry.shared.hasBlockedDocumentGates else {
-            ManualSaveDocumentGateRegistry.shared.focusFirstBlockedWindow()
-            return .terminateCancel
-        }
-        guard !projectCoordinator.hasActiveDocumentSwitch,
-              !DocumentCloseAuthorization.hasPendingRequests
-        else {
-            projectCoordinator.focusCurrentDocumentWindow()
-            return .terminateCancel
-        }
-        guard NSDocumentController.shared.hasEditedDocuments else {
-            return .terminateNow
-        }
-        guard !isReviewingTermination else { return .terminateLater }
-        isReviewingTermination = true
-        NSDocumentController.shared.reviewUnsavedDocuments(
-            withAlertTitle: nil,
-            cancellable: true,
-            delegate: self,
-            didReviewAllSelector: #selector(documentController(_:didReviewAll:contextInfo:)),
-            contextInfo: nil
+        let hasBlockedDocumentGate = ManualSaveDocumentGateRegistry.shared
+            .hasBlockedDocumentGates
+        let reply = InflowTerminationPolicy.reply(
+            hasBlockedDocumentGate: hasBlockedDocumentGate,
+            hasActiveDocumentSwitch: projectCoordinator.hasActiveDocumentSwitch,
+            hasPendingCloseAuthorization: DocumentCloseAuthorization.hasPendingRequests
         )
-        return .terminateLater
-    }
-
-    @objc private func documentController(
-        _ documentController: NSDocumentController,
-        didReviewAll: Bool,
-        contextInfo _: UnsafeMutableRawPointer?
-    ) {
-        isReviewingTermination = false
-        guard didReviewAll else {
-            NSApp.reply(toApplicationShouldTerminate: false)
-            return
+        guard reply == .terminateNow else {
+            if hasBlockedDocumentGate {
+                ManualSaveDocumentGateRegistry.shared.focusFirstBlockedWindow()
+            } else {
+                projectCoordinator.focusCurrentDocumentWindow()
+            }
+            return reply
         }
-        guard !ManualSaveDocumentGateRegistry.shared.hasBlockedDocumentGates else {
-            ManualSaveDocumentGateRegistry.shared.focusFirstBlockedWindow()
-            NSApp.reply(toApplicationShouldTerminate: false)
-            return
-        }
-        guard !projectCoordinator.hasActiveDocumentSwitch,
-              !DocumentCloseAuthorization.hasPendingRequests
-        else {
-            projectCoordinator.focusCurrentDocumentWindow()
-            NSApp.reply(toApplicationShouldTerminate: false)
-            return
-        }
-        NSApp.reply(toApplicationShouldTerminate: true)
+        // NSApplication has already asked NSDocumentController to review every
+        // edited document before invoking this delegate callback. Starting a
+        // second review here creates a nested termination transaction: after the
+        // user chooses Don't Save, AppKit can remain waiting for a reply to the
+        // duplicate review. Once Inflow's own short-lived gates are clear, let
+        // the termination that AppKit already authorized finish normally.
+        return reply
     }
 }
 
@@ -2061,7 +2050,7 @@ private struct InflowEditingCommands: Commands {
 struct InflowApp: App {
     @NSApplicationDelegateAdaptor(InflowApplicationDelegate.self)
     private var applicationDelegate
-    @StateObject private var recoveryCoordinator = DocumentRecoveryCoordinator()
+    @StateObject private var recoveryCoordinator = DocumentRecoveryRuntime.makeCoordinator()
     @StateObject private var preferences = AppPreferences()
     @StateObject private var failureLog = LocalFailureLogController.shared
 

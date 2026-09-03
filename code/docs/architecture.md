@@ -140,7 +140,7 @@ LightweightProjectCoordinator 负责单一项目外壳、后台原生文档会�
 - 宿主策略无法安装或复核时，该文档不启用编辑，而不是降级到可能隐式写回的路径；
 - 当前主 App 未安装自动保存开关；
 - 未命名文档首次保存前不绑定用户路径；
-- 已修改文档的普通关闭、项目切换与应用退出因此落回 AppKit 的 Save / Don't Save / Cancel 审查；
+- 已修改文档的普通关闭、项目切换与应用退出因此落回 AppKit 的 Save / Don't Save / Cancel 审查；`NSApplication` 在调用 `applicationShouldTerminate` 前已经完成退出审查，应用委托只核对 Inflow 自身的短期事务门禁，不得再嵌套第二次 `reviewUnsavedDocuments`；
 - 保存失败保留当前编辑且不显示成功；
 - 另存前只提示相对引用可能变化，不搬移资源或重写引用。
 
@@ -164,6 +164,8 @@ DocumentRecovery 负责应用私有恢复存储。当前界面只通过 Lightwei
 - 恢复文档不绑定、不自动覆盖原文件；
 - 成功手动保存或明确放弃后清理对应快照；
 - 恢复不可用不阻止正常打开和手动保存。
+
+正式 Release 使用 `com.inflow.desktop.recovery` Keychain 项保存恢复域密钥。Xcode Debug 的 ad-hoc 指定要求会随重建变化，因此开发构建使用独立 DevelopmentRecovery 根和根内 mode-0600 随机开发密钥；XCTest 使用独立临时根与测试密钥。三种运行档位不得交叉读取、迁移或清理彼此的恢复记录。
 
 RecoveryCenterView 中保留的比较、批量操作、历史、多快照、迁移和完整异常矩阵不构成当前产品能力。
 

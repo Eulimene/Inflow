@@ -5,6 +5,42 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class RecentDocumentsTests: XCTestCase {
+    func testTerminationDelegateDoesNotStartASecondUnsavedDocumentReview() {
+        XCTAssertEqual(
+            InflowTerminationPolicy.reply(
+                hasBlockedDocumentGate: false,
+                hasActiveDocumentSwitch: false,
+                hasPendingCloseAuthorization: false
+            ),
+            .terminateNow,
+            "AppKit reviews edited documents before it asks the app delegate to terminate"
+        )
+        XCTAssertEqual(
+            InflowTerminationPolicy.reply(
+                hasBlockedDocumentGate: true,
+                hasActiveDocumentSwitch: false,
+                hasPendingCloseAuthorization: false
+            ),
+            .terminateCancel
+        )
+        XCTAssertEqual(
+            InflowTerminationPolicy.reply(
+                hasBlockedDocumentGate: false,
+                hasActiveDocumentSwitch: true,
+                hasPendingCloseAuthorization: false
+            ),
+            .terminateCancel
+        )
+        XCTAssertEqual(
+            InflowTerminationPolicy.reply(
+                hasBlockedDocumentGate: false,
+                hasActiveDocumentSwitch: false,
+                hasPendingCloseAuthorization: true
+            ),
+            .terminateCancel
+        )
+    }
+
     func testProjectDocumentsReuseTheSelectedFolderSecurityScope() {
         XCTAssertFalse(
             DocumentSecurityScopePolicy.shouldStartFileScopedAccess(

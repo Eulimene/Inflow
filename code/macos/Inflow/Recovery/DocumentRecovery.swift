@@ -588,6 +588,166 @@ private enum DurableRecoveryWriter {
     }
 }
 
+#if DEBUG
+/// Xcode's default local build is ad-hoc signed, so its designated requirement
+/// changes whenever the executable is rebuilt. Giving that changing identity
+/// access to the production recovery item makes Keychain ask for the login
+/// password on nearly every developer run. Debug recovery therefore uses its
+/// own random, mode-0600 file key inside its isolated recovery directory.
+final class DevelopmentDocumentRecoveryKeyProvider: DocumentRecoveryKeyProviding,
+    @unchecked Sendable
+{
+    private let keyURL: URL
+    private let fileManager: FileManager
+    private let lock = NSLock()
+
+    init(keyURL: URL, fileManager: FileManager = .default) {
+        self.keyURL = keyURL
+        self.fileManager = fileManager
+    }
+
+    func loadKey() throws -> SymmetricKey? {
+        try lock.withLock { try loadKeyWithoutLock() }
+    }
+
+    func createKey() throws -> SymmetricKey {
+        try lock.withLock {
+            if let existing = try loadKeyWithoutLock() { return existing }
+            do {
+                try fileManager.createDirectory(
+                    at: keyURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700]
+                )
+                let key = SymmetricKey(size: .bits256)
+                let bytes = key.withUnsafeBytes { Data($0) }
+                try DurableRecoveryWriter.replace(bytes, at: keyURL)
+                try fileManager.setAttributes(
+                    [.posixPermissions: 0o600],
+                    ofItemAtPath: keyURL.path
+                )
+                return key
+            } catch {
+                throw DocumentRecoveryError.unavailableKey
+            }
+        }
+    }
+
+    func removeKey() throws {
+        try lock.withLock {
+            do {
+                _ = try DurableRecoveryWriter.removeIfPresent(at: keyURL)
+            } catch {
+                throw DocumentRecoveryError.unavailableKey
+            }
+        }
+    }
+
+    private func loadKeyWithoutLock() throws -> SymmetricKey? {
+        var metadata = stat()
+        errno = 0
+        let descriptor = keyURL.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return open(path, O_RDONLY | O_NOFOLLOW)
+        }
+        if descriptor < 0 {
+            if errno == ENOENT { return nil }
+            throw DocumentRecoveryError.unavailableKey
+        }
+        defer { close(descriptor) }
+        guard fstat(descriptor, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_size == 32
+        else {
+            throw DocumentRecoveryError.unavailableKey
+        }
+        var bytes = Data(count: 32)
+        let didReadAll = bytes.withUnsafeMutableBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else { return false }
+            var offset = 0
+            while offset < rawBuffer.count {
+                let count = Darwin.read(
+                    descriptor,
+                    baseAddress.advanced(by: offset),
+                    rawBuffer.count - offset
+                )
+                if count <= 0 {
+                    if count < 0, errno == EINTR { continue }
+                    return false
+                }
+                offset += count
+            }
+            return true
+        }
+        guard didReadAll else { throw DocumentRecoveryError.unavailableKey }
+        return SymmetricKey(data: bytes)
+    }
+}
+#endif
+
+enum DocumentRecoveryRuntimeProfile: Equatable {
+    case production
+    case development
+    case automatedTest
+}
+
+enum DocumentRecoveryRuntime {
+    static func profile(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        isDebugBuild: Bool = _isDebugAssertConfiguration()
+    ) -> DocumentRecoveryRuntimeProfile {
+        if environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+        {
+            return .automatedTest
+        }
+        return isDebugBuild ? .development : .production
+    }
+
+    @MainActor
+    static func makeCoordinator(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> DocumentRecoveryCoordinator {
+        switch profile(environment: environment) {
+        case .production:
+            return DocumentRecoveryCoordinator(fileManager: fileManager)
+        case .automatedTest:
+            let root = fileManager.temporaryDirectory
+                .appendingPathComponent("InflowTests", isDirectory: true)
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                .appendingPathComponent("Recovery", isDirectory: true)
+            return DocumentRecoveryCoordinator(
+                rootURL: root,
+                fileManager: fileManager,
+                keyProvider: FixedDocumentRecoveryKeyProvider()
+            )
+        case .development:
+#if DEBUG
+            let base = (try? fileManager.url(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )) ?? fileManager.temporaryDirectory
+            let root = base
+                .appendingPathComponent("Inflow", isDirectory: true)
+                .appendingPathComponent("DevelopmentRecovery", isDirectory: true)
+            return DocumentRecoveryCoordinator(
+                rootURL: root,
+                fileManager: fileManager,
+                keyProvider: DevelopmentDocumentRecoveryKeyProvider(
+                    keyURL: root.appendingPathComponent(".development-recovery-key"),
+                    fileManager: fileManager
+                )
+            )
+#else
+            return DocumentRecoveryCoordinator(fileManager: fileManager)
+#endif
+        }
+    }
+}
+
 private struct ClosedRecoverySessionMarker: Codable {
     static let schemaVersion = 1
 

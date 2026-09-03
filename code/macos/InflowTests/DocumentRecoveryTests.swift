@@ -4,6 +4,50 @@ import XCTest
 @testable import Inflow
 
 final class DocumentRecoveryTests: XCTestCase {
+    func testRuntimeProfileKeepsTestsAndDebugBuildsOffTheProductionKeychain() {
+        XCTAssertEqual(
+            DocumentRecoveryRuntime.profile(
+                environment: ["XCTestConfigurationFilePath": "/tmp/tests.xctestconfiguration"],
+                isDebugBuild: false
+            ),
+            .automatedTest
+        )
+        XCTAssertEqual(
+            DocumentRecoveryRuntime.profile(environment: [:], isDebugBuild: true),
+            .development
+        )
+        XCTAssertEqual(
+            DocumentRecoveryRuntime.profile(environment: [:], isDebugBuild: false),
+            .production
+        )
+    }
+
+#if DEBUG
+    func testDevelopmentRecoveryKeyIsPersistentPrivateAndDoesNotUseKeychain() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "inflow-development-key-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let keyURL = root.appendingPathComponent(".development-recovery-key")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let provider = DevelopmentDocumentRecoveryKeyProvider(keyURL: keyURL)
+
+        XCTAssertNil(try provider.loadKey())
+        let created = try provider.createKey().withUnsafeBytes { Data($0) }
+        let loaded = try XCTUnwrap(provider.loadKey()).withUnsafeBytes { Data($0) }
+        XCTAssertEqual(created.count, 32)
+        XCTAssertEqual(loaded, created)
+        let permissions = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: keyURL.path)[.posixPermissions]
+                as? NSNumber
+        )
+        XCTAssertEqual(permissions.intValue & 0o777, 0o600)
+
+        try provider.removeKey()
+        XCTAssertNil(try provider.loadKey())
+    }
+#endif
+
     func testRecoveryCenterCopyDoesNotInventDiskOrdering() {
         XCTAssertEqual(RecoveryCenterPrompt.title, "恢复未保存的文档")
         XCTAssertEqual(
