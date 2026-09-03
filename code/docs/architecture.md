@@ -116,7 +116,7 @@ FolderBrowserController 负责：
 - 在确认创建前再次验证目录存在、可写且解析后仍在项目根内；
 - 区分“落盘前失败”和“空文件已落盘但打开失败”，后者保留真实文件并报告。
 
-LightweightProjectCoordinator 负责项目文档标签的打开、聚焦和项目上下文关联。同一规范路径已打开时只聚焦既有标签，不形成第二份编辑状态；新目标先在后台完成窗口尺寸匹配与首轮布局，再关闭隐式动画加入同一原生标签组，切换时不关闭当前文档或触发保存。项目内导航不重复激活已处于前台的应用；目标标签成为关键窗口后，MarkdownEditorView 在源码可见且可编辑时把第一响应者交回持久 NSTextView。MarkdownEditorView 通过窗口级弱引用保持原生文档身份，不把源码编辑器当成项目上下文的唯一来源。硬链接别名去重不属于当前合同。
+LightweightProjectCoordinator 负责单一项目外壳、后台原生文档会话和应用内文档表面的注册与切换。同一规范路径已打开时只选择既有表面，不形成第二份编辑状态；新目标由 `NSDocument` 在后台完成读取和安全校验，其窗口不显示，DocumentGroup 提供的 `Binding<MarkdownDocument>` 注册为 ProjectDocumentSurface 后才替换右侧工作区。项目外壳的 `NSWindow`、FolderBrowserSidebar 和左侧 PersistentEdgeSplitView 始终是同一实例；活动文档变化不调用 `showWindows`、`makeKeyAndOrderFront` 或 AppKit 窗口标签切换。每个表面保留自己的 MarkdownSourceEditorSession 和 UndoManager，MarkdownEditorView 使用明确的原生文档覆盖执行保存、恢复与文件安全操作。硬链接别名去重不属于当前合同。
 
 项目根目录的 security-scoped 租约在用户选择后保持，项目文档不为子文件重复启动访问。该根目录身份也是项目内 Markdown 导航的信任边界：每次打开仍重验目录身份、解析路径、符号链接边界和目标快照，通过后直接聚焦或打开标签，不再逐文件要求确认。原生打开造成的 last-used `ctime` 抖动只可在项目身份、解析路径、inode、大小、修改时间和描述符重读字节都与冻结请求匹配时稳定化；替换、越界或内容变更仍拒绝打开。
 
@@ -127,7 +127,7 @@ LightweightProjectCoordinator 负责项目文档标签的打开、聚焦和项�
 - 项目窗口使用固定空间顺序：左侧项目目录树、中间编辑区、右侧当前文档大纲；项目刚打开且没有当前文档时，右侧大纲不显示也不可操作。
 - AppPreferences v2 是工作区展示偏好的唯一事实源，持久保存明确视图模式、项目目录树与文档大纲显隐、目录树与大纲宽度、实时预览源码占比；目录树首次默认开启，大纲首次默认折叠且只在有当前文档时可用。“自动”视图偏好保留未明确选择时的上下文起点。
 - 目录树和大纲各自在栏头提供折叠按钮，折叠后在工作区对应边缘提供展开按钮；工具栏、“显示”菜单、设置页和 PersistentEdgeSplitView 全部读写同一偏好。用户操作立即作用于当前窗口，并由其他文件、窗口和重启后的进程复用。
-- 原生项目标签临时不可见不等于文档关闭：视图 `onDisappear` 不清理派生内容、恢复保护或文件监控，清理绑定到对应 `NSWindow.willCloseNotification`。首个 DocumentGroup 宿主完成进程级类策略验证后，后续标签跳过重复的整窗准备占位。
+- 项目目录树位于稳定外壳层，文档编辑器位于可替换表面层；切换表面只清理并重建该文档的派生内容、预览与监控，目录树状态不参与切换。后台 `NSDocument` 持续拥有内容、修改状态和保存身份，源码编辑器会话由 ProjectDocumentSurface 跨切换保留。首个 DocumentGroup 宿主完成进程级类策略验证后，后台文档不再呈现自己的窗口。
 - EditorWorkspaceMetrics 集中定义新窗口、项目目录树、大纲、正文最小宽度和底部状态栏尺寸。导航容器和空状态都以窗口可用高度为准参与布局，不能用自身固有高度缩短正文区域；状态栏始终贴在内容区底部。
 - 导航区是正文之外的展示状态；显示、隐藏或修改工作区偏好不得改变 MarkdownDocument.text、当前项目文档、选区或 UndoManager 历史。
 

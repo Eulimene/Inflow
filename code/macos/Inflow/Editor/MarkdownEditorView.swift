@@ -470,9 +470,8 @@ private struct EmptyMarkdownPreviewView: View {
     }
 }
 
-/// Keeps the scene's native document identity available even while SwiftUI
-/// temporarily detaches the source editor during project-tab switches or while
-/// the project shell is showing its empty-workspace guidance.
+/// Keeps the scene's native document identity available while SwiftUI resolves
+/// an ordinary document window or the project shell shows empty guidance.
 @MainActor
 private final class MarkdownEditorNativeDocumentHost: ObservableObject {
     weak private(set) var document: NSDocument?
@@ -576,6 +575,10 @@ struct MarkdownEditorView: View {
     private let recentDocuments: RecentDocumentsController?
     @ObservedObject private var folderBrowser: FolderBrowserController
     private let projectCoordinator: LightweightProjectCoordinator?
+    private let nativeDocumentOverride: NSDocument?
+    private let workspaceWindowDocument: NSDocument?
+    private let showsProjectSidebar: Bool
+    private let tearsDownWhenRemovedFromWorkspace: Bool
 
     init(
         document: Binding<MarkdownDocument>,
@@ -585,7 +588,12 @@ struct MarkdownEditorView: View {
         preferences: AppPreferences? = nil,
         recentDocuments: RecentDocumentsController? = nil,
         folderBrowser: FolderBrowserController,
-        projectCoordinator: LightweightProjectCoordinator? = nil
+        projectCoordinator: LightweightProjectCoordinator? = nil,
+        nativeDocumentOverride: NSDocument? = nil,
+        workspaceWindowDocument: NSDocument? = nil,
+        showsProjectSidebar: Bool = true,
+        tearsDownWhenRemovedFromWorkspace: Bool = false,
+        sourceEditorSessionOverride: MarkdownSourceEditorSession? = nil
     ) {
         _document = document
         self.fileURL = fileURL
@@ -595,6 +603,13 @@ struct MarkdownEditorView: View {
         self.recentDocuments = recentDocuments
         _folderBrowser = ObservedObject(wrappedValue: folderBrowser)
         self.projectCoordinator = projectCoordinator
+        self.nativeDocumentOverride = nativeDocumentOverride
+        self.workspaceWindowDocument = workspaceWindowDocument
+        self.showsProjectSidebar = showsProjectSidebar
+        self.tearsDownWhenRemovedFromWorkspace = tearsDownWhenRemovedFromWorkspace
+        _sourceEditorSession = StateObject(
+            wrappedValue: sourceEditorSessionOverride ?? MarkdownSourceEditorSession()
+        )
         let initialDocument = document.wrappedValue
         _recoveryRecordID = State(
             initialValue: initialDocument.recoveryTransfer?.targetRecordID ?? UUID()
@@ -631,7 +646,7 @@ struct MarkdownEditorView: View {
     @State private var previewLinkPlan: PreviewLinkPlan?
     @State private var incomingHeadingFragment: String?
     @State private var incomingNavigationIsPending = false
-    @StateObject private var sourceEditorSession = MarkdownSourceEditorSession()
+    @StateObject private var sourceEditorSession: MarkdownSourceEditorSession
     @StateObject private var nativeDocumentHost = MarkdownEditorNativeDocumentHost()
     @State private var selectedHeadingID: DocumentHeading.ID?
     @State private var sourceSelectionRequest: SourceSelectionRequest?
@@ -759,9 +774,11 @@ struct MarkdownEditorView: View {
     var body: some View {
         presentationLayer
             .background {
-                MarkdownEditorNativeDocumentResolver { document in
-                    nativeDocumentHost.attach(document)
-                    projectCoordinator?.activateProjectDocument(document)
+                if nativeDocumentOverride == nil {
+                    MarkdownEditorNativeDocumentResolver { document in
+                        nativeDocumentHost.attach(document)
+                        projectCoordinator?.activateProjectDocument(document)
+                    }
                 }
             }
             .alert(
@@ -1038,7 +1055,7 @@ struct MarkdownEditorView: View {
             notification in
             guard let window = notification.object as? NSWindow,
                   let windowDocument = window.windowController?.document as? NSDocument,
-                  windowDocument === nativeDocument
+                  windowDocument === (workspaceWindowDocument ?? nativeDocument)
             else { return }
             projectCoordinator?.activateProjectDocument(nativeDocument)
             focusProjectEditorAfterNavigation(in: window)
@@ -1127,8 +1144,7 @@ struct MarkdownEditorView: View {
     }
 
     private func releaseStaleDocumentSecurityScope(for newURL: URL?) {
-        guard let nativeDocument = sourceEditorSession.textView.window?
-            .windowController?.document as? NSDocument,
+        guard let nativeDocument,
               let authorizedURL = SecurityScopedDocumentLeaseRegistry.activeURL(
                   for: nativeDocument
               ),
@@ -1179,10 +1195,14 @@ struct MarkdownEditorView: View {
             }
         }
         .onDisappear {
-            // A native project-tab switch temporarily removes the inactive
-            // scene from the visible hierarchy. Keep its derived content,
-            // recovery protection and file monitoring alive so switching back
-            // changes only the workspace content instead of reloading it.
+            if tearsDownWhenRemovedFromWorkspace {
+                tearDownDocumentSession()
+                return
+            }
+            // Ordinary native windows can temporarily leave the visible
+            // hierarchy without closing. Embedded project surfaces opt into
+            // the explicit teardown branch above when the workspace replaces
+            // only its document content.
             guard let nativeDocument,
                   NSDocumentController.shared.documents.contains(where: {
                       $0 === nativeDocument
@@ -1196,10 +1216,10 @@ struct MarkdownEditorView: View {
             notification in
             guard let closingWindow = notification.object as? NSWindow,
                   let closingDocument = closingWindow.windowController?.document as? NSDocument,
-                  closingDocument === nativeDocument
+                  closingDocument === (workspaceWindowDocument ?? nativeDocument)
             else { return }
             tearDownDocumentSession()
-            folderBrowser.dissociateProjectWindow(closingDocument)
+            folderBrowser.dissociateProjectWindow(nativeDocument)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) {
             _ in
@@ -1503,7 +1523,7 @@ struct MarkdownEditorView: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            if hasProjectContext && !isProjectSidebarVisible {
+            if showsProjectSidebar && hasProjectContext && !isProjectSidebarVisible {
                 collapsedPaneButton(
                     label: "展开目录树",
                     systemImage: "chevron.right"
@@ -1531,7 +1551,7 @@ struct MarkdownEditorView: View {
     private var workspacePanes: [EditorWorkspacePane] {
         EditorWorkspaceLayout.panes(
             hasProjectContext: hasProjectContext,
-            projectSidebarVisible: isProjectSidebarVisible,
+            projectSidebarVisible: showsProjectSidebar && isProjectSidebarVisible,
             outlineAvailable: !isProjectShell && !usesSourceOnlyExperience,
             outlineVisible: isOutlineVisible
         )
@@ -1566,7 +1586,8 @@ struct MarkdownEditorView: View {
     }
 
     private var nativeDocument: NSDocument? {
-        nativeDocumentHost.document
+        nativeDocumentOverride
+            ?? nativeDocumentHost.document
             ?? sourceEditorSession.textView.window?.windowController?.document as? NSDocument
     }
 
@@ -2448,7 +2469,7 @@ struct MarkdownEditorView: View {
         else { return }
 
         Task { @MainActor in
-            // Let the destination tab finish its atomic presentation before
+            // Let the destination surface finish its atomic presentation before
             // moving first responder away from the directory tree.
             await Task.yield()
             guard let editorWindow = sourceEditorSession.textView.window,

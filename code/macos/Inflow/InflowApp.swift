@@ -570,33 +570,31 @@ enum ProjectDocumentTargetPolicy {
             }
     }
 
-    static func shouldCloseAfterOpeningProjectTab(_ document: NSDocument?) -> Bool {
-        guard let document else { return false }
-        return document.fileURL == nil && !document.isDocumentEdited
-    }
 }
 
 @MainActor
-enum ProjectWindowTabbing {
-    static func group(_ documentWindow: NSWindow, beside currentWindow: NSWindow) {
-        guard currentWindow !== documentWindow,
-              documentWindow.tabbedWindows?.contains(where: { $0 === currentWindow }) != true
-        else { return }
-        // Build and lay out the destination while the current project tab is
-        // still visible. Matching the existing frame and suppressing the
-        // window animation prevents a newly opened project document from
-        // looking like one app window closed and another one launched.
-        documentWindow.animationBehavior = .none
-        documentWindow.setFrame(currentWindow.frame, display: false)
-        documentWindow.contentView?.layoutSubtreeIfNeeded()
-        currentWindow.tabbingMode = .preferred
-        documentWindow.tabbingMode = .preferred
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0
-            context.allowsImplicitAnimation = false
-            currentWindow.addTabbedWindow(documentWindow, ordered: .above)
-        }
+final class ProjectDocumentSurface: Identifiable {
+    let id: ObjectIdentifier
+    let nativeDocument: NSDocument
+    let content: Binding<MarkdownDocument>
+    let fileURL: URL
+    let isEditable: Bool
+    let sourceEditorSession = MarkdownSourceEditorSession()
+
+    init(
+        nativeDocument: NSDocument,
+        content: Binding<MarkdownDocument>,
+        fileURL: URL,
+        isEditable: Bool
+    ) {
+        id = ObjectIdentifier(nativeDocument)
+        self.nativeDocument = nativeDocument
+        self.content = content
+        self.fileURL = fileURL.standardizedFileURL
+        self.isEditable = isEditable
     }
+
+    var title: String { fileURL.lastPathComponent }
 }
 
 @MainActor
@@ -696,39 +694,51 @@ struct ProjectDocumentDetailedOpener {
 }
 
 @MainActor
-final class LightweightProjectCoordinator {
+final class LightweightProjectCoordinator: ObservableObject {
     let browser: FolderBrowserController
     private weak var projectDocument: NSDocument?
+    private weak var projectHostDocument: NSDocument?
     private let createProjectDocument: () throws -> NSDocument
     private let detailedDocumentOpener: ProjectDocumentDetailedOpener?
+    private let willActivateDocumentSurface: (NSDocument) -> Void
     private let documentSwitchGate = ProjectDocumentSwitchGate()
     private let reservationRegistry = ProjectDocumentReservationRegistry()
     private var projectPreparationTasks: [UUID: Task<Void, Never>] = [:]
     private var projectPreparationTimeouts: [UUID: Task<Void, Never>] = [:]
+    private var pendingSurfaceActivation: ObjectIdentifier?
+    @Published private(set) var documentSurfaces: [ProjectDocumentSurface] = []
+    @Published private(set) var activeSurfaceID: ObjectIdentifier?
 
     init(
         browser: FolderBrowserController,
         createProjectDocument: @escaping () throws -> NSDocument,
-        detailedDocumentOpener: ProjectDocumentDetailedOpener? = nil
+        detailedDocumentOpener: ProjectDocumentDetailedOpener? = nil,
+        willActivateDocumentSurface: @escaping (NSDocument) -> Void = { _ in }
     ) {
         self.browser = browser
         self.createProjectDocument = createProjectDocument
         self.detailedDocumentOpener = detailedDocumentOpener
+        self.willActivateDocumentSurface = willActivateDocumentSurface
     }
 
     var openedProjectURLs: [URL] {
-        guard activeProjectDocument != nil else { return [] }
+        guard activeProjectHost != nil || activeProjectDocument != nil else { return [] }
         return browser.folderURL.map { [$0] } ?? []
     }
 
     var hasActiveDocumentSwitch: Bool { documentSwitchGate.isBusy }
+
+    var activeDocumentSurface: ProjectDocumentSurface? {
+        guard let activeSurfaceID else { return nil }
+        return documentSurfaces.first { $0.id == activeSurfaceID }
+    }
 
     func canReuseAsBlankDocument(_ document: NSDocument) -> Bool {
         !reservationRegistry.isReserved(document)
     }
 
     func focusCurrentDocumentWindow() {
-        let document = activeProjectDocument
+        let document = activeProjectHost
             ?? NSDocumentController.shared.documents.first(where: \.isDocumentEdited)
         document?.showWindows()
         document?.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
@@ -744,7 +754,7 @@ final class LightweightProjectCoordinator {
             LocalFailureLogController.shared.record(.project, code: .projectUnavailable)
             return
         }
-        let previousDocument = activeProjectDocument
+        let previousDocument = activeProjectHost ?? activeProjectDocument
         if let reusableDocument {
             reservationRegistry.reserve(
                 document: reusableDocument,
@@ -922,7 +932,7 @@ final class LightweightProjectCoordinator {
             }
 
             self.browser.associateProjectWindow(with: nil)
-            self.attach(targetDocument)
+            self.attachProjectHost(targetDocument)
             if let previousDocument, previousDocument !== targetDocument {
                 previousDocument.close()
             }
@@ -936,9 +946,8 @@ final class LightweightProjectCoordinator {
               let switchToken = documentSwitchGate.begin()
         else { return }
         defer { finishSwitchToken(switchToken) }
-        let document = activeProjectDocument
-        guard let document else { return }
-        attach(document)
+        guard activeProjectHost != nil else { return }
+        focusProjectHostWindow()
     }
 
     func prepareToReplaceCurrentDocument(
@@ -1013,8 +1022,7 @@ final class LightweightProjectCoordinator {
                 completion(.failure(DocumentOpenError.targetChanged))
                 return
             }
-            current.showWindows()
-            current.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
+            willActivateDocumentSurface(current)
             guard let refreshedReceipt = refreshedProjectDocumentReceipt(
                 receipt,
                 targetURL: url
@@ -1027,6 +1035,7 @@ final class LightweightProjectCoordinator {
                 authorization: refreshedReceipt.authorization
             )
             activateProjectDocument(current)
+            focusProjectHostWindow()
             completion(.success(()))
             return
         }
@@ -1041,9 +1050,7 @@ final class LightweightProjectCoordinator {
                 completion(.failure(DocumentOpenError.targetChanged))
                 return
             }
-            existing.showWindows()
-            existing.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            willActivateDocumentSurface(existing)
             guard let refreshedReceipt = refreshedProjectDocumentReceipt(
                 receipt,
                 targetURL: url
@@ -1055,8 +1062,7 @@ final class LightweightProjectCoordinator {
                 existing,
                 authorization: refreshedReceipt.authorization
             )
-            activateProjectDocument(existing)
-            groupWindow(for: existing, asTabBeside: current)
+            prepareProjectDocumentSurface(existing)
             completion(.success(()))
             return
         }
@@ -1119,10 +1125,7 @@ final class LightweightProjectCoordinator {
                     return
                 }
                 guard !opened.wasAlreadyOpen else {
-                    opened.document.showWindows()
-                    opened.document.windowControllers.first?.window?
-                        .makeKeyAndOrderFront(nil)
-                    NSApp.activate(ignoringOtherApps: true)
+                    self.willActivateDocumentSurface(opened.document)
                     guard let focusedReceipt = self.refreshedProjectDocumentReceipt(
                         currentReceipt,
                         targetURL: url
@@ -1138,8 +1141,7 @@ final class LightweightProjectCoordinator {
                         opened.document,
                         authorization: focusedReceipt.authorization
                     )
-                    self.activateProjectDocument(opened.document)
-                    self.groupWindow(for: opened.document, asTabBeside: current)
+                    self.prepareProjectDocumentSurface(opened.document)
                     self.finishDocumentSwitch(
                         switchToken,
                         result: .success(()),
@@ -1148,9 +1150,9 @@ final class LightweightProjectCoordinator {
                     return
                 }
 
-                // Project files remain open in one native tab group. The
-                // directory tree selects a document tab instead of replacing
-                // and closing the document that was visible before it.
+                // Project files keep independent native document ownership,
+                // but their windows stay in the background. The stable project
+                // host replaces only its workspace surface.
                 self.completeDocumentTabOpen(
                     opened.document,
                     replacing: current,
@@ -1184,7 +1186,8 @@ final class LightweightProjectCoordinator {
     }
 
     private var activeProjectDocument: NSDocument? {
-        guard let document = projectDocument,
+        let document = activeDocumentSurface?.nativeDocument ?? projectDocument
+        guard let document,
               NSDocumentController.shared.documents.contains(where: { $0 === document }),
               ProjectSessionBoundary.hasCurrentRoot(browser),
               let root = browser.folderURL
@@ -1199,8 +1202,23 @@ final class LightweightProjectCoordinator {
         return document
     }
 
+    private var activeProjectHost: NSDocument? {
+        guard let document = projectHostDocument,
+              NSDocumentController.shared.documents.contains(where: { $0 === document }),
+              ProjectSessionBoundary.hasCurrentRoot(browser),
+              browser.isAssociatedProjectDocument(document)
+        else {
+            return nil
+        }
+        return document
+    }
+
     private func currentProjectDocument(_ candidate: NSDocument?) -> NSDocument? {
         if browser.isAssociatedProjectDocument(candidate) {
+            if projectHostDocument == nil, candidate?.fileURL == nil {
+                projectHostDocument = candidate
+                objectWillChange.send()
+            }
             return candidate
         }
         return activeProjectDocument
@@ -1216,43 +1234,138 @@ final class LightweightProjectCoordinator {
         else { return }
         projectDocument = document
         browser.associateProjectWindow(with: document)
+        let identifier = ObjectIdentifier(document)
+        if documentSurfaces.contains(where: { $0.id == identifier }) {
+            activeSurfaceID = identifier
+            pendingSurfaceActivation = nil
+        } else if document !== projectHostDocument {
+            pendingSurfaceActivation = identifier
+        }
     }
 
-    private func attach(
-        _ document: NSDocument?,
-        asTabBeside current: NSDocument? = nil
+    func isProjectHostDocument(_ document: NSDocument?) -> Bool {
+        guard let document else { return false }
+        return document === activeProjectHost
+    }
+
+    func isBackgroundProjectDocument(_ document: NSDocument?) -> Bool {
+        guard let document,
+              document !== projectHostDocument,
+              browser.isAssociatedProjectDocument(document),
+              ProjectSessionBoundary.hasCurrentRoot(browser),
+              let root = browser.folderURL,
+              let fileURL = document.fileURL
+        else {
+            return false
+        }
+        return FolderProjectPathBoundary.contains(fileURL, in: root)
+    }
+
+    func registerDocumentSurface(
+        nativeDocument: NSDocument,
+        content: Binding<MarkdownDocument>,
+        fileURL: URL,
+        isEditable: Bool
     ) {
+        guard isBackgroundProjectDocument(nativeDocument),
+              nativeDocument.fileURL?.standardizedFileURL == fileURL.standardizedFileURL
+        else { return }
+
+        let identifier = ObjectIdentifier(nativeDocument)
+        let surface: ProjectDocumentSurface
+        if let existing = documentSurfaces.first(where: { $0.id == identifier }) {
+            surface = existing
+        } else {
+            surface = ProjectDocumentSurface(
+                nativeDocument: nativeDocument,
+                content: content,
+                fileURL: fileURL,
+                isEditable: isEditable
+            )
+            documentSurfaces.append(surface)
+        }
+
+        if pendingSurfaceActivation == surface.id || activeSurfaceID == nil {
+            projectDocument = nativeDocument
+            activeSurfaceID = surface.id
+            pendingSurfaceActivation = nil
+            focusProjectHostWindow()
+        }
+        for windowController in nativeDocument.windowControllers {
+            windowController.window?.orderOut(nil)
+        }
+    }
+
+    func selectDocumentSurface(_ identifier: ObjectIdentifier) {
+        guard let surface = documentSurfaces.first(where: { $0.id == identifier }),
+              NSDocumentController.shared.documents.contains(where: {
+                  $0 === surface.nativeDocument
+              })
+        else { return }
+        projectDocument = surface.nativeDocument
+        activeSurfaceID = identifier
+        pendingSurfaceActivation = nil
+        focusProjectHostWindow()
+    }
+
+    private func attachProjectHost(_ document: NSDocument?) {
+        projectHostDocument = document
         projectDocument = document
+        documentSurfaces = []
+        activeSurfaceID = nil
+        pendingSurfaceActivation = nil
         browser.associateProjectWindow(with: document)
         if let document, document.windowControllers.isEmpty {
             document.makeWindowControllers()
         }
-        groupWindow(for: document, asTabBeside: current)
         document?.showWindows()
         document?.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
-        // Directory-tree and project-link navigation already happens inside
-        // the active app. Re-activating NSApp on every tab switch produces a
-        // visible resign/activate pulse on some macOS versions.
         if !NSApp.isActive {
             NSApp.activate(ignoringOtherApps: true)
         }
     }
 
-    private func groupWindow(
-        for document: NSDocument?,
-        asTabBeside current: NSDocument?
-    ) {
-        guard let currentWindow = current?.windowControllers.first?.window,
-              let documentWindow = document?.windowControllers.first?.window
-        else { return }
-        ProjectWindowTabbing.group(documentWindow, beside: currentWindow)
+    private func prepareProjectDocumentSurface(_ document: NSDocument) {
+        projectDocument = document
+        browser.associateProjectWindow(with: document)
+        pendingSurfaceActivation = ObjectIdentifier(document)
+        if document.windowControllers.isEmpty {
+            document.makeWindowControllers()
+        }
+        for windowController in document.windowControllers {
+            let window = windowController.window
+            window?.animationBehavior = .none
+            _ = window?.contentViewController?.view
+            window?.contentView?.layoutSubtreeIfNeeded()
+            window?.orderOut(nil)
+        }
+        if documentSurfaces.contains(where: { $0.id == ObjectIdentifier(document) }) {
+            activateProjectDocument(document)
+        }
+        focusProjectHostWindow()
+    }
+
+    private func focusProjectHostWindow() {
+        guard let document = activeProjectHost else { return }
+        if document.windowControllers.isEmpty {
+            document.makeWindowControllers()
+        }
+        guard let window = document.windowControllers.first?.window else { return }
+        if !window.isVisible {
+            document.showWindows()
+        }
+        if !window.isKeyWindow {
+            window.makeKeyAndOrderFront(nil)
+        }
+        if !NSApp.isActive {
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     private func restoreProject(document: NSDocument?) {
         projectDocument = document
         browser.associateProjectWindow(with: document)
-        document?.showWindows()
-        document?.windowControllers.first?.window?.makeKeyAndOrderFront(nil)
+        focusProjectHostWindow()
     }
 
     private func isReusableProjectShell(_ document: NSDocument) -> Bool {
@@ -1320,7 +1433,8 @@ final class LightweightProjectCoordinator {
             )
             return
         }
-        attach(openedDocument, asTabBeside: current)
+        willActivateDocumentSurface(openedDocument)
+        prepareProjectDocumentSurface(openedDocument)
         guard let attachedReceipt = refreshedProjectDocumentReceipt(
             currentReceipt,
             targetURL: targetURL
@@ -1339,13 +1453,6 @@ final class LightweightProjectCoordinator {
             openedDocument,
             authorization: attachedReceipt.authorization
         )
-        if let current,
-           current !== openedDocument,
-           ProjectDocumentTargetPolicy.shouldCloseAfterOpeningProjectTab(current)
-        {
-            current.windowControllers.first?.window?.animationBehavior = .none
-            current.close()
-        }
         finishDocumentSwitch(
             switchToken,
             result: .success(()),
@@ -1410,6 +1517,274 @@ final class LightweightProjectCoordinator {
             }
         )
         return true
+    }
+}
+
+@MainActor
+private struct InflowDocumentScene: View {
+    @Binding var document: MarkdownDocument
+    let fileURL: URL?
+    let isEditable: Bool
+    let recoveryCoordinator: DocumentRecoveryCoordinator
+    @ObservedObject var preferences: AppPreferences
+    let recentDocuments: RecentDocumentsController
+    @ObservedObject var folderBrowser: FolderBrowserController
+    @ObservedObject var projectCoordinator: LightweightProjectCoordinator
+    @State private var nativeDocument: NSDocument?
+
+    var body: some View {
+        Group {
+            if projectCoordinator.isProjectHostDocument(nativeDocument) {
+                ProjectWorkspaceScene(
+                    shellDocument: $document,
+                    hostDocument: nativeDocument,
+                    recoveryCoordinator: recoveryCoordinator,
+                    preferences: preferences,
+                    recentDocuments: recentDocuments,
+                    folderBrowser: folderBrowser,
+                    projectCoordinator: projectCoordinator
+                )
+            } else if projectCoordinator.isBackgroundProjectDocument(nativeDocument) {
+                Color.clear
+                    .accessibilityHidden(true)
+                    .onAppear { registerBackgroundSurfaceIfNeeded() }
+            } else {
+                MarkdownEditorView(
+                    document: $document,
+                    fileURL: fileURL,
+                    isEditable: isEditable,
+                    recoveryCoordinator: recoveryCoordinator,
+                    preferences: preferences,
+                    recentDocuments: recentDocuments,
+                    folderBrowser: folderBrowser,
+                    projectCoordinator: projectCoordinator
+                )
+            }
+        }
+        .background {
+            DocumentWindowResolver { window in
+                guard let resolved = window.windowController?.document as? NSDocument else {
+                    return false
+                }
+                if nativeDocument !== resolved {
+                    nativeDocument = resolved
+                }
+                if let fileURL {
+                    projectCoordinator.registerDocumentSurface(
+                        nativeDocument: resolved,
+                        content: $document,
+                        fileURL: fileURL,
+                        isEditable: isEditable
+                    )
+                }
+                return true
+            }
+        }
+    }
+
+    private func registerBackgroundSurfaceIfNeeded() {
+        guard let nativeDocument, let fileURL else { return }
+        projectCoordinator.registerDocumentSurface(
+            nativeDocument: nativeDocument,
+            content: $document,
+            fileURL: fileURL,
+            isEditable: isEditable
+        )
+    }
+}
+
+@MainActor
+private struct ProjectWorkspaceScene: View {
+    @Binding var shellDocument: MarkdownDocument
+    let hostDocument: NSDocument?
+    let recoveryCoordinator: DocumentRecoveryCoordinator
+    @ObservedObject var preferences: AppPreferences
+    let recentDocuments: RecentDocumentsController
+    @ObservedObject var folderBrowser: FolderBrowserController
+    @ObservedObject var projectCoordinator: LightweightProjectCoordinator
+
+    var body: some View {
+        Group {
+            if preferences.workspaceProjectSidebarVisible {
+                PersistentEdgeSplitView(
+                    edge: .leading,
+                    width: $preferences.workspaceProjectSidebarWidth,
+                    allowedWidth: AppPreferences.Limits.projectSidebarWidth,
+                    accessibilityLabel: "目录树与工作区分栏"
+                ) {
+                    projectSidebar
+                        .frame(
+                            minWidth: EditorWorkspaceMetrics.projectSidebarMinimumWidth,
+                            maxWidth: EditorWorkspaceMetrics.projectSidebarMaximumWidth
+                        )
+                } trailing: {
+                    workspaceContent
+                        .frame(minWidth: EditorWorkspaceMetrics.editorMinimumWidth)
+                }
+            } else {
+                workspaceContent
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            if !preferences.workspaceProjectSidebarVisible {
+                Button {
+                    preferences.workspaceProjectSidebarVisible = true
+                } label: {
+                    Label("展开目录树", systemImage: "chevron.right")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .padding(8)
+                .help("展开目录树")
+                .accessibilityLabel("展开目录树")
+            }
+        }
+        .background(
+            ProjectWorkspaceWindowTitle(
+                title: projectCoordinator.activeDocumentSurface?.title
+                    ?? folderBrowser.folderURL?.lastPathComponent
+                    ?? "Inflow"
+            )
+        )
+    }
+
+    private var projectSidebar: some View {
+        FolderBrowserSidebar(
+            controller: folderBrowser,
+            currentDocumentURL: projectCoordinator.activeDocumentSurface?.fileURL,
+            onOpenDocument: { url in
+                projectCoordinator.openDocument(
+                    url,
+                    replacing: projectCoordinator.activeDocumentSurface?.nativeDocument,
+                    using: recentDocuments
+                )
+            },
+            onOpenDocumentWithCompletion: { url, completion in
+                projectCoordinator.openDocument(
+                    url,
+                    replacing: projectCoordinator.activeDocumentSurface?.nativeDocument,
+                    using: recentDocuments,
+                    completion: completion
+                )
+            },
+            onOpenCreatedDocument: { url, completion in
+                projectCoordinator.openDocument(
+                    url,
+                    replacing: projectCoordinator.activeDocumentSurface?.nativeDocument,
+                    using: recentDocuments,
+                    completion: completion
+                )
+            },
+            onPrepareToReplaceCurrentDocument: { completion in
+                projectCoordinator.prepareToReplaceCurrentDocument(
+                    projectCoordinator.activeDocumentSurface?.nativeDocument,
+                    completion: completion
+                )
+            },
+            onCollapse: {
+                preferences.workspaceProjectSidebarVisible = false
+            }
+        )
+    }
+
+    private var workspaceContent: some View {
+        VStack(spacing: 0) {
+            if !projectCoordinator.documentSurfaces.isEmpty {
+                ProjectDocumentTabBar(projectCoordinator: projectCoordinator)
+                Divider()
+            }
+            activeEditor
+        }
+    }
+
+    @ViewBuilder
+    private var activeEditor: some View {
+        if let surface = projectCoordinator.activeDocumentSurface {
+            MarkdownEditorView(
+                document: surface.content,
+                fileURL: surface.fileURL,
+                isEditable: surface.isEditable,
+                recoveryCoordinator: recoveryCoordinator,
+                preferences: preferences,
+                recentDocuments: recentDocuments,
+                folderBrowser: folderBrowser,
+                projectCoordinator: projectCoordinator,
+                nativeDocumentOverride: surface.nativeDocument,
+                workspaceWindowDocument: hostDocument,
+                showsProjectSidebar: false,
+                tearsDownWhenRemovedFromWorkspace: true,
+                sourceEditorSessionOverride: surface.sourceEditorSession
+            )
+            .id(surface.id)
+        } else {
+            MarkdownEditorView(
+                document: $shellDocument,
+                fileURL: nil,
+                isEditable: false,
+                recoveryCoordinator: recoveryCoordinator,
+                preferences: preferences,
+                recentDocuments: recentDocuments,
+                folderBrowser: folderBrowser,
+                projectCoordinator: projectCoordinator,
+                nativeDocumentOverride: hostDocument,
+                workspaceWindowDocument: hostDocument,
+                showsProjectSidebar: false
+            )
+        }
+    }
+}
+
+@MainActor
+private struct ProjectDocumentTabBar: View {
+    @ObservedObject var projectCoordinator: LightweightProjectCoordinator
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(projectCoordinator.documentSurfaces) { surface in
+                    Button {
+                        projectCoordinator.selectDocumentSurface(surface.id)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "doc.text")
+                            Text(surface.title)
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, 10)
+                        .frame(height: 28)
+                        .background(
+                            projectCoordinator.activeSurfaceID == surface.id
+                                ? Color.accentColor.opacity(0.14)
+                                : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 6)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("打开的文档：\(surface.title)")
+                    .accessibilityValue(
+                        projectCoordinator.activeSurfaceID == surface.id ? "当前" : "后台"
+                    )
+                }
+            }
+            .padding(.horizontal, 8)
+        }
+        .frame(height: 36)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .accessibilityLabel("项目文档标签页")
+    }
+}
+
+private struct ProjectWorkspaceWindowTitle: NSViewRepresentable {
+    let title: String
+
+    func makeNSView(context _: Context) -> NSView {
+        NSView(frame: .zero)
+    }
+
+    func updateNSView(_ view: NSView, context _: Context) {
+        view.window?.title = title
+        view.window?.representedURL = nil
     }
 }
 
@@ -1693,7 +2068,7 @@ struct InflowApp: App {
     var body: some Scene {
         DocumentGroup(newDocument: MarkdownDocument()) { configuration in
             ManualSaveDocumentGate {
-                MarkdownEditorView(
+                InflowDocumentScene(
                     document: configuration.$document,
                     fileURL: configuration.fileURL,
                     isEditable: configuration.isEditable,

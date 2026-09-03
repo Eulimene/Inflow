@@ -79,17 +79,8 @@ final class FolderBrowserTests: XCTestCase {
                 isRegistered: true
             )
         )
-        XCTAssertFalse(
-            ProjectDocumentTargetPolicy.shouldCloseAfterOpeningProjectTab(policyDocument)
-        )
         policyDocument.fileURL = nil
-        XCTAssertTrue(
-            ProjectDocumentTargetPolicy.shouldCloseAfterOpeningProjectTab(policyDocument)
-        )
         policyDocument.updateChangeCount(.changeDone)
-        XCTAssertFalse(
-            ProjectDocumentTargetPolicy.shouldCloseAfterOpeningProjectTab(policyDocument)
-        )
         policyDocument.updateChangeCount(.changeCleared)
 
         let projectRoot = try temporaryDirectory()
@@ -114,10 +105,14 @@ final class FolderBrowserTests: XCTestCase {
             openedAuthorization = authorization
             pendingOpen = completion
         }
+        var onSurfaceActivation: ((NSDocument) -> Void)?
         let coordinator = LightweightProjectCoordinator(
             browser: browser,
             createProjectDocument: { ClosingTrackingDocument() },
-            detailedDocumentOpener: detailedOpener
+            detailedDocumentOpener: detailedOpener,
+            willActivateDocumentSurface: { document in
+                onSurfaceActivation?(document)
+            }
         )
         let recentDocuments = RecentDocumentsController(
             persistence: EmptyRecentDocumentPersistence(),
@@ -156,8 +151,9 @@ final class FolderBrowserTests: XCTestCase {
         let newDocument = ClosingTrackingDocument()
         NSDocumentController.shared.addDocument(newDocument)
         var firstMutationError: Error?
-        newDocument.onShow = {
-            newDocument.onShow = nil
+        onSurfaceActivation = { document in
+            guard document === newDocument else { return }
+            onSurfaceActivation = nil
             do {
                 try FileManager.default.removeItem(at: projectTarget)
                 try Data("# Replacement during attach\n".utf8).write(to: projectTarget)
@@ -216,8 +212,9 @@ final class FolderBrowserTests: XCTestCase {
 
         alreadyOpenDocument.fileURL = projectTarget
         var secondMutationError: Error?
-        alreadyOpenDocument.onShow = {
-            alreadyOpenDocument.onShow = nil
+        onSurfaceActivation = { document in
+            guard document === alreadyOpenDocument else { return }
+            onSurfaceActivation = nil
             do {
                 try FileManager.default.removeItem(at: projectTarget)
                 try Data("# Replacement during focus\n".utf8).write(to: projectTarget)
@@ -295,7 +292,11 @@ final class FolderBrowserTests: XCTestCase {
             )
         }
         XCTAssertNil(pendingOpen, "deduplication must not start a second native open")
-        XCTAssertEqual(ordinaryDocument.showCount, 1)
+        XCTAssertEqual(
+            ordinaryDocument.showCount,
+            0,
+            "project documents must stay behind the stable project host"
+        )
         XCTAssertTrue(browser.isAssociatedProjectDocument(oldDocument))
 
         let mutationAuthorization = try XCTUnwrap(
@@ -305,8 +306,9 @@ final class FolderBrowserTests: XCTestCase {
             )
         )
         var ordinaryMutationError: Error?
-        ordinaryDocument.onShow = {
-            ordinaryDocument.onShow = nil
+        onSurfaceActivation = { document in
+            guard document === ordinaryDocument else { return }
+            onSurfaceActivation = nil
             do {
                 try FileManager.default.removeItem(at: projectTarget)
                 try Data("# Replacement during ordinary focus\n".utf8)
@@ -325,7 +327,7 @@ final class FolderBrowserTests: XCTestCase {
         XCTAssertNil(ordinaryMutationError)
         assertTargetChanged(ordinaryMutationResult)
         XCTAssertNil(pendingOpen, "a focused ordinary window must not invoke the native opener")
-        XCTAssertEqual(ordinaryDocument.showCount, 2)
+        XCTAssertEqual(ordinaryDocument.showCount, 0)
         XCTAssertTrue(browser.isAssociatedProjectDocument(oldDocument))
 
         ordinaryDocument.fileURL = nil
@@ -364,8 +366,9 @@ final class FolderBrowserTests: XCTestCase {
             }
         }
         var benignMetadataMutationError: Error?
-        replacementDocument.onShow = {
-            replacementDocument.onShow = nil
+        onSurfaceActivation = { document in
+            guard document === replacementDocument else { return }
+            onSurfaceActivation = nil
             do {
                 try FileManager.default.setAttributes(
                     [.posixPermissions: 0o600],
@@ -401,6 +404,54 @@ final class FolderBrowserTests: XCTestCase {
             )
         }
         XCTAssertTrue(browser.isAssociatedProjectDocument(replacementDocument))
+
+        coordinator.registerDocumentSurface(
+            nativeDocument: replacementDocument,
+            content: .constant(MarkdownDocument(text: "# Trusted\n")),
+            fileURL: projectTarget,
+            isEditable: true
+        )
+        XCTAssertTrue(coordinator.isProjectHostDocument(oldDocument))
+        XCTAssertTrue(coordinator.isBackgroundProjectDocument(replacementDocument))
+        XCTAssertTrue(
+            coordinator.activeDocumentSurface?.nativeDocument === replacementDocument
+        )
+        let firstEditorSession = coordinator.activeDocumentSurface?.sourceEditorSession
+        XCTAssertEqual(replacementDocument.showCount, 0)
+
+        let secondTarget = projectRoot.appendingPathComponent("second.md")
+        try Data("# Second\n".utf8).write(to: secondTarget)
+        let secondDocument = ClosingTrackingDocument()
+        secondDocument.fileURL = secondTarget
+        NSDocumentController.shared.addDocument(secondDocument)
+        browser.associateProjectWindow(with: secondDocument)
+        defer {
+            if NSDocumentController.shared.documents.contains(where: {
+                $0 === secondDocument
+            }) {
+                secondDocument.close()
+            }
+        }
+        coordinator.registerDocumentSurface(
+            nativeDocument: secondDocument,
+            content: .constant(MarkdownDocument(text: "# Second\n")),
+            fileURL: secondTarget,
+            isEditable: true
+        )
+        coordinator.selectDocumentSurface(ObjectIdentifier(secondDocument))
+        XCTAssertTrue(coordinator.isProjectHostDocument(oldDocument))
+        XCTAssertTrue(coordinator.activeDocumentSurface?.nativeDocument === secondDocument)
+        XCTAssertEqual(coordinator.documentSurfaces.count, 2)
+        XCTAssertEqual(secondDocument.showCount, 0)
+        XCTAssertEqual(oldDocument.closeCount, 0)
+
+        coordinator.selectDocumentSurface(ObjectIdentifier(replacementDocument))
+        XCTAssertTrue(coordinator.isProjectHostDocument(oldDocument))
+        XCTAssertTrue(
+            coordinator.activeDocumentSurface?.sourceEditorSession === firstEditorSession
+        )
+        XCTAssertEqual(replacementDocument.showCount, 0)
+        XCTAssertEqual(secondDocument.showCount, 0)
     }
 
     func testCoordinatorReleaseCleanupClosesOnlyUnownedNewHiddenDocuments() async throws {
@@ -1829,11 +1880,9 @@ private enum TestFolderOpenError: Error, LocalizedError {
 private final class ClosingTrackingDocument: NSDocument {
     private(set) var closeCount = 0
     private(set) var showCount = 0
-    var onShow: (() -> Void)?
 
     override func showWindows() {
         showCount += 1
-        onShow?()
         super.showWindows()
     }
 
