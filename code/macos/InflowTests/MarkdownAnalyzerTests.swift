@@ -202,7 +202,7 @@ final class MarkdownAnalyzerTests: XCTestCase {
     }
 
     @MainActor
-    func testPreviewToSplitNavigationAttachesAndFocusesPersistentEditor() throws {
+    func testOutlineNavigationMovesCaretAndFocusesRenderedEditorDirectly() throws {
         let markdown = "# First\n\n## 第二章 🚀\n"
         let heading = try XCTUnwrap(MarkdownAnalyzer.analyze(markdown).headings.last)
         let target = try XCTUnwrap(
@@ -225,7 +225,6 @@ final class MarkdownAnalyzerTests: XCTestCase {
             try XCTUnwrap(model.selectionRequest).style.showsTransientMatchIndicator,
             "outline navigation moves a caret without highlighting the heading as a search match"
         )
-        model.mode = .split
         renderPendingUI()
 
         XCTAssertTrue(window.firstResponder === session.textView)
@@ -304,7 +303,12 @@ private struct SourceEditorSwitchingHarness: View {
                 Color.clear
             }
         case .preview:
-            Color.clear
+            MarkdownSourceEditor(
+                text: $model.text,
+                selectionRequest: model.selectionRequest,
+                session: session,
+                presentation: .rendered
+            )
         }
     }
 

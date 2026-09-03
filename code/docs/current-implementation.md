@@ -20,7 +20,7 @@
 
 - 无待打开目标时，普通启动或在 Finder 中双击 Inflow App 都不弹文件选择器，直接进入可编辑的未命名文档；带外部目标的 Finder、应用内命令或拖到应用图标请求则沿统一路由进入独立文档或普通文件夹项目；
 - 在项目树中新建 Markdown，并在单一稳定项目外壳的应用内标签栏保留和切换已打开文档；
-- 在源码、分栏和只读阅读预览之间使用同一份正文；
+- 在源码、分栏和可直接写作的即时渲染编辑之间使用同一份正文；
 - 只由用户手动保存，并处理简单外部变化和单快照恢复；
 - 加入本地 PNG/JPEG、打开受限本地链接并导出基础浅色 PDF；
 - 在本机记录最小故障信息，由用户主动导出。
@@ -35,28 +35,28 @@
 - InflowLaunchPolicy 禁止 AppKit 自行弹出打开面板；应用委托在普通启动或 Finder 双击 App 且没有待处理外部目标时，显式创建并聚焦可编辑的未命名文档。带文件或文件夹目标的启动继续交给统一打开路由，不额外留下空白窗口。
 - RecentDocumentsController 当前用于统一应用内与外部目标的规范化、去重、空白窗口复用和多文件打开；recordsOpenedDocuments 为 false，因此不把它描述成 Inflow 管理的最近文档能力。
 - “打开项目…”把普通文件夹交给 LightweightProjectCoordinator 与 FolderBrowserController。项目不导入、不复制，也不创建私有项目文件。
-- FolderBrowser 负责递归目录树、隐藏项过滤、手动刷新、项目边界和安全新建 Markdown。新建使用不覆盖语义，并在执行前重新核对目标目录与符号链接边界。
+- FolderBrowser 负责递归目录树、展开状态、一键展开/折叠全部、隐藏项过滤、手动刷新、项目边界和安全新建 Markdown。新建使用不覆盖语义，并在执行前重新核对目标目录与符号链接边界。
 - 打开项目时先在不改动当前界面的情况下完成首轮目录扫描，并绑定目录 dev/inode 身份；只有扫描、旧文档关闭确认和提交点复核全部成功后，才附着新项目宿主并关闭旧文档。异步打开的隐藏目标在事务期间会被预留，超时迟到的回调不会关闭其他流程已采用的文档。
 - 项目窗口现在采用单一稳定外壳：目录树、目录树分栏和项目工具区只创建一次，不再随文件切换替换。每份已打开 Markdown 仍由独立原生文档会话持有正文、修改状态、保存路径与安全身份，但文档自己的窗口保持后台；应用内标签栏只切换右侧文档表面。新目标先由后台文档完成读取和校验，再发布到当前工作区；重复选择只切换现有会话，不调用 `showWindows`、不切换 `NSWindow`，也不关闭项目外壳或触发保存。项目外另存成功后，该文档退出项目上下文。
 - 用户选中项目根目录后，项目文档复用该根目录已保留的 security-scoped 访问，不再对每个子文件重复启动授权。原生文档打开产生的 Finder/AppKit last-used `ctime` 更新只在路径、根目录身份、inode、大小、修改时间与描述符重读字节都持续匹配时才可重试，内容或目标替换仍失败关闭。
-- MarkdownEditorView 以左侧项目目录树、中间编辑区、右侧当前文档大纲承载项目窗口；首次默认显示目录树、折叠大纲，没有当前文档时大纲不可用。两栏栏头提供折叠按钮，折叠后在工作区对应边缘提供展开按钮；工具栏与“显示”菜单入口继续可用。新窗口采用 1,200 × 760 pt、最小 820 × 520 pt，导航栏使用受限宽度，把主要空间留给编辑与预览。AppPreferences v2 以一组应用级工作区偏好统一保存视图模式、两侧显隐、目录树/大纲宽度和实时预览源码占比；菜单、工具栏、设置页和 PersistentEdgeSplitView 都读写同一值，旧的新窗口默认 key 在升级时迁移。
-- 首个 DocumentGroup 宿主验证手动保存类策略后，后台项目文档直接注册为可切换表面，不再显示自己的窗口或整窗“正在准备手动保存”。目录树 View 身份跨文件切换保持不变，展开层级、滚动位置与分栏宽度不会因活动文档变化而重建；只有右侧编辑、预览和当前大纲重新派生。每份表面保留独立的源码编辑器会话与 UndoManager；切换完成后，只要源码可见且可编辑，第一响应者会从目录树返回目标编辑器。
+- MarkdownEditorView 以左侧项目目录树、中间编辑区、右侧当前文档大纲承载项目窗口；首次默认显示目录树、折叠大纲，没有当前文档时大纲不可用。两栏栏头提供折叠按钮；目录树栏头还提供一键展开/折叠全部。目录树折叠后保留固定的左边缘展开栏，大纲折叠后在右边缘提供展开按钮；工具栏与“显示”菜单入口继续可用。新窗口采用 1,200 × 760 pt、最小 820 × 520 pt，导航栏使用受限宽度，把主要空间留给编辑与预览。AppPreferences v2 以一组应用级工作区偏好统一保存视图模式、两侧显隐、目录树/大纲宽度和实时预览源码占比；菜单、工具栏、设置页和 PersistentEdgeSplitView 都读写同一值，旧的新窗口默认 key 在升级时迁移。
+- 首个 DocumentGroup 宿主验证手动保存类策略后，后台项目文档直接注册为可切换表面，不再显示自己的窗口或整窗“正在准备手动保存”。项目外壳将已打开表面持久挂载在同一工作区，切换时只改变可见性、交互和当前大纲，不销毁再重建编辑器。目录树 View 身份、展开层级、滚动位置与分栏宽度跨文件保持不变；每份表面的源码编辑器会话、UndoManager、视图内部状态也继续存活。切换完成后，可编辑的目标编辑器成为第一响应者。
 
 上述启动与布局入口仍必须由 UAT-PERSONAL-01、04、08 和 09 在真实 Finder、Dock、沙箱、窗口与文件系统上验证；这四项及其他 UAT 当前均未执行。
 
 ### 2.2 单一正文与三种视图
 
 - MarkdownDocument.text 是 SwiftUI 文档模型中的正文事实；MarkdownSourceEditorSession 持有一个持久 NSTextView。
-- 源码编辑和实时预览分栏使用同一个 MarkdownSourceEditor；阅读预览使用当前内存正文生成只读 WebKit 结果，不创建第二个可编辑模型。
+- 源码编辑、实时预览分栏左侧与即时渲染编辑复用同一个 MarkdownSourceEditor 和 MarkdownSourceEditorSession；分栏右侧才使用当前内存正文生成只读 WebKit 结果。
 - 文本修改由 NSTextView 发布回同一个绑定，撤销与重做继续使用同一个 UndoManager。展示属性更新不登记正文 undo。
-- EditorViewMode 的历史内部 case 名 preview 现在对应用户可见的“阅读预览”。
-- 视图切换复用同一选区与源范围导航入口。点击大纲后切到可见源码、滚动到标题、把插入光标放到标题起点并聚焦编辑器；caret 导航不显示查找匹配高亮。
+- EditorViewMode 的历史内部 case 名 preview 现在对应用户可见的“即时渲染编辑”。
+- 视图切换复用同一选区与源范围导航入口。点击大纲后当前可编辑视图直接滚动到标题，把插入光标放到标题起点并聚焦编辑器；不切换视图，caret 导航不显示查找匹配高亮。
 
-### 2.3 阅读预览
+### 2.3 即时渲染编辑与分栏预览
 
-- MarkdownPreviewView 使用 MarkdownRenderer 把当前内存正文生成自包含 HTML，并在禁用页面脚本和网络请求的 WKWebView 中展示。macOS 26 的 WebKit 即使载入内存 HTML 也要求 App Sandbox 允许其客户端子进程启动，因此主应用声明 `network.client`；这只满足系统 WebKit 进程启动，预览仍用 CSP、非持久数据存储、禁用页面脚本与导航白名单阻止页面联网和任意导航，断网不影响预览。
-- 段落、标题、强调、删除线、引用、列表、任务、代码块、表格、链接、图片和受支持 Mermaid 走同一完整解析路径；不再用 NSTextView 展示属性冒充预览。
-- 阅读预览只读。用户切回源码或分栏继续编辑，正文、修改状态、保存路径和撤销历史保持不变。
+- 即时渲染编辑使用 RenderedMarkdownEditor 在持久 NSTextView 上为高频结构应用可逆的排版属性，用户可直接输入、选择、使用中文输入法、撤销和保存。围栏代码、表格、Mermaid、图片目标、原始 HTML 与复杂嵌套在原位保留可编辑局部源码。
+- 分栏右侧的 MarkdownPreviewView 使用 MarkdownRenderer 把当前内存正文生成自包含 HTML，并在禁用页面脚本和网络请求的 WKWebView 中展示。macOS 26 的 WebKit 即使载入内存 HTML 也要求 App Sandbox 允许其客户端子进程启动，因此主应用声明 `network.client`；这只满足系统 WebKit 进程启动，预览仍用 CSP、非持久数据存储、禁用页面脚本与导航白名单阻止页面联网和任意导航，断网不影响预览。
+- 展示属性不登记正文 undo；三种视图间切换时保持同一正文、修改状态、保存路径和撤销历史。
 - 链接导航、本地图片和失败降级继续受项目边界、当前内容快照与封闭宿主消息约束。
 
 对应组件入口在 RenderedMarkdownEditorTests；这些测试不能代替 UAT-PERSONAL-10 的中文输入法、富文本粘贴、跨视图撤销与真实链接操作。
@@ -120,7 +120,7 @@
 
 判断当前能力时，以已批准的个人首版范围、实际安装的菜单和主流程、以及 UAT-PERSONAL-01 至 10 为准，而不是以某个源文件或测试名称是否存在为准。
 
-自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 367 个 XCTest method：261 个 `current-direct`、13 个依赖真实 `NSApplication` 菜单或生命周期的 `current-host`、88 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
+自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 370 个 XCTest method：264 个 `current-direct`、13 个依赖真实 `NSApplication` 菜单或生命周期的 `current-host`、88 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
 
 ## 4. 人工 UAT 状态
 
@@ -135,7 +135,7 @@
 | UAT-PERSONAL-07 | 本地最小日志与无自动遥测 | 未执行 |
 | UAT-PERSONAL-08 | 一个真实项目端到端与基础烟测 | 未执行 |
 | UAT-PERSONAL-09 | 项目目录树、新建与相对资源 | 未执行 |
-| UAT-PERSONAL-10 | 阅读预览正确性与安全边界 | 未执行 |
+| UAT-PERSONAL-10 | 即时渲染编辑基础范围 | 未执行 |
 
 没有产品负责人签署的实际记录前，不得把任一项改为“通过”，也不得使用“候选已闭环”“个人首版完成”或“发布就绪”等表述。
 
@@ -146,6 +146,7 @@
 - 技术责任边界：[architecture.md](architecture.md)
 - 当前 UAT 对照：[launch-acceptance.md](launch-acceptance.md)
 - 已废止旧记录：[launch-candidate-0.1.0-build-1.md](launch-candidate-0.1.0-build-1.md)
-- 阅读预览核心：[../macos/Inflow/Preview/MarkdownPreviewView.swift](../macos/Inflow/Preview/MarkdownPreviewView.swift)
+- 即时渲染编辑核心：[../macos/Inflow/Editor/RenderedMarkdownEditor.swift](../macos/Inflow/Editor/RenderedMarkdownEditor.swift)
+- 分栏只读预览核心：[../macos/Inflow/Preview/MarkdownPreviewView.swift](../macos/Inflow/Preview/MarkdownPreviewView.swift)
 - 三视图接线：[../macos/Inflow/Editor/MarkdownEditorView.swift](../macos/Inflow/Editor/MarkdownEditorView.swift)
 - 同一 NSTextView 宿主：[../macos/Inflow/Editor/MarkdownSourceEditor.swift](../macos/Inflow/Editor/MarkdownSourceEditor.swift)

@@ -42,7 +42,7 @@
 - 删除线、围栏代码和图片内容通过源码编辑与预览验证，不写成格式菜单能力。
 - Mermaid 当前只验 flowchart 与 stateDiagram-v2；公式、脚注、sequenceDiagram、classDiagram 和其他 Mermaid 不计入通过。
 - 原始 HTML 只能可读或安全转义，不能执行样式、脚本、事件、表单、嵌入、导航或网络动作。
-- 断开网络后实时预览和阅读预览仍能完成首帧与内容刷新；已声明的 WebKit 客户端沙箱能力不得导致任何页面网络请求，`http`/`https` 只在用户明确点击后交给系统浏览器。
+- 断开网络后实时预览仍能完成首帧与内容刷新，即时渲染编辑仍可直接写作；已声明的 WebKit 客户端沙箱能力不得导致任何页面网络请求，`http`/`https` 只在用户明确操作后交给系统浏览器。
 - 图片新增只接受静态 PNG/JPEG，写入 assets，重名递增；撤销不删除已写入资源。
 - 项目内 Markdown 打开可编辑原件；PNG/JPEG/PDF 打开不可写临时副本。即时渲染编辑只在 Command+点击时执行链接。
 
@@ -55,7 +55,7 @@
 - 通过、失败、跳过与未执行数量；
 - 已知测试宿主或环境阻塞。
 
-仓库级当前自动检查的唯一配置是 `scripts/verify-launch.sh --personal`。它运行 Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查，不生成归档或发布证据。`quality/personal-xctest-scope.tsv` 将当前 367 个 XCTest method 逐项分为 261 个 `current-direct`、13 个 `current-host`、88 个 `deferred` 与 5 个 `fixed-performance`；personal profile 只执行第一类，其他三类不计为通过。13 个宿主用例保留为 App-host 专项验证或真实应用 UAT；deferred profile 仍运行 macOS 全量测试。清单只要出现重复、陈旧、未分类、非法分区或计数变化，脚本就失败关闭。`--deferred-release-local`、`--deferred-signed-archive`、`scripts/release-workflow.sh`、固定性能协议和扩展合同均为显式后置门禁；即使单独通过，也不改变本表的人工状态。
+仓库级当前自动检查的唯一配置是 `scripts/verify-launch.sh --personal`。它运行 Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查，不生成归档或发布证据。`quality/personal-xctest-scope.tsv` 将当前 370 个 XCTest method 逐项分为 264 个 `current-direct`、13 个 `current-host`、88 个 `deferred` 与 5 个 `fixed-performance`；personal profile 只执行第一类，其他三类不计为通过。13 个宿主用例保留为 App-host 专项验证或真实应用 UAT；deferred profile 仍运行 macOS 全量测试。清单只要出现重复、陈旧、未分类、非法分区或计数变化，脚本就失败关闭。`--deferred-release-local`、`--deferred-signed-archive`、`scripts/release-workflow.sh`、固定性能协议和扩展合同均为显式后置门禁；即使单独通过，也不改变本表的人工状态。
 
 可用 `scripts/verify-launch.sh --describe-profile personal` 查看当前配置，也可查看两个 deferred profile；描述命令不构建、不归档、不签名、不联网。
 

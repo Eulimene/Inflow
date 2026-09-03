@@ -200,6 +200,42 @@ enum FolderBrowserActivation {
     }
 }
 
+enum FolderProjectTreeState {
+    static func directoryIDs(in items: [FolderProjectItem]) -> Set<String> {
+        var result = Set<String>()
+        collectDirectoryIDs(in: items, into: &result)
+        return result
+    }
+
+    static func selectedItemID(
+        for documentURL: URL?,
+        in items: [FolderProjectItem]
+    ) -> String? {
+        guard let documentURL else { return nil }
+        let target = FolderProjectPathBoundary.normalizedResolvedURL(documentURL)
+        return flattened(items).first { item in
+            item.isMarkdown
+                && FolderProjectPathBoundary.normalizedResolvedURL(item.url) == target
+        }?.id
+    }
+
+    private static func collectDirectoryIDs(
+        in items: [FolderProjectItem],
+        into result: inout Set<String>
+    ) {
+        for item in items where item.isDirectory {
+            result.insert(item.id)
+            collectDirectoryIDs(in: item.children ?? [], into: &result)
+        }
+    }
+
+    private static func flattened(_ items: [FolderProjectItem]) -> [FolderProjectItem] {
+        items.flatMap { item in
+            [item] + flattened(item.children ?? [])
+        }
+    }
+}
+
 struct FolderContentSnapshot: Equatable, Sendable {
     let items: [FolderProjectItem]
     let markdownFiles: [FolderMarkdownFile]
@@ -1416,6 +1452,7 @@ struct FolderBrowserSidebar: View {
     @State private var isPreparingCreation = false
     @State private var notice: FolderBrowserNotice?
     @State private var creationAuthorization: FolderMarkdownCreationAuthorization?
+    @State private var expandedDirectoryIDs = Set<String>()
 
     init(
         controller: FolderBrowserController,
@@ -1461,6 +1498,16 @@ struct FolderBrowserSidebar: View {
         .background(Color(nsColor: .controlBackgroundColor))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("项目侧栏")
+        .onAppear { synchronizeSelectionWithCurrentDocument() }
+        .onChange(of: currentDocumentURL) { _, _ in
+            synchronizeSelectionWithCurrentDocument()
+        }
+        .onChange(of: controller.items) { _, items in
+            expandedDirectoryIDs.formIntersection(
+                FolderProjectTreeState.directoryIDs(in: items)
+            )
+            synchronizeSelectionWithCurrentDocument()
+        }
         .sheet(isPresented: $isPresentingNewFile) {
             FolderNewMarkdownFileSheet(
                 targetFolderName: targetFolderName,
@@ -1497,6 +1544,24 @@ struct FolderBrowserSidebar: View {
                 .font(.headline)
                 .lineLimit(1)
             Spacer(minLength: 4)
+            Button {
+                expandedDirectoryIDs = allDirectoryIDs
+            } label: {
+                Image(systemName: "chevron.down.2")
+            }
+            .buttonStyle(.borderless)
+            .help("展开所有文件夹")
+            .disabled(allDirectoryIDs.isEmpty || expandedDirectoryIDs == allDirectoryIDs)
+            .accessibilityLabel("展开所有文件夹")
+            Button {
+                expandedDirectoryIDs.removeAll()
+            } label: {
+                Image(systemName: "chevron.up.2")
+            }
+            .buttonStyle(.borderless)
+            .help("折叠所有文件夹")
+            .disabled(expandedDirectoryIDs.isEmpty)
+            .accessibilityLabel("折叠所有文件夹")
             Button(action: onCollapse) {
                 Image(systemName: "chevron.left")
             }
@@ -1562,33 +1627,24 @@ struct FolderBrowserSidebar: View {
             }
         case .ready:
             List(selection: $selectedItemID) {
-                OutlineGroup(controller.items, children: \.children) { item in
-                    FolderProjectItemRow(
-                        item: item,
-                        isCurrentDocument: isCurrentDocument(item),
-                        onActivate: {
-                            selectedItemID = item.id
-                            activateItem(withID: item.id)
-                        }
-                    )
-                    .tag(item.id)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
+                FolderProjectTreeRows(
+                    items: controller.items,
+                    expandedDirectoryIDs: $expandedDirectoryIDs,
+                    selectedItemID: $selectedItemID,
+                    isCurrentDocument: isCurrentDocument,
+                    onActivate: { item in
                         selectedItemID = item.id
-                        activateItem(withID: item.id)
+                        _ = activateItem(withID: item.id)
+                    },
+                    onBeginCreation: { item in
+                        selectedItemID = item.id
+                        beginCreatingMarkdown(
+                            in: item.isDirectory
+                                ? .directory(item.url)
+                                : .file(item.url)
+                        )
                     }
-                    .contextMenu {
-                        Button("新建 Markdown 文件…") {
-                            selectedItemID = item.id
-                            beginCreatingMarkdown(
-                                in: item.isDirectory
-                                    ? .directory(item.url)
-                                    : .file(item.url)
-                            )
-                        }
-                    }
-                    .help(item.relativePath)
-                }
+                )
             }
             .listStyle(.sidebar)
             .onKeyPress(.return, phases: .down) { _ in
@@ -1615,6 +1671,17 @@ struct FolderBrowserSidebar: View {
         (try? controller.targetDirectory(for: creationSelection))?.lastPathComponent
             ?? controller.folderURL?.lastPathComponent
             ?? "项目"
+    }
+
+    private var allDirectoryIDs: Set<String> {
+        FolderProjectTreeState.directoryIDs(in: controller.items)
+    }
+
+    private func synchronizeSelectionWithCurrentDocument() {
+        selectedItemID = FolderProjectTreeState.selectedItemID(
+            for: currentDocumentURL,
+            in: controller.items
+        )
     }
 
     private func beginCreatingMarkdown(in selection: FolderBrowserSelection) {
@@ -1751,6 +1818,74 @@ struct FolderBrowserSidebar: View {
         guard item.isMarkdown, let currentDocumentURL else { return false }
         return FolderProjectPathBoundary.normalizedResolvedURL(item.url)
             == FolderProjectPathBoundary.normalizedResolvedURL(currentDocumentURL)
+    }
+}
+
+private struct FolderProjectTreeRows: View {
+    let items: [FolderProjectItem]
+    @Binding var expandedDirectoryIDs: Set<String>
+    @Binding var selectedItemID: String?
+    let isCurrentDocument: (FolderProjectItem) -> Bool
+    let onActivate: (FolderProjectItem) -> Void
+    let onBeginCreation: (FolderProjectItem) -> Void
+
+    var body: some View {
+        ForEach(items) { item in
+            if item.isDirectory {
+                DisclosureGroup(
+                    isExpanded: expansionBinding(for: item.id)
+                ) {
+                    FolderProjectTreeRows(
+                        items: item.children ?? [],
+                        expandedDirectoryIDs: $expandedDirectoryIDs,
+                        selectedItemID: $selectedItemID,
+                        isCurrentDocument: isCurrentDocument,
+                        onActivate: onActivate,
+                        onBeginCreation: onBeginCreation
+                    )
+                } label: {
+                    row(for: item)
+                }
+                .tag(item.id)
+            } else {
+                row(for: item)
+                    .tag(item.id)
+            }
+        }
+    }
+
+    private func row(for item: FolderProjectItem) -> some View {
+        FolderProjectItemRow(
+            item: item,
+            isCurrentDocument: isCurrentDocument(item),
+            onActivate: { onActivate(item) }
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedItemID = item.id
+            if item.isMarkdown {
+                onActivate(item)
+            }
+        }
+        .contextMenu {
+            Button("新建 Markdown 文件…") {
+                onBeginCreation(item)
+            }
+        }
+        .help(item.relativePath)
+    }
+
+    private func expansionBinding(for itemID: String) -> Binding<Bool> {
+        Binding(
+            get: { expandedDirectoryIDs.contains(itemID) },
+            set: { isExpanded in
+                if isExpanded {
+                    expandedDirectoryIDs.insert(itemID)
+                } else {
+                    expandedDirectoryIDs.remove(itemID)
+                }
+            }
+        )
     }
 }
 

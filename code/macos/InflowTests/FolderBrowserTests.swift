@@ -726,8 +726,25 @@ final class FolderBrowserTests: XCTestCase {
         XCTAssertEqual(tree[1].children?.map(\.displayName), ["Beta.markdown"])
         XCTAssertTrue(tree[1].children?.first?.isMarkdown == true)
         XCTAssertFalse(tree.last?.isMarkdown == true)
+        XCTAssertEqual(
+            FolderProjectTreeState.directoryIDs(in: tree),
+            Set(["Empty", "Guide"])
+        )
 
         let markdownItem = try XCTUnwrap(tree[1].children?.first)
+        XCTAssertEqual(
+            FolderProjectTreeState.selectedItemID(
+                for: markdownItem.url,
+                in: tree
+            ),
+            markdownItem.id
+        )
+        XCTAssertNil(
+            FolderProjectTreeState.selectedItemID(
+                for: outside.appendingPathComponent("outside.md"),
+                in: tree
+            )
+        )
         XCTAssertEqual(
             FolderBrowserActivation.markdownURL(
                 forSelectedItemID: markdownItem.id,

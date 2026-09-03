@@ -1,44 +1,36 @@
 import AppKit
+import SwiftUI
 import XCTest
 import UniformTypeIdentifiers
 @testable import Inflow
 
 @MainActor
 final class RecentDocumentsTests: XCTestCase {
-    func testTerminationDelegateDoesNotStartASecondUnsavedDocumentReview() {
+    func testTerminationDelegateNeverCancelsAnAppKitAuthorizedQuit() {
         XCTAssertEqual(
-            InflowTerminationPolicy.reply(
-                hasBlockedDocumentGate: false,
-                hasActiveDocumentSwitch: false,
-                hasPendingCloseAuthorization: false
-            ),
+            InflowTerminationPolicy.replyAfterAppKitDocumentReview,
             .terminateNow,
-            "AppKit reviews edited documents before it asks the app delegate to terminate"
+            "short-lived Inflow UI work must not turn the system Quit command into a no-op"
         )
-        XCTAssertEqual(
-            InflowTerminationPolicy.reply(
-                hasBlockedDocumentGate: true,
-                hasActiveDocumentSwitch: false,
-                hasPendingCloseAuthorization: false
-            ),
-            .terminateCancel
+    }
+
+    func testDocumentWindowResolutionNeverDisablesTheStandardCloseButton() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 320),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
         )
-        XCTAssertEqual(
-            InflowTerminationPolicy.reply(
-                hasBlockedDocumentGate: false,
-                hasActiveDocumentSwitch: true,
-                hasPendingCloseAuthorization: false
-            ),
-            .terminateCancel
+        let closeButton = window.standardWindowButton(.closeButton)
+        XCTAssertTrue(closeButton?.isEnabled == true)
+        window.contentView = NSHostingView(
+            rootView: DocumentWindowResolver(onResolve: { _ in true })
         )
-        XCTAssertEqual(
-            InflowTerminationPolicy.reply(
-                hasBlockedDocumentGate: false,
-                hasActiveDocumentSwitch: false,
-                hasPendingCloseAuthorization: true
-            ),
-            .terminateCancel
-        )
+        window.makeKeyAndOrderFront(nil)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+
+        XCTAssertTrue(closeButton?.isEnabled == true)
+        window.orderOut(nil)
     }
 
     func testProjectDocumentsReuseTheSelectedFolderSecurityScope() {
@@ -982,10 +974,16 @@ final class RecentDocumentsTests: XCTestCase {
         )
         try Data("# Bytes currently at the path\n".utf8).write(to: originalURL)
 
-        let openedDocuments = try await openAuthorizedDocumentsConcurrently(
-            from: trustedData,
-            authorization: authorization
-        )
+        let openedDocuments: [OpenedDocumentResult]
+        do {
+            openedDocuments = try await openAuthorizedDocumentsConcurrently(
+                from: trustedData,
+                authorization: authorization
+            )
+        } catch {
+            XCTFail("descriptor-frozen concurrent open failed: \(error)")
+            throw error
+        }
         let document = try XCTUnwrap(openedDocuments.first?.document)
         let appKitOwnedContentsURL = try XCTUnwrap(document.autosavedContentsFileURL)
         XCTAssertTrue(
@@ -1132,10 +1130,16 @@ final class RecentDocumentsTests: XCTestCase {
                 projectRoot: directory
             )
         )
-        let callbackResults = try await openAuthorizedDocumentsWithClosingFirstCallback(
-            from: callbackData,
-            authorization: callbackAuthorization
-        )
+        let callbackResults: (order: [Int], documents: [OpenedDocumentResult])
+        do {
+            callbackResults = try await openAuthorizedDocumentsWithClosingFirstCallback(
+                from: callbackData,
+                authorization: callbackAuthorization
+            )
+        } catch {
+            XCTFail("serialized callback open failed: \(error)")
+            throw error
+        }
         let firstCallbackDocument = callbackResults.documents[0].document
         let secondCallbackDocument = callbackResults.documents[1].document
         let reentrantCallbackDocument = callbackResults.documents[2].document
@@ -1165,11 +1169,17 @@ final class RecentDocumentsTests: XCTestCase {
                 projectRoot: directory
             )
         )
-        let routedDocument = try await openAuthorizedDocumentThroughController(
-            menuController,
-            url: routedURL,
-            authorization: routedAuthorization
-        )
+        let routedDocument: OpenedDocumentResult
+        do {
+            routedDocument = try await openAuthorizedDocumentThroughController(
+                menuController,
+                url: routedURL,
+                authorization: routedAuthorization
+            )
+        } catch {
+            XCTFail("controller-authorized open failed: \(error)")
+            throw error
+        }
         defer { routedDocument.document.close() }
         XCTAssertFalse(routedDocument.wasAlreadyOpen)
         let routedCurrentAuthorization = try XCTUnwrap(
@@ -1205,11 +1215,17 @@ final class RecentDocumentsTests: XCTestCase {
                 projectRoot: directory
             )
         )
-        let focusedOrdinary = try await openAuthorizedDocumentThroughController(
-            menuController,
-            url: ordinaryRouteURL,
-            authorization: ordinaryRouteAuthorization
-        )
+        let focusedOrdinary: OpenedDocumentResult
+        do {
+            focusedOrdinary = try await openAuthorizedDocumentThroughController(
+                menuController,
+                url: ordinaryRouteURL,
+                authorization: ordinaryRouteAuthorization
+            )
+        } catch {
+            XCTFail("ordinary existing-document focus failed: \(error)")
+            throw error
+        }
         XCTAssertTrue(focusedOrdinary.wasAlreadyOpen)
         XCTAssertTrue(focusedOrdinary.document === ordinaryRouteDocument)
         XCTAssertFalse(

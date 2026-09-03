@@ -302,7 +302,7 @@ enum EditorViewMode: String, CaseIterable, Identifiable {
         switch self {
         case .source: "源码编辑"
         case .split: "实时预览"
-        case .preview: "阅读预览"
+        case .preview: "即时渲染编辑"
         }
     }
 
@@ -579,6 +579,7 @@ struct MarkdownEditorView: View {
     private let workspaceWindowDocument: NSDocument?
     private let showsProjectSidebar: Bool
     private let tearsDownWhenRemovedFromWorkspace: Bool
+    private let isWorkspaceSurfaceActive: Bool
 
     init(
         document: Binding<MarkdownDocument>,
@@ -593,7 +594,8 @@ struct MarkdownEditorView: View {
         workspaceWindowDocument: NSDocument? = nil,
         showsProjectSidebar: Bool = true,
         tearsDownWhenRemovedFromWorkspace: Bool = false,
-        sourceEditorSessionOverride: MarkdownSourceEditorSession? = nil
+        sourceEditorSessionOverride: MarkdownSourceEditorSession? = nil,
+        isWorkspaceSurfaceActive: Bool = true
     ) {
         _document = document
         self.fileURL = fileURL
@@ -607,6 +609,7 @@ struct MarkdownEditorView: View {
         self.workspaceWindowDocument = workspaceWindowDocument
         self.showsProjectSidebar = showsProjectSidebar
         self.tearsDownWhenRemovedFromWorkspace = tearsDownWhenRemovedFromWorkspace
+        self.isWorkspaceSurfaceActive = isWorkspaceSurfaceActive
         _sourceEditorSession = StateObject(
             wrappedValue: sourceEditorSessionOverride ?? MarkdownSourceEditorSession()
         )
@@ -805,6 +808,63 @@ struct MarkdownEditorView: View {
     }
 
     private var editorSurface: some View {
+        editorFocusedSurface
+            .focusedSceneValue(
+                \.markdownFormatActions,
+                isWorkspaceSurfaceActive ? markdownFormatCommandActions : nil
+            )
+            .focusedSceneValue(
+                \.markdownInsertActions,
+                isWorkspaceSurfaceActive ? markdownInsertCommandActions : nil
+            )
+            .focusedSceneValue(
+                \.recoveryActions,
+                isWorkspaceSurfaceActive ? recoveryCommandActions : nil
+            )
+            .focusedSceneValue(
+                \.documentSaveActions,
+                isWorkspaceSurfaceActive ? documentSaveCommandActions : nil
+            )
+            .toolbar { editorToolbar }
+    }
+
+    private var editorFocusedSurface: some View {
+        editorSurfaceLayout
+            .focusedValue(
+                \.outlineVisibility,
+                !isWorkspaceSurfaceActive || isProjectShell || usesSourceOnlyExperience
+                    ? nil
+                    : outlineVisibilityBinding
+            )
+            .focusedValue(
+                \.projectSidebarVisibility,
+                isWorkspaceSurfaceActive && hasProjectContext
+                    ? projectSidebarVisibilityBinding
+                    : nil
+            )
+            .focusedSceneValue(
+                \.editorViewModeActions,
+                isWorkspaceSurfaceActive ? editorViewModeCommandActions : nil
+            )
+            .focusedSceneValue(
+                \.previewZoomActions,
+                isWorkspaceSurfaceActive ? previewZoomCommandActions : nil
+            )
+            .focusedSceneValue(
+                \.writingModeActions,
+                isWorkspaceSurfaceActive ? writingModeCommandActions : nil
+            )
+            .focusedSceneValue(
+                \.documentFindActions,
+                isWorkspaceSurfaceActive ? findCommandActions : nil
+            )
+            .focusedSceneValue(
+                \.htmlExportActions,
+                isWorkspaceSurfaceActive ? htmlExportCommandActions : nil
+            )
+    }
+
+    private var editorSurfaceLayout: some View {
         VStack(spacing: 0) {
             if let recoveryCoordinator {
                 RecoveryProtectionStatusBanner(coordinator: recoveryCoordinator)
@@ -869,24 +929,11 @@ struct MarkdownEditorView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
-        .focusedValue(
-            \.outlineVisibility,
-            isProjectShell || usesSourceOnlyExperience ? nil : outlineVisibilityBinding
-        )
-        .focusedValue(
-            \.projectSidebarVisibility,
-            hasProjectContext ? projectSidebarVisibilityBinding : nil
-        )
-        .focusedSceneValue(\.editorViewModeActions, editorViewModeCommandActions)
-        .focusedSceneValue(\.previewZoomActions, previewZoomCommandActions)
-        .focusedSceneValue(\.writingModeActions, writingModeCommandActions)
-        .focusedSceneValue(\.documentFindActions, findCommandActions)
-        .focusedSceneValue(\.htmlExportActions, htmlExportCommandActions)
-        .focusedSceneValue(\.markdownFormatActions, markdownFormatCommandActions)
-        .focusedSceneValue(\.markdownInsertActions, markdownInsertCommandActions)
-        .focusedSceneValue(\.recoveryActions, recoveryCommandActions)
-        .focusedSceneValue(\.documentSaveActions, documentSaveCommandActions)
-        .toolbar {
+    }
+
+    @ToolbarContentBuilder
+    private var editorToolbar: some ToolbarContent {
+        if isWorkspaceSurfaceActive {
             ToolbarItemGroup {
                 if hasProjectContext {
                     Button {
@@ -991,7 +1038,9 @@ struct MarkdownEditorView: View {
                     }
                 }
             }
-            focusProjectEditorAfterNavigation(in: sourceEditorSession.textView.window)
+            if isWorkspaceSurfaceActive {
+                focusProjectEditorAfterNavigation(in: sourceEditorSession.textView.window)
+            }
         }
         .onChange(of: Data(document.text.utf8)) { _, _ in
             let markdown = document.text
@@ -1053,7 +1102,8 @@ struct MarkdownEditorView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) {
             notification in
-            guard let window = notification.object as? NSWindow,
+            guard isWorkspaceSurfaceActive,
+                  let window = notification.object as? NSWindow,
                   let windowDocument = window.windowController?.document as? NSDocument,
                   windowDocument === (workspaceWindowDocument ?? nativeDocument)
             else { return }
@@ -1140,6 +1190,10 @@ struct MarkdownEditorView: View {
         }
         .onChange(of: canEditDocument) { _, _ in
             applyWritingModes()
+        }
+        .onChange(of: isWorkspaceSurfaceActive) { _, isActive in
+            guard isActive else { return }
+            focusProjectEditorAfterNavigation(in: sourceEditorSession.textView.window)
         }
     }
 
@@ -1668,7 +1722,8 @@ struct MarkdownEditorView: View {
                     .frame(minWidth: 320)
             }
         case .preview:
-            preview
+            renderedEditor
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -2463,7 +2518,7 @@ struct MarkdownEditorView: View {
         guard InflowLaunchPolicy.shouldFocusProjectDocumentAfterNavigation(
             fileURL: fileURL,
             hasProjectContext: hasProjectContext,
-            sourceIsVisible: viewMode != .preview,
+            sourceIsVisible: true,
             isEditable: canEditDocument
         )
         else { return }
@@ -3664,7 +3719,7 @@ struct MarkdownEditorView: View {
     private func selectViewMode(_ mode: EditorViewMode) {
         guard !usesSourceOnlyExperience || mode == .source else { return }
         viewMode = mode
-        guard mode != .preview, !findSession.isPresented else { return }
+        guard !findSession.isPresented else { return }
 
         Task { @MainActor in
             await Task.yield()

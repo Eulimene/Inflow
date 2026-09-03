@@ -438,7 +438,7 @@ final class DocumentRelocationTests: XCTestCase {
         for title in postLaunchTitles {
             XCTAssertTrue(items.filter { $0.title == title }.isEmpty, title)
         }
-        XCTAssertEqual(items.filter { $0.title == "阅读预览" }.count, 1)
+        XCTAssertEqual(items.filter { $0.title == "即时渲染编辑" }.count, 1)
         XCTAssertTrue(items.filter {
             $0.keyEquivalent == "p"
                 && $0.keyEquivalentModifierMask.contains(.command)

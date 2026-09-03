@@ -6,62 +6,6 @@ private enum ManualSaveDocumentGateState: Equatable {
     case failed(String)
 }
 
-@MainActor
-final class ManualSaveDocumentGateRegistry {
-    static let shared = ManualSaveDocumentGateRegistry()
-
-    private final class Entry {
-        weak var window: NSWindow?
-        weak var document: NSDocument?
-        var owners: Set<UUID>
-
-        init(window: NSWindow, document: NSDocument?, owner: UUID) {
-            self.window = window
-            self.document = document
-            owners = [owner]
-        }
-    }
-
-    private var entries: [ObjectIdentifier: Entry] = [:]
-
-    func block(_ window: NSWindow, document: NSDocument?, owner: UUID) {
-        removeReleasedEntries()
-        let windowID = ObjectIdentifier(window)
-        if let entry = entries[windowID] {
-            entry.document = document ?? entry.document
-            entry.owners.insert(owner)
-        } else {
-            entries[windowID] = Entry(window: window, document: document, owner: owner)
-        }
-    }
-
-    func unblock(_ window: NSWindow?, owner: UUID) {
-        guard let window else { return }
-        let windowID = ObjectIdentifier(window)
-        guard let entry = entries[windowID] else { return }
-        entry.owners.remove(owner)
-        if entry.owners.isEmpty {
-            entries.removeValue(forKey: windowID)
-        }
-    }
-
-    var hasBlockedDocumentGates: Bool {
-        removeReleasedEntries()
-        return !entries.isEmpty
-    }
-
-    func focusFirstBlockedWindow() {
-        removeReleasedEntries()
-        guard let window = entries.values.compactMap(\.window).first else { return }
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    private func removeReleasedEntries() {
-        entries = entries.filter { $0.value.window != nil }
-    }
-}
-
 /// Keeps the entire editor tree out of the hierarchy until the concrete
 /// DocumentGroup host has adopted and verified the manual-save policy.
 @MainActor
@@ -70,7 +14,6 @@ private struct ManualSaveDocumentGate<Content: View>: View {
     @State private var blockedWindow: NSWindow?
     @State private var blockedDocument: NSDocument?
     @State private var isConfirmingDiscard = false
-    @State private var registryOwner = UUID()
     private let content: () -> Content
 
     init(@ViewBuilder content: @escaping () -> Content) {
@@ -130,7 +73,8 @@ private struct ManualSaveDocumentGate<Content: View>: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onDisappear {
-            releaseBlockedHost()
+            blockedDocument = nil
+            blockedWindow = nil
         }
     }
 
@@ -139,28 +83,15 @@ private struct ManualSaveDocumentGate<Content: View>: View {
         guard state == .pending else { return true }
         releasePreviousHost(ifDifferentFrom: window)
         blockedWindow = window
-        window.standardWindowButton(.closeButton)?.isEnabled = false
-        ManualSaveDocumentGateRegistry.shared.block(
-            window,
-            document: blockedDocument,
-            owner: registryOwner
-        )
         guard let document = window.windowController?.document as? NSDocument,
               NSDocumentController.shared.documents.contains(where: { $0 === document })
         else {
             return false
         }
         blockedDocument = document
-        ManualSaveDocumentGateRegistry.shared.block(
-            window,
-            document: document,
-            owner: registryOwner
-        )
 
         do {
             try ManualSaveDocumentHostPolicy.apply(to: document)
-            ManualSaveDocumentGateRegistry.shared.unblock(window, owner: registryOwner)
-            window.standardWindowButton(.closeButton)?.isEnabled = true
             blockedDocument = nil
             blockedWindow = nil
             state = .ready
@@ -176,12 +107,6 @@ private struct ManualSaveDocumentGate<Content: View>: View {
         releasePreviousHost(ifDifferentFrom: window)
         blockedWindow = window
         blockedDocument = window.windowController?.document as? NSDocument
-        window.standardWindowButton(.closeButton)?.isEnabled = false
-        ManualSaveDocumentGateRegistry.shared.block(
-            window,
-            document: blockedDocument,
-            owner: registryOwner
-        )
         fail(ManualSaveDocumentHostPolicyError.unsupportedHost)
     }
 
@@ -209,8 +134,6 @@ private struct ManualSaveDocumentGate<Content: View>: View {
         } else {
             document = blockedDocument
         }
-        ManualSaveDocumentGateRegistry.shared.unblock(window, owner: registryOwner)
-        window?.standardWindowButton(.closeButton)?.isEnabled = true
         blockedDocument = nil
         blockedWindow = nil
         if let document {
@@ -234,24 +157,13 @@ private struct ManualSaveDocumentGate<Content: View>: View {
 
     @MainActor
     private func releasePreviousHost(ifDifferentFrom window: NSWindow) {
-        guard let previous = blockedWindow, previous !== window else { return }
-        ManualSaveDocumentGateRegistry.shared.unblock(previous, owner: registryOwner)
-        previous.standardWindowButton(.closeButton)?.isEnabled = true
+        guard let blockedWindow, blockedWindow !== window else { return }
         blockedDocument = nil
-        blockedWindow = nil
-    }
-
-    @MainActor
-    private func releaseBlockedHost() {
-        let window = blockedWindow
-        ManualSaveDocumentGateRegistry.shared.unblock(window, owner: registryOwner)
-        window?.standardWindowButton(.closeButton)?.isEnabled = true
-        blockedDocument = nil
-        blockedWindow = nil
+        self.blockedWindow = nil
     }
 }
 
-private struct DocumentWindowResolver: NSViewRepresentable {
+struct DocumentWindowResolver: NSViewRepresentable {
     let onResolve: @MainActor (NSWindow) -> Bool
     let onTimeout: @MainActor (NSWindow) -> Void
 
@@ -283,7 +195,6 @@ private struct DocumentWindowResolver: NSViewRepresentable {
         private weak var candidateWindow: NSWindow?
         private weak var resolvedWindow: NSWindow?
         private var resolutionTask: Task<Void, Never>?
-        private let registryOwner = UUID()
 
         init(
             onResolve: @escaping @MainActor (NSWindow) -> Bool,
@@ -306,10 +217,6 @@ private struct DocumentWindowResolver: NSViewRepresentable {
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             if window == nil {
-                ManualSaveDocumentGateRegistry.shared.unblock(
-                    candidateWindow,
-                    owner: registryOwner
-                )
                 resolutionTask?.cancel()
                 resolutionTask = nil
                 candidateWindow = nil
@@ -321,19 +228,6 @@ private struct DocumentWindowResolver: NSViewRepresentable {
         @MainActor
         func resolveIfPossible() {
             guard let window, resolvedWindow !== window else { return }
-            if let previous = candidateWindow, previous !== window {
-                ManualSaveDocumentGateRegistry.shared.unblock(
-                    previous,
-                    owner: registryOwner
-                )
-                previous.standardWindowButton(.closeButton)?.isEnabled = true
-            }
-            window.standardWindowButton(.closeButton)?.isEnabled = false
-            ManualSaveDocumentGateRegistry.shared.block(
-                window,
-                document: window.windowController?.document as? NSDocument,
-                owner: registryOwner
-            )
             if candidateWindow !== window {
                 resolutionTask?.cancel()
                 resolutionTask = nil
@@ -695,6 +589,11 @@ struct ProjectDocumentDetailedOpener {
 
 @MainActor
 final class LightweightProjectCoordinator: ObservableObject {
+    private struct WorkspaceSurfaceState {
+        var surfaces: [ProjectDocumentSurface] = []
+        var activeID: ObjectIdentifier?
+    }
+
     let browser: FolderBrowserController
     private weak var projectDocument: NSDocument?
     private weak var projectHostDocument: NSDocument?
@@ -706,8 +605,15 @@ final class LightweightProjectCoordinator: ObservableObject {
     private var projectPreparationTasks: [UUID: Task<Void, Never>] = [:]
     private var projectPreparationTimeouts: [UUID: Task<Void, Never>] = [:]
     private var pendingSurfaceActivation: ObjectIdentifier?
-    @Published private(set) var documentSurfaces: [ProjectDocumentSurface] = []
-    @Published private(set) var activeSurfaceID: ObjectIdentifier?
+    @Published private var workspaceSurfaceState = WorkspaceSurfaceState()
+
+    var documentSurfaces: [ProjectDocumentSurface] {
+        workspaceSurfaceState.surfaces
+    }
+
+    var activeSurfaceID: ObjectIdentifier? {
+        workspaceSurfaceState.activeID
+    }
 
     init(
         browser: FolderBrowserController,
@@ -1235,9 +1141,10 @@ final class LightweightProjectCoordinator: ObservableObject {
         projectDocument = document
         browser.associateProjectWindow(with: document)
         let identifier = ObjectIdentifier(document)
-        if documentSurfaces.contains(where: { $0.id == identifier }) {
-            activeSurfaceID = identifier
+        if let surface = documentSurfaces.first(where: { $0.id == identifier }) {
+            workspaceSurfaceState.activeID = identifier
             pendingSurfaceActivation = nil
+            focusEditorWhenMounted(surface)
         } else if document !== projectHostDocument {
             pendingSurfaceActivation = identifier
         }
@@ -1273,8 +1180,10 @@ final class LightweightProjectCoordinator: ObservableObject {
 
         let identifier = ObjectIdentifier(nativeDocument)
         let surface: ProjectDocumentSurface
+        let shouldActivate: Bool
         if let existing = documentSurfaces.first(where: { $0.id == identifier }) {
             surface = existing
+            shouldActivate = pendingSurfaceActivation == surface.id || activeSurfaceID == nil
         } else {
             surface = ProjectDocumentSurface(
                 nativeDocument: nativeDocument,
@@ -1282,14 +1191,25 @@ final class LightweightProjectCoordinator: ObservableObject {
                 fileURL: fileURL,
                 isEditable: isEditable
             )
-            documentSurfaces.append(surface)
+            shouldActivate = pendingSurfaceActivation == surface.id || activeSurfaceID == nil
+            var nextState = workspaceSurfaceState
+            nextState.surfaces.append(surface)
+            if shouldActivate {
+                nextState.activeID = surface.id
+            }
+            // Publish the new surface and its selection atomically. Publishing
+            // either half first creates a frame with no visible editor.
+            workspaceSurfaceState = nextState
         }
 
-        if pendingSurfaceActivation == surface.id || activeSurfaceID == nil {
+        if shouldActivate {
             projectDocument = nativeDocument
-            activeSurfaceID = surface.id
+            if activeSurfaceID != surface.id {
+                workspaceSurfaceState.activeID = surface.id
+            }
             pendingSurfaceActivation = nil
             focusProjectHostWindow()
+            focusEditorWhenMounted(surface)
         }
         for windowController in nativeDocument.windowControllers {
             windowController.window?.orderOut(nil)
@@ -1303,16 +1223,16 @@ final class LightweightProjectCoordinator: ObservableObject {
               })
         else { return }
         projectDocument = surface.nativeDocument
-        activeSurfaceID = identifier
+        workspaceSurfaceState.activeID = identifier
         pendingSurfaceActivation = nil
         focusProjectHostWindow()
+        focusEditorWhenMounted(surface)
     }
 
     private func attachProjectHost(_ document: NSDocument?) {
         projectHostDocument = document
         projectDocument = document
-        documentSurfaces = []
-        activeSurfaceID = nil
+        workspaceSurfaceState = WorkspaceSurfaceState()
         pendingSurfaceActivation = nil
         browser.associateProjectWindow(with: document)
         if let document, document.windowControllers.isEmpty {
@@ -1359,6 +1279,21 @@ final class LightweightProjectCoordinator: ObservableObject {
         }
         if !NSApp.isActive {
             NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    private func focusEditorWhenMounted(_ surface: ProjectDocumentSurface) {
+        Task { @MainActor [weak self, weak surface] in
+            for _ in 0 ..< 6 {
+                await Task.yield()
+                guard let self,
+                      let surface,
+                      self.activeSurfaceID == surface.id
+                else { return }
+                if surface.sourceEditorSession.focusEditor() {
+                    return
+                }
+            }
         }
     }
 
@@ -1603,6 +1538,13 @@ private struct ProjectWorkspaceScene: View {
     @ObservedObject var folderBrowser: FolderBrowserController
     @ObservedObject var projectCoordinator: LightweightProjectCoordinator
 
+    private var projectSidebarVisibility: Binding<Bool> {
+        Binding(
+            get: { preferences.workspaceProjectSidebarVisible },
+            set: { preferences.workspaceProjectSidebarVisible = $0 }
+        )
+    }
+
     var body: some View {
         Group {
             if preferences.workspaceProjectSidebarVisible {
@@ -1622,24 +1564,14 @@ private struct ProjectWorkspaceScene: View {
                         .frame(minWidth: EditorWorkspaceMetrics.editorMinimumWidth)
                 }
             } else {
-                workspaceContent
-            }
-        }
-        .overlay(alignment: .topLeading) {
-            if !preferences.workspaceProjectSidebarVisible {
-                Button {
-                    preferences.workspaceProjectSidebarVisible = true
-                } label: {
-                    Label("展开目录树", systemImage: "chevron.right")
-                        .labelStyle(.iconOnly)
+                HStack(spacing: 0) {
+                    collapsedProjectSidebarRail
+                    Divider()
+                    workspaceContent
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .padding(8)
-                .help("展开目录树")
-                .accessibilityLabel("展开目录树")
             }
         }
+        .focusedSceneValue(\.projectSidebarVisibility, projectSidebarVisibility)
         .background(
             ProjectWorkspaceWindowTitle(
                 title: projectCoordinator.activeDocumentSurface?.title
@@ -1647,6 +1579,25 @@ private struct ProjectWorkspaceScene: View {
                     ?? "Inflow"
             )
         )
+    }
+
+    private var collapsedProjectSidebarRail: some View {
+        VStack(spacing: 0) {
+            Button {
+                preferences.workspaceProjectSidebarVisible = true
+            } label: {
+                Image(systemName: "sidebar.left")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .help("展开目录树")
+            .accessibilityLabel("展开目录树")
+            .padding(.top, 8)
+            Spacer(minLength: 0)
+        }
+        .frame(width: 40)
+        .frame(maxHeight: .infinity)
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private var projectSidebar: some View {
@@ -1700,24 +1651,7 @@ private struct ProjectWorkspaceScene: View {
 
     @ViewBuilder
     private var activeEditor: some View {
-        if let surface = projectCoordinator.activeDocumentSurface {
-            MarkdownEditorView(
-                document: surface.content,
-                fileURL: surface.fileURL,
-                isEditable: surface.isEditable,
-                recoveryCoordinator: recoveryCoordinator,
-                preferences: preferences,
-                recentDocuments: recentDocuments,
-                folderBrowser: folderBrowser,
-                projectCoordinator: projectCoordinator,
-                nativeDocumentOverride: surface.nativeDocument,
-                workspaceWindowDocument: hostDocument,
-                showsProjectSidebar: false,
-                tearsDownWhenRemovedFromWorkspace: true,
-                sourceEditorSessionOverride: surface.sourceEditorSession
-            )
-            .id(surface.id)
-        } else {
+        if projectCoordinator.documentSurfaces.isEmpty {
             MarkdownEditorView(
                 document: $shellDocument,
                 fileURL: nil,
@@ -1731,7 +1665,40 @@ private struct ProjectWorkspaceScene: View {
                 workspaceWindowDocument: hostDocument,
                 showsProjectSidebar: false
             )
+        } else {
+            ZStack {
+                ForEach(projectCoordinator.documentSurfaces) { surface in
+                    let isActive = projectCoordinator.activeSurfaceID == surface.id
+                    projectEditor(for: surface, isActive: isActive)
+                        .opacity(isActive ? 1 : 0)
+                        .allowsHitTesting(isActive)
+                        .accessibilityHidden(!isActive)
+                        .zIndex(isActive ? 1 : 0)
+                }
+            }
         }
+    }
+
+    private func projectEditor(
+        for surface: ProjectDocumentSurface,
+        isActive: Bool
+    ) -> some View {
+        MarkdownEditorView(
+            document: surface.content,
+            fileURL: surface.fileURL,
+            isEditable: surface.isEditable,
+            recoveryCoordinator: recoveryCoordinator,
+            preferences: preferences,
+            recentDocuments: recentDocuments,
+            folderBrowser: folderBrowser,
+            projectCoordinator: projectCoordinator,
+            nativeDocumentOverride: surface.nativeDocument,
+            workspaceWindowDocument: hostDocument,
+            showsProjectSidebar: false,
+            tearsDownWhenRemovedFromWorkspace: true,
+            sourceEditorSessionOverride: surface.sourceEditorSession,
+            isWorkspaceSurfaceActive: isActive
+        )
     }
 }
 
@@ -1789,17 +1756,11 @@ private struct ProjectWorkspaceWindowTitle: NSViewRepresentable {
 }
 
 enum InflowTerminationPolicy {
-    static func reply(
-        hasBlockedDocumentGate: Bool,
-        hasActiveDocumentSwitch: Bool,
-        hasPendingCloseAuthorization: Bool
-    ) -> NSApplication.TerminateReply {
-        guard !hasBlockedDocumentGate,
-              !hasActiveDocumentSwitch,
-              !hasPendingCloseAuthorization
-        else {
-            return .terminateCancel
-        }
+    /// AppKit invokes the application delegate only after its document
+    /// controller has completed the Save / Don't Save / Cancel review. Inflow
+    /// has no second termination transaction of its own, so it must never
+    /// silently turn that completed system review into a cancelled Quit.
+    static var replyAfterAppKitDocumentReview: NSApplication.TerminateReply {
         return .terminateNow
     }
 }
@@ -1945,28 +1906,10 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
-        let hasBlockedDocumentGate = ManualSaveDocumentGateRegistry.shared
-            .hasBlockedDocumentGates
-        let reply = InflowTerminationPolicy.reply(
-            hasBlockedDocumentGate: hasBlockedDocumentGate,
-            hasActiveDocumentSwitch: projectCoordinator.hasActiveDocumentSwitch,
-            hasPendingCloseAuthorization: DocumentCloseAuthorization.hasPendingRequests
-        )
-        guard reply == .terminateNow else {
-            if hasBlockedDocumentGate {
-                ManualSaveDocumentGateRegistry.shared.focusFirstBlockedWindow()
-            } else {
-                projectCoordinator.focusCurrentDocumentWindow()
-            }
-            return reply
-        }
         // NSApplication has already asked NSDocumentController to review every
-        // edited document before invoking this delegate callback. Starting a
-        // second review here creates a nested termination transaction: after the
-        // user chooses Don't Save, AppKit can remain waiting for a reply to the
-        // duplicate review. Once Inflow's own short-lived gates are clear, let
-        // the termination that AppKit already authorized finish normally.
-        return reply
+        // edited document before invoking this callback. Project loading and
+        // other short-lived UI work must not make the Quit command a no-op.
+        return InflowTerminationPolicy.replyAfterAppKitDocumentReview
     }
 }
 

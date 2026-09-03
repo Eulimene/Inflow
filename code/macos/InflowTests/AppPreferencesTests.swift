@@ -464,25 +464,6 @@ final class AppPreferencesTests: XCTestCase {
         }
     }
 
-    @MainActor
-    func testManualSaveGateRegistryRequiresEveryOwnerToReleaseWindow() {
-        let registry = ManualSaveDocumentGateRegistry()
-        let window = NSWindow()
-        let document = NSDocument()
-        let resolverOwner = UUID()
-        let gateOwner = UUID()
-
-        registry.block(window, document: nil, owner: resolverOwner)
-        registry.block(window, document: document, owner: gateOwner)
-        XCTAssertTrue(registry.hasBlockedDocumentGates)
-
-        registry.unblock(window, owner: resolverOwner)
-        XCTAssertTrue(registry.hasBlockedDocumentGates)
-
-        registry.unblock(window, owner: gateOwner)
-        XCTAssertFalse(registry.hasBlockedDocumentGates)
-    }
-
     func testPersonalMilestoneDisablesDocumentGroupHostAutosavePolicies() throws {
         let document = AutosavingDocumentHostProbe()
 
