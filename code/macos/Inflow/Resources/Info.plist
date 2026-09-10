@@ -59,6 +59,11 @@
 	<string>$(INFLOW_SOURCE_HEAD)</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Inflow. All rights reserved.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticTermination</key>

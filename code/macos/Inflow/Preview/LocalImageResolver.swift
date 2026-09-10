@@ -114,7 +114,8 @@ enum LocalImageResolver {
             imageReferences: imageReferences,
             projectRoot: projectRoot,
             expectedProjectRootIdentity: expectedProjectRootIdentity,
-            requiresProjectBoundary: requiresProjectBoundary
+            requiresProjectBoundary: requiresProjectBoundary,
+            allowsOutsideProject: true
         ).html
     }
 
@@ -125,6 +126,7 @@ enum LocalImageResolver {
         projectRoot: URL? = nil,
         expectedProjectRootIdentity: FolderProjectDirectoryIdentity? = nil,
         requiresProjectBoundary: Bool = false,
+        allowsOutsideProject: Bool = false,
         sanitizesImageMetadata: Bool = false
     ) -> (html: String, hasFailure: Bool) {
         let fullRange = NSRange(location: 0, length: (fragment as NSString).length)
@@ -172,10 +174,13 @@ enum LocalImageResolver {
                 projectRoot: projectRoot,
                 expectedProjectRootIdentity: expectedProjectRootIdentity,
                 requiresProjectBoundary: requiresProjectBoundary,
+                allowsOutsideProject: allowsOutsideProject,
                 warningContext: warningContext,
                 sanitizesMetadata: sanitizesImageMetadata
             )
-            if !replacement.hasPrefix("<img class=\"inflow-local-image\"") {
+            if !replacement.hasPrefix("<img class=\"inflow-local-image\"")
+                && !replacement.hasPrefix("<img class=\"inflow-remote-image\"")
+            {
                 hasFailure = true
             }
             output.replaceCharacters(in: match.range, with: replacement)
@@ -229,6 +234,7 @@ enum LocalImageResolver {
         projectRoot: URL?,
         expectedProjectRootIdentity: FolderProjectDirectoryIdentity?,
         requiresProjectBoundary: Bool,
+        allowsOutsideProject: Bool,
         warningContext: WarningContext?,
         sanitizesMetadata: Bool
     ) -> String {
@@ -243,12 +249,21 @@ enum LocalImageResolver {
 
         if let absolute = URL(string: target), let scheme = absolute.scheme?.lowercased() {
             if scheme == "http" || scheme == "https" {
-                return warning(
-                    title: "远程图片未加载",
-                    detail: "首发版不会连接远程图片地址。引用仍保留在 Markdown 中。",
-                    kind: .remote,
-                    context: warningContext
-                )
+                guard let components = URLComponents(url: absolute, resolvingAgainstBaseURL: false),
+                      components.host?.isEmpty == false,
+                      components.user == nil,
+                      components.password == nil,
+                      let remoteURL = components.url
+                else {
+                    return warning(
+                        title: "无法预览这个图片地址",
+                        detail: "在线图片地址无效，原引用已保留。",
+                        kind: .remote,
+                        context: warningContext
+                    )
+                }
+                let label = alternative.isEmpty ? remoteURL.lastPathComponent : alternative
+                return "<img class=\"inflow-remote-image\" src=\"\(escapeAttribute(remoteURL.absoluteString))\" alt=\"\(escapeAttribute(label))\" loading=\"lazy\" referrerpolicy=\"no-referrer\">"
             }
             guard scheme == "file", absolute.isFileURL else {
                 return warning(
@@ -265,6 +280,7 @@ enum LocalImageResolver {
                 projectRoot: projectRoot,
                 expectedProjectRootIdentity: expectedProjectRootIdentity,
                 requiresProjectBoundary: requiresProjectBoundary,
+                allowsOutsideProject: allowsOutsideProject,
                 warningContext: warningContext,
                 sanitizesMetadata: sanitizesMetadata
             )
@@ -295,6 +311,7 @@ enum LocalImageResolver {
             projectRoot: projectRoot,
             expectedProjectRootIdentity: expectedProjectRootIdentity,
             requiresProjectBoundary: requiresProjectBoundary,
+            allowsOutsideProject: allowsOutsideProject,
             warningContext: warningContext,
             sanitizesMetadata: sanitizesMetadata
         )
@@ -319,16 +336,38 @@ enum LocalImageResolver {
         projectRoot: URL?,
         expectedProjectRootIdentity: FolderProjectDirectoryIdentity?,
         requiresProjectBoundary: Bool,
+        allowsOutsideProject: Bool,
         warningContext: WarningContext?,
         sanitizesMetadata: Bool
     ) -> String {
+        let readsOutsideProject: Bool
+        if let projectRoot,
+           let normalizedRoot = try? FolderProjectPathBoundary.normalizedProjectRoot(
+               projectRoot
+           ),
+           expectedProjectRootIdentity.map({
+               FolderProjectDirectoryIdentity.capture(normalizedRoot) == $0
+           }) ?? true
+        {
+            readsOutsideProject = FolderProjectPathBoundary.resolvedURL(
+                url,
+                within: normalizedRoot
+            ) == nil
+        } else {
+            readsOutsideProject = false
+        }
+
         let image: ValidatedLocalImage
         do {
             image = try ProjectBoundLocalImageLoader.load(
                 at: url,
-                projectRoot: projectRoot,
-                expectedProjectRootIdentity: expectedProjectRootIdentity,
-                requiresProjectBoundary: requiresProjectBoundary
+                projectRoot: allowsOutsideProject && readsOutsideProject ? nil : projectRoot,
+                expectedProjectRootIdentity: allowsOutsideProject && readsOutsideProject
+                    ? nil
+                    : expectedProjectRootIdentity,
+                requiresProjectBoundary: allowsOutsideProject && readsOutsideProject
+                    ? false
+                    : requiresProjectBoundary
             )
         } catch ProjectBoundLocalImageError.outsideProject {
             return outsideProjectWarning(

@@ -567,13 +567,13 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertFalse(fragment.contains("<script>"))
     }
 
-    func testPreviewDocumentForbidsScriptsAndNetworkRequests() {
+    func testPreviewDocumentAllowsOnlyImageNetworkRequestsAndForbidsScripts() {
         let html = MarkdownRenderer.htmlDocument(for: "# Safe preview")
 
         XCTAssertTrue(html.contains("default-src 'none'"))
         XCTAssertTrue(html.contains("connect-src 'none'"))
-        XCTAssertTrue(html.contains("img-src data:"))
-        XCTAssertFalse(html.contains("img-src data: file:"))
+        XCTAssertTrue(html.contains("img-src data: https: http:"))
+        XCTAssertFalse(html.contains("img-src data: https: http: file:"))
         XCTAssertTrue(html.contains("<h1>Safe preview</h1>"))
     }
 
@@ -597,7 +597,7 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertFalse(html.contains(imageURL.path))
     }
 
-    func testProjectImageBoundaryBlocksNormalizedAndDirectorySymlinkEscapes() throws {
+    func testProjectImageResolutionSupportsPathsOutsideTheProjectRoot() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let project = directory.appendingPathComponent("project", isDirectory: true)
@@ -625,10 +625,8 @@ final class MarkdownRendererTests: XCTestCase {
                 documentDirectory: notes,
                 projectRoot: project
             )
-            XCTAssertTrue(html.contains("无法读取项目外图片"), html)
-            XCTAssertTrue(html.contains("原引用已保留"), html)
-            XCTAssertFalse(html.contains("class=\"inflow-local-image\""), html)
-            XCTAssertFalse(html.contains("src=\"data:image/png;base64,"), html)
+            XCTAssertTrue(html.contains("class=\"inflow-local-image\""), html)
+            XCTAssertTrue(html.contains("src=\"data:image/png;base64,"), html)
             XCTAssertFalse(html.contains(outsideImage.path), html)
         }
 
@@ -758,15 +756,15 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertTrue(unsaved.contains("请先保存文档"))
     }
 
-    func testRemoteAndUnsupportedImagesNeverBecomeNetworkRequests() throws {
+    func testRemoteImagesRenderWhileUnsupportedLocalImagesStayBlocked() throws {
         let remote = MarkdownRenderer.htmlDocument(
             for: "![外部](https://private.example/path/secret.png)"
         )
-        XCTAssertTrue(remote.contains("远程图片未加载"))
-        XCTAssertFalse(remote.contains("private.example"))
-        XCTAssertFalse(remote.contains("src=\"https://"))
-        XCTAssertTrue(remote.contains("data-inflow-image-action=\"copyTarget\""))
-        XCTAssertFalse(remote.contains("data-inflow-image-action=\"replace\""))
+        XCTAssertTrue(remote.contains("class=\"inflow-remote-image\""))
+        XCTAssertTrue(remote.contains("src=\"https://private.example/path/secret.png\""))
+        XCTAssertTrue(remote.contains("loading=\"lazy\""))
+        XCTAssertTrue(remote.contains("referrerpolicy=\"no-referrer\""))
+        XCTAssertFalse(remote.contains("data-inflow-image-action"))
 
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1086,7 +1084,7 @@ final class MarkdownRendererTests: XCTestCase {
         ))
     }
 
-    func testLinkPlannerRequiresAnExactParsedCurrentReferenceAndOnlyHTTPSchemes() {
+    func testLinkPlannerRequiresAnExactParsedReferenceAndSupportsWebAndFileURLs() {
         let markdown = "[web](https://example.com/path) [mail](mailto:writer@example.com)"
         let web = PreviewLinkPlanner.plan(
             markdown: markdown,
@@ -1143,9 +1141,18 @@ final class MarkdownRendererTests: XCTestCase {
             .unsupportedScheme
         )
 
+        let fileURL = URL(fileURLWithPath: "/tmp/inflow-missing-file.md")
+        XCTAssertEqual(
+            blockedReason(PreviewLinkPlanner.plan(
+                markdown: "[file](\(fileURL.absoluteString))",
+                target: fileURL.absoluteString,
+                documentURL: nil
+            )),
+            .missingLocalTarget
+        )
+
         let disallowedSchemes = [
             "mailto:writer@example.com",
-            "file:///tmp/private.md",
             "ftp://example.com/archive.zip",
             "inflow-script:run",
         ]
@@ -1162,7 +1169,7 @@ final class MarkdownRendererTests: XCTestCase {
         }
     }
 
-    func testProjectLinkPlannerKeepsNormalizedAndSymlinkResolvedTargetsInsideRoot() throws {
+    func testProjectLinkPlannerSupportsNormalizedTargetsInsideAndOutsideRoot() throws {
         let container = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: container) }
 
@@ -1216,15 +1223,17 @@ final class MarkdownRendererTests: XCTestCase {
         )
 
         let escapingTarget = "../../outside/outside.md"
-        XCTAssertEqual(
-            blockedReason(PreviewLinkPlanner.plan(
-                markdown: "[outside](\(escapingTarget))",
-                target: escapingTarget,
-                documentURL: sourceURL,
-                projectRoot: project
-            )),
-            .outsideProject
+        let escapingPlan = PreviewLinkPlanner.plan(
+            markdown: "[outside](\(escapingTarget))",
+            target: escapingTarget,
+            documentURL: sourceURL,
+            projectRoot: project
         )
+        guard case let .local(outsideLink) = escapingPlan.destination else {
+            return XCTFail("expected an outside-project local link")
+        }
+        XCTAssertEqual(outsideLink.url.standardizedFileURL, outsideURL.standardizedFileURL)
+        XCTAssertNil(outsideLink.projectRoot)
 
         let escapingLink = notes.appendingPathComponent("escape", isDirectory: true)
         try FileManager.default.createSymbolicLink(
@@ -1232,26 +1241,31 @@ final class MarkdownRendererTests: XCTestCase {
             withDestinationURL: outside
         )
         let symlinkTarget = "escape/outside.md"
+        guard case let .local(symlinkLink) = PreviewLinkPlanner.plan(
+            markdown: "[symlink](\(symlinkTarget))",
+            target: symlinkTarget,
+            documentURL: sourceURL,
+            projectRoot: project
+        ).destination else {
+            return XCTFail("expected a directory-symlink local link")
+        }
         XCTAssertEqual(
-            blockedReason(PreviewLinkPlanner.plan(
-                markdown: "[symlink](\(symlinkTarget))",
-                target: symlinkTarget,
-                documentURL: sourceURL,
-                projectRoot: project
-            )),
-            .outsideProject
+            symlinkLink.url.resolvingSymlinksInPath().standardizedFileURL,
+            outsideURL.standardizedFileURL
         )
+        XCTAssertNil(symlinkLink.projectRoot)
 
         let absoluteTarget = outsideURL.path
-        XCTAssertEqual(
-            blockedReason(PreviewLinkPlanner.plan(
-                markdown: "[absolute](\(absoluteTarget))",
-                target: absoluteTarget,
-                documentURL: sourceURL,
-                projectRoot: project
-            )),
-            .outsideProject
-        )
+        guard case let .local(absoluteLink) = PreviewLinkPlanner.plan(
+            markdown: "[absolute](\(absoluteTarget))",
+            target: absoluteTarget,
+            documentURL: sourceURL,
+            projectRoot: project
+        ).destination else {
+            return XCTFail("expected an absolute outside-project local link")
+        }
+        XCTAssertEqual(absoluteLink.url.standardizedFileURL, outsideURL.standardizedFileURL)
+        XCTAssertNil(absoluteLink.projectRoot)
     }
 
     func testLinkPlannerResolvesCurrentAndDuplicateUnicodeHeadingAnchors() throws {
@@ -1328,9 +1342,9 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(link.fragment, "target")
         XCTAssertEqual(link.url.standardizedFileURL, targetURL.standardizedFileURL)
         XCTAssertTrue(PreviewLinkPlanner.localTargetIsCurrent(link))
-        XCTAssertFalse(
+        XCTAssertTrue(
             PreviewLinkActivationPolicy.opensWithoutConfirmation(plan),
-            "a path alone must not be treated as a selected-project authorization"
+            "an explicit click opens a current local target without another confirmation"
         )
 
         let projectIdentity = try XCTUnwrap(
@@ -1357,9 +1371,9 @@ final class MarkdownRendererTests: XCTestCase {
             projectRoot: directory,
             expectedProjectRootIdentity: projectIdentity
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             PreviewLinkActivationPolicy.opensWithoutConfirmation(trustedImagePlan),
-            "external-viewer and temporary-copy behavior keeps its explicit action"
+            "an explicit click opens a current local image without another confirmation"
         )
 
         try Data("# Replaced with different bytes\n".utf8).write(to: targetURL)
@@ -1374,7 +1388,10 @@ final class MarkdownRendererTests: XCTestCase {
             target: "guide.md#target",
             documentURL: sourceURL
         )
-        XCTAssertEqual(blockedReason(independentRelative), .localTargetRequiresProject)
+        guard case let .local(independentRelativeLink) = independentRelative.destination else {
+            return XCTFail("expected an independent relative local link")
+        }
+        XCTAssertNil(independentRelativeLink.projectRoot)
 
         let absoluteTarget = targetURL.path
         let independentAbsolute = PreviewLinkPlanner.plan(
@@ -1382,7 +1399,10 @@ final class MarkdownRendererTests: XCTestCase {
             target: absoluteTarget,
             documentURL: sourceURL
         )
-        XCTAssertEqual(blockedReason(independentAbsolute), .localTargetRequiresProject)
+        guard case let .local(independentAbsoluteLink) = independentAbsolute.destination else {
+            return XCTFail("expected an independent absolute local link")
+        }
+        XCTAssertNil(independentAbsoluteLink.projectRoot)
 
         let unsavedProjectDocument = PreviewLinkPlanner.plan(
             markdown: markdown,
@@ -1420,16 +1440,19 @@ final class MarkdownRendererTests: XCTestCase {
             target: "archive.zip",
             documentURL: sourceURL
         )
-        XCTAssertEqual(blockedReason(attachmentPlan), .localTargetRequiresProject)
-        XCTAssertEqual(
-            blockedReason(PreviewLinkPlanner.plan(
-                markdown: "[archive](archive.zip)",
-                target: "archive.zip",
-                documentURL: sourceURL,
-                projectRoot: directory
-            )),
-            .unsupportedScheme
-        )
+        guard case let .local(attachment) = attachmentPlan.destination else {
+            return XCTFail("expected a generic local attachment")
+        }
+        XCTAssertEqual(attachment.kind, .attachment)
+        guard case let .local(projectAttachment) = PreviewLinkPlanner.plan(
+            markdown: "[archive](archive.zip)",
+            target: "archive.zip",
+            documentURL: sourceURL,
+            projectRoot: directory
+        ).destination else {
+            return XCTFail("expected a project attachment")
+        }
+        XCTAssertEqual(projectAttachment.kind, .attachment)
 
         let fakePDF = directory.appendingPathComponent("fake.pdf")
         try Data("not pdf".utf8).write(to: fakePDF)
@@ -1772,18 +1795,12 @@ final class MarkdownRendererTests: XCTestCase {
     }
 
     @MainActor
-    func testMountedRemoteImageRoutesExactRecoveryActionsWithoutPageScripts() async throws {
-        let received = expectation(description: "image issue actions reported")
-        received.expectedFulfillmentCount = 3
+    func testMountedRemoteImageUsesARestrictedNetworkImageElement() async throws {
         let target = "https://private.example/图.png?token=secret"
-        var actions: [(PreviewImageIssueAction, Int, String)] = []
+        let renderedTarget = try XCTUnwrap(URL(string: target)?.absoluteString)
         let root = MarkdownPreviewView(
             html: MarkdownRenderer.htmlDocument(for: "![图](\(target))"),
-            baseURL: nil,
-            onImageIssueAction: { action, offset, reportedTarget in
-                actions.append((action, offset, reportedTarget))
-                received.fulfill()
-            }
+            baseURL: nil
         )
         let hosting = NSHostingView(rootView: root)
         hosting.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
@@ -1800,39 +1817,26 @@ final class MarkdownRendererTests: XCTestCase {
         hosting.layoutSubtreeIfNeeded()
 
         var webView: WKWebView?
-        var actionsAreReady = false
+        var imageIsReady = false
         for _ in 0..<100 {
             webView = descendants(of: hosting).compactMap { $0 as? WKWebView }.first
             if let candidate = webView,
-               candidate.isLoading == false,
                let isReady = try? await candidate.callAsyncJavaScript(
-                   "return document.querySelectorAll('[data-inflow-image-action]').length === 3;",
-                   arguments: [:],
+                   "const image = document.querySelector('img.inflow-remote-image'); return image?.getAttribute('src') === target && image?.getAttribute('referrerpolicy') === 'no-referrer';",
+                   arguments: ["target": renderedTarget],
                    in: nil,
                    contentWorld: .defaultClient
                ) as? Bool,
                isReady
             {
-                actionsAreReady = true
+                imageIsReady = true
                 break
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
         let mounted = try XCTUnwrap(webView)
-        XCTAssertTrue(actionsAreReady)
+        XCTAssertTrue(imageIsReady)
         XCTAssertFalse(mounted.configuration.defaultWebpagePreferences.allowsContentJavaScript)
-        for action in ["locate", "copyTarget", "ignore"] {
-            _ = try await mounted.callAsyncJavaScript(
-                "document.querySelector(`[data-inflow-image-action='${action}']`).click(); return true;",
-                arguments: ["action": action],
-                in: nil,
-                contentWorld: .defaultClient
-            )
-        }
-        await fulfillment(of: [received], timeout: 5)
-        XCTAssertEqual(actions.map(\.0), [.locate, .copyTarget, .ignore])
-        XCTAssertEqual(actions.map(\.1), [0, 0, 0])
-        XCTAssertEqual(actions.map(\.2), [target, target, target])
     }
 
     private func temporaryDirectory() throws -> URL {

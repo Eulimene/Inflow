@@ -642,10 +642,7 @@ struct PreviewLinkPlan: Identifiable, Equatable, Sendable {
 enum PreviewLinkActivationPolicy {
     static func opensWithoutConfirmation(_ plan: PreviewLinkPlan) -> Bool {
         guard case let .local(link) = plan.destination else { return false }
-        return link.kind == .markdown
-            && link.projectRoot != nil
-            && link.expectedProjectRootIdentity != nil
-            && PreviewLinkPlanner.localTargetIsCurrent(link)
+        return PreviewLinkPlanner.localTargetIsCurrent(link)
     }
 }
 
@@ -755,6 +752,47 @@ enum PreviewLinkPlanner {
                         )
                     )
                 )
+            case "file":
+                guard components.host == nil
+                        || components.host?.isEmpty == true
+                        || components.host == "localhost",
+                      components.user == nil,
+                      components.password == nil,
+                      let path = decodedComponent(
+                          components.percentEncodedPath,
+                          permitsEmpty: false
+                      )
+                else {
+                    return blocked(
+                        sourceUTF8: sourceUTF8,
+                        target: target,
+                        reason: .invalidTarget,
+                        safeTarget: safeTarget
+                    )
+                }
+                let fragment: String?
+                if let encodedFragment = components.percentEncodedFragment {
+                    guard let decodedFragment = decodedComponent(encodedFragment) else {
+                        return blocked(
+                            sourceUTF8: sourceUTF8,
+                            target: target,
+                            reason: .invalidTarget,
+                            safeTarget: safeTarget
+                        )
+                    }
+                    fragment = decodedFragment.isEmpty ? nil : decodedFragment
+                } else {
+                    fragment = nil
+                }
+                return resolvedLocalPlan(
+                    sourceUTF8: sourceUTF8,
+                    target: target,
+                    url: URL(fileURLWithPath: path).standardizedFileURL,
+                    fragment: fragment,
+                    documentURL: documentURL,
+                    projectRoot: projectRoot,
+                    expectedProjectRootIdentity: expectedProjectRootIdentity
+                )
             default:
                 return blocked(
                     sourceUTF8: sourceUTF8,
@@ -776,25 +814,6 @@ enum PreviewLinkPlanner {
                 safeTarget: safeTarget
             )
         }
-        guard projectRoot != nil else {
-            return blocked(
-                sourceUTF8: sourceUTF8,
-                target: target,
-                reason: .localTargetRequiresProject,
-                safeTarget: safeTarget
-            )
-        }
-        guard projectRootIsCurrent(
-            projectRoot,
-            expectedIdentity: expectedProjectRootIdentity
-        ) else {
-            return blocked(
-                sourceUTF8: sourceUTF8,
-                target: target,
-                reason: .outsideProject,
-                safeTarget: safeTarget
-            )
-        }
         let url: URL
         if parts.path.hasPrefix("/") {
             url = URL(fileURLWithPath: parts.path).standardizedFileURL
@@ -812,54 +831,13 @@ enum PreviewLinkPlanner {
                 relativeTo: documentURL.deletingLastPathComponent()
             ).standardizedFileURL
         }
-        let normalizedProjectRoot: URL?
-        if let projectRoot {
-            do {
-                normalizedProjectRoot = try FolderProjectPathBoundary.normalizedProjectRoot(
-                    projectRoot
-                )
-            } catch {
-                return blocked(
-                    sourceUTF8: sourceUTF8,
-                    target: target,
-                    reason: .outsideProject,
-                    safeTarget: safeTarget
-                )
-            }
-            guard let normalizedProjectRoot,
-                  projectRootIsCurrent(
-                      normalizedProjectRoot,
-                      expectedIdentity: expectedProjectRootIdentity
-                  ),
-                  FolderProjectPathBoundary.resolvedURL(
-                      url,
-                      within: normalizedProjectRoot
-                  ) != nil,
-                  documentURL.map({
-                      FolderProjectPathBoundary.resolvedURL(
-                          $0,
-                          within: normalizedProjectRoot
-                      ) != nil
-                  }) ?? true
-            else {
-                return blocked(
-                    sourceUTF8: sourceUTF8,
-                    target: target,
-                    reason: .outsideProject,
-                    safeTarget: safeTarget
-                )
-            }
-        } else {
-            normalizedProjectRoot = nil
-        }
-
-        return localPlan(
+        return resolvedLocalPlan(
             sourceUTF8: sourceUTF8,
             target: target,
             url: url,
             fragment: parts.fragment,
             documentURL: documentURL,
-            projectRoot: normalizedProjectRoot,
+            projectRoot: projectRoot,
             expectedProjectRootIdentity: expectedProjectRootIdentity
         )
     }
@@ -884,6 +862,54 @@ enum PreviewLinkPlanner {
             return false
         }
         return (try? PreviewLocalFileSnapshot.capture(link.url)) == link.snapshot
+    }
+
+    private static func resolvedLocalPlan(
+        sourceUTF8: Data,
+        target: String,
+        url: URL,
+        fragment: String?,
+        documentURL: URL?,
+        projectRoot: URL?,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity?
+    ) -> PreviewLinkPlan {
+        let normalizedProjectRoot: URL?
+        if let projectRoot {
+            guard projectRootIsCurrent(
+                projectRoot,
+                expectedIdentity: expectedProjectRootIdentity
+            ), let normalized = try? FolderProjectPathBoundary.normalizedProjectRoot(
+                projectRoot
+            ) else {
+                return blocked(
+                    sourceUTF8: sourceUTF8,
+                    target: target,
+                    reason: .outsideProject,
+                    safeTarget: safeDisplayTarget(target)
+                )
+            }
+            // A project authorization makes in-root links directly editable.
+            // Links outside that root remain valid local links and are handed
+            // to Launch Services, just like a link opened from a browser.
+            normalizedProjectRoot = FolderProjectPathBoundary.resolvedURL(
+                url,
+                within: normalized
+            ) == nil ? nil : normalized
+        } else {
+            normalizedProjectRoot = nil
+        }
+
+        return localPlan(
+            sourceUTF8: sourceUTF8,
+            target: target,
+            url: url,
+            fragment: fragment,
+            documentURL: documentURL,
+            projectRoot: normalizedProjectRoot,
+            expectedProjectRootIdentity: normalizedProjectRoot == nil
+                ? nil
+                : expectedProjectRootIdentity
+        )
     }
 
     private static func localPlan(
@@ -952,14 +978,6 @@ enum PreviewLinkPlanner {
         }
 
         let kind = localKind(for: url)
-        if projectRoot != nil, kind == .attachment {
-            return blocked(
-                sourceUTF8: sourceUTF8,
-                target: target,
-                reason: .unsupportedScheme,
-                safeTarget: safeTarget
-            )
-        }
         do {
             switch kind {
             case .image:

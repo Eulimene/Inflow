@@ -2516,12 +2516,11 @@ struct MarkdownEditorView: View {
             switch plan.destination {
             case let .currentDocument(fragment):
                 navigateInCurrentDocument(to: fragment)
-            case .local where PreviewLinkActivationPolicy.opensWithoutConfirmation(plan):
-                // The project picker already authorized this root. Revalidate
-                // the frozen target and switch tabs without asking the user to
-                // approve the same directory again.
+            case .external:
                 performResolvedPreviewLink(plan)
-            case .external, .local, .blocked:
+            case .local where PreviewLinkActivationPolicy.opensWithoutConfirmation(plan):
+                performResolvedPreviewLink(plan)
+            case .local, .blocked:
                 previewLinkPlan = plan
             }
         }
@@ -2707,7 +2706,15 @@ struct MarkdownEditorView: View {
                     )
                 }
             case .attachment:
-                NSWorkspace.shared.activateFileViewerSelecting([accessURL])
+                guard NSWorkspace.shared.open(accessURL) else {
+                    previewLinkPlan = blockedPreviewLinkPlan(
+                        target: plan.target,
+                        reason: .cannotOpen,
+                        safeTarget: link.url.lastPathComponent,
+                        expectedURL: link.url
+                    )
+                    return
+                }
             }
         case let .currentDocument(fragment):
             previewLinkPlan = nil

@@ -310,10 +310,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
 
     @MainActor
     func testRenderedSessionKeepsStructuralMarkdownMarkersVisible() throws {
-        let source = "> quote\n- item\n1. ordered\n- [x] done\n\nparagraph"
+        let source = "> quote\n- item\n1. ordered\n- [x] done\n\nparagraph **bold**"
         let session = MarkdownSourceEditorSession()
         session.textView.string = source
-        session.textView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        let inlineMarker = (source as NSString).range(of: "**bold**")
+        session.textView.setSelectedRange(NSRange(location: inlineMarker.location, length: 0))
         session.setPresentation(.rendered, source: source, onCommandClickLink: nil)
 
         for marker in ["> ", "- ", "1. ", "[x] "] {
@@ -327,6 +328,19 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             )
             XCTAssertGreaterThan(font.pointSize, 1, "\(marker) must remain visible")
         }
+
+        let inlineMarkerFont = try XCTUnwrap(
+            session.textView.textStorage?.attribute(
+                .font,
+                at: inlineMarker.location,
+                effectiveRange: nil
+            ) as? NSFont
+        )
+        XCTAssertLessThan(
+            inlineMarkerFont.pointSize,
+            1,
+            "inline Markdown delimiters must stay visually collapsed while editing"
+        )
     }
 
     @MainActor

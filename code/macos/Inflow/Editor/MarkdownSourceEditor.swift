@@ -413,9 +413,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             else {
                 continue
             }
-            if NSIntersectionRange(paragraphRange, range).length > 0
-                || marker.kind.remainsVisibleWhenInactive
-            {
+            if marker.kind.remainsVisibleWhenInactive {
                 storage.addAttributes(
                     [
                         .font: NSFont.monospacedSystemFont(
