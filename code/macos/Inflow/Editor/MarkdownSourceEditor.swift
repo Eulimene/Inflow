@@ -139,7 +139,6 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var renderedPlan: RenderedMarkdownPlan?
     private var renderedAppliedAppearance: SourceEditorAppearance?
     private var renderedLinkHandler: ((String) -> Void)?
-    private var renderedMarkerParagraphRange = NSRange(location: NSNotFound, length: 0)
     private let lineNumberRuler: MarkdownLineNumberRulerView
     private var focusModeEnabled = false
     private var typewriterModeEnabled = false
@@ -285,7 +284,6 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         switch presentation {
         case .source:
             renderedPlan = nil
-            renderedMarkerParagraphRange = NSRange(location: NSNotFound, length: 0)
             textView.commandClickHandler = nil
             textView.setAccessibilityLabel("Markdown 源码编辑器")
             applySourceAppearance(sourceAppearance, force: changed)
@@ -332,14 +330,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             return
         }
         let selection = textView.selectedRange()
-        let sourceLength = (source as NSString).length
-        let paragraphRange = (source as NSString).paragraphRange(
-            for: NSRange(location: min(selection.location, sourceLength), length: 0)
-        )
         if !force,
            renderedPlan?.exactlyMatches(source) == true,
-           renderedAppliedAppearance == sourceAppearance,
-           renderedMarkerParagraphRange == paragraphRange
+           renderedAppliedAppearance == sourceAppearance
         {
             return
         }
@@ -347,7 +340,6 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         invalidateSyntaxApplication()
         let plan = RenderedMarkdownEditor.plan(for: source)
         renderedPlan = plan
-        renderedMarkerParagraphRange = paragraphRange
         scrollView.hasVerticalRuler = false
         scrollView.rulersVisible = false
 
@@ -384,9 +376,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         for style in plan.contentStyles {
             let range = style.sourceRange.utf16Range
             guard NSMaxRange(range) <= storage.length else { continue }
-            storage.addAttributes(
-                renderedAttributes(for: style.kind, baseFont: baseFont),
-                range: range
+            applyRenderedAttributes(
+                for: style.kind,
+                range: range,
+                storage: storage,
+                baseFont: baseFont
             )
         }
         for block in plan.localSourceBlocks {
@@ -421,6 +415,10 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                             weight: .regular
                         ),
                         .foregroundColor: NSColor.tertiaryLabelColor,
+                        .backgroundColor: NSColor.clear,
+                        .underlineStyle: 0,
+                        .strikethroughStyle: 0,
+                        .obliqueness: 0,
                     ],
                     range: range
                 )
@@ -429,6 +427,10 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                     [
                         .font: NSFont.systemFont(ofSize: 0.1),
                         .foregroundColor: NSColor.clear,
+                        .backgroundColor: NSColor.clear,
+                        .underlineStyle: 0,
+                        .strikethroughStyle: 0,
+                        .obliqueness: 0,
                     ],
                     range: range
                 )
@@ -440,42 +442,76 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         refreshWritingModePresentation()
     }
 
-    private func renderedAttributes(
+    private func applyRenderedAttributes(
         for kind: RenderedMarkdownContentStyleKind,
+        range: NSRange,
+        storage: NSTextStorage,
         baseFont: NSFont
-    ) -> [NSAttributedString.Key: Any] {
+    ) {
         switch kind {
         case .paragraph, .unorderedListItem, .orderedListItem, .taskListItem:
-            [:]
+            break
         case let .heading(level):
-            [
+            storage.addAttributes(
+                [
                 .font: NSFont.systemFont(
                     ofSize: max(baseFont.pointSize, 30 - CGFloat(level * 3)),
                     weight: level <= 2 ? .bold : .semibold
                 ),
                 .foregroundColor: NSColor.labelColor,
-            ]
+                ],
+                range: range
+            )
         case .emphasis:
-            [.obliqueness: 0.18]
+            storage.addAttribute(.obliqueness, value: 0.18, range: range)
         case .strong:
-            [.font: NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)]
+            transformFonts(in: range, storage: storage) { font in
+                NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+            }
         case .strikethrough:
-            [.strikethroughStyle: NSUnderlineStyle.single.rawValue]
+            storage.addAttribute(
+                .strikethroughStyle,
+                value: NSUnderlineStyle.single.rawValue,
+                range: range
+            )
         case .inlineCode:
-            [
-                .font: NSFont.monospacedSystemFont(
-                    ofSize: max(13, baseFont.pointSize - 1),
+            transformFonts(in: range, storage: storage) { font in
+                NSFont.monospacedSystemFont(
+                    ofSize: max(13, font.pointSize - 1),
                     weight: .regular
-                ),
-                .backgroundColor: NSColor.quaternaryLabelColor.withAlphaComponent(0.2),
-            ]
+                )
+            }
+            storage.addAttribute(
+                .backgroundColor,
+                value: NSColor.quaternaryLabelColor.withAlphaComponent(0.2),
+                range: range
+            )
         case .blockQuote:
-            [.foregroundColor: NSColor.secondaryLabelColor]
+            storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: range)
         case .link:
-            [
-                .foregroundColor: NSColor.linkColor,
-                .underlineStyle: NSUnderlineStyle.single.rawValue,
-            ]
+            storage.addAttributes(
+                [
+                    .foregroundColor: NSColor.linkColor,
+                    .underlineStyle: NSUnderlineStyle.single.rawValue,
+                ],
+                range: range
+            )
+        }
+    }
+
+    private func transformFonts(
+        in range: NSRange,
+        storage: NSTextStorage,
+        transform: (NSFont) -> NSFont
+    ) {
+        guard range.length > 0 else { return }
+        var replacements: [(NSRange, NSFont)] = []
+        storage.enumerateAttribute(.font, in: range) { value, effectiveRange, _ in
+            let font = value as? NSFont ?? textView.font ?? NSFont.systemFont(ofSize: 15)
+            replacements.append((effectiveRange, transform(font)))
+        }
+        for (effectiveRange, font) in replacements {
+            storage.addAttribute(.font, value: font, range: effectiveRange)
         }
     }
 
@@ -703,6 +739,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         invalidateSyntaxApplication()
         lineNumberRuler.updateText(textView.string)
         updateBoundText?(textView.string)
+        scheduleRenderedPresentation(for: textView.string)
     }
 
     @discardableResult
@@ -716,9 +753,6 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             selectedUTF16Range = range
         }
         refreshWritingModePresentation()
-        if presentation == .rendered {
-            applyRenderedPresentation(source: textView.string, force: false)
-        }
     }
 
     func requestRestoration(_ state: MarkdownRestorationState) {

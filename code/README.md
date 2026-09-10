@@ -35,7 +35,7 @@ Inflow 是一款本地优先的 Markdown 写作工作台。当前代码只为产
 
 - 源码编辑、实时预览分栏和即时编辑都绑定同一 Markdown 文本、同一保存路径与同一个持久 NSTextView 会话。
 - 视图切换不创建富文本副本；正文修改继续进入同一原生撤销与重做历史。
-- 即时编辑直接呈现段落、H1–H6、粗体、斜体、删除线、引用、三类列表、行内代码和普通链接文字；行内定界符在光标所在段落也保持视觉折叠。
+- 即时编辑直接呈现段落、H1–H6、粗体、斜体、删除线、引用、三类列表、行内代码和普通链接文字；嵌套行内样式按所在标题或正文的字号合成，行内定界符保持视觉折叠且不残留下划线、删除线或背景。
 - 表格、围栏代码、Mermaid、图片、原始 HTML、复杂嵌套及歧义结构在当前位置保留局部 Markdown 源码；展示计划不增删或替换源字符。
 - 输入法存在 marked text 时保留现有展示，不重建组合文本；普通点击链接用于编辑，Command+点击才请求打开链接。
 - 当前格式菜单只暴露粗体、斜体、行内代码、H1–H6、引用和无序/有序/任务列表；链接与固定表格模板位于插入菜单。
@@ -99,7 +99,7 @@ Rust 核心的独立检查：
 
     scripts/verify-launch.sh --personal
 
-该配置只执行 Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查；不创建归档或发布证据，也不执行固定设备/30 次性能协议、扩展生态合同、签名、公证或分发门禁。[`quality/personal-xctest-scope.tsv`](quality/personal-xctest-scope.tsv) 把当前 373 个 XCTest method 逐项分为 267 个 `current-direct`、13 个 `current-host`、88 个 `deferred` 和 5 个 `fixed-performance`。`--personal` 只执行 `current-direct`；其余三类不计为通过。13 个宿主用例保留为 App-host 专项验证或真实应用 UAT，后置与固定性能用例由 deferred profile 的全量测试保留。脚本会对重复、陈旧、未分类、非法分区和四类精确计数失败关闭；新增测试不能默认混入当前门禁。可用 `scripts/verify-launch.sh --describe-profile personal` 无副作用查看边界。
+该配置只执行 Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查；不创建归档或发布证据，也不执行固定设备/30 次性能协议、扩展生态合同、签名、公证或分发门禁。[`quality/personal-xctest-scope.tsv`](quality/personal-xctest-scope.tsv) 把当前 376 个 XCTest method 逐项分为 270 个 `current-direct`、13 个 `current-host`、88 个 `deferred` 和 5 个 `fixed-performance`。`--personal` 只执行 `current-direct`；其余三类不计为通过。13 个宿主用例保留为 App-host 专项验证或真实应用 UAT，后置与固定性能用例由 deferred profile 的全量测试保留。脚本会对重复、陈旧、未分类、非法分区和四类精确计数失败关闭；新增测试不能默认混入当前门禁。可用 `scripts/verify-launch.sh --describe-profile personal` 无副作用查看边界。
 
 `--deferred-release-local`、`--deferred-signed-archive` 以及 `scripts/release-workflow.sh` 只为后续公共分发决策保留，不属于个人首版完成条件。
 

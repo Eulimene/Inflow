@@ -409,8 +409,14 @@ enum FolderContentScanner {
             defer { Darwin.closedir(directoryStream) }
 
             var items: [FolderProjectItem] = []
-            errno = 0
-            while let entry = Darwin.readdir(directoryStream) {
+            while true {
+                errno = 0
+                guard let entry = Darwin.readdir(directoryStream) else {
+                    guard errno == 0 else {
+                        throw FolderBrowserError.unavailable
+                    }
+                    break
+                }
                 try Task.checkCancellation()
                 let name = withUnsafePointer(to: entry.pointee.d_name) { pointer in
                     pointer.withMemoryRebound(
@@ -436,6 +442,9 @@ enum FolderContentScanner {
                         AT_SYMLINK_NOFOLLOW
                     )
                 }
+                if metadataResult != 0, errno == EACCES || errno == EPERM {
+                    continue
+                }
                 guard metadataResult == 0 else {
                     throw FolderBrowserError.unavailable
                 }
@@ -453,12 +462,22 @@ enum FolderContentScanner {
 
                 if fileType == S_IFDIR {
                     try beforeOpeningDirectory?(item)
+                    let accessibility = item.withUnsafeFileSystemRepresentation { path in
+                        guard let path else { return Int32(-1) }
+                        return Darwin.access(path, R_OK | X_OK)
+                    }
+                    if accessibility != 0, errno == EACCES || errno == EPERM {
+                        continue
+                    }
                     let childDescriptor = name.withCString { namePointer in
                         Darwin.openat(
                             descriptor,
                             namePointer,
                             O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
                         )
+                    }
+                    if childDescriptor < 0, errno == EACCES || errno == EPERM {
+                        continue
                     }
                     guard childDescriptor >= 0 else {
                         throw FolderBrowserError.unavailable
@@ -505,7 +524,6 @@ enum FolderContentScanner {
                     }
                 }
             }
-            guard errno == 0 else { throw FolderBrowserError.unavailable }
             return items.sorted(by: FolderProjectItem.projectOrder)
         }
 
@@ -931,8 +949,9 @@ final class FolderBrowserController: ObservableObject {
     }
 
     func openFolder(_ url: URL, remember: Bool = true) {
-        guard let directory = validatedFolderURLForOpening(url),
-              let identity = FolderProjectDirectoryIdentity.capture(directory)
+        let directory = url.standardizedFileURL
+        retainAccess(to: directory)
+        guard let identity = FolderProjectDirectoryIdentity.capture(directory)
         else {
             folderURL = nil
             projectRootIdentity = nil
@@ -963,21 +982,6 @@ final class FolderBrowserController: ObservableObject {
         refresh()
     }
 
-    /// Validates a project root without changing the visible browser state.
-    /// Security scope must be active before metadata inspection in a sandbox.
-    func validatedFolderURLForOpening(_ url: URL) -> URL? {
-        let directory = url.standardizedFileURL
-        retainAccess(to: directory)
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(
-            atPath: directory.path,
-            isDirectory: &isDirectory
-        ), isDirectory.boolValue else {
-            return nil
-        }
-        return directory
-    }
-
     /// Scans a candidate without changing the project currently shown. The
     /// caller may therefore wait for a complete, readable first snapshot
     /// before asking the current document to close.
@@ -988,9 +992,10 @@ final class FolderBrowserController: ObservableObject {
         ) -> Void
     ) -> Task<Void, Never> {
         Task { [weak self, scanWorker] in
-            guard let self,
-                  let validatedURL = self.validatedFolderURLForOpening(url),
-                  let identity = FolderProjectDirectoryIdentity.capture(validatedURL)
+            guard let self else { return }
+            let selectedURL = url.standardizedFileURL
+            self.retainAccess(to: selectedURL)
+            guard let identity = FolderProjectDirectoryIdentity.capture(selectedURL)
             else {
                 completion(.failure(FolderBrowserError.unavailable))
                 return

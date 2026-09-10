@@ -344,6 +344,99 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
+    func testRenderedSessionComposesEveryInlineStyleWithoutShrinkingHeadingText() throws {
+        let source = "# **Bold** *italic* ~~gone~~ `code` [link](https://example.com)"
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        session.textView.undoManager?.removeAllActions()
+        session.setPresentation(.rendered, source: source, onCommandClickLink: nil)
+
+        let storage = try XCTUnwrap(session.textView.textStorage)
+        let boldLocation = try XCTUnwrap((source as NSString).range(of: "Bold").nonEmptyLocation)
+        let italicLocation = try XCTUnwrap(
+            (source as NSString).range(of: "italic").nonEmptyLocation
+        )
+        let goneLocation = try XCTUnwrap((source as NSString).range(of: "gone").nonEmptyLocation)
+        let codeLocation = try XCTUnwrap((source as NSString).range(of: "code").nonEmptyLocation)
+        let linkLocation = try XCTUnwrap((source as NSString).range(of: "link").nonEmptyLocation)
+
+        let boldFont = try XCTUnwrap(
+            storage.attribute(.font, at: boldLocation, effectiveRange: nil) as? NSFont
+        )
+        let codeFont = try XCTUnwrap(
+            storage.attribute(.font, at: codeLocation, effectiveRange: nil) as? NSFont
+        )
+        let linkFont = try XCTUnwrap(
+            storage.attribute(.font, at: linkLocation, effectiveRange: nil) as? NSFont
+        )
+        XCTAssertEqual(boldFont.pointSize, 27, accuracy: 0.001)
+        XCTAssertTrue(NSFontManager.shared.traits(of: boldFont).contains(.boldFontMask))
+        XCTAssertEqual(codeFont.pointSize, 26, accuracy: 0.001)
+        XCTAssertTrue(codeFont.fontDescriptor.symbolicTraits.contains(.monoSpace))
+        XCTAssertEqual(linkFont.pointSize, 27, accuracy: 0.001)
+        let obliqueness = try XCTUnwrap(
+            storage.attribute(.obliqueness, at: italicLocation, effectiveRange: nil) as? NSNumber
+        )
+        let strikethrough = try XCTUnwrap(
+            storage.attribute(.strikethroughStyle, at: goneLocation, effectiveRange: nil)
+                as? NSNumber
+        )
+        let underline = try XCTUnwrap(
+            storage.attribute(.underlineStyle, at: linkLocation, effectiveRange: nil)
+                as? NSNumber
+        )
+        XCTAssertEqual(obliqueness.doubleValue, 0.18, accuracy: 0.001)
+        XCTAssertEqual(strikethrough.intValue, NSUnderlineStyle.single.rawValue)
+        XCTAssertEqual(underline.intValue, NSUnderlineStyle.single.rawValue)
+
+        for marker in RenderedMarkdownEditor.plan(for: source).markers {
+            let location = marker.sourceRange.utf16Range.location
+            let markerFont = try XCTUnwrap(
+                storage.attribute(.font, at: location, effectiveRange: nil) as? NSFont
+            )
+            XCTAssertLessThan(markerFont.pointSize, 1, "\(marker.kind) should be collapsed")
+            XCTAssertEqual(
+                (storage.attribute(.underlineStyle, at: location, effectiveRange: nil)
+                    as? NSNumber)?.intValue,
+                0
+            )
+            XCTAssertEqual(
+                (storage.attribute(.strikethroughStyle, at: location, effectiveRange: nil)
+                    as? NSNumber)?.intValue,
+                0
+            )
+        }
+        XCTAssertEqual(Data(session.textView.string.utf8), Data(source.utf8))
+        XCTAssertFalse(session.textView.undoManager?.canUndo == true)
+    }
+
+    @MainActor
+    func testRenderedSessionRefreshesAfterTypingUndoAndRedo() async throws {
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = "plain"
+        session.textView.setSelectedRange(NSRange(location: 5, length: 0))
+        session.textView.undoManager?.removeAllActions()
+        session.setPresentation(.rendered, source: "plain", onCommandClickLink: nil)
+
+        session.textView.insertText(
+            " **bold**",
+            replacementRange: session.textView.selectedRange()
+        )
+        await settleRenderedPresentation()
+        XCTAssertEqual(session.textView.string, "plain **bold**")
+        try assertStrongTextIsRendered(in: session, source: session.textView.string)
+
+        session.textView.undoManager?.undo()
+        await settleRenderedPresentation()
+        XCTAssertEqual(session.textView.string, "plain")
+
+        session.textView.undoManager?.redo()
+        await settleRenderedPresentation()
+        XCTAssertEqual(session.textView.string, "plain **bold**")
+        try assertStrongTextIsRendered(in: session, source: session.textView.string)
+    }
+
+    @MainActor
     func testCommandClickConvertsWindowCoordinatesIntoTheTextView() {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 500, height: 300),
@@ -398,6 +491,35 @@ final class RenderedMarkdownEditorTests: XCTestCase {
 
     private func rangesOverlap(_ lhs: Range<Int>, _ rhs: Range<Int>) -> Bool {
         lhs.lowerBound < rhs.upperBound && lhs.upperBound > rhs.lowerBound
+    }
+
+    @MainActor
+    private func assertStrongTextIsRendered(
+        in session: MarkdownSourceEditorSession,
+        source: String
+    ) throws {
+        let storage = try XCTUnwrap(session.textView.textStorage)
+        let contentLocation = try XCTUnwrap(
+            (source as NSString).range(of: "bold").nonEmptyLocation
+        )
+        let markerLocation = try XCTUnwrap(
+            (source as NSString).range(of: "**bold**").nonEmptyLocation
+        )
+        let contentFont = try XCTUnwrap(
+            storage.attribute(.font, at: contentLocation, effectiveRange: nil) as? NSFont
+        )
+        let markerFont = try XCTUnwrap(
+            storage.attribute(.font, at: markerLocation, effectiveRange: nil) as? NSFont
+        )
+        XCTAssertTrue(NSFontManager.shared.traits(of: contentFont).contains(.boldFontMask))
+        XCTAssertLessThan(markerFont.pointSize, 1)
+    }
+
+    @MainActor
+    private func settleRenderedPresentation() async {
+        for _ in 0..<4 {
+            await Task.yield()
+        }
     }
 }
 

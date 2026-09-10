@@ -959,6 +959,33 @@ final class FolderBrowserTests: XCTestCase {
         }
     }
 
+    func testScannerSkipsUnreadableDescendantsInsteadOfRejectingSelectedRoot() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("# Visible".utf8).write(to: root.appendingPathComponent("visible.md"))
+        let unreadable = root.appendingPathComponent("unreadable", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: unreadable,
+            withIntermediateDirectories: false
+        )
+        try Data("# Hidden".utf8).write(to: unreadable.appendingPathComponent("hidden.md"))
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0],
+            ofItemAtPath: unreadable.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: unreadable.path
+            )
+        }
+
+        let snapshot = try FolderContentScanner.snapshot(root)
+
+        XCTAssertEqual(snapshot.markdownFiles.map(\.relativePath), ["visible.md"])
+        XCTAssertEqual(snapshot.items.map(\.relativePath), ["visible.md"])
+    }
+
     func testProjectBoundaryNormalizesRootAndResolvesSymlinksBeforeContainment()
         throws
     {
@@ -1304,12 +1331,8 @@ final class FolderBrowserTests: XCTestCase {
         let candidate = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: candidate) }
         try Data("# Two".utf8).write(to: candidate.appendingPathComponent("two.md"))
-        XCTAssertEqual(
-            controller.validatedFolderURLForOpening(candidate)?.path,
-            candidate.path
-        )
         XCTAssertEqual(controller.folderURL?.path, root.path)
-        XCTAssertEqual(started.map(\.path), [root.path, candidate.path])
+        XCTAssertEqual(started.map(\.path), [root.path])
 
         let preparation: FolderProjectOpenPreparation = try await withCheckedThrowingContinuation {
             continuation in
@@ -1318,6 +1341,7 @@ final class FolderBrowserTests: XCTestCase {
             }
         }
         XCTAssertEqual(controller.folderURL?.path, root.path)
+        XCTAssertEqual(started.map(\.path), [root.path, candidate.path])
         XCTAssertEqual(preparation.snapshot.markdownFiles.map(\.relativePath), ["two.md"])
         XCTAssertTrue(controller.commitPreparedFolder(preparation))
         XCTAssertEqual(controller.folderURL?.path, candidate.path)
