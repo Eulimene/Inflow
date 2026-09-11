@@ -344,6 +344,9 @@ enum EditorViewMode: String, CaseIterable, Identifiable {
         self
     }
 
+    var usesCanonicalPreviewRenderer: Bool {
+        self != .source
+    }
 }
 
 enum EditorViewModeLaunchContext: Equatable {
@@ -680,6 +683,7 @@ struct MarkdownEditorView: View {
     @State private var selectedHeadingID: DocumentHeading.ID?
     @State private var sourceSelectionRequest: SourceSelectionRequest?
     @State private var sourceSelectionGeneration = 0
+    @State private var instantSourceEditing = false
     @State private var outlineFocusGeneration = 0
     @StateObject private var findSession = DocumentFindSession()
     @State private var replaceAllPlan: ReplaceAllPlan?
@@ -1755,37 +1759,44 @@ struct MarkdownEditorView: View {
     }
 
     private var renderedEditor: some View {
-        MarkdownSourceEditor(
-            text: $document.text,
-            selectionRequest: sourceSelectionRequest,
-            session: sourceEditorSession,
-            isEditable: canEditDocument,
-            appearance: preferences.sourceEditorAppearance,
-            presentation: .rendered,
-            onPasteImage: pasteImage,
-            onDropImage: dropImage,
-            onLinkClick: activatePreviewLink,
-            renderedResourceContext: renderedResourceContext
-        )
-    }
+        ZStack(alignment: .topTrailing) {
+            if instantSourceEditing {
+                sourceEditor
+            } else {
+                previewSurface(onEditRequested: activateInstantEdit)
+            }
 
-    private var renderedResourceContext: RenderedMarkdownResourceContext {
-        let requiresProjectBoundary = folderBrowser.isAssociatedProjectDocument(nativeDocument)
-        let candidateProjectRoot = activeProjectRoot
-        let projectRootIdentity = currentProjectRootIdentity(for: candidateProjectRoot)
-        let projectRoot = projectRootIdentity == nil ? nil : candidateProjectRoot
-        let documentDirectory = requiresProjectBoundary && projectRoot == nil
-            ? nil
-            : fileURL?.deletingLastPathComponent()
-        return RenderedMarkdownResourceContext(
-            documentDirectory: documentDirectory,
-            projectRoot: projectRoot,
-            expectedProjectRootIdentity: projectRootIdentity,
-            requiresProjectBoundary: requiresProjectBoundary
-        )
+            if canEditDocument {
+                Button(
+                    instantSourceEditing ? "完成编辑" : "编辑源码",
+                    systemImage: instantSourceEditing ? "checkmark" : "pencil"
+                ) {
+                    if instantSourceEditing {
+                        instantSourceEditing = false
+                    } else {
+                        activateInstantEdit(sourceUTF8Offset: nil)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .padding(12)
+                .help(
+                    instantSourceEditing
+                        ? "完成后显示与实时预览相同的渲染内容"
+                        : "双击正文也可在当前模式内编辑源码"
+                )
+                .accessibilityHint("在即时编辑的渲染阅读态和 Markdown 源码编辑态之间切换")
+            }
+        }
     }
 
     private var preview: some View {
+        previewSurface()
+    }
+
+    private func previewSurface(
+        onEditRequested: @escaping (Int?) -> Void = { _ in }
+    ) -> some View {
         VStack(spacing: 0) {
             if previewFailureMessage != nil {
                 previewFailureBanner
@@ -1801,6 +1812,7 @@ struct MarkdownEditorView: View {
                         : nil,
                     onHeadingActivated: activatePreviewHeading,
                     onLinkActivated: activatePreviewLink,
+                    onEditRequested: onEditRequested,
                     onPreviewIssueAction: activatePreviewIssue,
                     onImageIssueAction: activatePreviewImageIssue,
                     onManualScroll: {
@@ -1966,7 +1978,7 @@ struct MarkdownEditorView: View {
             typewriterModeEnabled: isTypewriterModeEnabled
         )
         if isFocusModeEnabled || isTypewriterModeEnabled {
-            viewMode = viewMode.sourceVisible
+            revealSourceSurface()
             Task { @MainActor in
                 await Task.yield()
                 _ = sourceEditorSession.focusEditor()
@@ -2397,7 +2409,7 @@ struct MarkdownEditorView: View {
         }
 
         selectedHeadingID = heading.id
-        viewMode = viewMode.sourceVisible
+        revealSourceSurface()
         sourceSelectionGeneration &+= 1
         sourceSelectionRequest = SourceSelectionRequest(
             generation: sourceSelectionGeneration,
@@ -2428,6 +2440,27 @@ struct MarkdownEditorView: View {
         selectHeading(heading)
     }
 
+    private func activateInstantEdit(sourceUTF8Offset: Int?) {
+        instantSourceEditing = true
+        if let sourceUTF8Offset,
+           let validatedOffset = PreviewIssueNavigation.validatedOffset(
+               sourceUTF8Offset,
+               renderedSource: previewSourceSnapshot,
+               currentSource: document.text
+           )
+        {
+            sourceSelectionGeneration &+= 1
+            sourceSelectionRequest = SourceSelectionRequest(
+                generation: sourceSelectionGeneration,
+                utf8Range: validatedOffset..<validatedOffset
+            )
+        }
+        Task { @MainActor in
+            await Task.yield()
+            _ = sourceEditorSession.focusEditor()
+        }
+    }
+
     private func activatePreviewIssue(
         action: PreviewIssueAction,
         sourceUTF8Offset: Int
@@ -2443,7 +2476,7 @@ struct MarkdownEditorView: View {
 
         switch action {
         case .locate:
-            viewMode = viewMode.sourceVisible
+            revealSourceSurface()
             sourceSelectionGeneration &+= 1
             sourceSelectionRequest = SourceSelectionRequest(
                 generation: sourceSelectionGeneration,
@@ -2471,7 +2504,7 @@ struct MarkdownEditorView: View {
 
         switch action {
         case .locate:
-            viewMode = viewMode.sourceVisible
+            revealSourceSurface()
             sourceSelectionGeneration &+= 1
             sourceSelectionRequest = SourceSelectionRequest(
                 generation: sourceSelectionGeneration,
@@ -2496,7 +2529,7 @@ struct MarkdownEditorView: View {
                     : "文档为只读，无法替换图片引用。"
                 return
             }
-            viewMode = viewMode.sourceVisible
+            revealSourceSurface()
             sourceEditorSession.textView.setSelectedRange(selection.revealRange)
             sourceEditorSession.textView.scrollRangeToVisible(selection.revealRange)
             insertImage()
@@ -2575,7 +2608,7 @@ struct MarkdownEditorView: View {
         guard let fragment = incomingHeadingFragment else {
             incomingNavigationIsPending = false
             selectedHeadingID = nil
-            viewMode = viewMode.sourceVisible
+            revealSourceSurface()
             sourceSelectionGeneration &+= 1
             sourceSelectionRequest = SourceSelectionRequest(
                 generation: sourceSelectionGeneration,
@@ -3068,7 +3101,7 @@ struct MarkdownEditorView: View {
                         destination: asset.relativeMarkdownPath,
                         defaultAlternative: alternative.isEmpty ? "图片描述" : alternative
                     )
-                    viewMode = viewMode.sourceVisible
+                    revealSourceSurface()
                     guard sourceEditorSession.applyMarkdownImage(
                         plan,
                         asset: asset,
@@ -3125,7 +3158,7 @@ struct MarkdownEditorView: View {
                 ? "图片描述"
                 : defaultAlternative
         )
-        viewMode = viewMode.sourceVisible
+        revealSourceSurface()
         guard sourceEditorSession.applyMarkdownFormat(
             plan,
             actionName: "插入图片"
@@ -3214,7 +3247,7 @@ struct MarkdownEditorView: View {
                         destination: asset.relativeMarkdownPath,
                         defaultAlternative: alternative
                     )
-                    viewMode = viewMode.sourceVisible
+                    revealSourceSurface()
                     guard sourceEditorSession.applyMarkdownImage(
                         plan,
                         asset: asset,
@@ -3247,7 +3280,7 @@ struct MarkdownEditorView: View {
                 source: document.text,
                 selectedUTF16Range: sourceEditorSession.textView.selectedRange()
             )
-            viewMode = viewMode.sourceVisible
+            revealSourceSurface()
             guard sourceEditorSession.applyMarkdownFormat(plan, actionName: "插入图表") else {
                 markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未插入图表。"
                 return
@@ -3269,7 +3302,7 @@ struct MarkdownEditorView: View {
                 source: document.text,
                 selectedUTF16Range: sourceEditorSession.textView.selectedRange()
             )
-            viewMode = viewMode.sourceVisible
+            revealSourceSurface()
             guard sourceEditorSession.applyMarkdownFormat(plan, actionName: "插入公式") else {
                 markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未插入公式。"
                 return
@@ -3291,7 +3324,7 @@ struct MarkdownEditorView: View {
                 source: document.text,
                 selectedUTF16Range: sourceEditorSession.textView.selectedRange()
             )
-            viewMode = viewMode.sourceVisible
+            revealSourceSurface()
             guard sourceEditorSession.applyMarkdownFormat(plan, actionName: "插入脚注") else {
                 markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未插入脚注。"
                 return
@@ -3313,7 +3346,7 @@ struct MarkdownEditorView: View {
                 source: document.text,
                 selectedUTF16Range: sourceEditorSession.textView.selectedRange()
             )
-            viewMode = viewMode.sourceVisible
+            revealSourceSurface()
             guard sourceEditorSession.applyMarkdownFormat(plan, actionName: "插入分隔线") else {
                 markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未插入分隔线。"
                 return
@@ -3335,7 +3368,7 @@ struct MarkdownEditorView: View {
                 source: document.text,
                 selectedUTF16Range: sourceEditorSession.textView.selectedRange()
             )
-            viewMode = viewMode.sourceVisible
+            revealSourceSurface()
             guard sourceEditorSession.applyMarkdownFormat(plan, actionName: "插入表格") else {
                 markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未插入表格。"
                 return
@@ -3369,7 +3402,7 @@ struct MarkdownEditorView: View {
                 selectedUTF16Range: request.selectedUTF16Range,
                 destination: destination
             )
-            viewMode = viewMode.sourceVisible
+            revealSourceSurface()
             guard sourceEditorSession.applyMarkdownFormat(plan, actionName: "插入链接") else {
                 linkInsertionRequest = nil
                 markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未插入链接。"
@@ -3397,7 +3430,7 @@ struct MarkdownEditorView: View {
                 selectedUTF16Range: sourceEditorSession.textView.selectedRange(),
                 command: command
             )
-            viewMode = viewMode.sourceVisible
+            revealSourceSurface()
             guard sourceEditorSession.applyMarkdownFormat(
                 plan,
                 actionName: command.undoActionName
@@ -3756,20 +3789,30 @@ struct MarkdownEditorView: View {
         }
     }
 
+    private func revealSourceSurface() {
+        if viewMode == .preview {
+            instantSourceEditing = true
+        }
+        viewMode = viewMode.sourceVisible
+    }
+
     private func selectViewMode(_ mode: EditorViewMode) {
         guard !usesSourceOnlyExperience || mode == .source else { return }
         viewMode = mode
+        instantSourceEditing = false
         guard !findSession.isPresented else { return }
 
-        Task { @MainActor in
-            await Task.yield()
-            _ = sourceEditorSession.focusEditor()
+        if mode != .preview {
+            Task { @MainActor in
+                await Task.yield()
+                _ = sourceEditorSession.focusEditor()
+            }
         }
     }
 
     private func presentFind(replacing: Bool) {
         guard !replacing || canEditDocument else { return }
-        viewMode = viewMode.sourceVisible
+        revealSourceSurface()
         findSession.present(replacing: replacing)
         if !findSession.resultsAreCurrent(for: document.text) {
             scheduleFindSearch(
@@ -3798,7 +3841,7 @@ struct MarkdownEditorView: View {
     }
 
     private func navigateFind(by offset: Int) {
-        viewMode = viewMode.sourceVisible
+        revealSourceSurface()
         if findSession.isSearching {
             pendingFindNavigation.append(offset)
             return
@@ -3822,7 +3865,7 @@ struct MarkdownEditorView: View {
 
     private func reveal(_ match: DocumentSearchMatch?) {
         guard let match else { return }
-        viewMode = viewMode.sourceVisible
+        revealSourceSurface()
         sourceSelectionGeneration &+= 1
         sourceSelectionRequest = SourceSelectionRequest(
             generation: sourceSelectionGeneration,

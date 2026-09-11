@@ -903,6 +903,17 @@ final class MarkdownRendererTests: XCTestCase {
             .manualScroll
         )
         XCTAssertEqual(
+            PreviewNavigationMessage.decode(["type": "edit"]),
+            .edit(sourceUTF8Offset: nil)
+        )
+        XCTAssertEqual(
+            PreviewNavigationMessage.decode([
+                "type": "edit",
+                "sourceUTF8Offset": NSNumber(value: 31),
+            ]),
+            .edit(sourceUTF8Offset: 31)
+        )
+        XCTAssertEqual(
             PreviewNavigationMessage.decode([
                 "type": "previewIssue",
                 "action": "locate",
@@ -941,6 +952,10 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertNil(PreviewNavigationMessage.decode([
             "type": "heading",
             "sourceUTF8Offset": NSNumber(value: 1.5),
+        ]))
+        XCTAssertNil(PreviewNavigationMessage.decode([
+            "type": "edit",
+            "sourceUTF8Offset": "document text",
         ]))
         XCTAssertNil(PreviewNavigationMessage.decode([
             "type": "link",
@@ -998,6 +1013,7 @@ final class MarkdownRendererTests: XCTestCase {
         let webView = WKWebView()
         var selectedOffset: Int?
         var selectedLink: String?
+        var selectedEditOffset: Int?
         var selectedIssue: (PreviewIssueAction, Int)?
         var selectedImageIssue: (PreviewImageIssueAction, Int, String)?
         var manualScrollCount = 0
@@ -1005,6 +1021,7 @@ final class MarkdownRendererTests: XCTestCase {
             scrollRequest: PreviewScrollRequest(generation: 1, fraction: 0.5),
             onHeadingActivated: { selectedOffset = $0 },
             onLinkActivated: { selectedLink = $0 },
+            onEditRequested: { selectedEditOffset = $0 },
             onPreviewIssueAction: { selectedIssue = ($0, $1) },
             onImageIssueAction: { selectedImageIssue = ($0, $1, $2) },
             onManualScroll: { manualScrollCount += 1 },
@@ -1013,6 +1030,7 @@ final class MarkdownRendererTests: XCTestCase {
 
         coordinator.handle(.heading(sourceUTF8Offset: 128))
         coordinator.handle(.link(target: "https://example.com"))
+        coordinator.handle(.edit(sourceUTF8Offset: 96))
         coordinator.handle(.previewIssue(action: .retry, sourceUTF8Offset: 64))
         coordinator.handle(.imageIssue(
             action: .copyTarget,
@@ -1023,6 +1041,7 @@ final class MarkdownRendererTests: XCTestCase {
 
         XCTAssertEqual(selectedOffset, 128)
         XCTAssertEqual(selectedLink, "https://example.com")
+        XCTAssertEqual(selectedEditOffset, 96)
         XCTAssertEqual(selectedIssue?.0, .retry)
         XCTAssertEqual(selectedIssue?.1, 64)
         XCTAssertEqual(selectedImageIssue?.0, .copyTarget)
@@ -1746,6 +1765,66 @@ final class MarkdownRendererTests: XCTestCase {
         )
         await fulfillment(of: [received], timeout: 5)
         XCTAssertEqual(receivedTarget, "https://example.com/a b?x=1&y=2")
+    }
+
+    @MainActor
+    func testMountedPreviewRequestsSourceEditingWhenRenderedBodyIsDoubleClicked() async throws {
+        let received = expectation(description: "edit requested")
+        var didRequestEditing = false
+        var receivedOffset: Int?
+        let root = MarkdownPreviewView(
+            html: MarkdownRenderer.htmlDocument(for: "正文 **加粗**"),
+            baseURL: nil,
+            onEditRequested: { offset in
+                didRequestEditing = true
+                receivedOffset = offset
+                received.fulfill()
+            }
+        )
+        let hosting = NSHostingView(rootView: root)
+        hosting.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
+        let window = NSWindow(
+            contentRect: hosting.frame,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.animationBehavior = .none
+        window.contentView = hosting
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        hosting.layoutSubtreeIfNeeded()
+
+        var webView: WKWebView?
+        var paragraphIsReady = false
+        for _ in 0..<100 {
+            webView = descendants(of: hosting).compactMap { $0 as? WKWebView }.first
+            if let candidate = webView,
+               candidate.isLoading == false,
+               let isReady = try? await candidate.callAsyncJavaScript(
+                   "return document.querySelector('p strong') !== null;",
+                   arguments: [:],
+                   in: nil,
+                   contentWorld: .defaultClient
+               ) as? Bool,
+               isReady
+            {
+                paragraphIsReady = true
+                break
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let mounted = try XCTUnwrap(webView)
+        XCTAssertTrue(paragraphIsReady)
+        _ = try await mounted.callAsyncJavaScript(
+            "document.querySelector('strong').dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); return true;",
+            arguments: [:],
+            in: nil,
+            contentWorld: .defaultClient
+        )
+        await fulfillment(of: [received], timeout: 5)
+        XCTAssertTrue(didRequestEditing)
+        XCTAssertNil(receivedOffset)
     }
 
     @MainActor

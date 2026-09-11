@@ -32,6 +32,7 @@ enum PreviewWebNavigationPolicy {
 enum PreviewNavigationMessage: Equatable {
     case heading(sourceUTF8Offset: Int)
     case link(target: String)
+    case edit(sourceUTF8Offset: Int?)
     case previewIssue(action: PreviewIssueAction, sourceUTF8Offset: Int)
     case imageIssue(
         action: PreviewImageIssueAction,
@@ -62,6 +63,12 @@ enum PreviewNavigationMessage: Equatable {
             return .link(target: target)
         case "manualScroll":
             return .manualScroll
+        case "edit":
+            guard dictionary.keys.contains("sourceUTF8Offset") else {
+                return .edit(sourceUTF8Offset: nil)
+            }
+            guard let offset = decodeSourceOffset(dictionary) else { return nil }
+            return .edit(sourceUTF8Offset: offset)
         case "previewIssue":
             guard let actionName = dictionary["action"] as? String,
                   let action = PreviewIssueAction(rawValue: actionName),
@@ -141,6 +148,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
     let scrollRequest: PreviewScrollRequest?
     let onHeadingActivated: (Int) -> Void
     let onLinkActivated: (String) -> Void
+    let onEditRequested: (Int?) -> Void
     let onPreviewIssueAction: (PreviewIssueAction, Int) -> Void
     let onImageIssueAction: (PreviewImageIssueAction, Int, String) -> Void
     let onManualScroll: () -> Void
@@ -151,6 +159,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
         scrollRequest: PreviewScrollRequest? = nil,
         onHeadingActivated: @escaping (Int) -> Void = { _ in },
         onLinkActivated: @escaping (String) -> Void = { _ in },
+        onEditRequested: @escaping (Int?) -> Void = { _ in },
         onPreviewIssueAction: @escaping (PreviewIssueAction, Int) -> Void = { _, _ in },
         onImageIssueAction: @escaping (PreviewImageIssueAction, Int, String) -> Void = { _, _, _ in },
         onManualScroll: @escaping () -> Void = {}
@@ -160,6 +169,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
         self.scrollRequest = scrollRequest
         self.onHeadingActivated = onHeadingActivated
         self.onLinkActivated = onLinkActivated
+        self.onEditRequested = onEditRequested
         self.onPreviewIssueAction = onPreviewIssueAction
         self.onImageIssueAction = onImageIssueAction
         self.onManualScroll = onManualScroll
@@ -194,6 +204,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
             scrollRequest: scrollRequest,
             onHeadingActivated: onHeadingActivated,
             onLinkActivated: onLinkActivated,
+            onEditRequested: onEditRequested,
             onPreviewIssueAction: onPreviewIssueAction,
             onImageIssueAction: onImageIssueAction,
             onManualScroll: onManualScroll,
@@ -207,6 +218,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
             scrollRequest: scrollRequest,
             onHeadingActivated: onHeadingActivated,
             onLinkActivated: onLinkActivated,
+            onEditRequested: onEditRequested,
             onPreviewIssueAction: onPreviewIssueAction,
             onImageIssueAction: onImageIssueAction,
             onManualScroll: onManualScroll,
@@ -247,6 +259,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
         private var documentLoadGeneration = 0
         private var onHeadingActivated: (Int) -> Void = { _ in }
         private var onLinkActivated: (String) -> Void = { _ in }
+        private var onEditRequested: (Int?) -> Void = { _ in }
         private var onPreviewIssueAction: (PreviewIssueAction, Int) -> Void = { _, _ in }
         private var onImageIssueAction: (PreviewImageIssueAction, Int, String) -> Void = { _, _, _ in }
         private var onManualScroll: () -> Void = {}
@@ -255,6 +268,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
             scrollRequest: PreviewScrollRequest?,
             onHeadingActivated: @escaping (Int) -> Void,
             onLinkActivated: @escaping (String) -> Void,
+            onEditRequested: @escaping (Int?) -> Void = { _ in },
             onPreviewIssueAction: @escaping (PreviewIssueAction, Int) -> Void,
             onImageIssueAction: @escaping (PreviewImageIssueAction, Int, String) -> Void = { _, _, _ in },
             onManualScroll: @escaping () -> Void,
@@ -263,6 +277,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
             requestedScroll = scrollRequest
             self.onHeadingActivated = onHeadingActivated
             self.onLinkActivated = onLinkActivated
+            self.onEditRequested = onEditRequested
             self.onPreviewIssueAction = onPreviewIssueAction
             self.onImageIssueAction = onImageIssueAction
             self.onManualScroll = onManualScroll
@@ -369,6 +384,8 @@ struct MarkdownPreviewView: NSViewRepresentable {
                 onHeadingActivated(sourceUTF8Offset)
             case let .link(target):
                 onLinkActivated(target)
+            case let .edit(sourceUTF8Offset):
+                onEditRequested(sourceUTF8Offset)
             case let .previewIssue(action, sourceUTF8Offset):
                 onPreviewIssueAction(action, sourceUTF8Offset)
             case let .imageIssue(action, sourceUTF8Offset, target):
@@ -504,6 +521,21 @@ struct MarkdownPreviewView: NSViewRepresentable {
             && event.target.matches(selector)) {
           event.preventDefault();
           activate(event.target);
+        }
+      });
+
+      document.addEventListener('dblclick', (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target || target.closest('a, button, input')) {
+          return;
+        }
+        event.preventDefault();
+        const located = target.closest(selector);
+        const value = Number(located?.dataset.inflowSourceStart);
+        if (Number.isSafeInteger(value) && value >= 0) {
+          handler.postMessage({ type: 'edit', sourceUTF8Offset: value });
+        } else {
+          handler.postMessage({ type: 'edit' });
         }
       });
 

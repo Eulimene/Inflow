@@ -47,14 +47,14 @@
 ### 2.2 单一正文与三种视图
 
 - MarkdownDocument.text 是 SwiftUI 文档模型中的正文事实；MarkdownSourceEditorSession 持有一个持久 NSTextView。
-- 源码编辑、实时预览分栏左侧与即时编辑复用同一个 MarkdownSourceEditor 和 MarkdownSourceEditorSession；分栏右侧才使用当前内存正文生成只读 WebKit 结果。
+- 源码编辑与实时预览分栏左侧复用同一个 MarkdownSourceEditor 和 MarkdownSourceEditorSession；分栏右侧和即时编辑阅读态复用当前内存正文生成的同一份只读 WebKit 结果。
 - 文本修改由 NSTextView 发布回同一个绑定，撤销与重做继续使用同一个 UndoManager。展示属性更新不登记正文 undo。
 - EditorViewMode 的历史内部 case 名 preview 现在对应用户可见的“即时编辑”。
 - 视图切换复用同一选区与源范围导航入口。点击大纲后当前可编辑视图直接滚动到标题，把插入光标放到标题起点并聚焦编辑器；不切换视图，caret 导航不显示查找匹配高亮。
 
 ### 2.3 即时编辑与分栏预览
 
-- 即时编辑（边写边渲染）使用 RenderedMarkdownEditor 在持久 NSTextView 上应用可逆排版。ATX H1–H6 与 Setext H1/H2、强调和嵌套样式按有效字体合成；隐藏定界符清除装饰残影；合法代码跨度的单层边界空格按 CommonMark 展示规则折叠；输入、撤销和重做按最新字节快照刷新。行内链接、带 title 的链接、完整/折叠/快捷引用式链接和 `http`/`https` 自动链接都呈现为普通点击可激活文字，引用定义作为元数据折叠而不进入阅读正文；引用块隐藏 `>` 并呈现缩进、底色和引用条。GFM 表格保留原始字符范围，但阅读时用原生网格覆盖呈现表头、列对齐和交替数据行，表格内链接继续走同一导航回调。行内与引用式的本地/在线图片在后台加载；受支持的 Mermaid 由同一个离线 Rust Core 生成无脚本 SVG；二者都通过文本布局预留尺寸并覆盖呈现，不插入对象替代字符，因此保存内容和 undo 仍是纯 Markdown。普通围栏代码、原始 HTML、无效或不支持的 Mermaid 及歧义结构保留可编辑局部源码。
+- 即时编辑的阅读态直接挂载实时预览使用的 `previewHTML` 和 MarkdownPreviewView。两种模式由同一次 Rust Core 渲染、同一套 PreviewAppearanceCSS、本地图片解析、在线图片策略、链接标注、代码高亮、公式与 Mermaid 输出驱动，因而可见内容和排版不再由另一套 Swift/NSTextView 规则近似。链接仍按预览导航策略激活；双击非链接正文或点击右上角“编辑源码”会在即时编辑模式内部显示同一 MarkdownSourceEditor，“完成编辑”后恢复规范渲染。标题携带的源偏移可精确定位，普通正文保留当前编辑位置。保存内容和 undo 始终属于原始 Markdown，不产生 HTML 或富文本副本。
 - 分栏右侧的 MarkdownPreviewView 使用 MarkdownRenderer 把当前内存正文生成 HTML，并在禁用页面脚本的 WKWebView 中展示。Mermaid `flowchart` 支持普通连线和仓库已有的 `-.文字.->` 带标签虚线，生成本地自包含 SVG。CSP 只放行 `data:` 以及 `http`/`https` 图片，仍禁止脚本、连接 API、媒体、嵌入、文件 URL 和页面自行导航；非持久数据存储不保留站点数据。
 - 展示属性不登记正文 undo；三种视图间切换时保持同一正文、修改状态、保存路径和撤销历史。
 - 链接导航、本地图片和失败降级继续受当前内容快照与封闭宿主消息约束；项目边界只决定 Markdown 能否在当前项目标签中直接编辑，不再把项目外的用户点击目标视为无效链接。
@@ -146,7 +146,6 @@
 - 技术责任边界：[architecture.md](architecture.md)
 - 当前 UAT 对照：[launch-acceptance.md](launch-acceptance.md)
 - 已废止旧记录：[launch-candidate-0.1.0-build-1.md](launch-candidate-0.1.0-build-1.md)
-- 即时编辑核心：[../macos/Inflow/Editor/RenderedMarkdownEditor.swift](../macos/Inflow/Editor/RenderedMarkdownEditor.swift)
-- 分栏只读预览核心：[../macos/Inflow/Preview/MarkdownPreviewView.swift](../macos/Inflow/Preview/MarkdownPreviewView.swift)
+- 即时编辑与分栏共用的渲染核心：[../macos/Inflow/Preview/MarkdownPreviewView.swift](../macos/Inflow/Preview/MarkdownPreviewView.swift)
 - 三视图接线：[../macos/Inflow/Editor/MarkdownEditorView.swift](../macos/Inflow/Editor/MarkdownEditorView.swift)
 - 同一 NSTextView 宿主：[../macos/Inflow/Editor/MarkdownSourceEditor.swift](../macos/Inflow/Editor/MarkdownSourceEditor.swift)
