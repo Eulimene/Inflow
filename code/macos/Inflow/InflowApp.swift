@@ -492,6 +492,33 @@ final class ProjectDocumentSurface: Identifiable {
 }
 
 enum ProjectDocumentTabSelection {
+    enum CloseScope: CaseIterable, Equatable {
+        case current
+        case others
+        case left
+        case right
+    }
+
+    static func targetIDs(
+        for scope: CloseScope,
+        anchorID: ObjectIdentifier,
+        orderedIDs: [ObjectIdentifier]
+    ) -> [ObjectIdentifier] {
+        guard let anchorIndex = orderedIDs.firstIndex(of: anchorID) else {
+            return []
+        }
+        switch scope {
+        case .current:
+            return [anchorID]
+        case .others:
+            return orderedIDs.filter { $0 != anchorID }
+        case .left:
+            return Array(orderedIDs[..<anchorIndex])
+        case .right:
+            return Array(orderedIDs[orderedIDs.index(after: anchorIndex)...])
+        }
+    }
+
     static func activeIDAfterClosing(
         _ closingID: ObjectIdentifier,
         orderedIDs: [ObjectIdentifier],
@@ -510,6 +537,29 @@ enum ProjectDocumentTabSelection {
             return orderedIDs[closingIndex - 1]
         }
         return nil
+    }
+
+    static func activeIDAfterClosing(
+        _ closingIDs: Set<ObjectIdentifier>,
+        orderedIDs: [ObjectIdentifier],
+        activeID: ObjectIdentifier?
+    ) -> ObjectIdentifier? {
+        let remainingIDs = orderedIDs.filter { !closingIDs.contains($0) }
+        guard let activeID else { return remainingIDs.first }
+        if remainingIDs.contains(activeID) {
+            return activeID
+        }
+        guard let activeIndex = orderedIDs.firstIndex(of: activeID) else {
+            return remainingIDs.first
+        }
+        if let rightNeighbor = orderedIDs[orderedIDs.index(after: activeIndex)...]
+            .first(where: { !closingIDs.contains($0) })
+        {
+            return rightNeighbor
+        }
+        return orderedIDs[..<activeIndex]
+            .reversed()
+            .first(where: { !closingIDs.contains($0) })
     }
 }
 
@@ -1200,6 +1250,11 @@ final class LightweightProjectCoordinator: ObservableObject {
               nativeDocument.fileURL?.standardizedFileURL == fileURL.standardizedFileURL
         else { return }
 
+        // A DocumentGroup still owns a native window for every project file.
+        // Suppress it before publishing or laying out the in-workspace surface,
+        // otherwise AppKit can briefly expose that differently sized window.
+        suppressBackgroundWindows(of: nativeDocument)
+
         let identifier = ObjectIdentifier(nativeDocument)
         let surface: ProjectDocumentSurface
         let shouldActivate: Bool
@@ -1213,7 +1268,10 @@ final class LightweightProjectCoordinator: ObservableObject {
                 fileURL: fileURL,
                 isEditable: isEditable
             )
-            shouldActivate = pendingSurfaceActivation == surface.id || activeSurfaceID == nil
+            // Keep the currently visible editor in place while SwiftUI mounts a
+            // newly opened surface. The host reports that mount below and only
+            // then performs the visible selection.
+            shouldActivate = activeSurfaceID == nil
             var nextState = workspaceSurfaceState
             nextState.surfaces.append(surface)
             if shouldActivate {
@@ -1233,8 +1291,27 @@ final class LightweightProjectCoordinator: ObservableObject {
             focusProjectHostWindow()
             focusEditorWhenMounted(surface)
         }
-        for windowController in nativeDocument.windowControllers {
-            windowController.window?.orderOut(nil)
+        suppressBackgroundWindows(of: nativeDocument)
+    }
+
+    func documentSurfaceDidMount(_ identifier: ObjectIdentifier) {
+        guard pendingSurfaceActivation == identifier,
+              activeSurfaceID != identifier,
+              documentSurfaces.contains(where: { $0.id == identifier })
+        else { return }
+
+        // Let the representable descendants create their native views before
+        // selecting the new surface. Until then the previous editor remains
+        // fully visible, avoiding a blank or partially rendered frame.
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self,
+                  self.pendingSurfaceActivation == identifier,
+                  let surface = self.documentSurfaces.first(where: {
+                      $0.id == identifier
+                  })
+            else { return }
+            self.activateProjectDocument(surface.nativeDocument)
         }
     }
 
@@ -1252,52 +1329,105 @@ final class LightweightProjectCoordinator: ObservableObject {
     }
 
     func closeDocumentSurface(_ identifier: ObjectIdentifier) {
+        closeDocumentSurfaces(
+            ProjectDocumentTabSelection.targetIDs(
+                for: .current,
+                anchorID: identifier,
+                orderedIDs: documentSurfaces.map(\.id)
+            )
+        )
+    }
+
+    func closeDocumentSurfaces(
+        in scope: ProjectDocumentTabSelection.CloseScope,
+        relativeTo identifier: ObjectIdentifier
+    ) {
+        closeDocumentSurfaces(
+            ProjectDocumentTabSelection.targetIDs(
+                for: scope,
+                anchorID: identifier,
+                orderedIDs: documentSurfaces.map(\.id)
+            )
+        )
+    }
+
+    private func closeDocumentSurfaces(_ identifiers: [ObjectIdentifier]) {
         guard !documentSwitchGate.isBusy,
-              let surface = documentSurfaces.first(where: { $0.id == identifier })
+              !DocumentCloseAuthorization.hasPendingRequests
         else { return }
 
+        let requestedIDs = Set(identifiers)
+        let surfaces = documentSurfaces.filter { requestedIDs.contains($0.id) }
+        guard !surfaces.isEmpty else { return }
+
+        authorizeClosing(surfaces, at: 0) { [weak self] authorized in
+            guard authorized else { return }
+            self?.commitClosing(surfaces)
+        }
+    }
+
+    private func authorizeClosing(
+        _ surfaces: [ProjectDocumentSurface],
+        at index: Int,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard surfaces.indices.contains(index) else {
+            completion(true)
+            return
+        }
+        let surface = surfaces[index]
         DocumentCloseAuthorization.request(for: surface.nativeDocument) {
             [weak self, weak surface] shouldClose in
-            guard shouldClose, let self, let surface,
-                  let currentIndex = self.documentSurfaces.firstIndex(where: {
-                      $0.id == identifier && $0 === surface
-                  })
-            else { return }
-
-            let orderedIDs = self.documentSurfaces.map(\.id)
-            let nextActiveID = ProjectDocumentTabSelection.activeIDAfterClosing(
-                identifier,
-                orderedIDs: orderedIDs,
-                activeID: self.activeSurfaceID
-            )
-            var nextState = self.workspaceSurfaceState
-            nextState.surfaces.remove(at: currentIndex)
-            nextState.activeID = nextActiveID.flatMap { candidate in
-                nextState.surfaces.contains(where: { $0.id == candidate })
-                    ? candidate
-                    : nil
+            guard shouldClose, let self, surface != nil else {
+                completion(false)
+                return
             }
+            self.authorizeClosing(surfaces, at: index + 1, completion: completion)
+        }
+    }
 
-            // Remove the editor surface and choose its successor in one
-            // publication so the workspace never renders a blank transition.
-            self.workspaceSurfaceState = nextState
-            if self.pendingSurfaceActivation == identifier {
-                self.pendingSurfaceActivation = nil
-            }
-            self.browser.dissociateProjectWindow(surface.nativeDocument)
+    private func commitClosing(_ authorizedSurfaces: [ProjectDocumentSurface]) {
+        guard !documentSwitchGate.isBusy else { return }
+        let currentSurfaceIDs = Set(documentSurfaces.map(\.id))
+        let surfaces = authorizedSurfaces.filter { currentSurfaceIDs.contains($0.id) }
+        guard !surfaces.isEmpty else { return }
+
+        let closingIDs = Set(surfaces.map(\.id))
+        let orderedIDs = documentSurfaces.map(\.id)
+        let nextActiveID = ProjectDocumentTabSelection.activeIDAfterClosing(
+            closingIDs,
+            orderedIDs: orderedIDs,
+            activeID: activeSurfaceID
+        )
+        var nextState = workspaceSurfaceState
+        nextState.surfaces.removeAll { closingIDs.contains($0.id) }
+        nextState.activeID = nextActiveID.flatMap { candidate in
+            nextState.surfaces.contains(where: { $0.id == candidate })
+                ? candidate
+                : nil
+        }
+
+        // Remove every requested surface and select its successor in one
+        // publication so batch closing never exposes an intermediate editor.
+        workspaceSurfaceState = nextState
+        if let pendingSurfaceActivation, closingIDs.contains(pendingSurfaceActivation) {
+            self.pendingSurfaceActivation = nil
+        }
+        for surface in surfaces {
+            browser.dissociateProjectWindow(surface.nativeDocument)
             NativeDocumentLoadedFileRegistry.clear(surface.nativeDocument)
             surface.nativeDocument.close()
+        }
 
-            if let nextID = nextState.activeID,
-               let nextSurface = nextState.surfaces.first(where: { $0.id == nextID })
-            {
-                self.projectDocument = nextSurface.nativeDocument
-                self.focusProjectHostWindow()
-                self.focusEditorWhenMounted(nextSurface)
-            } else {
-                self.projectDocument = self.projectHostDocument
-                self.focusProjectHostWindow()
-            }
+        if let nextID = nextState.activeID,
+           let nextSurface = nextState.surfaces.first(where: { $0.id == nextID })
+        {
+            projectDocument = nextSurface.nativeDocument
+            focusProjectHostWindow()
+            focusEditorWhenMounted(nextSurface)
+        } else {
+            projectDocument = projectHostDocument
+            focusProjectHostWindow()
         }
     }
 
@@ -1318,6 +1448,8 @@ final class LightweightProjectCoordinator: ObservableObject {
     }
 
     private func prepareProjectDocumentSurface(_ document: NSDocument) {
+        let hostWindow = activeProjectHost?.windowControllers.first?.window
+        let stableHostFrame = hostWindow?.frame
         projectDocument = document
         browser.associateProjectWindow(with: document)
         pendingSurfaceActivation = ObjectIdentifier(document)
@@ -1327,14 +1459,25 @@ final class LightweightProjectCoordinator: ObservableObject {
         for windowController in document.windowControllers {
             let window = windowController.window
             window?.animationBehavior = .none
+            window?.orderOut(nil)
             _ = window?.contentViewController?.view
             window?.contentView?.layoutSubtreeIfNeeded()
             window?.orderOut(nil)
+        }
+        if let hostWindow, let stableHostFrame, hostWindow.frame != stableHostFrame {
+            hostWindow.setFrame(stableHostFrame, display: true, animate: false)
         }
         if documentSurfaces.contains(where: { $0.id == ObjectIdentifier(document) }) {
             activateProjectDocument(document)
         }
         focusProjectHostWindow()
+    }
+
+    private func suppressBackgroundWindows(of document: NSDocument) {
+        for windowController in document.windowControllers {
+            windowController.window?.animationBehavior = .none
+            windowController.window?.orderOut(nil)
+        }
     }
 
     private func focusProjectHostWindow() {
@@ -1711,17 +1854,17 @@ private struct ProjectWorkspaceScene: View {
 
     private var workspaceContent: some View {
         VStack(spacing: 0) {
-            if !projectCoordinator.documentSurfaces.isEmpty {
-                ProjectDocumentTabBar(projectCoordinator: projectCoordinator)
-                Divider()
-            }
+            // Reserve the tab strip from the moment a project opens. Adding the
+            // first file must not push the entire editor down by one row.
+            ProjectDocumentTabBar(projectCoordinator: projectCoordinator)
+            Divider()
             activeEditor
         }
     }
 
-    @ViewBuilder
     private var activeEditor: some View {
-        if projectCoordinator.documentSurfaces.isEmpty {
+        let hasActiveSurface = projectCoordinator.activeSurfaceID != nil
+        return ZStack {
             MarkdownEditorView(
                 document: $shellDocument,
                 fileURL: nil,
@@ -1733,23 +1876,28 @@ private struct ProjectWorkspaceScene: View {
                 projectCoordinator: projectCoordinator,
                 nativeDocumentOverride: hostDocument,
                 workspaceWindowDocument: hostDocument,
-                showsProjectSidebar: false
+                showsProjectSidebar: false,
+                isWorkspaceSurfaceActive: !hasActiveSurface
             )
-        } else {
-            ZStack {
-                ForEach(projectCoordinator.documentSurfaces) { surface in
-                    let isActive = projectCoordinator.activeSurfaceID == surface.id
-                    projectEditor(for: surface, isActive: isActive)
-                        .opacity(isActive ? 1 : 0)
-                        .allowsHitTesting(isActive)
-                        .accessibilityHidden(!isActive)
-                        .zIndex(isActive ? 1 : 0)
-                }
+            .opacity(hasActiveSurface ? 0 : 1)
+            .allowsHitTesting(!hasActiveSurface)
+            .accessibilityHidden(hasActiveSurface)
+
+            ForEach(projectCoordinator.documentSurfaces) { surface in
+                let isActive = projectCoordinator.activeSurfaceID == surface.id
+                projectEditor(for: surface, isActive: isActive)
+                    .opacity(isActive ? 1 : 0)
+                    .allowsHitTesting(isActive)
+                    .accessibilityHidden(!isActive)
+                    .zIndex(isActive ? 1 : 0)
+                    .onAppear {
+                        projectCoordinator.documentSurfaceDidMount(surface.id)
+                    }
             }
-            .transaction { transaction in
-                transaction.animation = nil
-                transaction.disablesAnimations = true
-            }
+        }
+        .transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
         }
     }
 
@@ -1784,34 +1932,95 @@ private struct ProjectDocumentTabBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
                 ForEach(projectCoordinator.documentSurfaces) { surface in
-                    Button {
-                        projectCoordinator.selectDocumentSurface(surface.id)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "doc.text")
-                            Text(surface.title)
-                                .lineLimit(1)
+                    let isActive = projectCoordinator.activeSurfaceID == surface.id
+                    HStack(spacing: 2) {
+                        Button {
+                            projectCoordinator.selectDocumentSurface(surface.id)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "doc.text")
+                                Text(surface.title)
+                                    .lineLimit(1)
+                            }
+                            .padding(.leading, 10)
+                            .padding(.trailing, 4)
+                            .frame(height: 28)
+                            .contentShape(Rectangle())
                         }
-                        .padding(.horizontal, 10)
-                        .frame(height: 28)
-                        .background(
-                            projectCoordinator.activeSurfaceID == surface.id
-                                ? Color.accentColor.opacity(0.14)
-                                : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 6)
+                        .buttonStyle(.plain)
+
+                        Button {
+                            projectCoordinator.closeDocumentSurface(surface.id)
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9, weight: .semibold))
+                                .frame(width: 18, height: 18)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.trailing, 5)
+                        .help("关闭 \(surface.title)")
+                        .accessibilityLabel("关闭文档：\(surface.title)")
+                    }
+                    .frame(height: 28)
+                    .background(
+                        isActive
+                            ? Color.accentColor.opacity(0.14)
+                            : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 6)
+                    )
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("打开的文档：\(surface.title)")
+                    .accessibilityValue(isActive ? "当前" : "后台")
+                    .contextMenu {
+                        Button("关闭当前文件") {
+                            projectCoordinator.closeDocumentSurfaces(
+                                in: .current,
+                                relativeTo: surface.id
+                            )
+                        }
+                        Divider()
+                        Button("关闭其他文件") {
+                            projectCoordinator.closeDocumentSurfaces(
+                                in: .others,
+                                relativeTo: surface.id
+                            )
+                        }
+                        .disabled(
+                            ProjectDocumentTabSelection.targetIDs(
+                                for: .others,
+                                anchorID: surface.id,
+                                orderedIDs: projectCoordinator.documentSurfaces.map(\.id)
+                            ).isEmpty
+                        )
+                        Button("关闭左侧文件") {
+                            projectCoordinator.closeDocumentSurfaces(
+                                in: .left,
+                                relativeTo: surface.id
+                            )
+                        }
+                        .disabled(
+                            ProjectDocumentTabSelection.targetIDs(
+                                for: .left,
+                                anchorID: surface.id,
+                                orderedIDs: projectCoordinator.documentSurfaces.map(\.id)
+                            ).isEmpty
+                        )
+                        Button("关闭右侧文件") {
+                            projectCoordinator.closeDocumentSurfaces(
+                                in: .right,
+                                relativeTo: surface.id
+                            )
+                        }
+                        .disabled(
+                            ProjectDocumentTabSelection.targetIDs(
+                                for: .right,
+                                anchorID: surface.id,
+                                orderedIDs: projectCoordinator.documentSurfaces.map(\.id)
+                            ).isEmpty
                         )
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("打开的文档：\(surface.title)")
-                    .accessibilityValue(
-                        projectCoordinator.activeSurfaceID == surface.id ? "当前" : "后台"
-                    )
-                    .contextMenu {
-                        Button("关闭标签页") {
-                            projectCoordinator.closeDocumentSurface(surface.id)
-                        }
-                    }
-                    .accessibilityAction(named: "关闭标签页") {
+                    .accessibilityAction(named: "关闭当前文件") {
                         projectCoordinator.closeDocumentSurface(surface.id)
                     }
                 }

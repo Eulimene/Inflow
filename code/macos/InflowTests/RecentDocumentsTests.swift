@@ -1182,6 +1182,8 @@ final class RecentDocumentsTests: XCTestCase {
         }
         defer { routedDocument.document.close() }
         XCTAssertFalse(routedDocument.wasAlreadyOpen)
+        let routedReceipt = try XCTUnwrap(routedDocument.receipt)
+        XCTAssertEqual(routedReceipt.expectedData, routedData)
         let routedCurrentAuthorization = try XCTUnwrap(
             ProjectDocumentOpenAuthorization.capture(
                 targetURL: routedURL,
@@ -1198,16 +1200,19 @@ final class RecentDocumentsTests: XCTestCase {
         XCTAssertTrue(
             NativeDocumentLoadedFileRegistry.matches(
                 routedDocument.document,
-                authorization: routedCurrentAuthorization
+                authorization: routedReceipt.authorization
             ),
-            "the real controller path must preserve its descriptor-bound authorization"
+            "the real controller path must preserve the authorization returned by its descriptor-bound receipt"
         )
 
         let ordinaryRouteURL = directory.appendingPathComponent("ordinary-route.md")
         try Data("# Existing ordinary window\n".utf8).write(to: ordinaryRouteURL)
         let ordinaryRouteDocument = NSDocument()
-        ordinaryRouteDocument.fileURL = ordinaryRouteURL
+        // Register before assigning the represented path. AppKit can perform
+        // asynchronous last-used metadata bookkeeping during registration;
+        // the authorization below must freeze the settled user-visible file.
         NSDocumentController.shared.addDocument(ordinaryRouteDocument)
+        ordinaryRouteDocument.fileURL = ordinaryRouteURL
         defer { ordinaryRouteDocument.close() }
         let ordinaryRouteAuthorization = try XCTUnwrap(
             ProjectDocumentOpenAuthorization.capture(

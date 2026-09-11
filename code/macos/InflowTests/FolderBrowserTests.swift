@@ -39,6 +39,77 @@ final class FolderBrowserTests: XCTestCase {
             ),
             third
         )
+
+        XCTAssertEqual(
+            ProjectDocumentTabSelection.targetIDs(
+                for: .current,
+                anchorID: second,
+                orderedIDs: ordered
+            ),
+            [second]
+        )
+        XCTAssertEqual(
+            ProjectDocumentTabSelection.targetIDs(
+                for: .others,
+                anchorID: second,
+                orderedIDs: ordered
+            ),
+            [first, third]
+        )
+        XCTAssertEqual(
+            ProjectDocumentTabSelection.targetIDs(
+                for: .left,
+                anchorID: second,
+                orderedIDs: ordered
+            ),
+            [first]
+        )
+        XCTAssertEqual(
+            ProjectDocumentTabSelection.targetIDs(
+                for: .right,
+                anchorID: second,
+                orderedIDs: ordered
+            ),
+            [third]
+        )
+        XCTAssertTrue(
+            ProjectDocumentTabSelection.targetIDs(
+                for: .left,
+                anchorID: first,
+                orderedIDs: ordered
+            ).isEmpty
+        )
+        XCTAssertTrue(
+            ProjectDocumentTabSelection.targetIDs(
+                for: .right,
+                anchorID: third,
+                orderedIDs: ordered
+            ).isEmpty
+        )
+        XCTAssertEqual(
+            ProjectDocumentTabSelection.activeIDAfterClosing(
+                [first, second],
+                orderedIDs: ordered,
+                activeID: first
+            ),
+            third
+        )
+        XCTAssertEqual(
+            ProjectDocumentTabSelection.activeIDAfterClosing(
+                [second, third],
+                orderedIDs: ordered,
+                activeID: third
+            ),
+            first
+        )
+        XCTAssertEqual(
+            ProjectDocumentTabSelection.activeIDAfterClosing(
+                [first, third],
+                orderedIDs: ordered,
+                activeID: second
+            ),
+            second
+        )
     }
 
     func testProjectDocumentSwitchGateRejectsConcurrentTransactions() async throws {
@@ -393,6 +464,14 @@ final class FolderBrowserTests: XCTestCase {
         let replacementDocument = ClosingTrackingDocument()
         replacementDocument.fileURL = projectTarget
         NSDocumentController.shared.addDocument(replacementDocument)
+        // Match the real DocumentGroup lifecycle: its native window exists
+        // before the project coordinator receives the completed open. Let
+        // AppKit finish that setup before freezing the callback receipt so the
+        // explicit permission mutation below remains the only attach-time
+        // metadata change exercised by this assertion.
+        replacementDocument.makeWindowControllers()
+        replacementDocument.windowControllers.forEach { $0.window?.orderOut(nil) }
+        await Task.yield()
         defer {
             for document in NSDocumentController.shared.documents
                 where document === replacementDocument
@@ -458,6 +537,17 @@ final class FolderBrowserTests: XCTestCase {
         try Data("# Second\n".utf8).write(to: secondTarget)
         let secondDocument = ClosingTrackingDocument()
         secondDocument.fileURL = secondTarget
+        let backgroundWindow = NSWindow(
+            contentRect: NSRect(x: 120, y: 120, width: 520, height: 360),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        backgroundWindow.animationBehavior = .none
+        let backgroundWindowController = NSWindowController(window: backgroundWindow)
+        secondDocument.addWindowController(backgroundWindowController)
+        backgroundWindow.orderFront(nil)
+        XCTAssertTrue(backgroundWindow.isVisible)
         NSDocumentController.shared.addDocument(secondDocument)
         browser.associateProjectWindow(with: secondDocument)
         defer {
@@ -473,12 +563,39 @@ final class FolderBrowserTests: XCTestCase {
             fileURL: secondTarget,
             isEditable: true
         )
+        XCTAssertFalse(
+            backgroundWindow.isVisible,
+            "a project document's native window must be hidden before its workspace surface publishes"
+        )
+        secondDocument.removeWindowController(backgroundWindowController)
+        backgroundWindow.close()
         coordinator.selectDocumentSurface(ObjectIdentifier(secondDocument))
         XCTAssertTrue(coordinator.isProjectHostDocument(oldDocument))
         XCTAssertTrue(coordinator.activeDocumentSurface?.nativeDocument === secondDocument)
         XCTAssertEqual(coordinator.documentSurfaces.count, 2)
         XCTAssertEqual(secondDocument.showCount, 0)
         XCTAssertEqual(oldDocument.closeCount, 0)
+
+        let thirdTarget = projectRoot.appendingPathComponent("third.md")
+        try Data("# Third\n".utf8).write(to: thirdTarget)
+        let thirdDocument = ClosingTrackingDocument()
+        thirdDocument.fileURL = thirdTarget
+        NSDocumentController.shared.addDocument(thirdDocument)
+        browser.associateProjectWindow(with: thirdDocument)
+        defer {
+            if NSDocumentController.shared.documents.contains(where: {
+                $0 === thirdDocument
+            }) {
+                thirdDocument.close()
+            }
+        }
+        coordinator.registerDocumentSurface(
+            nativeDocument: thirdDocument,
+            content: .constant(MarkdownDocument(text: "# Third\n")),
+            fileURL: thirdTarget,
+            isEditable: true
+        )
+        XCTAssertEqual(coordinator.documentSurfaces.count, 3)
 
         coordinator.selectDocumentSurface(ObjectIdentifier(replacementDocument))
         XCTAssertTrue(coordinator.isProjectHostDocument(oldDocument))
@@ -488,8 +605,12 @@ final class FolderBrowserTests: XCTestCase {
         XCTAssertEqual(replacementDocument.showCount, 0)
         XCTAssertEqual(secondDocument.showCount, 0)
 
-        coordinator.closeDocumentSurface(ObjectIdentifier(replacementDocument))
+        coordinator.closeDocumentSurfaces(
+            in: .others,
+            relativeTo: ObjectIdentifier(secondDocument)
+        )
         XCTAssertEqual(replacementDocument.closeCount, 1)
+        XCTAssertEqual(thirdDocument.closeCount, 1)
         XCTAssertEqual(coordinator.documentSurfaces.count, 1)
         XCTAssertTrue(coordinator.activeDocumentSurface?.nativeDocument === secondDocument)
         XCTAssertFalse(browser.isAssociatedProjectDocument(replacementDocument))

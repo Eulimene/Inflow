@@ -116,7 +116,7 @@ FolderBrowserController 负责：
 - 在确认创建前再次验证目录存在、可写且解析后仍在项目根内；
 - 区分“落盘前失败”和“空文件已落盘但打开失败”，后者保留真实文件并报告。
 
-LightweightProjectCoordinator 负责单一项目外壳、后台原生文档会话和应用内文档表面的注册与切换。同一规范路径已打开时只选择既有表面，不形成第二份编辑状态；新目标由 `NSDocument` 在后台完成读取和安全校验，其窗口不显示，DocumentGroup 提供的 `Binding<MarkdownDocument>` 注册为 ProjectDocumentSurface 后才替换右侧工作区。项目外壳的 `NSWindow`、FolderBrowserSidebar 和左侧 PersistentEdgeSplitView 始终是同一实例；活动文档变化不调用 `showWindows`、`makeKeyAndOrderFront` 或 AppKit 窗口标签切换。每个表面保留自己的 MarkdownSourceEditorSession 和 UndoManager，MarkdownEditorView 使用明确的原生文档覆盖执行保存、恢复与文件安全操作。硬链接别名去重不属于当前合同。
+LightweightProjectCoordinator 负责单一项目外壳、后台原生文档会话和应用内文档表面的注册与切换。同一规范路径已打开时只选择既有表面，不形成第二份编辑状态；新目标由 `NSDocument` 在后台完成读取和安全校验，其窗口在原生视图布局前就执行 `orderOut`，DocumentGroup 提供的 `Binding<MarkdownDocument>` 注册为 ProjectDocumentSurface 后先在隐藏层挂载，下一个主线程周期再替换右侧工作区。项目外壳的 `NSWindow`、FolderBrowserSidebar、左侧 PersistentEdgeSplitView、标签栏与工作区 ZStack 始终是同一实例；活动文档变化不调用 `showWindows`、不更换 AppKit 窗口，后台布局如果触发框架 frame 改写还会无动画恢复外壳原 frame。每个表面保留自己的 MarkdownSourceEditorSession 和 UndoManager，MarkdownEditorView 使用明确的原生文档覆盖执行保存、恢复与文件安全操作。标签关闭可以按当前、其他、左侧或右侧计算目标集；批量操作先逐份获得原生关闭授权，再在单次 WorkspaceSurfaceState 发布中移除全部目标。硬链接别名去重不属于当前合同。
 
 项目根目录的 security-scoped 租约在用户选择后保持，项目文档不为子文件重复启动访问。该根目录身份也是项目内 Markdown 导航的直接编辑信任边界：每次打开仍重验目录身份、解析路径、符号链接边界和目标快照，通过后直接聚焦或打开标签，不再逐文件要求确认。原生打开造成的 last-used `ctime` 抖动只可在项目身份、解析路径、inode、大小、修改时间和描述符重读字节都与冻结请求匹配时稳定化；替换、越界或内容变更仍拒绝作为项目标签打开。
 
