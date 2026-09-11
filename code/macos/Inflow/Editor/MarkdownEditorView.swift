@@ -684,7 +684,6 @@ struct MarkdownEditorView: View {
     @State private var selectedHeadingID: DocumentHeading.ID?
     @State private var sourceSelectionRequest: SourceSelectionRequest?
     @State private var sourceSelectionGeneration = 0
-    @State private var instantSourceEditing = false
     @State private var outlineFocusGeneration = 0
     @StateObject private var findSession = DocumentFindSession()
     @State private var replaceAllPlan: ReplaceAllPlan?
@@ -1726,35 +1725,28 @@ struct MarkdownEditorView: View {
     }
 
     private var renderedEditor: some View {
-        ZStack(alignment: .topTrailing) {
-            if instantSourceEditing {
-                sourceEditor
-            } else {
-                previewSurface(onEditRequested: activateInstantEdit)
-            }
+        MarkdownSourceEditor(
+            text: $document.text,
+            selectionRequest: sourceSelectionRequest,
+            session: sourceEditorSession,
+            isEditable: canEditDocument,
+            appearance: preferences.sourceEditorAppearance,
+            presentation: .rendered,
+            onPasteImage: pasteImage,
+            onDropImage: dropImage,
+            onLinkClick: activatePreviewLink,
+            renderedResourceContext: renderedEditingResourceContext
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 
-            if canEditDocument {
-                Button(
-                    instantSourceEditing ? "完成编辑" : "编辑源码",
-                    systemImage: instantSourceEditing ? "checkmark" : "pencil"
-                ) {
-                    if instantSourceEditing {
-                        instantSourceEditing = false
-                    } else {
-                        activateInstantEdit(sourceUTF8Offset: nil)
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .padding(12)
-                .help(
-                    instantSourceEditing
-                        ? "完成后显示与实时预览相同的渲染内容"
-                        : "双击正文也可在当前模式内编辑源码"
-                )
-                .accessibilityHint("在即时编辑的渲染阅读态和 Markdown 源码编辑态之间切换")
-            }
-        }
+    private var renderedEditingResourceContext: RenderedMarkdownResourceContext {
+        RenderedMarkdownResourceContext(
+            documentDirectory: fileURL?.deletingLastPathComponent(),
+            projectRoot: activeProjectRoot,
+            expectedProjectRootIdentity: currentProjectRootIdentity(for: activeProjectRoot),
+            requiresProjectBoundary: activeProjectRoot != nil
+        )
     }
 
     private var preview: some View {
@@ -2405,27 +2397,6 @@ struct MarkdownEditorView: View {
             return
         }
         selectHeading(heading)
-    }
-
-    private func activateInstantEdit(sourceUTF8Offset: Int?) {
-        instantSourceEditing = true
-        if let sourceUTF8Offset,
-           let validatedOffset = PreviewIssueNavigation.validatedOffset(
-               sourceUTF8Offset,
-               renderedSource: previewSourceSnapshot,
-               currentSource: document.text
-           )
-        {
-            sourceSelectionGeneration &+= 1
-            sourceSelectionRequest = SourceSelectionRequest(
-                generation: sourceSelectionGeneration,
-                utf8Range: validatedOffset..<validatedOffset
-            )
-        }
-        Task { @MainActor in
-            await Task.yield()
-            _ = sourceEditorSession.focusEditor()
-        }
     }
 
     private func activatePreviewIssue(
@@ -3757,16 +3728,12 @@ struct MarkdownEditorView: View {
     }
 
     private func revealSourceSurface() {
-        if viewMode == .preview {
-            instantSourceEditing = true
-        }
         viewMode = viewMode.sourceVisible
     }
 
     private func selectViewMode(_ mode: EditorViewMode) {
         guard !usesSourceOnlyExperience || mode == .source else { return }
         viewMode = mode
-        instantSourceEditing = false
         guard !findSession.isPresented else { return }
 
         if mode != .preview {

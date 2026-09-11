@@ -275,11 +275,13 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var syntaxApplicationTask: Task<Void, Never>?
     private var presentation = MarkdownEditorPresentation.source
     private var renderedPlan: RenderedMarkdownPlan?
+    private var renderedEditingRange: NSRange?
     private var renderedAppliedAppearance: SourceEditorAppearance?
     private var renderedLinkHandler: ((String) -> Void)?
     private var renderedResourceContext = RenderedMarkdownResourceContext.unavailable
     private var renderedImageGeneration = 0
     private var renderedImageTask: Task<Void, Never>?
+    private var renderedInteractionTask: Task<Void, Never>?
     private let lineNumberRuler: MarkdownLineNumberRulerView
     private var focusModeEnabled = false
     private var typewriterModeEnabled = false
@@ -340,6 +342,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             self?.refreshWritingModePresentation()
             self?.updateBoundText?(text)
             self?.scheduleRenderedPresentation(for: text)
+        }
+        textView.focusDidChangeHandler = { [weak self] in
+            self?.scheduleRenderedInteractionPresentation()
         }
         NotificationCenter.default.addObserver(
             self,
@@ -427,8 +432,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         renderedResourceContext = resourceContext
         switch presentation {
         case .source:
+            renderedInteractionTask?.cancel()
+            renderedInteractionTask = nil
             cancelRenderedImageLoading()
             renderedPlan = nil
+            renderedEditingRange = nil
             textView.linkClickHandler = nil
             textView.clickableLinkRanges = []
             textView.clearRenderedImages()
@@ -453,7 +461,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             }
             applyRenderedPresentation(
                 source: source,
-                force: changed || resourceContextChanged
+                force: changed
+                    || resourceContextChanged
+                    || !renderedPresentationIsCurrent(source: source)
             )
         }
     }
@@ -468,8 +478,49 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             else {
                 return
             }
+            guard !self.renderedPresentationIsCurrent(source: source) else { return }
             self.applyRenderedPresentation(source: source, force: true)
         }
+    }
+
+    private func scheduleRenderedInteractionPresentation() {
+        guard presentation == .rendered else { return }
+        renderedInteractionTask?.cancel()
+        renderedInteractionTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard !Task.isCancelled,
+                  let self,
+                  self.presentation == .rendered
+            else { return }
+            guard !self.renderedPresentationIsCurrent(source: self.textView.string) else {
+                self.renderedInteractionTask = nil
+                return
+            }
+            self.applyRenderedPresentation(source: self.textView.string, force: true)
+            self.renderedInteractionTask = nil
+        }
+    }
+
+    private func renderedPresentationIsCurrent(source: String) -> Bool {
+        renderedPlan?.exactlyMatches(source) == true
+            && renderedAppliedAppearance == sourceAppearance
+            && currentRenderedEditingRange(source: source) == renderedEditingRange
+    }
+
+    private func currentRenderedEditingRange(source: String) -> NSRange? {
+        guard presentation == .rendered,
+              textView.isEditable,
+              textView.window?.firstResponder === textView,
+              let renderedPlan,
+              renderedPlan.exactlyMatches(source)
+        else {
+            return nil
+        }
+        return RenderedMarkdownEditor.editingBlockRange(
+            containingUTF16Location: textView.selectedRange().location,
+            source: source,
+            plan: renderedPlan
+        )
     }
 
     private func applyRenderedPresentation(source: String, force: Bool) {
@@ -490,10 +541,26 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         invalidateSyntaxApplication()
         let plan = RenderedMarkdownEditor.plan(for: source)
         renderedPlan = plan
-        textView.clickableLinkRanges = plan.links.map(\.textRange.utf16Range)
+        let editingRange: NSRange? = if textView.isEditable,
+                                       textView.window?.firstResponder === textView
+        {
+            RenderedMarkdownEditor.editingBlockRange(
+                containingUTF16Location: selection.location,
+                source: source,
+                plan: plan
+            )
+        } else {
+            nil
+        }
+        renderedEditingRange = editingRange
+        textView.clickableLinkRanges = plan.links.compactMap { link in
+            let range = link.textRange.utf16Range
+            return rangesOverlap(range, editingRange) ? nil : range
+        }
         textView.clearRenderedImages()
         textView.renderedQuoteRanges = plan.contentStyles.compactMap { style in
             guard style.kind == .blockQuote else { return nil }
+            guard !rangesOverlap(style.sourceRange.utf16Range, editingRange) else { return nil }
             return style.sourceRange.utf16Range
         }
         scrollView.hasVerticalRuler = false
@@ -531,12 +598,34 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         )
         for style in plan.contentStyles {
             let range = style.sourceRange.utf16Range
-            guard NSMaxRange(range) <= storage.length else { continue }
+            guard NSMaxRange(range) <= storage.length,
+                  !rangesOverlap(range, editingRange)
+            else { continue }
             applyRenderedAttributes(
                 for: style.kind,
                 range: range,
                 storage: storage,
                 baseFont: baseFont
+            )
+        }
+        if let editingRange,
+           editingRange.length > 0,
+           NSMaxRange(editingRange) <= storage.length
+        {
+            let editingParagraph = NSMutableParagraphStyle()
+            editingParagraph.lineHeightMultiple = CGFloat(sourceAppearance.lineHeight)
+            editingParagraph.paragraphSpacing = 6
+            storage.addAttributes(
+                [
+                    .font: NSFont.monospacedSystemFont(
+                        ofSize: max(13, CGFloat(sourceAppearance.fontSize)),
+                        weight: .regular
+                    ),
+                    .foregroundColor: NSColor.labelColor,
+                    .backgroundColor: NSColor.clear,
+                    .paragraphStyle: editingParagraph,
+                ],
+                range: editingRange
             )
         }
         for block in plan.localSourceBlocks {
@@ -563,6 +652,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             else {
                 continue
             }
+            if rangesOverlap(range, editingRange) { continue }
             if marker.kind.remainsVisibleWhenInactive {
                 storage.addAttributes(
                     [
@@ -596,7 +686,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             guard !plan.tables.contains(where: {
                 NSIntersectionRange($0.sourceRange.utf16Range, image.sourceRange.utf16Range).length
                     == image.sourceRange.utf16Range.length
-            }) else { continue }
+            }), !rangesOverlap(image.sourceRange.utf16Range, editingRange)
+            else { continue }
             applyRenderedImage(
                 nil,
                 alternative: image.alternative,
@@ -605,6 +696,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             )
         }
         for table in plan.tables {
+            guard !rangesOverlap(table.sourceRange.utf16Range, editingRange) else { continue }
             let size = textView.setRenderedTable(
                 table,
                 baseFont: baseFont,
@@ -620,6 +712,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             )
         }
         for diagram in plan.mermaidDiagrams {
+            guard !rangesOverlap(diagram.sourceRange.utf16Range, editingRange) else { continue }
             guard let image = renderedMermaidImage(from: diagram.svg) else { continue }
             applyRenderedImage(
                 image,
@@ -661,7 +754,10 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                         $0.sourceRange.utf16Range,
                         renderedImage.sourceRange.utf16Range
                     ).length == renderedImage.sourceRange.utf16Range.length
-                }) else { continue }
+                }), !self.rangesOverlap(
+                    renderedImage.sourceRange.utf16Range,
+                    self.renderedEditingRange
+                ) else { continue }
                 guard let data = await RenderedMarkdownImageLoader.shared.load(
                     target: renderedImage.target,
                     context: context
@@ -753,7 +849,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             paragraphStyle.minimumLineHeight,
             displayedImage.size.height + 10
         )
-        storage.addAttribute(.paragraphStyle, value: paragraphStyle, range: sourceRange)
+        storage.addAttribute(
+            .paragraphStyle,
+            value: paragraphStyle,
+            range: NSRange(location: sourceRange.location, length: 1)
+        )
         textView.setRenderedImage(
             displayedImage,
             alternative: alternative,
@@ -789,7 +889,19 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 as? NSParagraphStyle
         )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
         paragraphStyle.minimumLineHeight = max(paragraphStyle.minimumLineHeight, size.height + 10)
-        storage.addAttribute(.paragraphStyle, value: paragraphStyle, range: sourceRange)
+        storage.addAttribute(
+            .paragraphStyle,
+            value: paragraphStyle,
+            range: NSRange(location: sourceRange.location, length: 1)
+        )
+    }
+
+    private func rangesOverlap(_ range: NSRange, _ optionalRange: NSRange?) -> Bool {
+        guard let optionalRange else { return false }
+        if range.length == 0 || optionalRange.length == 0 {
+            return range.location == optionalRange.location
+        }
+        return NSIntersectionRange(range, optionalRange).length > 0
     }
 
     private func renderedMermaidImage(from sourceSVG: String) -> NSImage? {
@@ -1179,6 +1291,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     fileprivate func updateSelectedRange(_ range: NSRange) {
         if selectedUTF16Range != range {
             selectedUTF16Range = range
+            scheduleRenderedInteractionPresentation()
         }
         refreshWritingModePresentation()
     }
@@ -1509,6 +1622,13 @@ final class MarkdownLineNumberRulerView: NSRulerView {
 }
 
 @MainActor
+enum RenderedMarkdownLinkActivation {
+    static func shouldNavigate(for modifierFlags: NSEvent.ModifierFlags) -> Bool {
+        modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command)
+    }
+}
+
+@MainActor
 final class WindowAwareTextView: NSTextView {
     private struct RenderedImageViewState {
         let sourceRange: NSRange
@@ -1522,6 +1642,7 @@ final class WindowAwareTextView: NSTextView {
 
     private let persistentUndoManager = UndoManager()
     var didAttachToWindow: (() -> Void)?
+    var focusDidChangeHandler: (() -> Void)?
     var textDidChangeHandler: ((String) -> Void)?
     var pasteImageHandler: ((ClipboardImagePayload) -> Void)?
     var dropImageHandler: ((URL) -> Void)?
@@ -1558,6 +1679,18 @@ final class WindowAwareTextView: NSTextView {
         if window != nil {
             didAttachToWindow?()
         }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let becameFirstResponder = super.becomeFirstResponder()
+        if becameFirstResponder { focusDidChangeHandler?() }
+        return becameFirstResponder
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resignedFirstResponder = super.resignFirstResponder()
+        if resignedFirstResponder { focusDidChangeHandler?() }
+        return resignedFirstResponder
     }
 
     func clearRenderedImages() {
@@ -1743,7 +1876,8 @@ final class WindowAwareTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         let localPoint = localPoint(forWindowPoint: event.locationInWindow)
-        if let location = clickableLinkLocation(at: localPoint),
+        if RenderedMarkdownLinkActivation.shouldNavigate(for: event.modifierFlags),
+           let location = clickableLinkLocation(at: localPoint),
            linkClickHandler?(location) == true
         {
             return
@@ -1864,6 +1998,15 @@ final class WindowAwareTextView: NSTextView {
 }
 
 final class RenderedMarkdownImageView: NSImageView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
@@ -2116,6 +2259,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
             textView.pasteImageHandler = nil
             textView.dropImageHandler = nil
             textView.linkClickHandler = nil
+            textView.focusDidChangeHandler = nil
         }
     }
 

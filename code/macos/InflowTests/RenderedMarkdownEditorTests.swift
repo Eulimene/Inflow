@@ -223,6 +223,44 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         }
     }
 
+    func testEditingBlockTracksCaretAcrossParagraphsAndRenderedBlocks() throws {
+        let source = "第一段 **粗体**\n续行\n\n```mermaid\nflowchart LR\nA --> B\n```\n\n最后一段"
+        let plan = RenderedMarkdownEditor.plan(for: source)
+        let firstLocation = (source as NSString).range(of: "粗体").location
+        let firstBlock = try XCTUnwrap(
+            RenderedMarkdownEditor.editingBlockRange(
+                containingUTF16Location: firstLocation,
+                source: source,
+                plan: plan
+            )
+        )
+        XCTAssertEqual(
+            (source as NSString).substring(with: firstBlock),
+            "第一段 **粗体**\n续行\n"
+        )
+
+        let diagram = try XCTUnwrap(plan.mermaidDiagrams.first)
+        XCTAssertEqual(
+            RenderedMarkdownEditor.editingBlockRange(
+                containingUTF16Location: diagram.sourceRange.utf16Range.location + 4,
+                source: source,
+                plan: plan
+            ),
+            diagram.sourceRange.utf16Range
+        )
+
+        let blankLocation = NSMaxRange(firstBlock)
+        XCTAssertEqual(
+            RenderedMarkdownEditor.editingBlockRange(
+                containingUTF16Location: blankLocation,
+                source: source,
+                plan: plan
+            )?.length,
+            1,
+            "a caret on the blank separator must not expose either neighboring block"
+        )
+    }
+
     func testComplexStructuresBecomeNonoverlappingLocalSourceBlocks() {
         let source = """
         安全段落
@@ -352,6 +390,91 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
         XCTAssertEqual(session.textView.string, source)
         XCTAssertFalse(session.textView.undoManager?.canUndo == true)
+    }
+
+    @MainActor
+    func testRenderedSessionRevealsOnlyFocusedCaretBlockAndUnmountsMermaidWhileEditing() throws {
+        let source = "第一段 **粗体**\n\n```mermaid\nflowchart LR\nA --> B\n```\n\n第二段 *斜体*"
+        let plan = RenderedMarkdownEditor.plan(for: source)
+        let boldMarker = try XCTUnwrap(plan.markers.first { $0.kind == .strong })
+        let italicMarker = try XCTUnwrap(plan.markers.first { $0.kind == .emphasis })
+        let diagram = try XCTUnwrap(plan.mermaidDiagrams.first)
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 520),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = session.scrollView
+        defer {
+            _ = window.makeFirstResponder(nil)
+            window.contentView = nil
+        }
+        XCTAssertTrue(window.makeFirstResponder(session.textView))
+
+        session.textView.setSelectedRange(
+            NSRange(location: boldMarker.sourceRange.utf16Range.location, length: 0)
+        )
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        XCTAssertGreaterThan(try markerFont(boldMarker, in: session).pointSize, 1)
+        XCTAssertLessThan(try markerFont(italicMarker, in: session).pointSize, 1)
+        XCTAssertNotNil(
+            session.textView.renderedImage(
+                atUTF16Location: diagram.sourceRange.utf16Range.location
+            )
+        )
+        let storage = try XCTUnwrap(session.textView.textStorage)
+        let openingParagraph = try XCTUnwrap(
+            storage.attribute(
+                .paragraphStyle,
+                at: diagram.sourceRange.utf16Range.location,
+                effectiveRange: nil
+            ) as? NSParagraphStyle
+        )
+        let diagramBodyLocation = (source as NSString).range(of: "flowchart LR").location
+        let bodyParagraph = try XCTUnwrap(
+            storage.attribute(
+                .paragraphStyle,
+                at: diagramBodyLocation,
+                effectiveRange: nil
+            ) as? NSParagraphStyle
+        )
+        XCTAssertGreaterThan(
+            openingParagraph.minimumLineHeight,
+            bodyParagraph.minimumLineHeight,
+            "only the anchor line should reserve the Mermaid overlay height"
+        )
+
+        session.textView.setSelectedRange(
+            NSRange(location: diagram.sourceRange.utf16Range.location + 4, length: 0)
+        )
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        XCTAssertLessThan(try markerFont(boldMarker, in: session).pointSize, 1)
+        XCTAssertNil(
+            session.textView.renderedImage(
+                atUTF16Location: diagram.sourceRange.utf16Range.location
+            ),
+            "the Mermaid overlay must not remain above the source being edited"
+        )
+
+        session.textView.setSelectedRange(
+            NSRange(location: italicMarker.sourceRange.utf16Range.location, length: 0)
+        )
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        XCTAssertLessThan(try markerFont(boldMarker, in: session).pointSize, 1)
+        XCTAssertGreaterThan(try markerFont(italicMarker, in: session).pointSize, 1)
+        XCTAssertNotNil(
+            session.textView.renderedImage(
+                atUTF16Location: diagram.sourceRange.utf16Range.location
+            )
+        )
+
+        _ = window.makeFirstResponder(nil)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        XCTAssertLessThan(try markerFont(italicMarker, in: session).pointSize, 1)
     }
 
     func testUnsupportedMermaidRemainsReadableLocalSource() {
@@ -542,7 +665,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testRenderedSessionActivatesLinkOnNormalClick() throws {
+    func testRenderedSessionResolvesLinkAndRequiresCommandForNavigation() throws {
         let source = "Read [the guide](guide.md)."
         let session = MarkdownSourceEditorSession()
         session.textView.string = source
@@ -558,6 +681,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             session.textView.linkClickHandler?(link.textRange.utf16Range.location) == true
         )
         XCTAssertEqual(activatedTarget, "guide.md")
+        XCTAssertFalse(RenderedMarkdownLinkActivation.shouldNavigate(for: []))
+        XCTAssertTrue(RenderedMarkdownLinkActivation.shouldNavigate(for: [.command]))
+        XCTAssertTrue(
+            RenderedMarkdownLinkActivation.shouldNavigate(for: [.command, .shift])
+        )
     }
 
     @MainActor
@@ -925,6 +1053,20 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                 [table.sourceRange] + table.rows.flatMap { $0.map(\.sourceRange) }
             }
             + plan.mermaidDiagrams.map(\.sourceRange)
+    }
+
+    @MainActor
+    private func markerFont(
+        _ marker: RenderedMarkdownMarker,
+        in session: MarkdownSourceEditorSession
+    ) throws -> NSFont {
+        try XCTUnwrap(
+            session.textView.textStorage?.attribute(
+                .font,
+                at: marker.sourceRange.utf16Range.location,
+                effectiveRange: nil
+            ) as? NSFont
+        )
     }
 
     private func rangesOverlap(_ lhs: Range<Int>, _ rhs: Range<Int>) -> Bool {

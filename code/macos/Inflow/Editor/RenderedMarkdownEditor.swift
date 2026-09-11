@@ -206,6 +206,99 @@ enum RenderedMarkdownEditor {
         }
     }
 
+    /// Resolves the smallest source block that should become editable for the
+    /// current caret. Rendered replacement blocks take precedence; ordinary
+    /// Markdown falls back to the surrounding blank-line-delimited block.
+    static func editingBlockRange(
+        containingUTF16Location location: Int,
+        source: String,
+        plan: RenderedMarkdownPlan
+    ) -> NSRange? {
+        let sourceLength = (source as NSString).length
+        guard location >= 0, location <= sourceLength, !source.isEmpty else { return nil }
+
+        let replacementRanges = plan.localSourceBlocks.map(\.sourceRange.utf16Range)
+            + plan.tables.map(\.sourceRange.utf16Range)
+            + plan.mermaidDiagrams.map(\.sourceRange.utf16Range)
+            + plan.images.map(\.sourceRange.utf16Range)
+        if let replacement = replacementRanges.first(where: {
+            containsCaret(location, in: $0, sourceLength: sourceLength)
+        }) {
+            return replacement
+        }
+
+        let lines = utf16Lines(in: source)
+        guard let selectedLine = lines.firstIndex(where: {
+            containsCaret(location, in: $0.fullRange, sourceLength: sourceLength)
+        }) else {
+            return nil
+        }
+        guard !lines[selectedLine].isBlank else { return lines[selectedLine].fullRange }
+
+        var first = selectedLine
+        var last = selectedLine
+        while first > 0, !lines[first - 1].isBlank { first -= 1 }
+        while last + 1 < lines.count, !lines[last + 1].isBlank { last += 1 }
+        return NSRange(
+            location: lines[first].fullRange.location,
+            length: NSMaxRange(lines[last].fullRange) - lines[first].fullRange.location
+        )
+    }
+
+    private struct UTF16Line {
+        let fullRange: NSRange
+        let isBlank: Bool
+    }
+
+    private static func utf16Lines(in source: String) -> [UTF16Line] {
+        let text = source as NSString
+        guard text.length > 0 else { return [] }
+        var result: [UTF16Line] = []
+        var cursor = 0
+        while cursor < text.length {
+            var lineStart = 0
+            var lineEnd = 0
+            var contentsEnd = 0
+            text.getLineStart(
+                &lineStart,
+                end: &lineEnd,
+                contentsEnd: &contentsEnd,
+                for: NSRange(location: cursor, length: 0)
+            )
+            let contentRange = NSRange(
+                location: lineStart,
+                length: contentsEnd - lineStart
+            )
+            let content = text.substring(with: contentRange)
+            result.append(
+                UTF16Line(
+                    fullRange: NSRange(location: lineStart, length: lineEnd - lineStart),
+                    isBlank: content.trimmingCharacters(in: .whitespaces).isEmpty
+                )
+            )
+            cursor = max(lineEnd, cursor + 1)
+        }
+        if source.last?.isNewline == true {
+            result.append(
+                UTF16Line(
+                    fullRange: NSRange(location: text.length, length: 0),
+                    isBlank: true
+                )
+            )
+        }
+        return result
+    }
+
+    private static func containsCaret(
+        _ location: Int,
+        in range: NSRange,
+        sourceLength: Int
+    ) -> Bool {
+        location >= range.location
+            && (location < NSMaxRange(range)
+                || (location == sourceLength && location == NSMaxRange(range)))
+    }
+
     private static func parserFailurePlan(for source: String) -> RenderedMarkdownPlan {
         let utf8 = Data(source.utf8)
         let localSourceBlocks: [RenderedMarkdownLocalSourceBlock]

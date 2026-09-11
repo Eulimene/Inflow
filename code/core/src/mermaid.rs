@@ -246,11 +246,11 @@ fn render(diagram: &Diagram, source: &str) -> Result<String, MermaidError> {
         })
         .collect();
     let mut output = format!(
-        "<figure class=\"mermaid-diagram\" aria-label=\"{}\"><svg xmlns=\"http://www.w3.org/2000/svg\" role=\"img\" viewBox=\"0 0 {width} {height}\" aria-label=\"{}\"><defs><marker id=\"inflow-arrow\" markerWidth=\"10\" markerHeight=\"10\" refX=\"9\" refY=\"3\" orient=\"auto\"><path d=\"M0,0 L0,6 L9,3 z\" fill=\"currentColor\"/></marker></defs>",
+        "<figure class=\"mermaid-diagram\" aria-label=\"{}\"><svg xmlns=\"http://www.w3.org/2000/svg\" role=\"img\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" aria-label=\"{}\"><defs><marker id=\"inflow-arrow\" markerWidth=\"10\" markerHeight=\"10\" refX=\"9\" refY=\"3\" orient=\"auto\"><path d=\"M0,0 L0,6 L9,3 z\" fill=\"currentColor\"/></marker></defs>",
         diagram.kind,
         escape(source)
     );
-    for edge in &diagram.edges {
+    for (edge_index, edge) in diagram.edges.iter().enumerate() {
         let from_index = diagram
             .nodes
             .iter()
@@ -263,35 +263,30 @@ fn render(diagram: &Diagram, source: &str) -> Result<String, MermaidError> {
             .ok_or(MermaidError::InvalidSyntax)?;
         let (from_x, from_y) = positions[from_index];
         let (to_x, to_y) = positions[to_index];
-        let (x1, y1, x2, y2) = match diagram.direction {
-            Direction::Horizontal => (
-                from_x + node_width,
-                from_y + node_height / 2,
-                to_x,
-                to_y + node_height / 2,
-            ),
-            Direction::Vertical => (
-                from_x + node_width / 2,
-                from_y + node_height,
-                to_x + node_width / 2,
-                to_y,
-            ),
-        };
+        let (path, label_x, label_y, routed) = edge_path(
+            diagram.direction,
+            (from_x, from_y),
+            (to_x, to_y),
+            (node_width, node_height),
+            (width, height),
+            from_index,
+            to_index,
+            edge_index,
+        );
         let dash = if edge.dashed {
             " stroke-dasharray=\"6 5\""
         } else {
             ""
         };
+        let route_class = if routed { " edge-routed" } else { "" };
         let _ = write!(
             output,
-            "<line x1=\"{x1}\" y1=\"{y1}\" x2=\"{x2}\" y2=\"{y2}\" stroke=\"currentColor\" stroke-width=\"2\"{dash} marker-end=\"url(#inflow-arrow)\"/>"
+            "<path class=\"edge{route_class}\" d=\"{path}\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"{dash} marker-end=\"url(#inflow-arrow)\"/>"
         );
         if !edge.label.is_empty() {
             let _ = write!(
                 output,
-                "<text x=\"{}\" y=\"{}\" text-anchor=\"middle\" class=\"edge-label\">{}</text>",
-                usize::midpoint(x1, x2),
-                usize::midpoint(y1, y2).saturating_sub(7),
+                "<text x=\"{label_x}\" y=\"{label_y}\" text-anchor=\"middle\" class=\"edge-label\">{}</text>",
                 escape(&edge.label)
             );
         }
@@ -307,6 +302,119 @@ fn render(diagram: &Diagram, source: &str) -> Result<String, MermaidError> {
     }
     output.push_str("</svg></figure>");
     Ok(output)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn edge_path(
+    direction: Direction,
+    from: (usize, usize),
+    to: (usize, usize),
+    node_size: (usize, usize),
+    canvas_size: (usize, usize),
+    from_index: usize,
+    to_index: usize,
+    edge_index: usize,
+) -> (String, usize, usize, bool) {
+    let (node_width, node_height) = node_size;
+    let is_adjacent_forward = to_index == from_index + 1;
+    match direction {
+        Direction::Horizontal if is_adjacent_forward => {
+            let start = (from.0 + node_width, from.1 + node_height / 2);
+            let end = (to.0, to.1 + node_height / 2);
+            (
+                format!("M {} {} L {} {}", start.0, start.1, end.0, end.1),
+                usize::midpoint(start.0, end.0),
+                usize::midpoint(start.1, end.1).saturating_sub(7),
+                false,
+            )
+        }
+        Direction::Horizontal => {
+            let forward = to_index > from_index;
+            let start = if forward {
+                (from.0 + node_width, from.1 + node_height / 2)
+            } else {
+                (from.0, from.1 + node_height / 2)
+            };
+            let end = if forward {
+                (to.0, to.1 + node_height / 2)
+            } else {
+                (to.0 + node_width, to.1 + node_height / 2)
+            };
+            let lane_offset = [0, 14][(edge_index / 2) % 2];
+            let lane = if edge_index.is_multiple_of(2) {
+                22 + lane_offset
+            } else {
+                canvas_size.1.saturating_sub(22 + lane_offset)
+            };
+            let exit = if forward {
+                start.0 + 28
+            } else {
+                start.0.saturating_sub(28)
+            };
+            let entrance = if forward {
+                end.0.saturating_sub(28)
+            } else {
+                end.0 + 28
+            };
+            (
+                format!(
+                    "M {} {} H {exit} V {lane} H {entrance} V {} H {}",
+                    start.0, start.1, end.1, end.0
+                ),
+                usize::midpoint(exit, entrance),
+                lane.saturating_sub(7),
+                true,
+            )
+        }
+        Direction::Vertical if is_adjacent_forward => {
+            let start = (from.0 + node_width / 2, from.1 + node_height);
+            let end = (to.0 + node_width / 2, to.1);
+            (
+                format!("M {} {} L {} {}", start.0, start.1, end.0, end.1),
+                usize::midpoint(start.0, end.0),
+                usize::midpoint(start.1, end.1).saturating_sub(7),
+                false,
+            )
+        }
+        Direction::Vertical => {
+            let forward = to_index > from_index;
+            let start = if forward {
+                (from.0 + node_width / 2, from.1 + node_height)
+            } else {
+                (from.0 + node_width / 2, from.1)
+            };
+            let end = if forward {
+                (to.0 + node_width / 2, to.1)
+            } else {
+                (to.0 + node_width / 2, to.1 + node_height)
+            };
+            let lane_offset = [0, 18][(edge_index / 2) % 2];
+            let lane = if edge_index.is_multiple_of(2) {
+                35 + lane_offset
+            } else {
+                canvas_size.0.saturating_sub(35 + lane_offset)
+            };
+            let exit = if forward {
+                start.1 + 28
+            } else {
+                start.1.saturating_sub(28)
+            };
+            let entrance = if forward {
+                end.1.saturating_sub(28)
+            } else {
+                end.1 + 28
+            };
+            (
+                format!(
+                    "M {} {} V {exit} H {lane} V {entrance} H {} V {}",
+                    start.0, start.1, end.0, end.1
+                ),
+                lane,
+                usize::midpoint(exit, entrance).saturating_sub(7),
+                true,
+            )
+        }
+    }
 }
 
 pub fn fallback(source: &str, error: &MermaidError) -> String {
@@ -391,6 +499,17 @@ mod tests {
         assert!(output.contains(">贯穿</text>"));
         assert!(output.contains(">服务</text>"));
         assert!(!output.contains("mermaid-error"));
+    }
+
+    #[test]
+    fn routes_non_adjacent_edges_around_intermediate_nodes() {
+        let output = svg("flowchart LR\nA --> B\nB --> C\nA -->|跳过| C").expect("supported graph");
+
+        assert!(output.contains("width=\"720\" height=\"190\""));
+        assert!(output.contains("class=\"edge edge-routed\""));
+        assert!(output.contains(" H "));
+        assert!(output.contains(" V "));
+        assert!(output.contains(">跳过</text>"));
     }
 
     #[test]

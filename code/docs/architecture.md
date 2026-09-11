@@ -11,7 +11,7 @@
 当前架构只服务产品负责人本人的真实项目验证。核心目标是：
 
 - Markdown 纯文本始终是唯一内容事实；
-- 源码、分栏和即时编辑共享一份正文、保存路径与撤销历史；分栏右侧和即时编辑阅读态共享同一份 HTML 渲染结果；
+- 源码、分栏和即时编辑共享一份正文、保存路径与撤销历史；分栏右侧使用只读 HTML，块级即时编辑使用同一 Rust 解析结果驱动持久 NSTextView 的展示属性；
 - 文件与项目操作保持在 macOS 原生授权和生命周期边界内；
 - 解析、预览、图片、链接、恢复、PDF 或日志失败时，正文仍可继续手动保存；
 - 复杂或不确定结构失败关闭到可见源码，不猜测性改写；
@@ -60,7 +60,7 @@ SwiftUI 与 AppKit 负责：
 必须同时保持以下约束：
 
 1. NSTextView 的 string 与 MarkdownDocument.text 表示同一份 Markdown。
-2. 源码与分栏左侧复用同一个 MarkdownSourceEditorSession；分栏右侧与即时编辑阅读态复用同一份 previewHTML 和 MarkdownPreviewView，不建立第二套渲染模型。
+2. 三种视图的可编辑侧都复用同一个 MarkdownSourceEditorSession；分栏右侧消费 previewHTML，即时编辑则把同一 Rust 解析范围映射到原始字符串的 TextKit 展示属性，不建立第二份可编辑内容。
 3. 分栏右侧只消费当前源快照生成的派生结果，不可反向成为正文事实。
 4. 展示属性、语法高亮和预览刷新不能发布正文变化，也不能登记正文 undo。
 5. 格式、查找替换与图片引用只通过已验证的编辑计划修改同一字符串，并形成可理解的原生撤销步骤。
@@ -82,9 +82,9 @@ Swift String 的规范等价不能替代精确字节身份。Rust 返回 UTF-8 b
 
 ### 4.3 即时编辑
 
-EditorViewMode 的内部历史 case 名 preview 对应用户可见的“即时编辑”。它与分栏右侧调用同一个 previewSurface，传入同一份 previewHTML、图片解析结果、外观配置和导航回调，因此所有 Markdown 语法的可见结果严格来自同一条 Rust Core → HTML → WebKit 渲染路径。
+EditorViewMode 的内部历史 case 名 preview 对应用户可见的“即时编辑”。该模式始终挂载共享的 MarkdownSourceEditorSession，并以 RenderedMarkdownEditor 将 Rust Core 的 UTF-8 解析范围无损映射为 TextKit 展示属性。空行分隔的普通块以及表格、图片、Mermaid 等整体替换块都有确定的编辑范围。
 
-即时编辑阅读态不创建第二份内容事实，也不登记正文 undo。链接保持普通单击导航；双击非链接正文或点击“编辑源码”会在当前即时编辑模式内部显示共享的 MarkdownSourceEditor，标题源偏移用于精确定位；“完成编辑”后重新显示规范预览。输入、中文输入法、撤销、重做和保存继续走原生编辑器。当前范围不承诺直接在 WebKit DOM 内进行无损结构化修改，因为那会把 HTML 变成第二份可编辑文档并破坏 Markdown 的唯一事实源。
+光标所在块自动恢复等宽源码与全部 Markdown 标记，其他块保持渲染；光标进入表格、图片或 Mermaid 块时对应覆盖视图先卸载，移出后重新挂载，编辑器失去焦点时当前块也立即恢复渲染。该过程不需要手动模式按钮，不替换 NSTextView，不创建第二份内容事实，也不登记展示层 undo。输入、中文输入法、撤销、重做、链接导航和保存继续作用于原始 Markdown。
 
 ## 5. 当前编辑命令边界
 
