@@ -39,6 +39,12 @@ struct DocumentOutlineView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("\(analysis.headings.count) 个标题")
+                WorkspacePaneVisibilityButton(
+                    paneName: "文档大纲",
+                    systemImage: "sidebar.right",
+                    isExpanded: true,
+                    action: onCollapse
+                )
             }
             .padding(.horizontal, 12)
             .frame(height: EditorWorkspaceMetrics.navigationHeaderHeight)
@@ -66,15 +72,6 @@ struct DocumentOutlineView: View {
         .background(Color(nsColor: .controlBackgroundColor))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("文档大纲")
-        .overlay(alignment: .leading) {
-            WorkspacePaneVisibilityButton(
-                paneName: "文档大纲",
-                systemImage: "sidebar.right",
-                isExpanded: true,
-                action: onCollapse
-            )
-            .padding(.leading, 8)
-        }
         .onChange(of: focusGeneration) { _, _ in
             focusFirstHeadingIfRequested()
         }

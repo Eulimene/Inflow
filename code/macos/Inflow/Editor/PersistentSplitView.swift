@@ -70,13 +70,16 @@ enum WorkspaceEdgeSplitLayout {
         edge: WorkspaceSplitEdge,
         totalWidth: CGFloat,
         dividerThickness: CGFloat,
-        allowedWidth: ClosedRange<Double>
+        allowedWidth: ClosedRange<Double>,
+        isEdgeVisible: Bool = true
     ) -> CGFloat {
         let availableWidth = max(0, totalWidth - dividerThickness)
-        let resolvedWidth = min(
-            availableWidth,
-            CGFloat(normalized(edgeWidth, allowedWidth: allowedWidth))
-        )
+        let resolvedWidth = isEdgeVisible
+            ? min(
+                availableWidth,
+                CGFloat(normalized(edgeWidth, allowedWidth: allowedWidth))
+            )
+            : 0
         return switch edge {
         case .leading: resolvedWidth
         case .trailing: availableWidth - resolvedWidth
@@ -104,9 +107,17 @@ private final class EdgeWidthSplitView: NSSplitView {
     var desiredEdgeWidth = 0.0
     var edge = WorkspaceSplitEdge.leading
     var allowedWidth = 0.0 ... 0.0
+    var isEdgeVisible = true
     private var isApplyingDesiredWidth = false
+    private var isAnimatingDesiredWidth = false
+    private var animationGeneration = 0
+    private var widthAnimationTask: Task<Void, Never>?
 
-    func applyDesiredWidth() {
+    override var dividerThickness: CGFloat {
+        isEdgeVisible ? super.dividerThickness : 0
+    }
+
+    func applyDesiredWidth(animated: Bool = false) {
         let totalWidth = max(0, bounds.width)
         let totalHeight = max(0, bounds.height)
         guard subviews.count == 2, totalWidth > dividerThickness else { return }
@@ -118,21 +129,69 @@ private final class EdgeWidthSplitView: NSSplitView {
             edge: edge,
             totalWidth: totalWidth,
             dividerThickness: dividerThickness,
-            allowedWidth: allowedWidth
+            allowedWidth: allowedWidth,
+            isEdgeVisible: isEdgeVisible
         )
         let availableWidth = max(0, totalWidth - dividerThickness)
-        subviews[0].frame = NSRect(
+        let leadingFrame = NSRect(
             x: bounds.minX,
             y: bounds.minY,
             width: position,
             height: totalHeight
         )
-        subviews[1].frame = NSRect(
+        let trailingFrame = NSRect(
             x: bounds.minX + position + dividerThickness,
             y: bounds.minY,
             width: max(0, availableWidth - position),
             height: totalHeight
         )
+        needsDisplay = true
+
+        guard animated, window != nil else {
+            widthAnimationTask?.cancel()
+            widthAnimationTask = nil
+            animationGeneration &+= 1
+            isAnimatingDesiredWidth = false
+            subviews[0].frame = leadingFrame
+            subviews[1].frame = trailingFrame
+            return
+        }
+        widthAnimationTask?.cancel()
+        animationGeneration &+= 1
+        let generation = animationGeneration
+        isAnimatingDesiredWidth = true
+        let initialLeadingFrame = subviews[0].frame
+        let initialTrailingFrame = subviews[1].frame
+        widthAnimationTask = Task { @MainActor [weak self] in
+            for step in 1 ... 12 {
+                do {
+                    try await Task.sleep(for: .milliseconds(15))
+                } catch {
+                    return
+                }
+                guard let self,
+                      !Task.isCancelled,
+                      self.animationGeneration == generation,
+                      self.subviews.count == 2
+                else { return }
+                let progress = CGFloat(step) / 12
+                let eased = progress * progress * (3 - 2 * progress)
+                self.subviews[0].frame = Self.interpolatedFrame(
+                    from: initialLeadingFrame,
+                    to: leadingFrame,
+                    progress: eased
+                )
+                self.subviews[1].frame = Self.interpolatedFrame(
+                    from: initialTrailingFrame,
+                    to: trailingFrame,
+                    progress: eased
+                )
+            }
+            guard let self, self.animationGeneration == generation else { return }
+            self.isAnimatingDesiredWidth = false
+            self.widthAnimationTask = nil
+            self.applyDesiredWidth()
+        }
     }
 
     override func resizeSubviews(withOldSize oldSize: NSSize) {
@@ -140,13 +199,27 @@ private final class EdgeWidthSplitView: NSSplitView {
     }
 
     var isApplyingProgrammaticLayout: Bool {
-        isApplyingDesiredWidth
+        isApplyingDesiredWidth || isAnimatingDesiredWidth
+    }
+
+    private static func interpolatedFrame(
+        from start: NSRect,
+        to end: NSRect,
+        progress: CGFloat
+    ) -> NSRect {
+        NSRect(
+            x: start.origin.x + (end.origin.x - start.origin.x) * progress,
+            y: start.origin.y + (end.origin.y - start.origin.y) * progress,
+            width: start.size.width + (end.size.width - start.size.width) * progress,
+            height: start.size.height + (end.size.height - start.size.height) * progress
+        )
     }
 }
 
 struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentable {
     @Binding private var width: Double
     private let edge: WorkspaceSplitEdge
+    private let isEdgeVisible: Bool
     private let allowedWidth: ClosedRange<Double>
     private let accessibilityLabel: String
     private let leading: Leading
@@ -155,6 +228,7 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
     init(
         edge: WorkspaceSplitEdge,
         width: Binding<Double>,
+        isEdgeVisible: Bool = true,
         allowedWidth: ClosedRange<Double>,
         accessibilityLabel: String,
         @ViewBuilder leading: () -> Leading,
@@ -162,6 +236,7 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
     ) {
         self.edge = edge
         _width = width
+        self.isEdgeVisible = isEdgeVisible
         self.allowedWidth = allowedWidth
         self.accessibilityLabel = accessibilityLabel
         self.leading = leading()
@@ -177,6 +252,7 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
         splitView.isVertical = true
         splitView.dividerStyle = .thin
         splitView.edge = edge
+        splitView.isEdgeVisible = isEdgeVisible
         splitView.allowedWidth = allowedWidth
         splitView.desiredEdgeWidth = WorkspaceEdgeSplitLayout.normalized(
             width,
@@ -199,7 +275,8 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
             leadingRelay: leadingRelay,
             trailingRelay: trailingRelay,
             allowedWidth: allowedWidth,
-            edge: edge
+            edge: edge,
+            isEdgeVisible: isEdgeVisible
         )
         splitView.delegate = context.coordinator
         return splitView
@@ -213,7 +290,8 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
             trailing: trailing,
             splitView: edgeSplitView,
             allowedWidth: allowedWidth,
-            edge: edge
+            edge: edge,
+            isEdgeVisible: isEdgeVisible
         )
     }
 
@@ -231,6 +309,7 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
         private var acceptsResizePersistence = false
         private var resizePersistenceActivationTask: Task<Void, Never>?
         private var contentUpdateTask: Task<Void, Never>?
+        private var visibilityUpdateTask: Task<Void, Never>?
 
         init(width: Binding<Double>) {
             self.width = width
@@ -241,12 +320,18 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
             leadingRelay: PersistentHostingContent<Leading>,
             trailingRelay: PersistentHostingContent<Trailing>,
             allowedWidth: ClosedRange<Double>,
-            edge: WorkspaceSplitEdge
+            edge: WorkspaceSplitEdge,
+            isEdgeVisible: Bool
         ) {
             self.splitView = splitView
             self.leadingRelay = leadingRelay
             self.trailingRelay = trailingRelay
-            configure(splitView, allowedWidth: allowedWidth, edge: edge)
+            configure(
+                splitView,
+                allowedWidth: allowedWidth,
+                edge: edge,
+                isEdgeVisible: isEdgeVisible
+            )
             applyStoredWidth(to: splitView)
             resizePersistenceActivationTask?.cancel()
             resizePersistenceActivationTask = Task { @MainActor [weak self] in
@@ -263,7 +348,8 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
             trailing: Trailing,
             splitView: EdgeWidthSplitView,
             allowedWidth: ClosedRange<Double>,
-            edge: WorkspaceSplitEdge
+            edge: WorkspaceSplitEdge,
+            isEdgeVisible: Bool
         ) {
             self.width = width
             contentUpdateTask?.cancel()
@@ -274,8 +360,33 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
                 self.trailingRelay?.content = trailing
                 self.contentUpdateTask = nil
             }
-            configure(splitView, allowedWidth: allowedWidth, edge: edge)
-            applyStoredWidth(to: splitView)
+            let visibilityChanged = splitView.isEdgeVisible != isEdgeVisible
+            visibilityUpdateTask?.cancel()
+            if visibilityChanged {
+                // `updateNSView` runs inside SwiftUI's own update transaction.
+                // Defer the frame animation until that transaction has ended so
+                // AppKit never observes a partially updated split hierarchy.
+                visibilityUpdateTask = Task { @MainActor [weak self, weak splitView] in
+                    await Task.yield()
+                    guard !Task.isCancelled, let self, let splitView else { return }
+                    self.configure(
+                        splitView,
+                        allowedWidth: allowedWidth,
+                        edge: edge,
+                        isEdgeVisible: isEdgeVisible
+                    )
+                    self.applyStoredWidth(to: splitView, animated: true)
+                    self.visibilityUpdateTask = nil
+                }
+            } else {
+                configure(
+                    splitView,
+                    allowedWidth: allowedWidth,
+                    edge: edge,
+                    isEdgeVisible: isEdgeVisible
+                )
+                applyStoredWidth(to: splitView)
+            }
         }
 
         func detach() {
@@ -283,6 +394,8 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
             resizePersistenceActivationTask = nil
             contentUpdateTask?.cancel()
             contentUpdateTask = nil
+            visibilityUpdateTask?.cancel()
+            visibilityUpdateTask = nil
             acceptsResizePersistence = false
             splitView = nil
             leadingRelay = nil
@@ -319,6 +432,7 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
 
         func splitViewDidResizeSubviews(_ notification: Notification) {
             guard let splitView = notification.object as? EdgeWidthSplitView,
+                  splitView.isEdgeVisible,
                   acceptsResizePersistence,
                   !splitView.isApplyingProgrammaticLayout,
                   splitView.subviews.count == 2
@@ -340,18 +454,23 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
         private func configure(
             _ splitView: EdgeWidthSplitView,
             allowedWidth: ClosedRange<Double>,
-            edge: WorkspaceSplitEdge
+            edge: WorkspaceSplitEdge,
+            isEdgeVisible: Bool
         ) {
             splitView.allowedWidth = allowedWidth
             splitView.edge = edge
+            splitView.isEdgeVisible = isEdgeVisible
         }
 
-        private func applyStoredWidth(to splitView: EdgeWidthSplitView) {
+        private func applyStoredWidth(
+            to splitView: EdgeWidthSplitView,
+            animated: Bool = false
+        ) {
             splitView.desiredEdgeWidth = WorkspaceEdgeSplitLayout.normalized(
                 width.wrappedValue,
                 allowedWidth: splitView.allowedWidth
             )
-            splitView.applyDesiredWidth()
+            splitView.applyDesiredWidth(animated: animated)
         }
     }
 }

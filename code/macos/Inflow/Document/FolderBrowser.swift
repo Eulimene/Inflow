@@ -1514,15 +1514,6 @@ struct FolderBrowserSidebar: View {
         .background(Color(nsColor: .controlBackgroundColor))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("项目侧栏")
-        .overlay(alignment: .trailing) {
-            WorkspacePaneVisibilityButton(
-                paneName: "目录树",
-                systemImage: "sidebar.left",
-                isExpanded: true,
-                action: onCollapse
-            )
-            .padding(.trailing, 8)
-        }
         .onAppear { synchronizeSelectionWithCurrentDocument() }
         .onChange(of: currentDocumentURL) { _, _ in
             synchronizeSelectionWithCurrentDocument()
@@ -1563,6 +1554,12 @@ struct FolderBrowserSidebar: View {
 
     private var header: some View {
         HStack(spacing: 8) {
+            WorkspacePaneVisibilityButton(
+                paneName: "目录树",
+                systemImage: "sidebar.left",
+                isExpanded: true,
+                action: onCollapse
+            )
             Image(systemName: "folder.fill")
                 .foregroundStyle(.secondary)
             Text(controller.folderURL?.lastPathComponent ?? "项目")

@@ -3,6 +3,34 @@ import SwiftUI
 import XCTest
 @testable import Inflow
 
+@MainActor
+private final class EdgeVisibilityTestModel: ObservableObject {
+    @Published var isVisible = true
+    var width = 264.0
+}
+
+@MainActor
+private struct EdgeVisibilityTestView: View {
+    @ObservedObject var model: EdgeVisibilityTestModel
+
+    var body: some View {
+        PersistentEdgeSplitView(
+            edge: .leading,
+            width: Binding(
+                get: { model.width },
+                set: { model.width = $0 }
+            ),
+            isEdgeVisible: model.isVisible,
+            allowedWidth: 200 ... 300,
+            accessibilityLabel: "Animated test edge split"
+        ) {
+            Text("Sidebar")
+        } trailing: {
+            Text("Workspace")
+        }
+    }
+}
+
 final class EditorViewModeCommandsTests: XCTestCase {
     func testWorkspaceViewModePreferenceMapsEveryExplicitMode() {
         XCTAssertEqual(WorkspaceViewModePreference(mode: .source), .source)
@@ -31,6 +59,28 @@ final class EditorViewModeCommandsTests: XCTestCase {
         XCTAssertEqual(
             EditorSplitLayout.fraction(for: 200, totalWidth: 802, dividerThickness: 2),
             0.25
+        )
+        XCTAssertEqual(
+            WorkspaceEdgeSplitLayout.position(
+                for: 264,
+                edge: .leading,
+                totalWidth: 1_002,
+                dividerThickness: 0,
+                allowedWidth: 200 ... 300,
+                isEdgeVisible: false
+            ),
+            0
+        )
+        XCTAssertEqual(
+            WorkspaceEdgeSplitLayout.position(
+                for: 236,
+                edge: .trailing,
+                totalWidth: 1_002,
+                dividerThickness: 0,
+                allowedWidth: 200 ... 288,
+                isEdgeVisible: false
+            ),
+            1_002
         )
     }
 
@@ -116,6 +166,41 @@ final class EditorViewModeCommandsTests: XCTestCase {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
         XCTAssertEqual(edgeSplit.subviews[0].frame.width, 300, accuracy: 1)
         XCTAssertEqual(storedLeadingWidth, 300, accuracy: 1)
+
+        let visibilityModel = EdgeVisibilityTestModel()
+        let visibilityHost = NSHostingView(
+            rootView: EdgeVisibilityTestView(model: visibilityModel)
+        )
+        visibilityHost.frame = NSRect(x: 0, y: 0, width: 1_002, height: 500)
+        visibilityHost.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        let persistentSplit = try XCTUnwrap(
+            descendants(of: visibilityHost).compactMap { $0 as? NSSplitView }.first
+        )
+        XCTAssertEqual(persistentSplit.subviews[0].frame.width, 264, accuracy: 1)
+
+        visibilityModel.isVisible = false
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.25))
+        let collapsedSplit = try XCTUnwrap(
+            descendants(of: visibilityHost).compactMap { $0 as? NSSplitView }.first
+        )
+        XCTAssertTrue(collapsedSplit === persistentSplit)
+        XCTAssertEqual(collapsedSplit.subviews[0].frame.width, 0, accuracy: 1)
+        XCTAssertEqual(
+            collapsedSplit.subviews[1].frame.width,
+            collapsedSplit.bounds.width,
+            accuracy: 1
+        )
+        XCTAssertEqual(visibilityModel.width, 264, accuracy: 0.01)
+
+        visibilityModel.isVisible = true
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.25))
+        let expandedSplit = try XCTUnwrap(
+            descendants(of: visibilityHost).compactMap { $0 as? NSSplitView }.first
+        )
+        XCTAssertTrue(expandedSplit === persistentSplit)
+        XCTAssertEqual(expandedSplit.subviews[0].frame.width, 264, accuracy: 1)
+        XCTAssertEqual(visibilityModel.width, 264, accuracy: 0.01)
 
         var storedTrailingWidth = 236.0
         let trailingRoot = PersistentEdgeSplitView(

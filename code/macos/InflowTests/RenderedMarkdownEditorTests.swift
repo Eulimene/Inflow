@@ -363,6 +363,30 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertEqual(plan.sourceSnapshot, source)
     }
 
+    @MainActor
+    func testUnsupportedTripleDashBlockRemainsLiteralSource() throws {
+        let source = "---\n测试文字\n---"
+        let plan = RenderedMarkdownEditor.plan(for: source)
+
+        let block = try XCTUnwrap(plan.localSourceBlocks.first)
+        XCTAssertEqual(plan.localSourceBlocks.count, 1)
+        XCTAssertEqual(block.reasons, [.unsupportedSyntax])
+        XCTAssertEqual(utf8Text(block.sourceRange, source: source), source)
+        XCTAssertTrue(plan.markers.isEmpty)
+        XCTAssertTrue(plan.contentStyles.isEmpty)
+        XCTAssertTrue(plan.links.isEmpty)
+        XCTAssertTrue(plan.images.isEmpty)
+        XCTAssertTrue(plan.tables.isEmpty)
+        XCTAssertTrue(plan.mermaidDiagrams.isEmpty)
+
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        session.textView.undoManager?.removeAllActions()
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        XCTAssertEqual(session.textView.string, source)
+        XCTAssertFalse(session.textView.undoManager?.canUndo == true)
+    }
+
     func testPlanRendersLocalAndRemoteImagesWithoutChangingSource() throws {
         let source = """
         ![本地图](assets/封面.png)

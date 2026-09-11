@@ -1761,30 +1761,21 @@ private struct ProjectWorkspaceScene: View {
     }
 
     var body: some View {
-        Group {
-            if preferences.workspaceProjectSidebarVisible {
-                PersistentEdgeSplitView(
-                    edge: .leading,
-                    width: $preferences.workspaceProjectSidebarWidth,
-                    allowedWidth: AppPreferences.Limits.projectSidebarWidth,
-                    accessibilityLabel: "目录树与工作区分栏"
-                ) {
-                    projectSidebar
-                        .frame(
-                            minWidth: EditorWorkspaceMetrics.projectSidebarMinimumWidth,
-                            maxWidth: EditorWorkspaceMetrics.projectSidebarMaximumWidth
-                        )
-                } trailing: {
-                    workspaceContent
-                        .frame(minWidth: EditorWorkspaceMetrics.editorMinimumWidth)
-                }
-            } else {
-                HStack(spacing: 0) {
-                    collapsedProjectSidebarRail
-                    Divider()
-                    workspaceContent
-                }
-            }
+        PersistentEdgeSplitView(
+            edge: .leading,
+            width: $preferences.workspaceProjectSidebarWidth,
+            isEdgeVisible: preferences.workspaceProjectSidebarVisible,
+            allowedWidth: AppPreferences.Limits.projectSidebarWidth,
+            accessibilityLabel: "目录树与工作区分栏"
+        ) {
+            projectSidebar
+                .frame(
+                    minWidth: EditorWorkspaceMetrics.projectSidebarMinimumWidth,
+                    maxWidth: EditorWorkspaceMetrics.projectSidebarMaximumWidth
+                )
+        } trailing: {
+            workspaceContent
+                .frame(minWidth: EditorWorkspaceMetrics.editorMinimumWidth)
         }
         .focusedSceneValue(\.projectSidebarVisibility, projectSidebarVisibility)
         .background(
@@ -1794,23 +1785,6 @@ private struct ProjectWorkspaceScene: View {
                     ?? "Inflow"
             )
         )
-    }
-
-    private var collapsedProjectSidebarRail: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 0)
-            WorkspacePaneVisibilityButton(
-                paneName: "目录树",
-                systemImage: "sidebar.left",
-                isExpanded: false
-            ) {
-                preferences.workspaceProjectSidebarVisible = true
-            }
-            Spacer(minLength: 0)
-        }
-        .frame(width: 40)
-        .frame(maxHeight: .infinity)
-        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private var projectSidebar: some View {
@@ -1856,7 +1830,13 @@ private struct ProjectWorkspaceScene: View {
         VStack(spacing: 0) {
             // Reserve the tab strip from the moment a project opens. Adding the
             // first file must not push the entire editor down by one row.
-            ProjectDocumentTabBar(projectCoordinator: projectCoordinator)
+            ProjectDocumentTabBar(
+                projectCoordinator: projectCoordinator,
+                showsProjectSidebar: preferences.workspaceProjectSidebarVisible,
+                onExpandProjectSidebar: {
+                    preferences.workspaceProjectSidebarVisible = true
+                }
+            )
             Divider()
             activeEditor
         }
@@ -1927,105 +1907,120 @@ private struct ProjectWorkspaceScene: View {
 @MainActor
 private struct ProjectDocumentTabBar: View {
     @ObservedObject var projectCoordinator: LightweightProjectCoordinator
+    let showsProjectSidebar: Bool
+    let onExpandProjectSidebar: () -> Void
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(projectCoordinator.documentSurfaces) { surface in
-                    let isActive = projectCoordinator.activeSurfaceID == surface.id
-                    HStack(spacing: 2) {
-                        Button {
-                            projectCoordinator.selectDocumentSurface(surface.id)
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "doc.text")
-                                Text(surface.title)
-                                    .lineLimit(1)
-                            }
-                            .padding(.leading, 10)
-                            .padding(.trailing, 4)
-                            .frame(height: 28)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
+        HStack(spacing: 0) {
+            if !showsProjectSidebar {
+                WorkspacePaneVisibilityButton(
+                    paneName: "目录树",
+                    systemImage: "sidebar.left",
+                    isExpanded: false,
+                    action: onExpandProjectSidebar
+                )
+                .padding(.leading, 7)
+                .padding(.trailing, 3)
+            }
 
-                        Button {
-                            projectCoordinator.closeDocumentSurface(surface.id)
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 9, weight: .semibold))
-                                .frame(width: 18, height: 18)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(projectCoordinator.documentSurfaces) { surface in
+                        let isActive = projectCoordinator.activeSurfaceID == surface.id
+                        HStack(spacing: 2) {
+                            Button {
+                                projectCoordinator.selectDocumentSurface(surface.id)
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "doc.text")
+                                    Text(surface.title)
+                                        .lineLimit(1)
+                                }
+                                .padding(.leading, 10)
+                                .padding(.trailing, 4)
+                                .frame(height: 28)
                                 .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                projectCoordinator.closeDocumentSurface(surface.id)
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .frame(width: 18, height: 18)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.trailing, 5)
+                            .help("关闭 \(surface.title)")
+                            .accessibilityLabel("关闭文档：\(surface.title)")
                         }
-                        .buttonStyle(.plain)
-                        .padding(.trailing, 5)
-                        .help("关闭 \(surface.title)")
-                        .accessibilityLabel("关闭文档：\(surface.title)")
-                    }
-                    .frame(height: 28)
-                    .background(
-                        isActive
-                            ? Color.accentColor.opacity(0.14)
-                            : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 6)
-                    )
-                    .accessibilityElement(children: .contain)
-                    .accessibilityLabel("打开的文档：\(surface.title)")
-                    .accessibilityValue(isActive ? "当前" : "后台")
-                    .contextMenu {
-                        Button("关闭当前文件") {
-                            projectCoordinator.closeDocumentSurfaces(
-                                in: .current,
-                                relativeTo: surface.id
-                            )
-                        }
-                        Divider()
-                        Button("关闭其他文件") {
-                            projectCoordinator.closeDocumentSurfaces(
-                                in: .others,
-                                relativeTo: surface.id
-                            )
-                        }
-                        .disabled(
-                            ProjectDocumentTabSelection.targetIDs(
-                                for: .others,
-                                anchorID: surface.id,
-                                orderedIDs: projectCoordinator.documentSurfaces.map(\.id)
-                            ).isEmpty
+                        .frame(height: 28)
+                        .background(
+                            isActive
+                                ? Color.accentColor.opacity(0.14)
+                                : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 6)
                         )
-                        Button("关闭左侧文件") {
-                            projectCoordinator.closeDocumentSurfaces(
-                                in: .left,
-                                relativeTo: surface.id
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel("打开的文档：\(surface.title)")
+                        .accessibilityValue(isActive ? "当前" : "后台")
+                        .contextMenu {
+                            Button("关闭当前文件") {
+                                projectCoordinator.closeDocumentSurfaces(
+                                    in: .current,
+                                    relativeTo: surface.id
+                                )
+                            }
+                            Divider()
+                            Button("关闭其他文件") {
+                                projectCoordinator.closeDocumentSurfaces(
+                                    in: .others,
+                                    relativeTo: surface.id
+                                )
+                            }
+                            .disabled(
+                                ProjectDocumentTabSelection.targetIDs(
+                                    for: .others,
+                                    anchorID: surface.id,
+                                    orderedIDs: projectCoordinator.documentSurfaces.map(\.id)
+                                ).isEmpty
+                            )
+                            Button("关闭左侧文件") {
+                                projectCoordinator.closeDocumentSurfaces(
+                                    in: .left,
+                                    relativeTo: surface.id
+                                )
+                            }
+                            .disabled(
+                                ProjectDocumentTabSelection.targetIDs(
+                                    for: .left,
+                                    anchorID: surface.id,
+                                    orderedIDs: projectCoordinator.documentSurfaces.map(\.id)
+                                ).isEmpty
+                            )
+                            Button("关闭右侧文件") {
+                                projectCoordinator.closeDocumentSurfaces(
+                                    in: .right,
+                                    relativeTo: surface.id
+                                )
+                            }
+                            .disabled(
+                                ProjectDocumentTabSelection.targetIDs(
+                                    for: .right,
+                                    anchorID: surface.id,
+                                    orderedIDs: projectCoordinator.documentSurfaces.map(\.id)
+                                ).isEmpty
                             )
                         }
-                        .disabled(
-                            ProjectDocumentTabSelection.targetIDs(
-                                for: .left,
-                                anchorID: surface.id,
-                                orderedIDs: projectCoordinator.documentSurfaces.map(\.id)
-                            ).isEmpty
-                        )
-                        Button("关闭右侧文件") {
-                            projectCoordinator.closeDocumentSurfaces(
-                                in: .right,
-                                relativeTo: surface.id
-                            )
+                        .accessibilityAction(named: "关闭当前文件") {
+                            projectCoordinator.closeDocumentSurface(surface.id)
                         }
-                        .disabled(
-                            ProjectDocumentTabSelection.targetIDs(
-                                for: .right,
-                                anchorID: surface.id,
-                                orderedIDs: projectCoordinator.documentSurfaces.map(\.id)
-                            ).isEmpty
-                        )
-                    }
-                    .accessibilityAction(named: "关闭当前文件") {
-                        projectCoordinator.closeDocumentSurface(surface.id)
                     }
                 }
+                .padding(.horizontal, 8)
             }
-            .padding(.horizontal, 8)
         }
         .frame(height: 36)
         .background(Color(nsColor: .windowBackgroundColor))

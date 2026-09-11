@@ -45,9 +45,8 @@ enum EditorWorkspaceMetrics {
     static let statusBarHeight: CGFloat = 30
 }
 
-/// One consistent, reversible control is used at the vertical midpoint of
-/// each workspace edge. Its location and icon stay stable when the pane is
-/// shown or hidden; only the action and accessible label change.
+/// Compact sidebar control shared by the navigation headers and the top edge
+/// of the editor when a pane is hidden.
 struct WorkspacePaneVisibilityButton: View {
     let paneName: String
     let systemImage: String
@@ -61,11 +60,13 @@ struct WorkspacePaneVisibilityButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .frame(width: 24, height: 24)
+                .font(.system(size: 13, weight: .medium))
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.borderless)
         .controlSize(.small)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 6))
         .help(label)
         .accessibilityLabel(label)
     }
@@ -964,33 +965,6 @@ struct MarkdownEditorView: View {
     @ToolbarContentBuilder
     private var editorToolbar: some ToolbarContent {
         if isWorkspaceSurfaceActive {
-            ToolbarItemGroup {
-                if hasProjectContext {
-                    Button {
-                        isProjectSidebarVisible.toggle()
-                    } label: {
-                        Label(
-                            isProjectSidebarVisible ? "隐藏目录树" : "显示目录树",
-                            systemImage: "sidebar.left"
-                        )
-                    }
-                    .help(isProjectSidebarVisible ? "隐藏项目目录树" : "显示项目目录树")
-                    .accessibilityValue(isProjectSidebarVisible ? "已显示" : "已隐藏")
-                }
-
-                Button {
-                    isOutlineVisible.toggle()
-                } label: {
-                    Label(
-                        isOutlineVisible ? "隐藏大纲" : "显示大纲",
-                        systemImage: "sidebar.right"
-                    )
-                }
-                .help(isOutlineVisible ? "隐藏文档大纲" : "显示文档大纲")
-                .accessibilityValue(isOutlineVisible ? "已显示" : "已隐藏")
-                .disabled(isProjectShell || usesSourceOnlyExperience)
-            }
-
             ToolbarItem {
                 Picker(
                     "写作视图",
@@ -1520,10 +1494,11 @@ struct MarkdownEditorView: View {
     @ViewBuilder
     private var content: some View {
         Group {
-            if workspacePanes.first == .projectSidebar {
+            if showsProjectSidebar && hasProjectContext {
                 PersistentEdgeSplitView(
                     edge: .leading,
                     width: $preferences.workspaceProjectSidebarWidth,
+                    isEdgeVisible: isProjectSidebarVisible,
                     allowedWidth: AppPreferences.Limits.projectSidebarWidth,
                     accessibilityLabel: "目录树与工作区分栏"
                 ) {
@@ -1606,7 +1581,7 @@ struct MarkdownEditorView: View {
                 documentContent
             }
         }
-        .overlay(alignment: .leading) {
+        .overlay(alignment: .topLeading) {
             if showsProjectSidebar && hasProjectContext && !isProjectSidebarVisible {
                 WorkspacePaneVisibilityButton(
                     paneName: "目录树",
@@ -1615,10 +1590,10 @@ struct MarkdownEditorView: View {
                 ) {
                     isProjectSidebarVisible = true
                 }
-                .padding(.leading, 8)
+                .padding(7)
             }
         }
-        .overlay(alignment: .trailing) {
+        .overlay(alignment: .topTrailing) {
             if !isProjectShell && !usesSourceOnlyExperience && !isOutlineVisible {
                 WorkspacePaneVisibilityButton(
                     paneName: "文档大纲",
@@ -1627,22 +1602,13 @@ struct MarkdownEditorView: View {
                 ) {
                     isOutlineVisible = true
                 }
-                .padding(.trailing, 8)
+                .padding(7)
             }
         }
     }
 
     private var hasProjectContext: Bool {
         activeProjectRoot != nil
-    }
-
-    private var workspacePanes: [EditorWorkspacePane] {
-        EditorWorkspaceLayout.panes(
-            hasProjectContext: hasProjectContext,
-            projectSidebarVisible: showsProjectSidebar && isProjectSidebarVisible,
-            outlineAvailable: !isProjectShell && !usesSourceOnlyExperience,
-            outlineVisible: isOutlineVisible
-        )
     }
 
     private var activeProjectRoot: URL? {
@@ -1698,10 +1664,11 @@ struct MarkdownEditorView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if workspacePanes.last == .outline {
+        } else if !usesSourceOnlyExperience {
             PersistentEdgeSplitView(
                 edge: .trailing,
                 width: $preferences.workspaceOutlineWidth,
+                isEdgeVisible: isOutlineVisible,
                 allowedWidth: AppPreferences.Limits.outlineWidth,
                 accessibilityLabel: "工作区与文档大纲分栏"
             ) {

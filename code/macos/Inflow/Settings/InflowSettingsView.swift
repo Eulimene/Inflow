@@ -170,7 +170,7 @@ struct InflowSettingsView: View {
                     isOn: $preferences.workspaceOutlineVisible
                 )
                 Text(
-                    "工具栏、显示菜单以及目录树和大纲自身的展开/折叠操作"
+                    "显示菜单以及目录树和大纲顶部的展开/折叠操作"
                         + "都会立即保存；之后打开文件、项目或重新启动 Inflow 时继续使用。"
                 )
                 .font(.caption)

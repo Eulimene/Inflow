@@ -520,7 +520,7 @@ private struct RenderedMarkdownPlanner {
     }
 
     private func initialLocalSourceCandidates() -> [LocalCandidate] {
-        var candidates: [LocalCandidate] = []
+        var candidates = unsupportedTripleDashBlockCandidates()
         for span in spans {
             let range = span.utf8Range
             switch span.kind {
@@ -564,6 +564,38 @@ private struct RenderedMarkdownPlanner {
             case .heading, .emphasis, .strong, .strikethrough, .code, .link,
                  .blockQuote, .list:
                 break
+            }
+        }
+        return candidates
+    }
+
+    /// CommonMark otherwise interprets a `---` / content / `---` block as a
+    /// thematic break followed by a Setext heading. Inflow does not currently
+    /// implement front matter or a generic triple-dash fence, so preserve the
+    /// complete construct as literal source instead of presenting a misleading
+    /// partial rendering.
+    private func unsupportedTripleDashBlockCandidates() -> [LocalCandidate] {
+        var candidates: [LocalCandidate] = []
+        var openingLineIndex: Int?
+
+        for line in lines {
+            let trimmed = trimmingHorizontalWhitespace(from: line.contentRange)
+            let isDelimiter = trimmed.count == 3
+                && bytes[trimmed].allSatisfy { $0 == 0x2D }
+            guard isDelimiter else { continue }
+
+            if let openingIndex = openingLineIndex {
+                guard line.index > openingIndex else { continue }
+                let blockRange = lines[openingIndex].contentRange.lowerBound
+                    ..< line.contentRange.upperBound
+                appendLocal(
+                    blockRange,
+                    reason: .unsupportedSyntax,
+                    to: &candidates
+                )
+                openingLineIndex = nil
+            } else if line.index == 0 || lines[line.index - 1].isBlank {
+                openingLineIndex = line.index
             }
         }
         return candidates
