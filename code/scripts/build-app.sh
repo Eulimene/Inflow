@@ -7,7 +7,7 @@ PROJECT_DIRECTORY="$(dirname -- "${SCRIPT_DIRECTORY}")"
 CONFIGURATION="Debug"
 OPEN_AFTER_BUILD=0
 CLEAN_BEFORE_BUILD=0
-OUTPUT_DIRECTORY="${PROJECT_DIRECTORY}/.derivedData"
+OUTPUT_DIRECTORY="${PROJECT_DIRECTORY}/Build"
 
 usage() {
   cat <<'EOF'
@@ -18,7 +18,7 @@ Build the Inflow macOS app with the repository's local Rust toolchain.
 Options:
   --debug            Build the Debug configuration (default).
   --release          Build the Release configuration.
-  -o, --output-dir   Store all build data below PATH (default: .derivedData).
+  -o, --output-dir   Store all build data below PATH (default: ./Build).
   --clean            Clean the selected configuration before building.
   --open             Open this exact app build in a new process after success.
   -h, --help         Show this help message.
@@ -83,7 +83,8 @@ esac
 
 /bin/mkdir -p "${OUTPUT_DIRECTORY}"
 DERIVED_DATA_PATH="$(CDPATH= cd -- "${OUTPUT_DIRECTORY}" && pwd -P)"
-APP_PATH="${DERIVED_DATA_PATH}/Build/Products/${CONFIGURATION}/Inflow.app"
+PRODUCTS_DIRECTORY="${DERIVED_DATA_PATH}/Products/${CONFIGURATION}"
+APP_PATH="${PRODUCTS_DIRECTORY}/Inflow.app"
 
 echo "Building Inflow (${CONFIGURATION})..."
 echo "Build directory: ${DERIVED_DATA_PATH}"
@@ -96,6 +97,7 @@ if [ "${CLEAN_BEFORE_BUILD}" -eq 1 ]; then
     -configuration "${CONFIGURATION}" \
     -destination 'platform=macOS,arch=arm64' \
     -derivedDataPath "${DERIVED_DATA_PATH}" \
+    CONFIGURATION_BUILD_DIR="${PRODUCTS_DIRECTORY}" \
     CODE_SIGNING_ALLOWED=NO \
     clean
 fi
@@ -106,6 +108,7 @@ fi
   -configuration "${CONFIGURATION}" \
   -destination 'platform=macOS,arch=arm64' \
   -derivedDataPath "${DERIVED_DATA_PATH}" \
+  CONFIGURATION_BUILD_DIR="${PRODUCTS_DIRECTORY}" \
   CODE_SIGNING_ALLOWED=NO \
   build
 

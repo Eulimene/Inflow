@@ -75,6 +75,7 @@ xcuserdata/
 # Xcode build products
 DerivedData/
 .derivedData*/
+Build/
 build/
 *.hmap
 *.ipa
