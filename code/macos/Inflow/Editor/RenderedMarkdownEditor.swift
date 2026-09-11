@@ -96,6 +96,35 @@ struct RenderedMarkdownImage: Equatable, Sendable {
     let target: String
 }
 
+enum RenderedMarkdownTableAlignment: Equatable, Sendable {
+    case leading
+    case center
+    case trailing
+}
+
+struct RenderedMarkdownTableCellLink: Equatable, Sendable {
+    let visibleRange: NSRange
+    let target: String
+}
+
+struct RenderedMarkdownTableCell: Equatable, Sendable {
+    let sourceRange: RenderedMarkdownSourceRange
+    let text: String
+    let links: [RenderedMarkdownTableCellLink]
+}
+
+struct RenderedMarkdownTable: Equatable, Sendable {
+    let sourceRange: RenderedMarkdownSourceRange
+    let alignments: [RenderedMarkdownTableAlignment]
+    let rows: [[RenderedMarkdownTableCell]]
+}
+
+struct RenderedMarkdownMermaidDiagram: Equatable, Sendable {
+    let sourceRange: RenderedMarkdownSourceRange
+    /// A parser-generated, script-free SVG. The Markdown source remains the editor's model.
+    let svg: String
+}
+
 /// A display-only interpretation of one exact Markdown byte snapshot.
 ///
 /// The plan never contains replacement text or a second rendered body. Attribute and local
@@ -108,6 +137,8 @@ struct RenderedMarkdownPlan: Equatable, Sendable {
     let localSourceBlocks: [RenderedMarkdownLocalSourceBlock]
     let links: [RenderedMarkdownLink]
     let images: [RenderedMarkdownImage]
+    let tables: [RenderedMarkdownTable]
+    let mermaidDiagrams: [RenderedMarkdownMermaidDiagram]
 
     func exactlyMatches(_ source: String) -> Bool {
         sourceUTF8 == Data(source.utf8)
@@ -119,6 +150,21 @@ enum RenderedMarkdownRefreshDecision: Equatable, Sendable {
     /// the current block while an input method owns marked text.
     case keepCurrentPresentation
     case apply(RenderedMarkdownPlan)
+}
+
+enum RenderedMarkdownMermaidRenderer {
+    /// Reuses the bundled Rust renderer. It produces deterministic SVG without JavaScript or
+    /// network access, so instant editing and Preview share exactly the same Mermaid grammar.
+    static func svg(forMarkdown markdown: String) -> String? {
+        guard let fragment = try? MarkdownRenderer.htmlFragment(for: markdown),
+              fragment.contains("class=\"mermaid-diagram\""),
+              let start = fragment.range(of: "<svg"),
+              let end = fragment.range(of: "</svg>", range: start.lowerBound..<fragment.endIndex)
+        else {
+            return nil
+        }
+        return String(fragment[start.lowerBound..<end.upperBound])
+    }
 }
 
 enum RenderedMarkdownEditor {
@@ -183,7 +229,9 @@ enum RenderedMarkdownEditor {
             contentStyles: [],
             localSourceBlocks: localSourceBlocks,
             links: [],
-            images: []
+            images: [],
+            tables: [],
+            mermaidDiagrams: []
         )
     }
 }
@@ -226,6 +274,23 @@ private struct RenderedMarkdownPlanner {
         let targetUTF8Range: Range<Int>
         let alternative: String
         let target: String
+    }
+
+    private struct PendingTableCell: Equatable {
+        let utf8Range: Range<Int>
+        let text: String
+        let links: [RenderedMarkdownTableCellLink]
+    }
+
+    private struct PendingTable: Equatable {
+        let utf8Range: Range<Int>
+        let alignments: [RenderedMarkdownTableAlignment]
+        let rows: [[PendingTableCell]]
+    }
+
+    private struct PendingMermaidDiagram: Equatable {
+        let utf8Range: Range<Int>
+        let svg: String
     }
 
     private enum ParsedLine {
@@ -294,7 +359,9 @@ private struct RenderedMarkdownPlanner {
                 contentStyles: [],
                 localSourceBlocks: [],
                 links: [],
-                images: []
+                images: [],
+                tables: [],
+                mermaidDiagrams: []
             )
         }
 
@@ -348,13 +415,23 @@ private struct RenderedMarkdownPlanner {
             }
             return $0.sourceUTF8Range.upperBound < $1.sourceUTF8Range.upperBound
         }
+        let pendingTables = makeTables(
+            excluding: mergedLocalCandidates,
+            markers: pendingMarkers,
+            links: pendingLinks
+        )
+        let pendingMermaidDiagrams = makeMermaidDiagrams(
+            excluding: mergedLocalCandidates
+        )
 
         let requestedOffsets = requestedUTF8Offsets(
             localCandidates: mergedLocalCandidates,
             markers: pendingMarkers,
             styles: pendingStyles,
             links: pendingLinks,
-            images: pendingImages
+            images: pendingImages,
+            tables: pendingTables,
+            mermaidDiagrams: pendingMermaidDiagrams
         )
         guard let utf16Offsets = mapUTF8OffsetsToUTF16(requestedOffsets) else {
             throw RenderedMarkdownPlanError.invalidSourceRange
@@ -407,6 +484,27 @@ private struct RenderedMarkdownPlanner {
                 target: image.target
             )
         }
+        let tables = try pendingTables.map { table in
+            RenderedMarkdownTable(
+                sourceRange: try mappedRange(table.utf8Range),
+                alignments: table.alignments,
+                rows: try table.rows.map { row in
+                    try row.map { cell in
+                        RenderedMarkdownTableCell(
+                            sourceRange: try mappedRange(cell.utf8Range),
+                            text: cell.text,
+                            links: cell.links
+                        )
+                    }
+                }
+            )
+        }
+        let mermaidDiagrams = try pendingMermaidDiagrams.map { diagram in
+            RenderedMarkdownMermaidDiagram(
+                sourceRange: try mappedRange(diagram.utf8Range),
+                svg: diagram.svg
+            )
+        }
 
         return RenderedMarkdownPlan(
             sourceSnapshot: source,
@@ -415,7 +513,9 @@ private struct RenderedMarkdownPlanner {
             contentStyles: styles,
             localSourceBlocks: localSourceBlocks,
             links: links,
-            images: images
+            images: images,
+            tables: tables,
+            mermaidDiagrams: mermaidDiagrams
         )
     }
 
@@ -449,6 +549,13 @@ private struct RenderedMarkdownPlanner {
                     to: &candidates
                 )
             case .code where isBlockCode(range):
+                if isMermaidFence(range),
+                   RenderedMarkdownMermaidRenderer.svg(
+                       forMarkdown: String(decoding: bytes[range], as: UTF8.self)
+                   ) != nil
+                {
+                    break
+                }
                 appendLocal(
                     range,
                     reason: isMermaidFence(range) ? .mermaid : .fencedCode,
@@ -780,6 +887,143 @@ private struct RenderedMarkdownPlanner {
             cursor += 1
         }
         return result
+    }
+
+    private func makeTables(
+        excluding localCandidates: [LocalCandidate],
+        markers: [PendingMarker],
+        links: [PendingLink]
+    ) -> [PendingTable] {
+        spans.compactMap { span -> PendingTable? in
+            guard span.kind == .table,
+                  !overlapsLocalSource(span.utf8Range, localCandidates: localCandidates)
+            else {
+                return nil
+            }
+            let rowIndices = lineIndices(intersecting: span.utf8Range)
+            guard rowIndices.count >= 2 else { return nil }
+            let delimiterRanges = tableCellRanges(in: lines[rowIndices[1]].contentRange)
+            guard !delimiterRanges.isEmpty else { return nil }
+            let alignments = delimiterRanges.map(tableAlignment(for:))
+            let renderedRows = rowIndices.enumerated().compactMap {
+                offset, lineIndex -> [PendingTableCell]? in
+                guard offset != 1 else { return nil }
+                let ranges = tableCellRanges(in: lines[lineIndex].contentRange)
+                guard !ranges.isEmpty else { return nil }
+                return ranges.map { cellRange in
+                    let rawVisibleText = visibleText(in: cellRange, excluding: markers)
+                    let leadingWhitespaceLength = rawVisibleText.prefix {
+                        $0 == " " || $0 == "\t"
+                    }.utf16.count
+                    let cellLinks = links.filter {
+                        $0.textUTF8Range.lowerBound >= cellRange.lowerBound
+                            && $0.textUTF8Range.upperBound <= cellRange.upperBound
+                    }.map { link in
+                        let prefix = cellRange.lowerBound..<link.textUTF8Range.lowerBound
+                        let visibleLocation = visibleText(
+                            in: prefix,
+                            excluding: markers
+                        ).utf16.count
+                        let visibleLabel = visibleText(
+                            in: link.textUTF8Range,
+                            excluding: markers
+                        )
+                        return RenderedMarkdownTableCellLink(
+                            visibleRange: NSRange(
+                                location: max(0, visibleLocation - leadingWhitespaceLength),
+                                length: visibleLabel.utf16.count
+                            ),
+                            target: link.target
+                        )
+                    }
+                    return PendingTableCell(
+                        utf8Range: cellRange,
+                        text: rawVisibleText.trimmingCharacters(in: .whitespaces),
+                        links: cellLinks
+                    )
+                }
+            }
+            guard !renderedRows.isEmpty else { return nil }
+            return PendingTable(
+                utf8Range: span.utf8Range,
+                alignments: alignments,
+                rows: renderedRows
+            )
+        }
+    }
+
+    private func tableCellRanges(in lineRange: Range<Int>) -> [Range<Int>] {
+        let trimmed = trimmingHorizontalWhitespace(from: lineRange)
+        guard !trimmed.isEmpty else { return [] }
+        var pipes = tablePipeOffsets(in: trimmed)
+        var lower = trimmed.lowerBound
+        var upper = trimmed.upperBound
+        if pipes.first == lower {
+            lower += 1
+            pipes.removeFirst()
+        }
+        if pipes.last == upper - 1 {
+            upper -= 1
+            pipes.removeLast()
+        }
+        guard lower <= upper else { return [] }
+        let boundaries = [lower] + pipes + [upper]
+        return zip(boundaries, boundaries.dropFirst()).enumerated().map {
+            index, boundary in
+            let (left, right) = boundary
+            return trimmingHorizontalWhitespace(from: (index == 0 ? left : left + 1)..<right)
+        }
+    }
+
+    private func tableAlignment(for range: Range<Int>) -> RenderedMarkdownTableAlignment {
+        let value = String(decoding: bytes[range], as: UTF8.self)
+            .trimmingCharacters(in: .whitespaces)
+        if value.hasPrefix(":"), value.hasSuffix(":") { return .center }
+        if value.hasSuffix(":") { return .trailing }
+        return .leading
+    }
+
+    private func visibleText(
+        in range: Range<Int>,
+        excluding markers: [PendingMarker]
+    ) -> String {
+        guard !range.isEmpty else { return "" }
+        let hidden = markers.compactMap { marker -> Range<Int>? in
+            let lower = max(range.lowerBound, marker.utf8Range.lowerBound)
+            let upper = min(range.upperBound, marker.utf8Range.upperBound)
+            return lower < upper ? lower..<upper : nil
+        }.sorted { $0.lowerBound < $1.lowerBound }
+        var output: [UInt8] = []
+        var cursor = range.lowerBound
+        for hiddenRange in hidden {
+            if hiddenRange.lowerBound > cursor {
+                output.append(contentsOf: bytes[cursor..<hiddenRange.lowerBound])
+            }
+            cursor = max(cursor, hiddenRange.upperBound)
+        }
+        if cursor < range.upperBound {
+            output.append(contentsOf: bytes[cursor..<range.upperBound])
+        }
+        return String(decoding: output, as: UTF8.self)
+            .replacingOccurrences(of: "\\|", with: "|")
+    }
+
+    private func makeMermaidDiagrams(
+        excluding localCandidates: [LocalCandidate]
+    ) -> [PendingMermaidDiagram] {
+        spans.compactMap { span -> PendingMermaidDiagram? in
+            guard span.kind == .code,
+                  isBlockCode(span.utf8Range),
+                  isMermaidFence(span.utf8Range),
+                  !overlapsLocalSource(span.utf8Range, localCandidates: localCandidates),
+                  let svg = RenderedMarkdownMermaidRenderer.svg(
+                      forMarkdown: String(decoding: bytes[span.utf8Range], as: UTF8.self)
+                  )
+            else {
+                return nil
+            }
+            return PendingMermaidDiagram(utf8Range: span.utf8Range, svg: svg)
+        }
     }
 
     private func trimmingHorizontalWhitespace(from range: Range<Int>) -> Range<Int> {
@@ -1871,7 +2115,9 @@ private struct RenderedMarkdownPlanner {
         markers: [PendingMarker],
         styles: [PendingStyle],
         links: [PendingLink],
-        images: [PendingImage]
+        images: [PendingImage],
+        tables: [PendingTable],
+        mermaidDiagrams: [PendingMermaidDiagram]
     ) -> [Int] {
         var offsets: Set<Int> = [0, bytes.count]
         func insert(_ range: Range<Int>) {
@@ -1891,6 +2137,11 @@ private struct RenderedMarkdownPlanner {
             insert(image.alternativeUTF8Range)
             insert(image.targetUTF8Range)
         }
+        tables.forEach { table in
+            insert(table.utf8Range)
+            table.rows.flatMap { $0 }.forEach { insert($0.utf8Range) }
+        }
+        mermaidDiagrams.forEach { insert($0.utf8Range) }
         return offsets.sorted()
     }
 

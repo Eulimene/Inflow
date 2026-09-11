@@ -84,6 +84,14 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             }
         )
         XCTAssertTrue(hasStyle(.link, text: "表格链接", source: source, plan: plan))
+        XCTAssertEqual(plan.tables.count, 1)
+        XCTAssertEqual(plan.tables.first?.rows.map { $0.map(\.text) }, [
+            ["领域", "入口"],
+            ["文档", "表格链接"],
+        ])
+        XCTAssertEqual(plan.tables.first?.rows[1][1].links.map(\.target), [
+            "./00%20文档治理/README.md",
+        ])
 
         XCTAssertTrue(hasMarker(.blockQuote, text: "> ", source: source, plan: plan))
         XCTAssertTrue(hasMarker(.unorderedList, text: "- ", source: source, plan: plan))
@@ -150,6 +158,24 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             ) as? NSFont
         }
         XCTAssertLessThan(tableDelimiterFont?.pointSize ?? .greatestFiniteMagnitude, 1)
+
+        let quoteMarker = try? XCTUnwrap(plan.markers.first { $0.kind == .blockQuote })
+        let quoteMarkerFont = quoteMarker.flatMap { marker in
+            storage?.attribute(
+                .font,
+                at: marker.sourceRange.utf16Range.location,
+                effectiveRange: nil
+            ) as? NSFont
+        }
+        XCTAssertLessThan(quoteMarkerFont?.pointSize ?? .greatestFiniteMagnitude, 1)
+        XCTAssertEqual(session.textView.renderedQuoteRanges.count, 1)
+        XCTAssertNotNil(
+            plan.tables.first.flatMap {
+                session.textView.renderedTable(
+                    atUTF16Location: $0.sourceRange.utf16Range.location
+                )
+            }
+        )
 
         let paddedLocation = (source as NSString).range(of: "padded").location
         let paddedFont = storage?.attribute(
@@ -227,10 +253,13 @@ final class RenderedMarkdownEditorTests: XCTestCase {
 
         XCTAssertFalse(reasons.contains(.table))
         XCTAssertTrue(reasons.contains(.fencedCode))
-        XCTAssertTrue(reasons.contains(.mermaid))
+        XCTAssertFalse(reasons.contains(.mermaid))
         XCTAssertTrue(reasons.contains(.rawHTML))
         XCTAssertTrue(reasons.contains(.complexOrAmbiguous))
         XCTAssertEqual(plan.images.map(\.target), ["image.png"])
+        XCTAssertEqual(plan.tables.count, 1)
+        XCTAssertEqual(plan.mermaidDiagrams.count, 1)
+        XCTAssertTrue(plan.mermaidDiagrams[0].svg.contains("<svg"))
         XCTAssertTrue(hasStyle(.paragraph, text: "安全段落", source: source, plan: plan))
         XCTAssertTrue(hasStyle(.tableHeader, text: "| A | B |", source: source, plan: plan))
         XCTAssertTrue(
@@ -263,7 +292,75 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             XCTAssertFalse(plan.images.contains {
                 rangesOverlap($0.sourceRange.utf8Range, block.sourceRange.utf8Range)
             })
+            XCTAssertFalse(plan.tables.contains {
+                rangesOverlap($0.sourceRange.utf8Range, block.sourceRange.utf8Range)
+            })
+            XCTAssertFalse(plan.mermaidDiagrams.contains {
+                rangesOverlap($0.sourceRange.utf8Range, block.sourceRange.utf8Range)
+            })
         }
+    }
+
+    @MainActor
+    func testRenderedSessionMountsTableQuoteAndMermaidWithoutChangingSource() throws {
+        let source = """
+        > 行内引用
+
+        | 名称 | 文档 |
+        | :--- | ---: |
+        | Inflow | [打开](guide.md) |
+
+        ```mermaid
+        flowchart LR
+        A[开始] --> B[结束]
+        ```
+        """
+        let plan = RenderedMarkdownEditor.plan(for: source)
+        XCTAssertTrue(plan.localSourceBlocks.isEmpty)
+        XCTAssertEqual(plan.tables.first?.alignments, [.leading, .trailing])
+        XCTAssertEqual(plan.mermaidDiagrams.count, 1)
+
+        var activatedTarget: String?
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        session.textView.undoManager?.removeAllActions()
+        session.setPresentation(
+            .rendered,
+            source: source,
+            onLinkClick: { activatedTarget = $0 }
+        )
+
+        let table = try XCTUnwrap(plan.tables.first)
+        let tableView = try XCTUnwrap(
+            session.textView.renderedTable(
+                atUTF16Location: table.sourceRange.utf16Range.location
+            )
+        )
+        XCTAssertEqual(tableView.cellTexts, [["名称", "文档"], ["Inflow", "打开"]])
+        XCTAssertGreaterThan(tableView.renderedSize.width, 100)
+        XCTAssertGreaterThan(tableView.renderedSize.height, 60)
+        XCTAssertTrue(
+            tableView.textView(NSTextView(), clickedOnLink: "guide.md", at: 0)
+        )
+        XCTAssertEqual(activatedTarget, "guide.md")
+
+        let diagram = try XCTUnwrap(plan.mermaidDiagrams.first)
+        XCTAssertNotNil(
+            session.textView.renderedImage(
+                atUTF16Location: diagram.sourceRange.utf16Range.location
+            )
+        )
+        XCTAssertEqual(session.textView.string, source)
+        XCTAssertFalse(session.textView.undoManager?.canUndo == true)
+    }
+
+    func testUnsupportedMermaidRemainsReadableLocalSource() {
+        let source = "```mermaid\npie\ntitle Values\n```"
+        let plan = RenderedMarkdownEditor.plan(for: source)
+
+        XCTAssertTrue(plan.mermaidDiagrams.isEmpty)
+        XCTAssertEqual(plan.localSourceBlocks.flatMap(\.reasons), [.mermaid])
+        XCTAssertEqual(plan.sourceSnapshot, source)
     }
 
     func testPlanRendersLocalAndRemoteImagesWithoutChangingSource() throws {
@@ -609,7 +706,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testRenderedSessionKeepsStructuralMarkdownMarkersVisible() throws {
+    func testRenderedSessionRendersStructuralMarkersWithoutLeakingQuoteSource() throws {
         let source = "> quote\n- item\n1. ordered\n- [x] done\n\nparagraph **bold**"
         let session = MarkdownSourceEditorSession()
         session.textView.string = source
@@ -617,7 +714,17 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         session.textView.setSelectedRange(NSRange(location: inlineMarker.location, length: 0))
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
 
-        for marker in ["> ", "- ", "1. ", "[x] "] {
+        let quoteLocation = try XCTUnwrap((source as NSString).range(of: "> ").nonEmptyLocation)
+        let quoteFont = try XCTUnwrap(
+            session.textView.textStorage?.attribute(
+                .font,
+                at: quoteLocation,
+                effectiveRange: nil
+            ) as? NSFont
+        )
+        XCTAssertLessThan(quoteFont.pointSize, 1, "quote source marker must be hidden")
+
+        for marker in ["- ", "1. ", "[x] "] {
             let location = try XCTUnwrap((source as NSString).range(of: marker).nonEmptyLocation)
             let font = try XCTUnwrap(
                 session.textView.textStorage?.attribute(
@@ -790,6 +897,10 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             + plan.images.flatMap {
                 [$0.sourceRange, $0.alternativeRange, $0.targetRange]
             }
+            + plan.tables.flatMap { table in
+                [table.sourceRange] + table.rows.flatMap { $0.map(\.sourceRange) }
+            }
+            + plan.mermaidDiagrams.map(\.sourceRange)
     }
 
     private func rangesOverlap(_ lhs: Range<Int>, _ rhs: Range<Int>) -> Bool {

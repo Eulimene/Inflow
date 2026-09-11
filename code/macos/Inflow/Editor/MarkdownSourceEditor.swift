@@ -145,10 +145,11 @@ private extension RenderedMarkdownMarkerKind {
     /// still recede until the user edits that paragraph.
     var remainsVisibleWhenInactive: Bool {
         switch self {
-        case .blockQuote, .unorderedList, .orderedList, .taskList, .tableSeparator:
+        case .unorderedList, .orderedList, .taskList:
             true
-        case .heading, .referenceDefinition, .emphasis, .strong, .strikethrough, .inlineCode,
-             .tableBoundary, .tableDelimiterRow, .linkDelimiter, .linkDestination:
+        case .heading, .blockQuote, .referenceDefinition, .emphasis, .strong, .strikethrough,
+             .inlineCode, .tableBoundary, .tableSeparator, .tableDelimiterRow, .linkDelimiter,
+             .linkDestination:
             false
         }
     }
@@ -431,6 +432,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             textView.linkClickHandler = nil
             textView.clickableLinkRanges = []
             textView.clearRenderedImages()
+            textView.renderedQuoteRanges = []
             textView.setAccessibilityLabel("Markdown 源码编辑器")
             applySourceAppearance(sourceAppearance, force: changed)
         case .rendered:
@@ -490,6 +492,10 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         renderedPlan = plan
         textView.clickableLinkRanges = plan.links.map(\.textRange.utf16Range)
         textView.clearRenderedImages()
+        textView.renderedQuoteRanges = plan.contentStyles.compactMap { style in
+            guard style.kind == .blockQuote else { return nil }
+            return style.sourceRange.utf16Range
+        }
         scrollView.hasVerticalRuler = false
         scrollView.rulersVisible = false
 
@@ -587,10 +593,38 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             }
         }
         for image in plan.images {
+            guard !plan.tables.contains(where: {
+                NSIntersectionRange($0.sourceRange.utf16Range, image.sourceRange.utf16Range).length
+                    == image.sourceRange.utf16Range.length
+            }) else { continue }
             applyRenderedImage(
                 nil,
                 alternative: image.alternative,
                 sourceRange: image.sourceRange.utf16Range,
+                storage: storage
+            )
+        }
+        for table in plan.tables {
+            let size = textView.setRenderedTable(
+                table,
+                baseFont: baseFont,
+                maximumWidth: max(240, min(900, scrollView.contentSize.width - 32)),
+                onLinkClick: { [weak self] target in
+                    self?.renderedLinkHandler?(target)
+                }
+            )
+            applyRenderedBlock(
+                sourceRange: table.sourceRange.utf16Range,
+                size: size,
+                storage: storage
+            )
+        }
+        for diagram in plan.mermaidDiagrams {
+            guard let image = renderedMermaidImage(from: diagram.svg) else { continue }
+            applyRenderedImage(
+                image,
+                alternative: "Mermaid 图表",
+                sourceRange: diagram.sourceRange.utf16Range,
                 storage: storage
             )
         }
@@ -622,6 +656,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 else {
                     return
                 }
+                guard !plan.tables.contains(where: {
+                    NSIntersectionRange(
+                        $0.sourceRange.utf16Range,
+                        renderedImage.sourceRange.utf16Range
+                    ).length == renderedImage.sourceRange.utf16Range.length
+                }) else { continue }
                 guard let data = await RenderedMarkdownImageLoader.shared.load(
                     target: renderedImage.target,
                     context: context
@@ -721,6 +761,53 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         )
     }
 
+    private func applyRenderedBlock(
+        sourceRange: NSRange,
+        size: NSSize,
+        storage: NSTextStorage
+    ) {
+        guard sourceRange.length > 0, NSMaxRange(sourceRange) <= storage.length else { return }
+        storage.addAttributes(
+            [
+                .font: NSFont.systemFont(ofSize: 0.1),
+                .foregroundColor: NSColor.clear,
+                .backgroundColor: NSColor.clear,
+                .kern: 0,
+                .underlineStyle: 0,
+                .strikethroughStyle: 0,
+                .obliqueness: 0,
+            ],
+            range: sourceRange
+        )
+        storage.addAttribute(
+            .kern,
+            value: size.width,
+            range: NSRange(location: sourceRange.location, length: 1)
+        )
+        let paragraphStyle = (
+            storage.attribute(.paragraphStyle, at: sourceRange.location, effectiveRange: nil)
+                as? NSParagraphStyle
+        )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+        paragraphStyle.minimumLineHeight = max(paragraphStyle.minimumLineHeight, size.height + 10)
+        storage.addAttribute(.paragraphStyle, value: paragraphStyle, range: sourceRange)
+    }
+
+    private func renderedMermaidImage(from sourceSVG: String) -> NSImage? {
+        let styledSVG = sourceSVG.replacingOccurrences(
+            of: "<defs>",
+            with: """
+            <defs><style>
+            .node rect { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
+            text { fill: #24292f; font: 14px -apple-system, BlinkMacSystemFont, sans-serif; }
+            line, marker path { color: #57606a; }
+            </style>
+            """
+        )
+        guard let image = NSImage(data: Data(styledSVG.utf8)), image.isValid else { return nil }
+        image.accessibilityDescription = "Mermaid 图表"
+        return image
+    }
+
     private func scaledRenderedImage(_ source: NSImage) -> NSImage {
         let sourceSize = source.size
         guard sourceSize.width > 0, sourceSize.height > 0 else { return source }
@@ -779,7 +866,22 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 range: range
             )
         case .blockQuote:
-            storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: range)
+            let paragraphStyle = (
+                storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
+                    as? NSParagraphStyle
+            )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+            paragraphStyle.firstLineHeadIndent += 16
+            paragraphStyle.headIndent += 16
+            paragraphStyle.paragraphSpacingBefore = max(paragraphStyle.paragraphSpacingBefore, 3)
+            paragraphStyle.paragraphSpacing = max(paragraphStyle.paragraphSpacing, 3)
+            storage.addAttributes(
+                [
+                    .foregroundColor: NSColor.secondaryLabelColor,
+                    .backgroundColor: NSColor.quaternaryLabelColor.withAlphaComponent(0.12),
+                    .paragraphStyle: paragraphStyle,
+                ],
+                range: range
+            )
         case .tableHeader:
             transformFonts(in: range, storage: storage) { font in
                 NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
@@ -1413,6 +1515,11 @@ final class WindowAwareTextView: NSTextView {
         let imageView: RenderedMarkdownImageView
     }
 
+    private struct RenderedTableViewState {
+        let sourceRange: NSRange
+        let tableView: RenderedMarkdownTableView
+    }
+
     private let persistentUndoManager = UndoManager()
     var didAttachToWindow: (() -> Void)?
     var textDidChangeHandler: ((String) -> Void)?
@@ -1425,7 +1532,13 @@ final class WindowAwareTextView: NSTextView {
             window?.invalidateCursorRects(for: self)
         }
     }
+    var renderedQuoteRanges: [NSRange] = [] {
+        didSet {
+            if oldValue != renderedQuoteRanges { needsDisplay = true }
+        }
+    }
     private var renderedImageViews: [Int: RenderedImageViewState] = [:]
+    private var renderedTableViews: [Int: RenderedTableViewState] = [:]
     private var renderedImageLayoutTask: Task<Void, Never>?
 
     override var undoManager: UndoManager? {
@@ -1435,7 +1548,7 @@ final class WindowAwareTextView: NSTextView {
     override func setFrameSize(_ newSize: NSSize) {
         let sizeChanged = frame.size != newSize
         super.setFrameSize(newSize)
-        if sizeChanged, !renderedImageViews.isEmpty {
+        if sizeChanged, !renderedImageViews.isEmpty || !renderedTableViews.isEmpty {
             scheduleRenderedImageLayout()
         }
     }
@@ -1452,6 +1565,8 @@ final class WindowAwareTextView: NSTextView {
         renderedImageLayoutTask = nil
         renderedImageViews.values.forEach { $0.imageView.removeFromSuperview() }
         renderedImageViews.removeAll()
+        renderedTableViews.values.forEach { $0.tableView.removeFromSuperview() }
+        renderedTableViews.removeAll()
     }
 
     func setRenderedImage(
@@ -1480,6 +1595,34 @@ final class WindowAwareTextView: NSTextView {
 
     func renderedImage(atUTF16Location location: Int) -> NSImage? {
         renderedImageViews[location]?.imageView.image
+    }
+
+    @discardableResult
+    func setRenderedTable(
+        _ table: RenderedMarkdownTable,
+        baseFont: NSFont,
+        maximumWidth: CGFloat,
+        onLinkClick: @escaping (String) -> Void
+    ) -> NSSize {
+        let key = table.sourceRange.utf16Range.location
+        renderedTableViews[key]?.tableView.removeFromSuperview()
+        let tableView = RenderedMarkdownTableView(
+            table: table,
+            baseFont: baseFont,
+            maximumWidth: maximumWidth,
+            onLinkClick: onLinkClick
+        )
+        addSubview(tableView)
+        renderedTableViews[key] = RenderedTableViewState(
+            sourceRange: table.sourceRange.utf16Range,
+            tableView: tableView
+        )
+        scheduleRenderedImageLayout()
+        return tableView.renderedSize
+    }
+
+    func renderedTable(atUTF16Location location: Int) -> RenderedMarkdownTableView? {
+        renderedTableViews[location]?.tableView
     }
 
     private func scheduleRenderedImageLayout() {
@@ -1524,6 +1667,55 @@ final class WindowAwareTextView: NSTextView {
                 height: image.size.height
             )
             state.imageView.isHidden = false
+        }
+        for state in renderedTableViews.values {
+            guard state.sourceRange.location < string.utf16.count else {
+                state.tableView.isHidden = true
+                continue
+            }
+            let glyphIndex = layoutManager.glyphIndexForCharacter(at: state.sourceRange.location)
+            guard glyphIndex < layoutManager.numberOfGlyphs else {
+                state.tableView.isHidden = true
+                continue
+            }
+            let lineRect = layoutManager.lineFragmentRect(
+                forGlyphAt: glyphIndex,
+                effectiveRange: nil,
+                withoutAdditionalLayout: true
+            )
+            let glyphRect = layoutManager.boundingRect(
+                forGlyphRange: NSRange(location: glyphIndex, length: 1),
+                in: textContainer
+            )
+            state.tableView.frame = NSRect(
+                x: textContainerOrigin.x + glyphRect.minX,
+                y: textContainerOrigin.y + lineRect.minY + 5,
+                width: state.tableView.renderedSize.width,
+                height: state.tableView.renderedSize.height
+            )
+            state.tableView.isHidden = false
+        }
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        guard let layoutManager else { return }
+        NSColor.separatorColor.setFill()
+        for characterRange in renderedQuoteRanges where characterRange.length > 0 {
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: characterRange,
+                actualCharacterRange: nil
+            )
+            layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) {
+                lineRect, _, _, _, _ in
+                let bar = NSRect(
+                    x: self.textContainerOrigin.x + lineRect.minX + 3,
+                    y: self.textContainerOrigin.y + lineRect.minY + 1,
+                    width: 3,
+                    height: max(1, lineRect.height - 2)
+                )
+                if bar.intersects(rect) { bar.fill() }
+            }
         }
     }
 
@@ -1673,6 +1865,197 @@ final class WindowAwareTextView: NSTextView {
 
 final class RenderedMarkdownImageView: NSImageView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+@MainActor
+final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
+    private struct CellLayout {
+        let row: Int
+        let column: Int
+        let textView: NSTextView
+    }
+
+    private let columnWidths: [CGFloat]
+    private let rowHeights: [CGFloat]
+    private let cells: [CellLayout]
+    private let onLinkClick: (String) -> Void
+    let renderedSize: NSSize
+    let cellTexts: [[String]]
+
+    override var isFlipped: Bool { true }
+
+    init(
+        table: RenderedMarkdownTable,
+        baseFont: NSFont,
+        maximumWidth: CGFloat,
+        onLinkClick: @escaping (String) -> Void
+    ) {
+        self.onLinkClick = onLinkClick
+        cellTexts = table.rows.map { $0.map(\.text) }
+        let columnCount = table.rows.map(\.count).max() ?? 0
+        var widths = Array(repeating: CGFloat(72), count: columnCount)
+        for row in table.rows {
+            for (column, cell) in row.enumerated() {
+                let width = (cell.text as NSString).size(withAttributes: [.font: baseFont]).width + 20
+                widths[column] = max(widths[column], min(280, ceil(width)))
+            }
+        }
+        let availableWidth = max(160, maximumWidth)
+        if widths.reduce(0, +) > availableWidth, !widths.isEmpty {
+            let equalWidth = max(56, floor(availableWidth / CGFloat(widths.count)))
+            widths = widths.map { min($0, equalWidth) }
+        }
+        columnWidths = widths
+
+        var heights: [CGFloat] = []
+        for (rowIndex, row) in table.rows.enumerated() {
+            let font = rowIndex == 0
+                ? NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
+                : baseFont
+            var rowHeight = CGFloat(34)
+            for (column, cell) in row.enumerated() where column < widths.count {
+                let bounds = (cell.text as NSString).boundingRect(
+                    with: NSSize(width: max(20, widths[column] - 16), height: 2_000),
+                    options: [.usesLineFragmentOrigin, .usesFontLeading],
+                    attributes: [.font: font]
+                )
+                rowHeight = max(rowHeight, ceil(bounds.height) + 12)
+            }
+            heights.append(rowHeight)
+        }
+        rowHeights = heights
+        renderedSize = NSSize(width: widths.reduce(0, +), height: heights.reduce(0, +))
+
+        var layouts: [CellLayout] = []
+        for (rowIndex, row) in table.rows.enumerated() {
+            for (column, cell) in row.enumerated() where column < widths.count {
+                let paragraph = NSMutableParagraphStyle()
+                let alignment = column < table.alignments.count
+                    ? table.alignments[column]
+                    : .leading
+                switch alignment {
+                case .leading: paragraph.alignment = .natural
+                case .center: paragraph.alignment = .center
+                case .trailing: paragraph.alignment = .right
+                }
+                let font = rowIndex == 0
+                    ? NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
+                    : baseFont
+                let attributed = NSMutableAttributedString(
+                    string: cell.text,
+                    attributes: [
+                        .font: font,
+                        .foregroundColor: NSColor.labelColor,
+                        .paragraphStyle: paragraph,
+                    ]
+                )
+                for link in cell.links
+                where link.visibleRange.length > 0
+                    && NSMaxRange(link.visibleRange) <= attributed.length {
+                    attributed.addAttributes(
+                        [
+                            .link: link.target,
+                            .foregroundColor: NSColor.linkColor,
+                            .underlineStyle: NSUnderlineStyle.single.rawValue,
+                        ],
+                        range: link.visibleRange
+                    )
+                }
+                let textView = NSTextView()
+                textView.isEditable = false
+                textView.isSelectable = true
+                textView.isRichText = true
+                textView.drawsBackground = false
+                textView.textContainerInset = .zero
+                textView.textContainer?.lineFragmentPadding = 0
+                textView.textContainer?.widthTracksTextView = true
+                textView.textContainer?.heightTracksTextView = false
+                textView.textStorage?.setAttributedString(attributed)
+                textView.delegate = nil
+                textView.setAccessibilityLabel(cell.text)
+                layouts.append(CellLayout(row: rowIndex, column: column, textView: textView))
+            }
+        }
+        cells = layouts
+        super.init(frame: NSRect(origin: .zero, size: renderedSize))
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.masksToBounds = true
+        setAccessibilityElement(true)
+        setAccessibilityRole(.table)
+        for layout in cells {
+            layout.textView.delegate = self
+            addSubview(layout.textView)
+        }
+        layoutCells()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    private func layoutCells() {
+        let xOffsets = columnWidths.reduce(into: [CGFloat(0)]) { result, width in
+            result.append((result.last ?? 0) + width)
+        }
+        let yOffsets = rowHeights.reduce(into: [CGFloat(0)]) { result, height in
+            result.append((result.last ?? 0) + height)
+        }
+        for cell in cells {
+            guard cell.column + 1 < xOffsets.count, cell.row + 1 < yOffsets.count else { continue }
+            cell.textView.frame = NSRect(
+                x: xOffsets[cell.column] + 8,
+                y: yOffsets[cell.row] + 6,
+                width: max(1, columnWidths[cell.column] - 16),
+                height: max(1, rowHeights[cell.row] - 12)
+            )
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        var y = CGFloat(0)
+        for (index, height) in rowHeights.enumerated() {
+            let rowRect = NSRect(x: 0, y: y, width: renderedSize.width, height: height)
+            let color = index == 0
+                ? NSColor.controlAccentColor.withAlphaComponent(0.10)
+                : (index.isMultiple(of: 2)
+                    ? NSColor.quaternaryLabelColor.withAlphaComponent(0.18)
+                    : NSColor.textBackgroundColor)
+            color.setFill()
+            rowRect.fill()
+            y += height
+        }
+        NSColor.separatorColor.setStroke()
+        let path = NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5))
+        path.lineWidth = 1
+        path.stroke()
+        var x = CGFloat(0)
+        for width in columnWidths.dropLast() {
+            x += width
+            let divider = NSBezierPath()
+            divider.move(to: NSPoint(x: x, y: 0))
+            divider.line(to: NSPoint(x: x, y: renderedSize.height))
+            divider.stroke()
+        }
+        y = 0
+        for height in rowHeights.dropLast() {
+            y += height
+            let divider = NSBezierPath()
+            divider.move(to: NSPoint(x: 0, y: y))
+            divider.line(to: NSPoint(x: renderedSize.width, y: y))
+            divider.stroke()
+        }
+    }
+
+    func textView(
+        _ textView: NSTextView,
+        clickedOnLink link: Any,
+        at charIndex: Int
+    ) -> Bool {
+        guard let target = link as? String else { return false }
+        onLinkClick(target)
+        return true
+    }
 }
 
 struct MarkdownSourceEditor: NSViewRepresentable {
