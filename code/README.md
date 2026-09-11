@@ -80,6 +80,18 @@ Inflow 是一款本地优先的 Markdown 写作工作台。当前代码只为产
 
 需要 Xcode 26 或兼容版本，以及 rust-toolchain.toml 指定的 Rust 工具链。以下命令只产生开发验证结果，不产生公开候选：
 
+一键构建 Debug App：
+
+    scripts/build-app.sh
+
+构建成功后直接启动：
+
+    scripts/build-app.sh --open
+
+也可使用 `--release` 构建 Release 配置；产物统一输出到 `.derivedData/Build/Products/<配置>/Inflow.app`。
+
+等价的底层构建命令：
+
     xcodebuild \
       -project Inflow.xcodeproj \
       -scheme Inflow \
