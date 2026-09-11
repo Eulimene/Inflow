@@ -28,6 +28,10 @@ final class RenderedMarkdownEditorTests: XCTestCase {
 
         [完整引用][docs] [折叠引用][] [快捷引用]
 
+        | 领域 | 入口 |
+        | --- | --- |
+        | 文档 | [表格链接](./00%20文档治理/README.md) |
+
         [docs]: guide.md
         [折叠引用]: collapsed.md
         [快捷引用]: shortcut.md
@@ -70,6 +74,16 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertTrue(hasStyle(.link, text: "完整引用", source: source, plan: plan))
         XCTAssertTrue(hasStyle(.link, text: "折叠引用", source: source, plan: plan))
         XCTAssertTrue(hasStyle(.link, text: "快捷引用", source: source, plan: plan))
+        XCTAssertTrue(hasStyle(.tableHeader, text: "| 领域 | 入口 |", source: source, plan: plan))
+        XCTAssertTrue(
+            plan.contentStyles.contains { style in
+                if case .tableBody = style.kind {
+                    return utf8Text(style.sourceRange, source: source).contains("表格链接")
+                }
+                return false
+            }
+        )
+        XCTAssertTrue(hasStyle(.link, text: "表格链接", source: source, plan: plan))
 
         XCTAssertTrue(hasMarker(.blockQuote, text: "> ", source: source, plan: plan))
         XCTAssertTrue(hasMarker(.unorderedList, text: "- ", source: source, plan: plan))
@@ -80,9 +94,23 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertTrue(hasMarker(.strikethrough, text: "~~", source: source, plan: plan))
         XCTAssertTrue(hasMarker(.inlineCode, text: "`", source: source, plan: plan))
         XCTAssertTrue(hasMarker(.linkDestination, text: "https://example.com/path", source: source, plan: plan))
+        XCTAssertTrue(hasMarker(.tableBoundary, text: "|", source: source, plan: plan))
+        XCTAssertTrue(hasMarker(.tableSeparator, text: "|", source: source, plan: plan))
+        XCTAssertTrue(
+            plan.markers.contains { marker in
+                marker.kind == .tableDelimiterRow
+                    && utf8Text(marker.sourceRange, source: source).contains("---")
+            }
+        )
         XCTAssertEqual(
             plan.links.map(\.target),
-            ["https://example.com/path", "guide.md", "collapsed.md", "shortcut.md"]
+            [
+                "https://example.com/path",
+                "guide.md",
+                "collapsed.md",
+                "shortcut.md",
+                "./00%20文档治理/README.md",
+            ]
         )
         XCTAssertTrue(
             plan.markers.contains { marker in
@@ -112,6 +140,16 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             ) as? NSFont
             XCTAssertLessThan(font?.pointSize ?? .greatestFiniteMagnitude, 1)
         }
+
+        let tableDelimiter = plan.markers.first { $0.kind == .tableDelimiterRow }
+        let tableDelimiterFont = tableDelimiter.flatMap { marker in
+            storage?.attribute(
+                .font,
+                at: marker.sourceRange.utf16Range.location,
+                effectiveRange: nil
+            ) as? NSFont
+        }
+        XCTAssertLessThan(tableDelimiterFont?.pointSize ?? .greatestFiniteMagnitude, 1)
 
         let paddedLocation = (source as NSString).range(of: "padded").location
         let paddedFont = storage?.attribute(
@@ -187,13 +225,22 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         let plan = RenderedMarkdownEditor.plan(for: source)
         let reasons = Set(plan.localSourceBlocks.flatMap(\.reasons))
 
-        XCTAssertTrue(reasons.contains(.table))
+        XCTAssertFalse(reasons.contains(.table))
         XCTAssertTrue(reasons.contains(.fencedCode))
         XCTAssertTrue(reasons.contains(.mermaid))
         XCTAssertTrue(reasons.contains(.rawHTML))
         XCTAssertTrue(reasons.contains(.complexOrAmbiguous))
         XCTAssertEqual(plan.images.map(\.target), ["image.png"])
         XCTAssertTrue(hasStyle(.paragraph, text: "安全段落", source: source, plan: plan))
+        XCTAssertTrue(hasStyle(.tableHeader, text: "| A | B |", source: source, plan: plan))
+        XCTAssertTrue(
+            plan.contentStyles.contains { style in
+                if case .tableBody = style.kind {
+                    return utf8Text(style.sourceRange, source: source) == "| 1 | 2 |"
+                }
+                return false
+            }
+        )
         XCTAssertTrue(plan.exactlyMatches(source))
 
         for (index, block) in plan.localSourceBlocks.enumerated() {

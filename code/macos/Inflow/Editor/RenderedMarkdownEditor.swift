@@ -21,6 +21,9 @@ enum RenderedMarkdownMarkerKind: Equatable, Sendable {
     case unorderedList
     case orderedList
     case taskList
+    case tableBoundary
+    case tableSeparator
+    case tableDelimiterRow
     case referenceDefinition
     case linkDelimiter
     case linkDestination
@@ -42,6 +45,8 @@ enum RenderedMarkdownContentStyleKind: Equatable, Sendable {
     case unorderedListItem
     case orderedListItem
     case taskListItem(isChecked: Bool)
+    case tableHeader
+    case tableBody(alternating: Bool)
     case link
 }
 
@@ -306,6 +311,11 @@ private struct RenderedMarkdownPlanner {
             markers: &pendingMarkers,
             styles: &pendingStyles
         )
+        addTablePresentation(
+            excluding: mergedLocalCandidates,
+            markers: &pendingMarkers,
+            styles: &pendingStyles
+        )
         addReferenceDefinitionPresentation(
             excluding: mergedLocalCandidates,
             markers: &pendingMarkers
@@ -415,7 +425,7 @@ private struct RenderedMarkdownPlanner {
             let range = span.utf8Range
             switch span.kind {
             case .table:
-                appendLocal(range, reason: .table, to: &candidates)
+                break
             case .image:
                 if imageParts(in: range) == nil,
                    referenceImageParts(in: range) == nil
@@ -693,6 +703,91 @@ private struct RenderedMarkdownPlanner {
         where !overlapsLocalSource(range, localCandidates: localCandidates) {
             appendMarker(.referenceDefinition, range: range, to: &markers)
         }
+    }
+
+    /// Presents a parser-validated GFM table directly on the original source.
+    /// The delimiter row and optional outer pipes recede, while inner pipes remain
+    /// as lightweight column boundaries. Inline spans (including links) are still
+    /// planned normally, so the table stays editable and saves as exact Markdown.
+    private func addTablePresentation(
+        excluding localCandidates: [LocalCandidate],
+        markers: inout [PendingMarker],
+        styles: inout [PendingStyle]
+    ) {
+        for span in spans where span.kind == .table {
+            guard !overlapsLocalSource(span.utf8Range, localCandidates: localCandidates) else {
+                continue
+            }
+            let rowIndices = lineIndices(intersecting: span.utf8Range)
+            guard rowIndices.count >= 2 else { continue }
+
+            for (rowOffset, lineIndex) in rowIndices.enumerated() {
+                let line = lines[lineIndex]
+                if rowOffset == 1 {
+                    appendMarker(.tableDelimiterRow, range: line.fullRange, to: &markers)
+                    continue
+                }
+
+                appendStyle(
+                    rowOffset == 0
+                        ? .tableHeader
+                        : .tableBody(alternating: rowOffset.isMultiple(of: 2)),
+                    range: line.contentRange,
+                    to: &styles
+                )
+                let pipes = tablePipeOffsets(in: line.contentRange)
+                guard !pipes.isEmpty else { continue }
+                let trimmedRange = trimmingHorizontalWhitespace(from: line.contentRange)
+                for pipe in pipes {
+                    let markerRange = pipe..<(pipe + 1)
+                    if pipe == trimmedRange.lowerBound || pipe == trimmedRange.upperBound - 1 {
+                        appendMarker(.tableBoundary, range: markerRange, to: &markers)
+                    } else {
+                        appendMarker(.tableSeparator, range: markerRange, to: &markers)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Finds structural pipes without mistaking escaped pipes or pipes inside an
+    /// inline code span for column boundaries.
+    private func tablePipeOffsets(in range: Range<Int>) -> [Int] {
+        var result: [Int] = []
+        var cursor = range.lowerBound
+        var activeCodeFenceLength: Int?
+        while cursor < range.upperBound {
+            if bytes[cursor] == 0x60 {
+                let runStart = cursor
+                while cursor < range.upperBound, bytes[cursor] == 0x60 { cursor += 1 }
+                let runLength = cursor - runStart
+                if let fenceLength = activeCodeFenceLength {
+                    if runLength == fenceLength { activeCodeFenceLength = nil }
+                } else {
+                    activeCodeFenceLength = runLength
+                }
+                continue
+            }
+            if bytes[cursor] == 0x7C, activeCodeFenceLength == nil {
+                var slashCount = 0
+                var lookBehind = cursor
+                while lookBehind > range.lowerBound, bytes[lookBehind - 1] == 0x5C {
+                    slashCount += 1
+                    lookBehind -= 1
+                }
+                if slashCount.isMultiple(of: 2) { result.append(cursor) }
+            }
+            cursor += 1
+        }
+        return result
+    }
+
+    private func trimmingHorizontalWhitespace(from range: Range<Int>) -> Range<Int> {
+        var lower = range.lowerBound
+        var upper = range.upperBound
+        while lower < upper, matchesHorizontalWhitespace(bytes[lower]) { lower += 1 }
+        while upper > lower, matchesHorizontalWhitespace(bytes[upper - 1]) { upper -= 1 }
+        return lower..<upper
     }
 
     private func addInlinePresentation(
@@ -1740,13 +1835,16 @@ private struct RenderedMarkdownPlanner {
         case .unorderedList: 2
         case .orderedList: 3
         case .taskList: 4
-        case .referenceDefinition: 5
-        case .emphasis: 6
-        case .strong: 7
-        case .strikethrough: 8
-        case .inlineCode: 9
-        case .linkDelimiter: 10
-        case .linkDestination: 11
+        case .tableBoundary: 5
+        case .tableSeparator: 6
+        case .tableDelimiterRow: 7
+        case .referenceDefinition: 8
+        case .emphasis: 9
+        case .strong: 10
+        case .strikethrough: 11
+        case .inlineCode: 12
+        case .linkDelimiter: 13
+        case .linkDestination: 14
         }
     }
 
@@ -1758,11 +1856,13 @@ private struct RenderedMarkdownPlanner {
         case .unorderedListItem: 3
         case .orderedListItem: 4
         case .taskListItem: 5
-        case .emphasis: 6
-        case .strong: 7
-        case .strikethrough: 8
-        case .inlineCode: 9
-        case .link: 10
+        case .tableHeader: 6
+        case .tableBody: 7
+        case .emphasis: 8
+        case .strong: 9
+        case .strikethrough: 10
+        case .inlineCode: 11
+        case .link: 12
         }
     }
 

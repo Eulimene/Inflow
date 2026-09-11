@@ -145,10 +145,10 @@ private extension RenderedMarkdownMarkerKind {
     /// still recede until the user edits that paragraph.
     var remainsVisibleWhenInactive: Bool {
         switch self {
-        case .blockQuote, .unorderedList, .orderedList, .taskList:
+        case .blockQuote, .unorderedList, .orderedList, .taskList, .tableSeparator:
             true
         case .heading, .referenceDefinition, .emphasis, .strong, .strikethrough, .inlineCode,
-             .linkDelimiter, .linkDestination:
+             .tableBoundary, .tableDelimiterRow, .linkDelimiter, .linkDestination:
             false
         }
     }
@@ -780,6 +780,23 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             )
         case .blockQuote:
             storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: range)
+        case .tableHeader:
+            transformFonts(in: range, storage: storage) { font in
+                NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+            }
+            applyRenderedTableRow(
+                range: range,
+                storage: storage,
+                backgroundColor: NSColor.controlAccentColor.withAlphaComponent(0.10)
+            )
+        case let .tableBody(alternating):
+            applyRenderedTableRow(
+                range: range,
+                storage: storage,
+                backgroundColor: alternating
+                    ? NSColor.quaternaryLabelColor.withAlphaComponent(0.22)
+                    : NSColor.quaternaryLabelColor.withAlphaComponent(0.10)
+            )
         case .link:
             storage.addAttributes(
                 [
@@ -789,6 +806,23 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 range: range
             )
         }
+    }
+
+    private func applyRenderedTableRow(
+        range: NSRange,
+        storage: NSTextStorage,
+        backgroundColor: NSColor
+    ) {
+        storage.addAttribute(.backgroundColor, value: backgroundColor, range: range)
+        guard range.length > 0 else { return }
+        let paragraphStyle = (
+            storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
+                as? NSParagraphStyle
+        )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+        paragraphStyle.paragraphSpacing = 1
+        paragraphStyle.paragraphSpacingBefore = 1
+        paragraphStyle.lineHeightMultiple = max(paragraphStyle.lineHeightMultiple, 1.25)
+        storage.addAttribute(.paragraphStyle, value: paragraphStyle, range: range)
     }
 
     private func transformFonts(
