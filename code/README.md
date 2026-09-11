@@ -88,7 +88,11 @@ Inflow 是一款本地优先的 Markdown 写作工作台。当前代码只为产
 
     scripts/build-app.sh --open
 
-也可使用 `--release` 构建 Release 配置；产物统一输出到 `.derivedData/Build/Products/<配置>/Inflow.app`。
+指定构建目录并在构建前清理该配置的旧产物：
+
+    scripts/build-app.sh --output-dir /private/tmp/inflow-build --clean
+
+也可使用 `--release` 构建 Release 配置。`--output-dir` 未指定时默认使用 `.derivedData`，App 位于所选目录的 `Build/Products/<配置>/Inflow.app`。`--open` 会以新进程启动这一确切产物，避免 macOS 激活同 Bundle ID 的旧构建。
 
 等价的底层构建命令：
 
