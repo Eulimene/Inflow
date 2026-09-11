@@ -588,7 +588,10 @@ struct PreviewLocalLink: Equatable, Sendable {
     let url: URL
     let fragment: String?
     let kind: PreviewLocalLinkKind
-    let snapshot: PreviewLocalFileSnapshot
+    /// Project-owned targets retain a frozen identity check before Inflow reads them.
+    /// System-opened targets deliberately omit it so sandbox-inaccessible sibling and
+    /// outside-project paths can reach Launch Services without a speculative read.
+    let snapshot: PreviewLocalFileSnapshot?
     let projectRoot: URL?
     let expectedProjectRootIdentity: FolderProjectDirectoryIdentity?
 }
@@ -643,6 +646,14 @@ enum PreviewLinkActivationPolicy {
     static func opensWithoutConfirmation(_ plan: PreviewLinkPlan) -> Bool {
         guard case let .local(link) = plan.destination else { return false }
         return PreviewLinkPlanner.localTargetIsCurrent(link)
+    }
+}
+
+enum PreviewLinkOpenPolicy {
+    /// Files outside the currently authorized project are explicit user navigation targets.
+    /// Hand them to Launch Services instead of requiring Inflow to read or copy their bytes.
+    static func usesSystemApplication(_ link: PreviewLocalLink) -> Bool {
+        link.projectRoot == nil || link.kind == .attachment
     }
 }
 
@@ -861,7 +872,10 @@ enum PreviewLinkPlanner {
         } else if link.expectedProjectRootIdentity != nil {
             return false
         }
-        return (try? PreviewLocalFileSnapshot.capture(link.url)) == link.snapshot
+        guard let snapshot = link.snapshot else {
+            return link.projectRoot == nil && link.expectedProjectRootIdentity == nil
+        }
+        return (try? PreviewLocalFileSnapshot.capture(link.url)) == snapshot
     }
 
     private static func resolvedLocalPlan(
@@ -942,6 +956,24 @@ enum PreviewLinkPlanner {
             )
         }
 
+        let kind = localKind(for: url)
+        if projectRoot == nil {
+            return PreviewLinkPlan(
+                sourceUTF8: sourceUTF8,
+                target: target,
+                destination: .local(
+                    PreviewLocalLink(
+                        url: url,
+                        fragment: fragment,
+                        kind: kind,
+                        snapshot: nil,
+                        projectRoot: nil,
+                        expectedProjectRootIdentity: nil
+                    )
+                )
+            )
+        }
+
         let safeTarget = url.lastPathComponent.isEmpty ? "该本地目标" : url.lastPathComponent
         let accessed = url.startAccessingSecurityScopedResource()
         defer {
@@ -977,19 +1009,20 @@ enum PreviewLinkPlanner {
             )
         }
 
-        let kind = localKind(for: url)
         do {
-            switch kind {
-            case .image:
-                _ = try LocalImageValidator.load(at: url)
-            case .pdf:
-                guard let document = CGPDFDocument(url as CFURL),
-                      document.numberOfPages > 0
-                else {
-                    throw PreviewLocalFileError.unsafeContent
+            if projectRoot != nil {
+                switch kind {
+                case .image:
+                    _ = try LocalImageValidator.load(at: url)
+                case .pdf:
+                    guard let document = CGPDFDocument(url as CFURL),
+                          document.numberOfPages > 0
+                    else {
+                        throw PreviewLocalFileError.unsafeContent
+                    }
+                case .markdown, .attachment:
+                    break
                 }
-            case .markdown, .attachment:
-                break
             }
             guard try PreviewLocalFileSnapshot.capture(url) == snapshot else {
                 throw PreviewLocalFileError.unavailable

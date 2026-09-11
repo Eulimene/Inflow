@@ -1764,7 +1764,24 @@ struct MarkdownEditorView: View {
             presentation: .rendered,
             onPasteImage: pasteImage,
             onDropImage: dropImage,
-            onCommandClickLink: activatePreviewLink
+            onLinkClick: activatePreviewLink,
+            renderedResourceContext: renderedResourceContext
+        )
+    }
+
+    private var renderedResourceContext: RenderedMarkdownResourceContext {
+        let requiresProjectBoundary = folderBrowser.isAssociatedProjectDocument(nativeDocument)
+        let candidateProjectRoot = activeProjectRoot
+        let projectRootIdentity = currentProjectRootIdentity(for: candidateProjectRoot)
+        let projectRoot = projectRootIdentity == nil ? nil : candidateProjectRoot
+        let documentDirectory = requiresProjectBoundary && projectRoot == nil
+            ? nil
+            : fileURL?.deletingLastPathComponent()
+        return RenderedMarkdownResourceContext(
+            documentDirectory: documentDirectory,
+            projectRoot: projectRoot,
+            expectedProjectRootIdentity: projectRootIdentity,
+            requiresProjectBoundary: requiresProjectBoundary
         )
     }
 
@@ -2648,29 +2665,39 @@ struct MarkdownEditorView: View {
             previewLinkPlan = nil
             switch link.kind {
             case .markdown:
-                if link.projectRoot != nil {
-                    openProjectMarkdown(link, sourcePlan: plan)
-                } else {
-                    do {
-                        let frozen = try PreviewLocalFileReader.read(
-                            accessURL,
-                            expected: link.snapshot
-                        )
-                        try openLinkedMarkdown(link, frozenData: frozen.data)
-                    } catch {
+                if PreviewLinkOpenPolicy.usesSystemApplication(link) {
+                    guard NSWorkspace.shared.open(accessURL) else {
                         previewLinkPlan = blockedPreviewLinkPlan(
                             target: plan.target,
-                            reason: .unavailableLocalTarget,
+                            reason: .cannotOpen,
                             safeTarget: link.url.lastPathComponent,
                             expectedURL: link.url
                         )
+                        return
                     }
+                } else {
+                    openProjectMarkdown(link, sourcePlan: plan)
                 }
             case .image, .pdf:
+                guard !PreviewLinkOpenPolicy.usesSystemApplication(link) else {
+                    guard NSWorkspace.shared.open(accessURL) else {
+                        previewLinkPlan = blockedPreviewLinkPlan(
+                            target: plan.target,
+                            reason: .cannotOpen,
+                            safeTarget: link.url.lastPathComponent,
+                            expectedURL: link.url
+                        )
+                        return
+                    }
+                    return
+                }
                 do {
+                    guard let snapshot = link.snapshot else {
+                        throw PreviewLocalFileError.unavailable
+                    }
                     let frozen = try PreviewLocalFileReader.read(
                         accessURL,
-                        expected: link.snapshot
+                        expected: snapshot
                     )
                     let safeURL = try SafePreviewOpenStore.materialize(
                         frozen,
@@ -2724,14 +2751,6 @@ struct MarkdownEditorView: View {
         }
     }
 
-    private func openLinkedMarkdown(_ link: PreviewLocalLink, frozenData: Data) throws {
-        let restored = try FrozenPreviewMarkdownDocument.make(
-            data: frozenData,
-            headingFragment: link.fragment
-        )
-        newDocument(restored)
-    }
-
     private func openProjectMarkdown(
         _ link: PreviewLocalLink,
         sourcePlan: PreviewLinkPlan
@@ -2750,7 +2769,8 @@ struct MarkdownEditorView: View {
             )
             return
         }
-        guard authorization.snapshot == link.snapshot,
+        guard let snapshot = link.snapshot,
+              authorization.snapshot == snapshot,
               link.expectedProjectRootIdentity.map({
                   authorization.projectIdentity == $0
               }) ?? true,

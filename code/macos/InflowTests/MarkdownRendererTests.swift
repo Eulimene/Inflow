@@ -1142,14 +1142,16 @@ final class MarkdownRendererTests: XCTestCase {
         )
 
         let fileURL = URL(fileURLWithPath: "/tmp/inflow-missing-file.md")
-        XCTAssertEqual(
-            blockedReason(PreviewLinkPlanner.plan(
-                markdown: "[file](\(fileURL.absoluteString))",
-                target: fileURL.absoluteString,
-                documentURL: nil
-            )),
-            .missingLocalTarget
+        let filePlan = PreviewLinkPlanner.plan(
+            markdown: "[file](\(fileURL.absoluteString))",
+            target: fileURL.absoluteString,
+            documentURL: nil
         )
+        guard case let .local(fileLink) = filePlan.destination else {
+            return XCTFail("file URLs must reach Launch Services without a speculative read")
+        }
+        XCTAssertNil(fileLink.snapshot)
+        XCTAssertTrue(PreviewLinkOpenPolicy.usesSystemApplication(fileLink))
 
         let disallowedSchemes = [
             "mailto:writer@example.com",
@@ -1361,6 +1363,10 @@ final class MarkdownRendererTests: XCTestCase {
             PreviewLinkActivationPolicy.opensWithoutConfirmation(trustedProjectPlan),
             "a current Markdown target inside the user-selected project opens directly"
         )
+        guard case let .local(trustedProjectLink) = trustedProjectPlan.destination else {
+            return XCTFail("expected a trusted project link")
+        }
+        XCTAssertFalse(PreviewLinkOpenPolicy.usesSystemApplication(trustedProjectLink))
 
         let trustedImageURL = directory.appendingPathComponent("cover.png")
         try pngData().write(to: trustedImageURL)
@@ -1375,6 +1381,10 @@ final class MarkdownRendererTests: XCTestCase {
             PreviewLinkActivationPolicy.opensWithoutConfirmation(trustedImagePlan),
             "an explicit click opens a current local image without another confirmation"
         )
+        guard case let .local(trustedImageLink) = trustedImagePlan.destination else {
+            return XCTFail("expected a trusted image link")
+        }
+        XCTAssertFalse(PreviewLinkOpenPolicy.usesSystemApplication(trustedImageLink))
 
         try Data("# Replaced with different bytes\n".utf8).write(to: targetURL)
         XCTAssertFalse(PreviewLinkPlanner.localTargetIsCurrent(link))
@@ -1392,6 +1402,8 @@ final class MarkdownRendererTests: XCTestCase {
             return XCTFail("expected an independent relative local link")
         }
         XCTAssertNil(independentRelativeLink.projectRoot)
+        XCTAssertNil(independentRelativeLink.snapshot)
+        XCTAssertTrue(PreviewLinkOpenPolicy.usesSystemApplication(independentRelativeLink))
 
         let absoluteTarget = targetURL.path
         let independentAbsolute = PreviewLinkPlanner.plan(
@@ -1403,6 +1415,8 @@ final class MarkdownRendererTests: XCTestCase {
             return XCTFail("expected an independent absolute local link")
         }
         XCTAssertNil(independentAbsoluteLink.projectRoot)
+        XCTAssertNil(independentAbsoluteLink.snapshot)
+        XCTAssertTrue(PreviewLinkOpenPolicy.usesSystemApplication(independentAbsoluteLink))
 
         let unsavedProjectDocument = PreviewLinkPlanner.plan(
             markdown: markdown,
@@ -1453,6 +1467,7 @@ final class MarkdownRendererTests: XCTestCase {
             return XCTFail("expected a project attachment")
         }
         XCTAssertEqual(projectAttachment.kind, .attachment)
+        XCTAssertTrue(PreviewLinkOpenPolicy.usesSystemApplication(projectAttachment))
 
         let fakePDF = directory.appendingPathComponent("fake.pdf")
         try Data("not pdf".utf8).write(to: fakePDF)
@@ -1497,6 +1512,14 @@ final class MarkdownRendererTests: XCTestCase {
             )),
             .unsafeLocalTarget
         )
+        guard case let .local(systemImageLink) = PreviewLinkPlanner.plan(
+            markdown: "[fake](fake.png)",
+            target: "fake.png",
+            documentURL: directory.appendingPathComponent("source.md")
+        ).destination else {
+            return XCTFail("an explicitly clicked external image should reach Launch Services")
+        }
+        XCTAssertTrue(PreviewLinkOpenPolicy.usesSystemApplication(systemImageLink))
 
         let aliasURL = directory.appendingPathComponent("alias.md")
         try FileManager.default.createSymbolicLink(at: aliasURL, withDestinationURL: imageURL)

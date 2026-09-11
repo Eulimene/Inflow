@@ -1,6 +1,143 @@
 import AppKit
 import SwiftUI
 
+struct RenderedMarkdownResourceContext: Equatable, Sendable {
+    let documentDirectory: URL?
+    let projectRoot: URL?
+    let expectedProjectRootIdentity: FolderProjectDirectoryIdentity?
+    let requiresProjectBoundary: Bool
+
+    static let unavailable = Self(
+        documentDirectory: nil,
+        projectRoot: nil,
+        expectedProjectRootIdentity: nil,
+        requiresProjectBoundary: false
+    )
+}
+
+enum RenderedMarkdownImageTarget: Equatable, Sendable {
+    case remote(URL)
+    case local(URL)
+
+    static func resolve(_ target: String, documentDirectory: URL?) -> Self? {
+        if let components = URLComponents(string: target),
+           let scheme = components.scheme?.lowercased()
+        {
+            if scheme == "http" || scheme == "https" {
+                guard components.host?.isEmpty == false,
+                      components.user == nil,
+                      components.password == nil,
+                      let url = components.url
+                else {
+                    return nil
+                }
+                return .remote(url)
+            }
+            guard scheme == "file",
+                  components.host == nil
+                    || components.host?.isEmpty == true
+                    || components.host == "localhost",
+                  components.user == nil,
+                  components.password == nil,
+                  let path = components.percentEncodedPath.removingPercentEncoding,
+                  !path.isEmpty
+            else {
+                return nil
+            }
+            return .local(URL(fileURLWithPath: path).standardizedFileURL)
+        }
+        if target.hasPrefix("/") {
+            guard let path = target.removingPercentEncoding else { return nil }
+            return .local(URL(fileURLWithPath: path).standardizedFileURL)
+        }
+        guard let documentDirectory,
+              let url = URL(string: target, relativeTo: documentDirectory)?.absoluteURL,
+              url.isFileURL
+        else {
+            return nil
+        }
+        return .local(url.standardizedFileURL)
+    }
+}
+
+actor RenderedMarkdownImageLoader {
+    static let shared = RenderedMarkdownImageLoader()
+
+    private var remoteCache: [URL: Data] = [:]
+    private var remoteCacheOrder: [URL] = []
+    private let maximumRemoteEntries = 24
+
+    func load(
+        target: String,
+        context: RenderedMarkdownResourceContext
+    ) async -> Data? {
+        guard !Task.isCancelled, !target.isEmpty else { return nil }
+        guard let resolved = RenderedMarkdownImageTarget.resolve(
+            target,
+            documentDirectory: context.documentDirectory
+        ) else {
+            return nil
+        }
+        if case let .remote(remoteURL) = resolved {
+            return await loadRemote(remoteURL)
+        }
+        guard case let .local(localURL) = resolved else { return nil }
+
+        let readsOutsideProject: Bool
+        if let projectRoot = context.projectRoot,
+           let normalizedRoot = try? FolderProjectPathBoundary.normalizedProjectRoot(projectRoot),
+           context.expectedProjectRootIdentity.map({
+               FolderProjectDirectoryIdentity.capture(normalizedRoot) == $0
+           }) ?? true
+        {
+            readsOutsideProject = FolderProjectPathBoundary.resolvedURL(
+                localURL,
+                within: normalizedRoot
+            ) == nil
+        } else {
+            readsOutsideProject = false
+        }
+
+        return try? ProjectBoundLocalImageLoader.load(
+            at: localURL,
+            projectRoot: readsOutsideProject ? nil : context.projectRoot,
+            expectedProjectRootIdentity: readsOutsideProject
+                ? nil
+                : context.expectedProjectRootIdentity,
+            requiresProjectBoundary: readsOutsideProject
+                ? false
+                : context.requiresProjectBoundary
+        ).data
+    }
+
+    private func loadRemote(_ url: URL) async -> Data? {
+        if let cached = remoteCache[url] { return cached }
+        var request = URLRequest(
+            url: url,
+            cachePolicy: .returnCacheDataElseLoad,
+            timeoutInterval: 20
+        )
+        request.setValue("image/*", forHTTPHeaderField: "Accept")
+        request.setValue(nil, forHTTPHeaderField: "Referer")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              !Task.isCancelled,
+              data.count <= LocalImageValidator.maximumBytes,
+              let response = response as? HTTPURLResponse,
+              (200..<300).contains(response.statusCode),
+              response.mimeType?.lowercased().hasPrefix("image/") == true
+        else {
+            return nil
+        }
+        remoteCache[url] = data
+        remoteCacheOrder.removeAll { $0 == url }
+        remoteCacheOrder.append(url)
+        while remoteCacheOrder.count > maximumRemoteEntries {
+            remoteCache.removeValue(forKey: remoteCacheOrder.removeFirst())
+        }
+        return data
+    }
+}
+
 private extension RenderedMarkdownMarkerKind {
     /// Structural prefixes carry meaning of their own. Keeping them visible
     /// prevents inactive list, task, and quote blocks from collapsing into
@@ -139,6 +276,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var renderedPlan: RenderedMarkdownPlan?
     private var renderedAppliedAppearance: SourceEditorAppearance?
     private var renderedLinkHandler: ((String) -> Void)?
+    private var renderedResourceContext = RenderedMarkdownResourceContext.unavailable
+    private var renderedImageGeneration = 0
+    private var renderedImageTask: Task<Void, Never>?
     private let lineNumberRuler: MarkdownLineNumberRulerView
     private var focusModeEnabled = false
     private var typewriterModeEnabled = false
@@ -276,25 +416,30 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     func setPresentation(
         _ presentation: MarkdownEditorPresentation,
         source: String,
-        onCommandClickLink: ((String) -> Void)?
+        onLinkClick: ((String) -> Void)?,
+        resourceContext: RenderedMarkdownResourceContext = .unavailable
     ) {
         let changed = self.presentation != presentation
+        let resourceContextChanged = renderedResourceContext != resourceContext
         self.presentation = presentation
-        renderedLinkHandler = onCommandClickLink
+        renderedLinkHandler = onLinkClick
+        renderedResourceContext = resourceContext
         switch presentation {
         case .source:
+            cancelRenderedImageLoading()
             renderedPlan = nil
-            textView.commandClickHandler = nil
+            textView.linkClickHandler = nil
+            textView.clickableLinkRanges = []
+            textView.clearRenderedImages()
             textView.setAccessibilityLabel("Markdown 源码编辑器")
             applySourceAppearance(sourceAppearance, force: changed)
         case .rendered:
             textView.setAccessibilityLabel("Markdown 即时编辑器")
-            textView.commandClickHandler = { [weak self] location, modifiers in
+            textView.linkClickHandler = { [weak self] location in
                 guard let self,
                       let renderedPlan = self.renderedPlan,
-                      let link = RenderedMarkdownEditor.commandClickTarget(
+                      let link = RenderedMarkdownEditor.clickTarget(
                           atUTF16Location: location,
-                          modifierFlags: modifiers,
                           currentSource: self.textView.string,
                           plan: renderedPlan
                       )
@@ -304,7 +449,10 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 self.renderedLinkHandler?(link.target)
                 return true
             }
-            applyRenderedPresentation(source: source, force: changed)
+            applyRenderedPresentation(
+                source: source,
+                force: changed || resourceContextChanged
+            )
         }
     }
 
@@ -340,6 +488,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         invalidateSyntaxApplication()
         let plan = RenderedMarkdownEditor.plan(for: source)
         renderedPlan = plan
+        textView.clickableLinkRanges = plan.links.map(\.textRange.utf16Range)
+        textView.clearRenderedImages()
         scrollView.hasVerticalRuler = false
         scrollView.rulersVisible = false
 
@@ -436,10 +586,152 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 )
             }
         }
+        for image in plan.images {
+            applyRenderedImage(
+                nil,
+                alternative: image.alternative,
+                sourceRange: image.sourceRange.utf16Range,
+                storage: storage
+            )
+        }
         storage.endEditing()
         renderedAppliedAppearance = sourceAppearance
         textView.setSelectedRange(selection)
         refreshWritingModePresentation()
+        loadRenderedImages(for: plan)
+    }
+
+    private func cancelRenderedImageLoading() {
+        renderedImageTask?.cancel()
+        renderedImageTask = nil
+        renderedImageGeneration &+= 1
+    }
+
+    private func loadRenderedImages(for plan: RenderedMarkdownPlan) {
+        cancelRenderedImageLoading()
+        guard !plan.images.isEmpty else { return }
+        let generation = renderedImageGeneration
+        let context = renderedResourceContext
+        renderedImageTask = Task { @MainActor [weak self] in
+            for renderedImage in plan.images {
+                guard let self,
+                      !Task.isCancelled,
+                      generation == self.renderedImageGeneration,
+                      self.presentation == .rendered,
+                      self.renderedPlan?.exactlyMatches(self.textView.string) == true
+                else {
+                    return
+                }
+                guard let data = await RenderedMarkdownImageLoader.shared.load(
+                    target: renderedImage.target,
+                    context: context
+                ), let image = NSImage(data: data), image.isValid else {
+                    continue
+                }
+                self.mountRenderedImage(
+                    image,
+                    alternative: renderedImage.alternative,
+                    sourceRange: renderedImage.sourceRange.utf16Range,
+                    generation: generation
+                )
+            }
+        }
+    }
+
+    private func mountRenderedImage(
+        _ image: NSImage,
+        alternative: String,
+        sourceRange: NSRange,
+        generation: Int
+    ) {
+        guard generation == renderedImageGeneration,
+              presentation == .rendered,
+              let storage = textView.textStorage,
+              NSMaxRange(sourceRange) <= storage.length
+        else {
+            return
+        }
+        let selection = textView.selectedRange()
+        let undoManager = textView.undoManager
+        let restoreUndoRegistration = undoManager?.isUndoRegistrationEnabled == true
+        if restoreUndoRegistration { undoManager?.disableUndoRegistration() }
+        defer {
+            if restoreUndoRegistration { undoManager?.enableUndoRegistration() }
+        }
+        storage.beginEditing()
+        applyRenderedImage(
+            image,
+            alternative: alternative,
+            sourceRange: sourceRange,
+            storage: storage
+        )
+        storage.endEditing()
+        textView.setSelectedRange(selection)
+        textView.needsDisplay = true
+    }
+
+    private func applyRenderedImage(
+        _ image: NSImage?,
+        alternative: String,
+        sourceRange: NSRange,
+        storage: NSTextStorage
+    ) {
+        guard sourceRange.length > 0, NSMaxRange(sourceRange) <= storage.length else { return }
+        storage.addAttributes(
+            [
+                .font: NSFont.systemFont(ofSize: 0.1),
+                .foregroundColor: NSColor.clear,
+                .backgroundColor: NSColor.clear,
+                .kern: 0,
+                .underlineStyle: 0,
+                .strikethroughStyle: 0,
+                .obliqueness: 0,
+            ],
+            range: sourceRange
+        )
+
+        let displayedImage = scaledRenderedImage(
+            image ?? NSImage(
+                systemSymbolName: "photo",
+                accessibilityDescription: alternative.isEmpty ? "图片" : alternative
+            ) ?? NSImage(size: NSSize(width: 28, height: 28))
+        )
+        displayedImage.accessibilityDescription = alternative.isEmpty ? "图片" : alternative
+        storage.addAttribute(
+            .kern,
+            value: displayedImage.size.width,
+            range: NSRange(location: sourceRange.location, length: 1)
+        )
+        let paragraphStyle = (
+            storage.attribute(
+                .paragraphStyle,
+                at: sourceRange.location,
+                effectiveRange: nil
+            ) as? NSParagraphStyle
+        )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+        paragraphStyle.minimumLineHeight = max(
+            paragraphStyle.minimumLineHeight,
+            displayedImage.size.height + 10
+        )
+        storage.addAttribute(.paragraphStyle, value: paragraphStyle, range: sourceRange)
+        textView.setRenderedImage(
+            displayedImage,
+            alternative: alternative,
+            sourceRange: sourceRange
+        )
+    }
+
+    private func scaledRenderedImage(_ source: NSImage) -> NSImage {
+        let sourceSize = source.size
+        guard sourceSize.width > 0, sourceSize.height > 0 else { return source }
+        let availableWidth = max(240, min(720, scrollView.contentSize.width - 32))
+        let scale = min(1, availableWidth / sourceSize.width, 480 / sourceSize.height)
+        guard scale < 1, let copy = source.copy() as? NSImage else { return source }
+        copy.size = NSSize(
+            width: max(1, sourceSize.width * scale),
+            height: max(1, sourceSize.height * scale)
+        )
+        return copy
     }
 
     private func applyRenderedAttributes(
@@ -1082,21 +1374,122 @@ final class MarkdownLineNumberRulerView: NSRulerView {
 
 @MainActor
 final class WindowAwareTextView: NSTextView {
+    private struct RenderedImageViewState {
+        let sourceRange: NSRange
+        let imageView: RenderedMarkdownImageView
+    }
+
     private let persistentUndoManager = UndoManager()
     var didAttachToWindow: (() -> Void)?
     var textDidChangeHandler: ((String) -> Void)?
     var pasteImageHandler: ((ClipboardImagePayload) -> Void)?
     var dropImageHandler: ((URL) -> Void)?
-    var commandClickHandler: ((Int, NSEvent.ModifierFlags) -> Bool)?
+    var linkClickHandler: ((Int) -> Bool)?
+    var clickableLinkRanges: [NSRange] = [] {
+        didSet {
+            guard oldValue != clickableLinkRanges else { return }
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+    private var renderedImageViews: [Int: RenderedImageViewState] = [:]
+    private var renderedImageLayoutTask: Task<Void, Never>?
 
     override var undoManager: UndoManager? {
         persistentUndoManager
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let sizeChanged = frame.size != newSize
+        super.setFrameSize(newSize)
+        if sizeChanged, !renderedImageViews.isEmpty {
+            scheduleRenderedImageLayout()
+        }
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil {
             didAttachToWindow?()
+        }
+    }
+
+    func clearRenderedImages() {
+        renderedImageLayoutTask?.cancel()
+        renderedImageLayoutTask = nil
+        renderedImageViews.values.forEach { $0.imageView.removeFromSuperview() }
+        renderedImageViews.removeAll()
+    }
+
+    func setRenderedImage(
+        _ image: NSImage,
+        alternative: String,
+        sourceRange: NSRange
+    ) {
+        let key = sourceRange.location
+        let imageView: RenderedMarkdownImageView
+        if let existing = renderedImageViews[key], existing.sourceRange == sourceRange {
+            imageView = existing.imageView
+        } else {
+            renderedImageViews[key]?.imageView.removeFromSuperview()
+            imageView = RenderedMarkdownImageView()
+            imageView.imageScaling = .scaleProportionallyDown
+            addSubview(imageView)
+            renderedImageViews[key] = RenderedImageViewState(
+                sourceRange: sourceRange,
+                imageView: imageView
+            )
+        }
+        imageView.image = image
+        imageView.setAccessibilityLabel(alternative.isEmpty ? "图片" : alternative)
+        scheduleRenderedImageLayout()
+    }
+
+    func renderedImage(atUTF16Location location: Int) -> NSImage? {
+        renderedImageViews[location]?.imageView.image
+    }
+
+    private func scheduleRenderedImageLayout() {
+        renderedImageLayoutTask?.cancel()
+        renderedImageLayoutTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            self?.layoutRenderedImages()
+        }
+    }
+
+    private func layoutRenderedImages() {
+        guard let layoutManager, let textContainer else { return }
+        layoutManager.ensureLayout(for: textContainer)
+        for state in renderedImageViews.values {
+            guard state.sourceRange.location < string.utf16.count else {
+                state.imageView.isHidden = true
+                continue
+            }
+            let glyphIndex = layoutManager.glyphIndexForCharacter(
+                at: state.sourceRange.location
+            )
+            guard glyphIndex < layoutManager.numberOfGlyphs,
+                  let image = state.imageView.image
+            else {
+                state.imageView.isHidden = true
+                continue
+            }
+            let lineRect = layoutManager.lineFragmentRect(
+                forGlyphAt: glyphIndex,
+                effectiveRange: nil,
+                withoutAdditionalLayout: true
+            )
+            let glyphRect = layoutManager.boundingRect(
+                forGlyphRange: NSRange(location: glyphIndex, length: 1),
+                in: textContainer
+            )
+            state.imageView.frame = NSRect(
+                x: textContainerOrigin.x + glyphRect.minX,
+                y: textContainerOrigin.y + lineRect.minY + 5,
+                width: image.size.width,
+                height: image.size.height
+            )
+            state.imageView.isHidden = false
         }
     }
 
@@ -1123,15 +1516,53 @@ final class WindowAwareTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
-           commandClickHandler?(
-               characterIndexForInsertion(at: localPoint(forWindowPoint: event.locationInWindow)),
-               event.modifierFlags
-           ) == true
+        let localPoint = localPoint(forWindowPoint: event.locationInWindow)
+        if let location = clickableLinkLocation(at: localPoint),
+           linkClickHandler?(location) == true
         {
             return
         }
         super.mouseDown(with: event)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard let layoutManager, let textContainer else { return }
+        for characterRange in clickableLinkRanges where characterRange.length > 0 {
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: characterRange,
+                actualCharacterRange: nil
+            )
+            let rect = layoutManager.boundingRect(
+                forGlyphRange: glyphRange,
+                in: textContainer
+            ).offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+            if !rect.isEmpty { addCursorRect(rect, cursor: .pointingHand) }
+        }
+    }
+
+    private func clickableLinkLocation(at localPoint: NSPoint) -> Int? {
+        guard let layoutManager, let textContainer else { return nil }
+        let containerPoint = NSPoint(
+            x: localPoint.x - textContainerOrigin.x,
+            y: localPoint.y - textContainerOrigin.y
+        )
+        var fraction: CGFloat = 0
+        let glyphIndex = layoutManager.glyphIndex(
+            for: containerPoint,
+            in: textContainer,
+            fractionOfDistanceThroughGlyph: &fraction
+        )
+        guard glyphIndex < layoutManager.numberOfGlyphs else { return nil }
+        let glyphRect = layoutManager.boundingRect(
+            forGlyphRange: NSRange(location: glyphIndex, length: 1),
+            in: textContainer
+        )
+        guard glyphRect.contains(containerPoint) else { return nil }
+        let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        return clickableLinkRanges.contains(where: { NSLocationInRange(characterIndex, $0) })
+            ? characterIndex
+            : nil
     }
 
     func localPoint(forWindowPoint point: NSPoint) -> NSPoint {
@@ -1206,6 +1637,10 @@ final class WindowAwareTextView: NSTextView {
     }
 }
 
+final class RenderedMarkdownImageView: NSImageView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 struct MarkdownSourceEditor: NSViewRepresentable {
     @Binding var text: String
     let selectionRequest: SourceSelectionRequest?
@@ -1215,7 +1650,8 @@ struct MarkdownSourceEditor: NSViewRepresentable {
     let presentation: MarkdownEditorPresentation
     let onPasteImage: ((ClipboardImagePayload) -> Void)?
     let onDropImage: ((URL) -> Void)?
-    let onCommandClickLink: ((String) -> Void)?
+    let onLinkClick: ((String) -> Void)?
+    let renderedResourceContext: RenderedMarkdownResourceContext
 
     init(
         text: Binding<String>,
@@ -1226,7 +1662,8 @@ struct MarkdownSourceEditor: NSViewRepresentable {
         presentation: MarkdownEditorPresentation = .source,
         onPasteImage: ((ClipboardImagePayload) -> Void)? = nil,
         onDropImage: ((URL) -> Void)? = nil,
-        onCommandClickLink: ((String) -> Void)? = nil
+        onLinkClick: ((String) -> Void)? = nil,
+        renderedResourceContext: RenderedMarkdownResourceContext = .unavailable
     ) {
         _text = text
         self.selectionRequest = selectionRequest
@@ -1236,7 +1673,8 @@ struct MarkdownSourceEditor: NSViewRepresentable {
         self.presentation = presentation
         self.onPasteImage = onPasteImage
         self.onDropImage = onDropImage
-        self.onCommandClickLink = onCommandClickLink
+        self.onLinkClick = onLinkClick
+        self.renderedResourceContext = renderedResourceContext
     }
 
     func makeCoordinator() -> Coordinator {
@@ -1260,7 +1698,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
             textView.didAttachToWindow = nil
             textView.pasteImageHandler = nil
             textView.dropImageHandler = nil
-            textView.commandClickHandler = nil
+            textView.linkClickHandler = nil
         }
     }
 
@@ -1304,7 +1742,8 @@ struct MarkdownSourceEditor: NSViewRepresentable {
             parent.session.setPresentation(
                 parent.presentation,
                 source: parent.text,
-                onCommandClickLink: parent.onCommandClickLink
+                onLinkClick: parent.onLinkClick,
+                resourceContext: parent.renderedResourceContext
             )
 
             parent.session.applyPendingRestorationIfPossible()

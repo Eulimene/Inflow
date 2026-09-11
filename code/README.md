@@ -35,9 +35,9 @@ Inflow 是一款本地优先的 Markdown 写作工作台。当前代码只为产
 
 - 源码编辑、实时预览分栏和即时编辑都绑定同一 Markdown 文本、同一保存路径与同一个持久 NSTextView 会话。
 - 视图切换不创建富文本副本；正文修改继续进入同一原生撤销与重做历史。
-- 即时编辑直接呈现段落、H1–H6、粗体、斜体、删除线、引用、三类列表、行内代码和普通链接文字；嵌套行内样式按所在标题或正文的字号合成，行内定界符保持视觉折叠且不残留下划线、删除线或背景。
-- 表格、围栏代码、Mermaid、图片、原始 HTML、复杂嵌套及歧义结构在当前位置保留局部 Markdown 源码；展示计划不增删或替换源字符。
-- 输入法存在 marked text 时保留现有展示，不重建组合文本；普通点击链接用于编辑，Command+点击才请求打开链接。
+- 即时编辑直接呈现段落、H1–H6、粗体、斜体、删除线、引用、三类列表、行内代码、行内/引用式/自动链接及本地/在线图片；嵌套样式按有效字号合成，定界符不残留装饰。
+- 图片以不改写原文的布局覆盖呈现，加载前显示占位；表格、围栏代码、Mermaid、原始 HTML、其他复杂或歧义结构仍在原位保留可编辑源码。
+- 输入法存在 marked text 时保留现有展示；链接普通点击即激活，指针经过可点击文字时显示链接光标。
 - 当前格式菜单只暴露粗体、斜体、行内代码、H1–H6、引用和无序/有序/任务列表；链接与固定表格模板位于插入菜单。
 
 ### Markdown、资源与链接
@@ -46,7 +46,7 @@ Inflow 是一款本地优先的 Markdown 写作工作台。当前代码只为产
 - 原始 HTML 只作为可读源码或安全转义文本处理，不执行其中的脚本、样式、事件、表单、嵌入或网络动作。
 - 已保存文档可通过文件选择、拖入或剪贴板加入静态 PNG/JPEG；资源复制到同目录 assets，重名使用递增后缀。
 - 撤销图片插入只撤销 Markdown 引用，不删除已经写入 assets 的资源文件。
-- 明确点击后，`http`/`https` 链接直接交给默认浏览器；本地相对路径、绝对路径和 `file://` 链接可以指向项目内外的 Markdown、文本、图片、PDF 或其他普通文件；受支持的本地 PNG/JPEG 引用和 `http`/`https` 在线图片直接在分栏预览中呈现。脚本和其他自定义 scheme 仍被阻止。
+- 明确点击后，`http`/`https` 链接直接交给默认浏览器；本地相对路径、绝对路径和 `file://` 可指向项目内外的 Markdown、文本、图片、PDF 或其他普通文件。项目内 Markdown 在当前项目打开，项目外目标直接交给 macOS；本地 PNG/JPEG 与 `http`/`https` 在线图片同时支持分栏预览和即时编辑。脚本和其他自定义 scheme 仍被阻止。
 
 ### 保存、恢复、PDF 与日志
 
@@ -99,7 +99,7 @@ Rust 核心的独立检查：
 
     scripts/verify-launch.sh --personal
 
-该配置只执行 Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查；不创建归档或发布证据，也不执行固定设备/30 次性能协议、扩展生态合同、签名、公证或分发门禁。[`quality/personal-xctest-scope.tsv`](quality/personal-xctest-scope.tsv) 把当前 376 个 XCTest method 逐项分为 270 个 `current-direct`、13 个 `current-host`、88 个 `deferred` 和 5 个 `fixed-performance`。`--personal` 只执行 `current-direct`；其余三类不计为通过。13 个宿主用例保留为 App-host 专项验证或真实应用 UAT，后置与固定性能用例由 deferred profile 的全量测试保留。脚本会对重复、陈旧、未分类、非法分区和四类精确计数失败关闭；新增测试不能默认混入当前门禁。可用 `scripts/verify-launch.sh --describe-profile personal` 无副作用查看边界。
+该配置只执行 Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查；不创建归档或发布证据，也不执行固定设备/30 次性能协议、扩展生态合同、签名、公证或分发门禁。[`quality/personal-xctest-scope.tsv`](quality/personal-xctest-scope.tsv) 把当前 380 个 XCTest method 逐项分为 274 个 `current-direct`、13 个 `current-host`、88 个 `deferred` 和 5 个 `fixed-performance`。`--personal` 只执行 `current-direct`；其余三类不计为通过。13 个宿主用例保留为 App-host 专项验证或真实应用 UAT，后置与固定性能用例由 deferred profile 的全量测试保留。脚本会对重复、陈旧、未分类、非法分区和四类精确计数失败关闭；新增测试不能默认混入当前门禁。可用 `scripts/verify-launch.sh --describe-profile personal` 无副作用查看边界。
 
 `--deferred-release-local`、`--deferred-signed-archive` 以及 `scripts/release-workflow.sh` 只为后续公共分发决策保留，不属于个人首版完成条件。
 

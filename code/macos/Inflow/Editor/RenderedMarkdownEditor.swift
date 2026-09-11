@@ -54,7 +54,6 @@ enum RenderedMarkdownLocalSourceReason: Int, CaseIterable, Hashable, Sendable {
     case mermaid
     case fencedCode
     case table
-    case image
     case rawHTML
     case unsupportedSyntax
     case complexOrAmbiguous
@@ -80,6 +79,17 @@ struct RenderedMarkdownLink: Equatable, Sendable {
     let target: String
 }
 
+struct RenderedMarkdownImage: Equatable, Sendable {
+    /// Complete `![alternative](target)` source range.
+    let sourceRange: RenderedMarkdownSourceRange
+    let alternativeRange: RenderedMarkdownSourceRange
+    /// Inline targets carry their exact range. Resolved reference-style targets use
+    /// a zero-length range at the end of the visible alternative text.
+    let targetRange: RenderedMarkdownSourceRange
+    let alternative: String
+    let target: String
+}
+
 /// A display-only interpretation of one exact Markdown byte snapshot.
 ///
 /// The plan never contains replacement text or a second rendered body. Attribute and local
@@ -91,6 +101,7 @@ struct RenderedMarkdownPlan: Equatable, Sendable {
     let contentStyles: [RenderedMarkdownContentStyle]
     let localSourceBlocks: [RenderedMarkdownLocalSourceBlock]
     let links: [RenderedMarkdownLink]
+    let images: [RenderedMarkdownImage]
 
     func exactlyMatches(_ source: String) -> Bool {
         sourceUTF8 == Data(source.utf8)
@@ -124,17 +135,14 @@ enum RenderedMarkdownEditor {
         return .apply(plan(for: source))
     }
 
-    /// Resolves a link only for a Command-click on its visible text and only when the plan is
-    /// byte-for-byte current. Scheme and project-boundary policy remains with the navigation
-    /// layer; this helper solely enforces the rendered-editor gesture and source mapping.
-    static func commandClickTarget(
+    /// Resolves a normal reading-mode click on visible link text. The source plan must still be
+    /// byte-for-byte current; scheme and project-boundary policy remains with navigation.
+    static func clickTarget(
         atUTF16Location location: Int,
-        modifierFlags: NSEvent.ModifierFlags,
         currentSource: String,
         plan: RenderedMarkdownPlan
     ) -> RenderedMarkdownLink? {
         guard location >= 0,
-              modifierFlags.contains(.command),
               plan.exactlyMatches(currentSource)
         else {
             return nil
@@ -168,7 +176,8 @@ enum RenderedMarkdownEditor {
             markers: [],
             contentStyles: [],
             localSourceBlocks: localSourceBlocks,
-            links: []
+            links: [],
+            images: []
         )
     }
 }
@@ -201,7 +210,16 @@ private struct RenderedMarkdownPlanner {
         let textUTF8Range: Range<Int>
         let targetUTF8Range: Range<Int>
         let target: String
-        let markerRanges: [Range<Int>]
+        let delimiterRanges: [Range<Int>]
+        let hiddenDestinationRange: Range<Int>?
+    }
+
+    private struct PendingImage: Equatable {
+        let sourceUTF8Range: Range<Int>
+        let alternativeUTF8Range: Range<Int>
+        let targetUTF8Range: Range<Int>
+        let alternative: String
+        let target: String
     }
 
     private enum ParsedLine {
@@ -237,6 +255,7 @@ private struct RenderedMarkdownPlanner {
     private let sourceUTF8: Data
     private let bytes: [UInt8]
     private let spans: [MarkdownSyntaxSpan]
+    private let references: [MarkdownReference]
     private let lines: [Line]
     private let semanticKindsByLine: [Set<UInt8>]
     private let semanticRangesByKind: [UInt8: [Range<Int>]]
@@ -244,11 +263,13 @@ private struct RenderedMarkdownPlanner {
     init(source: String) throws {
         let parsedBytes = Array(source.utf8)
         let parsedSpans = try MarkdownHighlighter.spans(in: source)
+        let parsedReferences = try MarkdownReferenceScanner.references(in: source)
         let parsedLines = Self.makeLines(bytes: parsedBytes)
         self.source = source
         sourceUTF8 = Data(source.utf8)
         bytes = parsedBytes
         spans = parsedSpans
+        references = parsedReferences
         lines = parsedLines
         semanticKindsByLine = Self.makeSemanticKindsByLine(
             lines: parsedLines,
@@ -266,7 +287,8 @@ private struct RenderedMarkdownPlanner {
                 markers: [],
                 contentStyles: [],
                 localSourceBlocks: [],
-                links: []
+                links: [],
+                images: []
             )
         }
 
@@ -291,10 +313,21 @@ private struct RenderedMarkdownPlanner {
             styles: &pendingStyles,
             links: &pendingLinks
         )
+        var pendingImages: [PendingImage] = []
+        addImagePresentation(
+            excluding: mergedLocalCandidates,
+            images: &pendingImages
+        )
 
         pendingMarkers = sortedUniqueMarkers(pendingMarkers)
         pendingStyles = sortedUniqueStyles(pendingStyles)
         pendingLinks.sort {
+            if $0.sourceUTF8Range.lowerBound != $1.sourceUTF8Range.lowerBound {
+                return $0.sourceUTF8Range.lowerBound < $1.sourceUTF8Range.lowerBound
+            }
+            return $0.sourceUTF8Range.upperBound < $1.sourceUTF8Range.upperBound
+        }
+        pendingImages.sort {
             if $0.sourceUTF8Range.lowerBound != $1.sourceUTF8Range.lowerBound {
                 return $0.sourceUTF8Range.lowerBound < $1.sourceUTF8Range.lowerBound
             }
@@ -305,7 +338,8 @@ private struct RenderedMarkdownPlanner {
             localCandidates: mergedLocalCandidates,
             markers: pendingMarkers,
             styles: pendingStyles,
-            links: pendingLinks
+            links: pendingLinks,
+            images: pendingImages
         )
         guard let utf16Offsets = mapUTF8OffsetsToUTF16(requestedOffsets) else {
             throw RenderedMarkdownPlanError.invalidSourceRange
@@ -349,6 +383,15 @@ private struct RenderedMarkdownPlanner {
                 target: link.target
             )
         }
+        let images = try pendingImages.map { image in
+            RenderedMarkdownImage(
+                sourceRange: try mappedRange(image.sourceUTF8Range),
+                alternativeRange: try mappedRange(image.alternativeUTF8Range),
+                targetRange: try mappedRange(image.targetUTF8Range),
+                alternative: image.alternative,
+                target: image.target
+            )
+        }
 
         return RenderedMarkdownPlan(
             sourceSnapshot: source,
@@ -356,7 +399,8 @@ private struct RenderedMarkdownPlanner {
             markers: markers,
             contentStyles: styles,
             localSourceBlocks: localSourceBlocks,
-            links: links
+            links: links,
+            images: images
         )
     }
 
@@ -368,11 +412,15 @@ private struct RenderedMarkdownPlanner {
             case .table:
                 appendLocal(range, reason: .table, to: &candidates)
             case .image:
-                appendLocal(
-                    enclosingParagraphRange(containing: range),
-                    reason: .image,
-                    to: &candidates
-                )
+                if imageParts(in: range) == nil,
+                   referenceImageParts(in: range) == nil
+                {
+                    appendLocal(
+                        enclosingParagraphRange(containing: range),
+                        reason: .complexOrAmbiguous,
+                        to: &candidates
+                    )
+                }
             case .raw:
                 appendLocal(
                     enclosingParagraphRange(containing: range),
@@ -458,7 +506,9 @@ private struct RenderedMarkdownPlanner {
             case .code:
                 parts = inlineCodeParts(in: span.utf8Range)
             case .link:
-                parts = linkParts(in: span.utf8Range).map(InlineParts.link)
+                parts = (linkParts(in: span.utf8Range)
+                    ?? autolinkParts(in: span.utf8Range)
+                    ?? referenceLinkParts(in: span.utf8Range)).map(InlineParts.link)
             default:
                 parts = nil
             }
@@ -634,12 +684,23 @@ private struct RenderedMarkdownPlanner {
                 styleKind = .inlineCode
                 parts = inlineCodeParts(in: range)
             case .link:
-                guard let link = linkParts(in: range) else { continue }
+                guard let link = linkParts(in: range)
+                    ?? autolinkParts(in: range)
+                    ?? referenceLinkParts(in: range)
+                else {
+                    continue
+                }
                 links.append(link)
-                appendMarker(.linkDelimiter, range: link.markerRanges[0], to: &markers)
-                appendMarker(.linkDelimiter, range: link.markerRanges[1], to: &markers)
-                appendMarker(.linkDestination, range: link.targetUTF8Range, to: &markers)
-                appendMarker(.linkDelimiter, range: link.markerRanges[2], to: &markers)
+                for delimiter in link.delimiterRanges {
+                    appendMarker(.linkDelimiter, range: delimiter, to: &markers)
+                }
+                if let hiddenDestinationRange = link.hiddenDestinationRange {
+                    appendMarker(
+                        .linkDestination,
+                        range: hiddenDestinationRange,
+                        to: &markers
+                    )
+                }
                 appendStyle(.link, range: link.textUTF8Range, to: &styles)
                 continue
             default:
@@ -650,6 +711,21 @@ private struct RenderedMarkdownPlanner {
             appendMarker(markerKind, range: opening, to: &markers)
             appendMarker(markerKind, range: closing, to: &markers)
             appendStyle(styleKind, range: content, to: &styles)
+        }
+    }
+
+    private func addImagePresentation(
+        excluding localCandidates: [LocalCandidate],
+        images: inout [PendingImage]
+    ) {
+        for span in spans where span.kind == .image {
+            guard !overlapsLocalSource(span.utf8Range, localCandidates: localCandidates),
+                  let image = imageParts(in: span.utf8Range)
+                    ?? referenceImageParts(in: span.utf8Range)
+            else {
+                continue
+            }
+            images.append(image)
         }
     }
 
@@ -934,17 +1010,37 @@ private struct RenderedMarkdownPlanner {
         let targetRange: Range<Int>
         let middleMarker: Range<Int>
         let closingMarker: Range<Int>
-        if rawDestinationEnd - rawDestinationStart >= 2,
+        if rawDestinationStart < rawDestinationEnd,
            bytes[rawDestinationStart] == 0x3C,
-           bytes[rawDestinationEnd - 1] == 0x3E
+           let closingAngle = bytes[(rawDestinationStart + 1)..<rawDestinationEnd]
+               .firstIndex(of: 0x3E),
+           titleSuffixIsValid((closingAngle + 1)..<rawDestinationEnd)
         {
-            targetRange = (rawDestinationStart + 1)..<(rawDestinationEnd - 1)
+            targetRange = (rawDestinationStart + 1)..<closingAngle
             middleMarker = middleMarkerStart..<(rawDestinationStart + 1)
-            closingMarker = (rawDestinationEnd - 1)..<range.upperBound
+            closingMarker = closingAngle..<range.upperBound
         } else {
-            targetRange = rawDestinationStart..<rawDestinationEnd
+            var targetEnd = rawDestinationStart
+            var depth = 0
+            while targetEnd < rawDestinationEnd {
+                let byte = bytes[targetEnd]
+                if (byte == 0x20 || byte == 0x09) && depth == 0 { break }
+                if byte == 0x28 {
+                    depth += 1
+                } else if byte == 0x29 {
+                    guard depth > 0 else { return nil }
+                    depth -= 1
+                }
+                targetEnd += 1
+            }
+            guard depth == 0,
+                  titleSuffixIsValid(targetEnd..<rawDestinationEnd)
+            else {
+                return nil
+            }
+            targetRange = rawDestinationStart..<targetEnd
             middleMarker = middleMarkerStart..<rawDestinationStart
-            closingMarker = rawDestinationEnd..<range.upperBound
+            closingMarker = targetEnd..<range.upperBound
         }
 
         guard destinationIsUnambiguous(targetRange),
@@ -957,8 +1053,145 @@ private struct RenderedMarkdownPlanner {
             textUTF8Range: textRange,
             targetUTF8Range: targetRange,
             target: target,
-            markerRanges: [range.lowerBound..<(range.lowerBound + 1), middleMarker, closingMarker]
+            delimiterRanges: [
+                range.lowerBound..<(range.lowerBound + 1),
+                middleMarker,
+                closingMarker,
+            ],
+            hiddenDestinationRange: targetRange
         )
+    }
+
+    private func autolinkParts(in range: Range<Int>) -> PendingLink? {
+        guard range.count >= 3,
+              bytes[range.lowerBound] == 0x3C,
+              bytes[range.upperBound - 1] == 0x3E
+        else {
+            return nil
+        }
+        let targetRange = (range.lowerBound + 1)..<(range.upperBound - 1)
+        guard destinationIsUnambiguous(targetRange),
+              let target = String(bytes: bytes[targetRange], encoding: .utf8),
+              let components = URLComponents(string: target),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              components.host?.isEmpty == false
+        else {
+            return nil
+        }
+        return PendingLink(
+            sourceUTF8Range: range,
+            textUTF8Range: targetRange,
+            targetUTF8Range: targetRange,
+            target: target,
+            delimiterRanges: [
+                range.lowerBound..<(range.lowerBound + 1),
+                (range.upperBound - 1)..<range.upperBound,
+            ],
+            hiddenDestinationRange: nil
+        )
+    }
+
+    private func titleSuffixIsValid(_ range: Range<Int>) -> Bool {
+        var lower = range.lowerBound
+        var upper = range.upperBound
+        while lower < upper, bytes[lower] == 0x20 || bytes[lower] == 0x09 {
+            lower += 1
+        }
+        while upper > lower, bytes[upper - 1] == 0x20 || bytes[upper - 1] == 0x09 {
+            upper -= 1
+        }
+        guard lower < upper else { return true }
+        guard upper - lower >= 2 else { return false }
+        let opening = bytes[lower]
+        let expectedClosing: UInt8
+        switch opening {
+        case 0x22: expectedClosing = 0x22
+        case 0x27: expectedClosing = 0x27
+        case 0x28: expectedClosing = 0x29
+        default: return false
+        }
+        guard bytes[upper - 1] == expectedClosing else { return false }
+        return !bytes[(lower + 1)..<(upper - 1)].contains(where: {
+            $0 == 0x0A || $0 == 0x0D || $0 < 0x20 || $0 == 0x7F
+        })
+    }
+
+    private func imageParts(in range: Range<Int>) -> PendingImage? {
+        guard range.count >= 5,
+              bytes[range.lowerBound] == 0x21,
+              let link = linkParts(in: (range.lowerBound + 1)..<range.upperBound),
+              let alternative = String(bytes: bytes[link.textUTF8Range], encoding: .utf8)
+        else {
+            return nil
+        }
+        return PendingImage(
+            sourceUTF8Range: range,
+            alternativeUTF8Range: link.textUTF8Range,
+            targetUTF8Range: link.targetUTF8Range,
+            alternative: alternative,
+            target: link.target
+        )
+    }
+
+    private func referenceLinkParts(in range: Range<Int>) -> PendingLink? {
+        guard let reference = references.first(where: {
+            $0.kind == .link && $0.sourceUTF8Range == range
+        }), let textRange = simpleReferenceLabelRange(in: range, image: false)
+        else {
+            return nil
+        }
+        let suffixRange = textRange.upperBound..<range.upperBound
+        return PendingLink(
+            sourceUTF8Range: range,
+            textUTF8Range: textRange,
+            targetUTF8Range: textRange.upperBound..<textRange.upperBound,
+            target: reference.target,
+            delimiterRanges: [range.lowerBound..<(range.lowerBound + 1)],
+            hiddenDestinationRange: suffixRange
+        )
+    }
+
+    private func referenceImageParts(in range: Range<Int>) -> PendingImage? {
+        guard let reference = references.first(where: {
+            $0.kind == .image && $0.sourceUTF8Range == range
+        }), let alternativeRange = simpleReferenceLabelRange(in: range, image: true),
+              let alternative = String(
+                  bytes: bytes[alternativeRange],
+                  encoding: .utf8
+              )
+        else {
+            return nil
+        }
+        return PendingImage(
+            sourceUTF8Range: range,
+            alternativeUTF8Range: alternativeRange,
+            targetUTF8Range: alternativeRange.upperBound..<alternativeRange.upperBound,
+            alternative: alternative,
+            target: reference.target
+        )
+    }
+
+    private func simpleReferenceLabelRange(
+        in range: Range<Int>,
+        image: Bool
+    ) -> Range<Int>? {
+        let openingLength = image ? 2 : 1
+        guard range.count > openingLength + 1,
+              (!image || bytes[range.lowerBound] == 0x21),
+              bytes[range.lowerBound + openingLength - 1] == 0x5B
+        else {
+            return nil
+        }
+        let labelStart = range.lowerBound + openingLength
+        var cursor = labelStart
+        while cursor < range.upperBound {
+            if bytes[cursor] == 0x5C || bytes[cursor] == 0x5B { return nil }
+            if bytes[cursor] == 0x5D { break }
+            cursor += 1
+        }
+        guard cursor > labelStart, cursor < range.upperBound else { return nil }
+        return labelStart..<cursor
     }
 
     private func destinationIsUnambiguous(_ range: Range<Int>) -> Bool {
@@ -1359,7 +1592,8 @@ private struct RenderedMarkdownPlanner {
         localCandidates: [LocalCandidate],
         markers: [PendingMarker],
         styles: [PendingStyle],
-        links: [PendingLink]
+        links: [PendingLink],
+        images: [PendingImage]
     ) -> [Int] {
         var offsets: Set<Int> = [0, bytes.count]
         func insert(_ range: Range<Int>) {
@@ -1373,6 +1607,11 @@ private struct RenderedMarkdownPlanner {
             insert(link.sourceUTF8Range)
             insert(link.textUTF8Range)
             insert(link.targetUTF8Range)
+        }
+        images.forEach { image in
+            insert(image.sourceUTF8Range)
+            insert(image.alternativeUTF8Range)
+            insert(image.targetUTF8Range)
         }
         return offsets.sorted()
     }

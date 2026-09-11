@@ -12,8 +12,8 @@ CODE_ROOT="$(CDPATH= cd -- "${SCRIPT_DIRECTORY}/.." && pwd)"
 VERIFIER="${SCRIPT_DIRECTORY}/verify-launch.sh"
 RELEASE_WORKFLOW="${SCRIPT_DIRECTORY}/release-workflow.sh"
 SCOPE_MANIFEST="${CODE_ROOT}/quality/personal-xctest-scope.tsv"
-EXPECTED_SELECTOR_COUNT=376
-EXPECTED_CURRENT_DIRECT_COUNT=270
+EXPECTED_SELECTOR_COUNT=380
+EXPECTED_CURRENT_DIRECT_COUNT=274
 EXPECTED_CURRENT_HOST_COUNT=13
 EXPECTED_DEFERRED_COUNT=88
 EXPECTED_FIXED_PERFORMANCE_COUNT=5
@@ -46,7 +46,7 @@ assert_line "${PERSONAL_PLAN}" \
 assert_line "${PERSONAL_PLAN}" 'deferred_checks=none'
 assert_line "${PERSONAL_PLAN}" 'archive=none'
 assert_line "${PERSONAL_PLAN}" 'selector_manifest=quality/personal-xctest-scope.tsv'
-assert_line "${PERSONAL_PLAN}" 'current_direct_selectors=270'
+assert_line "${PERSONAL_PLAN}" 'current_direct_selectors=274'
 assert_line "${PERSONAL_PLAN}" 'current_host_selectors=13'
 assert_line "${PERSONAL_PLAN}" 'deferred_selectors=88'
 assert_line "${PERSONAL_PLAN}" 'fixed_performance_selectors=5'

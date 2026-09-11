@@ -69,10 +69,9 @@ Legacy plaintext schema-1 records are validated, migrated once to encrypted sche
 
 ## Local links
 
-- Markdown, PNG, JPEG and PDF targets are opened with `O_NOFOLLOW`, checked with `fstat` before and after the read, and frozen from that descriptor. Markdown uses the 10 MiB document-open ceiling; image/PDF freezing is bounded to 256 MiB.
-- Before opening Markdown, the confirmation explains that the content will open as an **untitled safe copy**. The opened document remains untitled and is not bound or written back to the original path; no persistent banner or title badge is claimed. A fragment is percent-decoded once, normalized to NFC and carried into the new scene for exact generated-ID matching.
-- PNG/JPEG/PDF content is materialized to an app-owned `0700` cache as a `0400`, backup-excluded, one-hour copy and revalidated before the system opens that copy.
-- Other regular text files and attachments are handed to Launch Services after an explicit click so the system default application can open the original path.
+- Markdown targets inside the active project are opened with `O_NOFOLLOW`, checked against the selected project identity and current snapshot, and kept bound to the original project path. A fragment is percent-decoded once, normalized to NFC and carried into the destination surface for exact generated-ID matching.
+- Project-local PNG/JPEG/PDF targets are read and revalidated before a read-only managed copy is opened. Explicitly clicked targets outside the active project—including Markdown, text, images, PDF and other regular files—are handed directly to Launch Services; Inflow does not require permission to pre-read or copy their bytes.
+- Local and remote Markdown image references are rendered in both split preview and instant editing. Instant editing reserves TextKit layout space and overlays a mouse-transparent image while preserving every source character and the plain-text undo history.
 - Relative paths, absolute paths and `file://` URLs share the same planner. A target outside the active project is not granted project-editing trust, but it is no longer rejected solely for crossing the project root.
 
 ## Identity, recent records, settings and durability
