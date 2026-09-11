@@ -21,6 +21,7 @@ enum RenderedMarkdownMarkerKind: Equatable, Sendable {
     case unorderedList
     case orderedList
     case taskList
+    case referenceDefinition
     case linkDelimiter
     case linkDestination
 }
@@ -305,6 +306,10 @@ private struct RenderedMarkdownPlanner {
             markers: &pendingMarkers,
             styles: &pendingStyles
         )
+        addReferenceDefinitionPresentation(
+            excluding: mergedLocalCandidates,
+            markers: &pendingMarkers
+        )
 
         var pendingLinks: [PendingLink] = []
         addInlinePresentation(
@@ -449,7 +454,9 @@ private struct RenderedMarkdownPlanner {
 
     private func addUnsupportedHeadingCandidates(to candidates: inout [LocalCandidate]) {
         for span in spans where span.kind == .heading {
-            guard headingParts(in: span.utf8Range) != nil else {
+            guard headingParts(in: span.utf8Range) != nil
+                    || setextHeadingParts(in: span.utf8Range) != nil
+            else {
                 appendLocal(
                     enclosingParagraphRange(containing: span.utf8Range),
                     reason: .complexOrAmbiguous,
@@ -618,8 +625,35 @@ private struct RenderedMarkdownPlanner {
         markers: inout [PendingMarker],
         styles: inout [PendingStyle]
     ) {
+        let setextHeadings = spans.compactMap { span -> SetextHeadingParts? in
+            guard span.kind == .heading,
+                  !overlapsLocalSource(span.utf8Range, localCandidates: localCandidates)
+            else {
+                return nil
+            }
+            return setextHeadingParts(in: span.utf8Range)
+        }
+        for heading in setextHeadings {
+            appendMarker(
+                .heading(level: heading.level),
+                range: heading.marker,
+                to: &markers
+            )
+            appendStyle(
+                .heading(level: heading.level),
+                range: heading.content,
+                to: &styles
+            )
+        }
+
         for line in lines where !line.isBlank {
             guard !overlapsLocalSource(line.contentRange, localCandidates: localCandidates) else {
+                continue
+            }
+            guard !setextHeadings.contains(where: {
+                $0.source.lowerBound < line.fullRange.upperBound
+                    && $0.source.upperBound > line.fullRange.lowerBound
+            }) else {
                 continue
             }
             switch parseLine(line) {
@@ -648,6 +682,16 @@ private struct RenderedMarkdownPlanner {
                 appendMarker(.orderedList, range: marker, to: &markers)
                 appendStyle(.orderedListItem, range: content, to: &styles)
             }
+        }
+    }
+
+    private func addReferenceDefinitionPresentation(
+        excluding localCandidates: [LocalCandidate],
+        markers: inout [PendingMarker]
+    ) {
+        for range in referenceDefinitionRanges()
+        where !overlapsLocalSource(range, localCandidates: localCandidates) {
+            appendMarker(.referenceDefinition, range: range, to: &markers)
         }
     }
 
@@ -851,6 +895,70 @@ private struct RenderedMarkdownPlanner {
         return (level, openingMarker, cursor..<contentEnd, closingMarker)
     }
 
+    private struct SetextHeadingParts {
+        let level: Int
+        let source: Range<Int>
+        let content: Range<Int>
+        let marker: Range<Int>
+    }
+
+    private func setextHeadingParts(in range: Range<Int>) -> SetextHeadingParts? {
+        guard !range.isEmpty,
+              let newline = bytes[range].firstIndex(of: 0x0A),
+              newline > range.lowerBound,
+              newline + 1 < range.upperBound,
+              !bytes[(newline + 1)..<range.upperBound].contains(0x0A)
+        else {
+            return nil
+        }
+
+        var contentStart = range.lowerBound
+        var leadingSpaces = 0
+        while contentStart < newline, bytes[contentStart] == 0x20, leadingSpaces < 4 {
+            contentStart += 1
+            leadingSpaces += 1
+        }
+        guard leadingSpaces <= 3 else { return nil }
+
+        var contentEnd = newline
+        if contentEnd > contentStart, bytes[contentEnd - 1] == 0x0D { contentEnd -= 1 }
+        while contentEnd > contentStart, matchesHorizontalWhitespace(bytes[contentEnd - 1]) {
+            contentEnd -= 1
+        }
+        guard contentStart < contentEnd else { return nil }
+
+        var underlineCursor = newline + 1
+        var underlineSpaces = 0
+        while underlineCursor < range.upperBound,
+              bytes[underlineCursor] == 0x20,
+              underlineSpaces < 4
+        {
+            underlineCursor += 1
+            underlineSpaces += 1
+        }
+        guard underlineSpaces <= 3, underlineCursor < range.upperBound else { return nil }
+        let underlineCharacter = bytes[underlineCursor]
+        guard underlineCharacter == 0x3D || underlineCharacter == 0x2D else { return nil }
+        while underlineCursor < range.upperBound,
+              bytes[underlineCursor] == underlineCharacter
+        {
+            underlineCursor += 1
+        }
+        while underlineCursor < range.upperBound,
+              matchesHorizontalWhitespace(bytes[underlineCursor])
+        {
+            underlineCursor += 1
+        }
+        guard underlineCursor == range.upperBound else { return nil }
+
+        return SetextHeadingParts(
+            level: underlineCharacter == 0x3D ? 1 : 2,
+            source: range,
+            content: contentStart..<contentEnd,
+            marker: contentEnd..<range.upperBound
+        )
+    }
+
     private struct ListPrefix {
         enum Kind { case unordered, ordered }
         let kind: Kind
@@ -961,18 +1069,18 @@ private struct RenderedMarkdownPlanner {
         guard bytes[closingStart..<range.upperBound].allSatisfy({ $0 == 0x60 }) else {
             return nil
         }
-        let content = (range.lowerBound + delimiterLength)..<closingStart
-        if content.count >= 2,
-           bytes[content.lowerBound] == 0x20,
-           bytes[content.upperBound - 1] == 0x20,
-           !bytes[content].allSatisfy({ $0 == 0x20 })
-        {
-            return nil
-        }
+        let rawContent = (range.lowerBound + delimiterLength)..<closingStart
+        let trimsPadding = rawContent.count >= 2
+            && bytes[rawContent.lowerBound] == 0x20
+            && bytes[rawContent.upperBound - 1] == 0x20
+            && !bytes[rawContent].allSatisfy({ $0 == 0x20 })
+        let content = trimsPadding
+            ? (rawContent.lowerBound + 1)..<(rawContent.upperBound - 1)
+            : rawContent
         return .wrapped(
-            openingMarker: range.lowerBound..<(range.lowerBound + delimiterLength),
+            openingMarker: range.lowerBound..<content.lowerBound,
             content: content,
-            closingMarker: closingStart..<range.upperBound
+            closingMarker: content.upperBound..<range.upperBound
         )
     }
 
@@ -1141,9 +1249,10 @@ private struct RenderedMarkdownPlanner {
         else {
             return nil
         }
-        let suffixRange = textRange.upperBound..<range.upperBound
+        let sourceRange = extendedCollapsedReferenceRange(range)
+        let suffixRange = textRange.upperBound..<sourceRange.upperBound
         return PendingLink(
-            sourceUTF8Range: range,
+            sourceUTF8Range: sourceRange,
             textUTF8Range: textRange,
             targetUTF8Range: textRange.upperBound..<textRange.upperBound,
             target: reference.target,
@@ -1164,12 +1273,80 @@ private struct RenderedMarkdownPlanner {
             return nil
         }
         return PendingImage(
-            sourceUTF8Range: range,
+            sourceUTF8Range: extendedCollapsedReferenceRange(range),
             alternativeUTF8Range: alternativeRange,
             targetUTF8Range: alternativeRange.upperBound..<alternativeRange.upperBound,
             alternative: alternative,
             target: reference.target
         )
+    }
+
+    private func extendedCollapsedReferenceRange(_ range: Range<Int>) -> Range<Int> {
+        guard range.upperBound + 2 <= bytes.count,
+              bytes[range.upperBound] == 0x5B,
+              bytes[range.upperBound + 1] == 0x5D
+        else {
+            return range
+        }
+        return range.lowerBound..<(range.upperBound + 2)
+    }
+
+    private func referenceDefinitionRanges() -> [Range<Int>] {
+        lines.compactMap { line in
+            guard !line.isBlank else { return nil }
+            var cursor = line.contentRange.lowerBound
+            var indentation = 0
+            while cursor < line.contentRange.upperBound,
+                  bytes[cursor] == 0x20,
+                  indentation < 4
+            {
+                cursor += 1
+                indentation += 1
+            }
+            guard indentation <= 3,
+                  cursor < line.contentRange.upperBound,
+                  bytes[cursor] == 0x5B,
+                  cursor + 1 < line.contentRange.upperBound,
+                  bytes[cursor + 1] != 0x5E
+            else {
+                return nil
+            }
+
+            cursor += 1
+            let labelStart = cursor
+            var escaped = false
+            while cursor < line.contentRange.upperBound {
+                let byte = bytes[cursor]
+                if escaped {
+                    escaped = false
+                    cursor += 1
+                    continue
+                }
+                if byte == 0x5C {
+                    escaped = true
+                    cursor += 1
+                    continue
+                }
+                if byte == 0x5B { return nil }
+                if byte == 0x5D { break }
+                cursor += 1
+            }
+            guard cursor > labelStart,
+                  cursor + 1 < line.contentRange.upperBound,
+                  bytes[cursor] == 0x5D,
+                  bytes[cursor + 1] == 0x3A
+            else {
+                return nil
+            }
+            cursor += 2
+            while cursor < line.contentRange.upperBound,
+                  matchesHorizontalWhitespace(bytes[cursor])
+            {
+                cursor += 1
+            }
+            guard cursor < line.contentRange.upperBound else { return nil }
+            return line.fullRange
+        }
     }
 
     private func simpleReferenceLabelRange(
@@ -1563,12 +1740,13 @@ private struct RenderedMarkdownPlanner {
         case .unorderedList: 2
         case .orderedList: 3
         case .taskList: 4
-        case .emphasis: 5
-        case .strong: 6
-        case .strikethrough: 7
-        case .inlineCode: 8
-        case .linkDelimiter: 9
-        case .linkDestination: 10
+        case .referenceDefinition: 5
+        case .emphasis: 6
+        case .strong: 7
+        case .strikethrough: 8
+        case .inlineCode: 9
+        case .linkDelimiter: 10
+        case .linkDestination: 11
         }
     }
 

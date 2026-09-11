@@ -147,7 +147,7 @@ private extension RenderedMarkdownMarkerKind {
         switch self {
         case .blockQuote, .unorderedList, .orderedList, .taskList:
             true
-        case .heading, .emphasis, .strong, .strikethrough, .inlineCode,
+        case .heading, .referenceDefinition, .emphasis, .strong, .strikethrough, .inlineCode,
              .linkDelimiter, .linkDestination:
             false
         }

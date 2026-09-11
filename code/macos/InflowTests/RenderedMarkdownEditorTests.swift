@@ -3,6 +3,7 @@ import XCTest
 @testable import Inflow
 
 final class RenderedMarkdownEditorTests: XCTestCase {
+    @MainActor
     func testPlanCoversPersonalEditionDirectEditingStructures() {
         let source = """
         普通段落
@@ -12,11 +13,24 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         #### H4
         ##### H5
         ###### H6
+
+        Setext H1
+        =========
+
+        Setext H2
+        ---------
+
         > 引用内容
         - 无序项
         1. 有序项
         - [x] 已完成任务
-        **粗体** *斜体* ~~删除~~ `代码` [链接文字](https://example.com/path)
+        **粗体** __下划线粗体__ *斜体* _下划线斜体_ ***粗斜体*** ~~删除~~ `代码` `` padded `` [链接文字](https://example.com/path)
+
+        [完整引用][docs] [折叠引用][] [快捷引用]
+
+        [docs]: guide.md
+        [折叠引用]: collapsed.md
+        [快捷引用]: shortcut.md
         """
 
         let plan = RenderedMarkdownEditor.plan(for: source)
@@ -30,7 +44,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             guard case let .heading(level) = style.kind else { return nil }
             return level
         }
-        XCTAssertEqual(headingLevels, [1, 2, 3, 4, 5, 6])
+        XCTAssertEqual(headingLevels, [1, 2, 3, 4, 5, 6, 1, 2])
         XCTAssertTrue(hasStyle(.paragraph, text: "普通段落", source: source, plan: plan))
         XCTAssertTrue(hasStyle(.blockQuote, text: "引用内容", source: source, plan: plan))
         XCTAssertTrue(hasStyle(.unorderedListItem, text: "无序项", source: source, plan: plan))
@@ -44,10 +58,18 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             )
         )
         XCTAssertTrue(hasStyle(.strong, text: "粗体", source: source, plan: plan))
+        XCTAssertTrue(hasStyle(.strong, text: "下划线粗体", source: source, plan: plan))
         XCTAssertTrue(hasStyle(.emphasis, text: "斜体", source: source, plan: plan))
+        XCTAssertTrue(hasStyle(.emphasis, text: "下划线斜体", source: source, plan: plan))
+        XCTAssertTrue(hasStyle(.strong, text: "粗斜体", source: source, plan: plan))
+        XCTAssertTrue(hasStyle(.emphasis, text: "**粗斜体**", source: source, plan: plan))
         XCTAssertTrue(hasStyle(.strikethrough, text: "删除", source: source, plan: plan))
         XCTAssertTrue(hasStyle(.inlineCode, text: "代码", source: source, plan: plan))
+        XCTAssertTrue(hasStyle(.inlineCode, text: "padded", source: source, plan: plan))
         XCTAssertTrue(hasStyle(.link, text: "链接文字", source: source, plan: plan))
+        XCTAssertTrue(hasStyle(.link, text: "完整引用", source: source, plan: plan))
+        XCTAssertTrue(hasStyle(.link, text: "折叠引用", source: source, plan: plan))
+        XCTAssertTrue(hasStyle(.link, text: "快捷引用", source: source, plan: plan))
 
         XCTAssertTrue(hasMarker(.blockQuote, text: "> ", source: source, plan: plan))
         XCTAssertTrue(hasMarker(.unorderedList, text: "- ", source: source, plan: plan))
@@ -58,7 +80,57 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertTrue(hasMarker(.strikethrough, text: "~~", source: source, plan: plan))
         XCTAssertTrue(hasMarker(.inlineCode, text: "`", source: source, plan: plan))
         XCTAssertTrue(hasMarker(.linkDestination, text: "https://example.com/path", source: source, plan: plan))
-        XCTAssertEqual(plan.links.map(\.target), ["https://example.com/path"])
+        XCTAssertEqual(
+            plan.links.map(\.target),
+            ["https://example.com/path", "guide.md", "collapsed.md", "shortcut.md"]
+        )
+        XCTAssertTrue(
+            plan.markers.contains { marker in
+                marker.kind == .linkDestination
+                    && utf8Text(marker.sourceRange, source: source).hasSuffix("[]")
+            },
+            "Collapsed-reference suffix must not leak into rendered text"
+        )
+        XCTAssertEqual(
+            plan.markers.filter { $0.kind == .referenceDefinition }.count,
+            3,
+            "Reference definitions are metadata and must not render as body text"
+        )
+
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        session.textView.undoManager?.removeAllActions()
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let storage = try? XCTUnwrap(session.textView.textStorage)
+        XCTAssertNotNil(storage)
+
+        for marker in plan.markers where marker.kind == .referenceDefinition {
+            let font = storage?.attribute(
+                .font,
+                at: marker.sourceRange.utf16Range.location,
+                effectiveRange: nil
+            ) as? NSFont
+            XCTAssertLessThan(font?.pointSize ?? .greatestFiniteMagnitude, 1)
+        }
+
+        let paddedLocation = (source as NSString).range(of: "padded").location
+        let paddedFont = storage?.attribute(
+            .font,
+            at: paddedLocation,
+            effectiveRange: nil
+        ) as? NSFont
+        XCTAssertTrue(paddedFont?.fontDescriptor.symbolicTraits.contains(.monoSpace) == true)
+
+        for title in ["Setext H1", "Setext H2"] {
+            let location = (source as NSString).range(of: title).location
+            let font = storage?.attribute(.font, at: location, effectiveRange: nil) as? NSFont
+            XCTAssertTrue(
+                font.map { NSFontManager.shared.traits(of: $0).contains(.boldFontMask) } == true
+            )
+            XCTAssertGreaterThan(font?.pointSize ?? 0, 20)
+        }
+        XCTAssertEqual(Data(session.textView.string.utf8), Data(source.utf8))
+        XCTAssertFalse(session.textView.undoManager?.canUndo == true)
     }
 
     func testUnicodeRangesUseExactUTF8AndNSTextViewUTF16Coordinates() throws {
@@ -97,6 +169,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
 
         ```swift
         print("code")
+        [not-definition]: hidden.md
         ```
 
         ```mermaid
@@ -147,22 +220,44 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     func testPlanRendersLocalAndRemoteImagesWithoutChangingSource() throws {
-        let source = "![本地图](assets/封面.png)\n\n![remote](https://example.com/a.png)"
+        let source = """
+        ![本地图](assets/封面.png)
+
+        ![remote](https://example.com/a.png)
+
+        ![引用图][cover]
+
+        ![折叠图][]
+
+        [cover]: assets/reference.png
+        [折叠图]: https://example.com/collapsed.png
+        """
 
         let plan = RenderedMarkdownEditor.plan(for: source)
 
         XCTAssertTrue(plan.localSourceBlocks.isEmpty)
-        XCTAssertEqual(plan.images.count, 2)
-        XCTAssertEqual(plan.images.map(\.alternative), ["本地图", "remote"])
+        XCTAssertEqual(plan.images.count, 4)
+        XCTAssertEqual(plan.images.map(\.alternative), ["本地图", "remote", "引用图", "折叠图"])
         XCTAssertEqual(
             plan.images.map(\.target),
-            ["assets/封面.png", "https://example.com/a.png"]
+            [
+                "assets/封面.png",
+                "https://example.com/a.png",
+                "assets/reference.png",
+                "https://example.com/collapsed.png",
+            ]
         )
         XCTAssertEqual(
             utf8Text(try XCTUnwrap(plan.images.first).sourceRange, source: source),
             "![本地图](assets/封面.png)"
         )
         XCTAssertEqual(Data(plan.sourceSnapshot.utf8), Data(source.utf8))
+        XCTAssertTrue(
+            utf8Text(try XCTUnwrap(plan.images.last).sourceRange, source: source)
+                .hasSuffix("[]"),
+            "Collapsed-reference image suffix must be covered by the rendered image"
+        )
+        XCTAssertEqual(plan.markers.filter { $0.kind == .referenceDefinition }.count, 2)
     }
 
     func testImageTargetResolvesRelativeAbsoluteFileAndRemotePaths() throws {
