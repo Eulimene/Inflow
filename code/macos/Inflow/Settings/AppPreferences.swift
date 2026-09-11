@@ -66,6 +66,20 @@ enum PreviewTheme: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum LinkActivationPreference: String, CaseIterable, Identifiable, Sendable {
+    case singleClick
+    case contextMenu
+
+    var id: Self { self }
+
+    var label: String {
+        switch self {
+        case .singleClick: "单击打开"
+        case .contextMenu: "仅从右键菜单打开"
+        }
+    }
+}
+
 enum AutosaveDelay: String, CaseIterable, Identifiable, Sendable {
     case halfSecond = "0.5"
     case oneSecond = "1"
@@ -269,6 +283,7 @@ final class AppPreferences: ObservableObject {
         static let previewTheme = "preferences.preview.theme"
         static let mathRenderingEnabled = "preferences.preview.mathRenderingEnabled"
         static let mermaidRenderingEnabled = "preferences.preview.mermaidRenderingEnabled"
+        static let linkActivation = "preferences.preview.linkActivation"
         static let increasedContrast = "preferences.accessibility.increasedContrast"
         static let reduceMotion = "preferences.accessibility.reduceMotion"
         // Version-1 layout keys remain registered as migration artifacts.
@@ -310,6 +325,7 @@ final class AppPreferences: ObservableObject {
             Key.previewTheme,
             Key.mathRenderingEnabled,
             Key.mermaidRenderingEnabled,
+            Key.linkActivation,
             Key.increasedContrast,
             Key.reduceMotion,
             Key.legacyLastActiveEditorViewMode,
@@ -394,6 +410,7 @@ final class AppPreferences: ObservableObject {
         static let previewTheme = PreviewTheme.standard
         static let mathRenderingEnabled = false
         static let mermaidRenderingEnabled = true
+        static let linkActivation = LinkActivationPreference.singleClick
         static let increasedContrast = AccessibilityPreference.followSystem
         static let reduceMotion = AccessibilityPreference.followSystem
         static let recentDocumentCapacity = 20
@@ -503,6 +520,10 @@ final class AppPreferences: ObservableObject {
 
     @Published var mermaidRenderingEnabled: Bool {
         didSet { persist(mermaidRenderingEnabled, forKey: Key.mermaidRenderingEnabled) }
+    }
+
+    @Published var linkActivation: LinkActivationPreference {
+        didSet { persist(linkActivation.rawValue, forKey: Key.linkActivation) }
     }
 
     @Published var increasedContrast: AccessibilityPreference {
@@ -665,6 +686,12 @@ final class AppPreferences: ObservableObject {
         previewTheme = LaunchFixed.previewTheme
         mathRenderingEnabled = LaunchFixed.mathRenderingEnabled
         mermaidRenderingEnabled = LaunchFixed.mermaidRenderingEnabled
+        linkActivation = Self.enumeration(
+            LinkActivationPreference.self,
+            forKey: Key.linkActivation,
+            in: defaults,
+            defaultValue: LaunchFixed.linkActivation
+        )
         increasedContrast = LaunchFixed.increasedContrast
         reduceMotion = LaunchFixed.reduceMotion
         workspaceViewMode = Self.enumeration(
@@ -810,6 +837,7 @@ final class AppPreferences: ObservableObject {
         previewTheme = .standard
         mathRenderingEnabled = LaunchFixed.mathRenderingEnabled
         mermaidRenderingEnabled = LaunchFixed.mermaidRenderingEnabled
+        linkActivation = LaunchFixed.linkActivation
     }
 
     private func persistCurrentValues() {
@@ -828,6 +856,7 @@ final class AppPreferences: ObservableObject {
                 Key.previewTheme: previewTheme.rawValue,
                 Key.mathRenderingEnabled: mathRenderingEnabled,
                 Key.mermaidRenderingEnabled: mermaidRenderingEnabled,
+                Key.linkActivation: linkActivation.rawValue,
                 Key.increasedContrast: increasedContrast.rawValue,
                 Key.reduceMotion: reduceMotion.rawValue,
                 Key.workspaceViewMode: workspaceViewMode.rawValue,

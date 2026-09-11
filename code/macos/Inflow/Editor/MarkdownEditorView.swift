@@ -1735,7 +1735,8 @@ struct MarkdownEditorView: View {
             onPasteImage: pasteImage,
             onDropImage: dropImage,
             onLinkClick: activatePreviewLink,
-            renderedResourceContext: renderedEditingResourceContext
+            renderedResourceContext: renderedEditingResourceContext,
+            linkActivation: preferences.linkActivation
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

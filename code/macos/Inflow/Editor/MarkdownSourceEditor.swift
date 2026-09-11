@@ -278,6 +278,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var renderedEditingRange: NSRange?
     private var renderedAppliedAppearance: SourceEditorAppearance?
     private var renderedLinkHandler: ((String) -> Void)?
+    private var renderedLinkActivation = LinkActivationPreference.singleClick
     private var renderedResourceContext = RenderedMarkdownResourceContext.unavailable
     private var renderedImageGeneration = 0
     private var renderedImageTask: Task<Void, Never>?
@@ -423,12 +424,16 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         _ presentation: MarkdownEditorPresentation,
         source: String,
         onLinkClick: ((String) -> Void)?,
-        resourceContext: RenderedMarkdownResourceContext = .unavailable
+        resourceContext: RenderedMarkdownResourceContext = .unavailable,
+        linkActivation: LinkActivationPreference = .singleClick
     ) {
         let changed = self.presentation != presentation
         let resourceContextChanged = renderedResourceContext != resourceContext
+        let linkActivationChanged = renderedLinkActivation != linkActivation
         self.presentation = presentation
         renderedLinkHandler = onLinkClick
+        renderedLinkActivation = linkActivation
+        textView.linkActivation = linkActivation
         renderedResourceContext = resourceContext
         switch presentation {
         case .source:
@@ -463,6 +468,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 source: source,
                 force: changed
                     || resourceContextChanged
+                    || linkActivationChanged
                     || !renderedPresentationIsCurrent(source: source)
             )
         }
@@ -516,7 +522,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         else {
             return nil
         }
-        return RenderedMarkdownEditor.editingBlockRange(
+        return RenderedMarkdownEditor.sourceEditingBlockRange(
             containingUTF16Location: textView.selectedRange().location,
             source: source,
             plan: renderedPlan
@@ -544,7 +550,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         let editingRange: NSRange? = if textView.isEditable,
                                        textView.window?.firstResponder === textView
         {
-            RenderedMarkdownEditor.editingBlockRange(
+            RenderedMarkdownEditor.sourceEditingBlockRange(
                 containingUTF16Location: selection.location,
                 source: source,
                 plan: plan
@@ -557,7 +563,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             let range = link.textRange.utf16Range
             return rangesOverlap(range, editingRange) ? nil : range
         }
-        textView.clearRenderedImages()
+        textView.beginRenderedOverlayUpdate()
         textView.renderedQuoteRanges = plan.contentStyles.compactMap { style in
             guard style.kind == .blockQuote else { return nil }
             guard !rangesOverlap(style.sourceRange.utf16Range, editingRange) else { return nil }
@@ -631,6 +637,33 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         for block in plan.localSourceBlocks {
             let range = block.sourceRange.utf16Range
             guard NSMaxRange(range) <= storage.length else { continue }
+            if block.reasons.contains(.fencedCode),
+               !rangesOverlap(range, editingRange),
+               let parts = fencedCodeParts(in: range, source: source)
+            {
+                storage.addAttributes(
+                    [
+                        .font: NSFont.monospacedSystemFont(
+                            ofSize: max(13, CGFloat(sourceAppearance.fontSize)),
+                            weight: .regular
+                        ),
+                        .foregroundColor: NSColor.labelColor,
+                        .backgroundColor: NSColor.quaternaryLabelColor.withAlphaComponent(0.16),
+                    ],
+                    range: parts.content
+                )
+                for fence in [parts.opening, parts.closing] where fence.length > 0 {
+                    storage.addAttributes(
+                        [
+                            .font: NSFont.systemFont(ofSize: 0.1),
+                            .foregroundColor: NSColor.clear,
+                            .backgroundColor: NSColor.clear,
+                        ],
+                        range: fence
+                    )
+                }
+                continue
+            }
             storage.addAttributes(
                 [
                     .font: NSFont.monospacedSystemFont(
@@ -701,8 +734,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 table,
                 baseFont: baseFont,
                 maximumWidth: max(240, min(900, scrollView.contentSize.width - 32)),
+                linkActivation: renderedLinkActivation,
                 onLinkClick: { [weak self] target in
                     self?.renderedLinkHandler?(target)
+                },
+                onEdit: { [weak self] edit in
+                    self?.applyRenderedTableEdit(edit, to: table)
                 }
             )
             applyRenderedBlock(
@@ -721,9 +758,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 storage: storage
             )
         }
+        textView.endRenderedOverlayUpdate()
         storage.endEditing()
         renderedAppliedAppearance = sourceAppearance
         textView.setSelectedRange(selection)
+        syncRenderedTypingAttributes()
         refreshWritingModePresentation()
         loadRenderedImages(for: plan)
     }
@@ -902,6 +941,80 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             return range.location == optionalRange.location
         }
         return NSIntersectionRange(range, optionalRange).length > 0
+    }
+
+    private func fencedCodeParts(
+        in range: NSRange,
+        source: String
+    ) -> (opening: NSRange, content: NSRange, closing: NSRange)? {
+        let text = source as NSString
+        guard range.length > 0, NSMaxRange(range) <= text.length else { return nil }
+        let block = text.substring(with: range) as NSString
+        let firstNewline = block.range(of: "\n")
+        guard firstNewline.location != NSNotFound else { return nil }
+        let searchLength = block.hasSuffix("\n") ? block.length - 1 : block.length
+        let lastNewline = block.range(
+            of: "\n",
+            options: .backwards,
+            range: NSRange(location: 0, length: max(0, searchLength))
+        )
+        guard lastNewline.location != NSNotFound,
+              lastNewline.location >= NSMaxRange(firstNewline)
+        else { return nil }
+        let openingEnd = NSMaxRange(firstNewline)
+        let closingStart = NSMaxRange(lastNewline)
+        return (
+            NSRange(location: range.location, length: openingEnd),
+            NSRange(
+                location: range.location + openingEnd,
+                length: closingStart - openingEnd
+            ),
+            NSRange(
+                location: range.location + closingStart,
+                length: range.length - closingStart
+            )
+        )
+    }
+
+    private func syncRenderedTypingAttributes() {
+        guard presentation == .rendered,
+              let storage = textView.textStorage,
+              storage.length > 0
+        else { return }
+        let selection = textView.selectedRange()
+        var location = min(selection.location, storage.length - 1)
+        if let plan = renderedPlan {
+            let hiddenRanges = plan.markers.map(\.sourceRange.utf16Range)
+            if hiddenRanges.contains(where: { NSLocationInRange(location, $0) }),
+               selection.location > 0
+            {
+                location = selection.location - 1
+            }
+        }
+        let attributes = storage.attributes(at: location, effectiveRange: nil)
+        var typing: [NSAttributedString.Key: Any] = [:]
+        for key in [NSAttributedString.Key.font, .foregroundColor, .paragraphStyle] {
+            if let value = attributes[key] { typing[key] = value }
+        }
+        if typing[.font] == nil { typing[.font] = textView.font }
+        if typing[.foregroundColor] == nil { typing[.foregroundColor] = NSColor.textColor }
+        textView.typingAttributes = typing
+    }
+
+    private func applyRenderedTableEdit(
+        _ edit: RenderedMarkdownTableEdit,
+        to table: RenderedMarkdownTable
+    ) {
+        guard presentation == .rendered,
+              textView.isEditable,
+              let replacement = RenderedMarkdownTableEditing.replacement(
+                  for: table,
+                  applying: edit
+              ),
+              NSMaxRange(table.sourceRange.utf16Range) <= (textView.string as NSString).length
+        else { return }
+        textView.insertText(replacement, replacementRange: table.sourceRange.utf16Range)
+        textView.undoManager?.setActionName("编辑表格")
     }
 
     private func renderedMermaidImage(from sourceSVG: String) -> NSImage? {
@@ -1293,6 +1406,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             selectedUTF16Range = range
             scheduleRenderedInteractionPresentation()
         }
+        syncRenderedTypingAttributes()
         refreshWritingModePresentation()
     }
 
@@ -1623,8 +1737,13 @@ final class MarkdownLineNumberRulerView: NSRulerView {
 
 @MainActor
 enum RenderedMarkdownLinkActivation {
-    static func shouldNavigate(for modifierFlags: NSEvent.ModifierFlags) -> Bool {
-        modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command)
+    static func shouldNavigate(
+        for modifierFlags: NSEvent.ModifierFlags,
+        preference: LinkActivationPreference
+    ) -> Bool {
+        guard preference == .singleClick else { return false }
+        let modifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers.isEmpty || modifiers == .command
     }
 }
 
@@ -1647,6 +1766,7 @@ final class WindowAwareTextView: NSTextView {
     var pasteImageHandler: ((ClipboardImagePayload) -> Void)?
     var dropImageHandler: ((URL) -> Void)?
     var linkClickHandler: ((Int) -> Bool)?
+    var linkActivation = LinkActivationPreference.singleClick
     var clickableLinkRanges: [NSRange] = [] {
         didSet {
             guard oldValue != clickableLinkRanges else { return }
@@ -1660,6 +1780,7 @@ final class WindowAwareTextView: NSTextView {
     }
     private var renderedImageViews: [Int: RenderedImageViewState] = [:]
     private var renderedTableViews: [Int: RenderedTableViewState] = [:]
+    private var retainedRenderedOverlayKeys: Set<Int>?
     private var renderedImageLayoutTask: Task<Void, Never>?
 
     override var undoManager: UndoManager? {
@@ -1702,12 +1823,29 @@ final class WindowAwareTextView: NSTextView {
         renderedTableViews.removeAll()
     }
 
+    func beginRenderedOverlayUpdate() {
+        retainedRenderedOverlayKeys = []
+    }
+
+    func endRenderedOverlayUpdate() {
+        guard let retainedRenderedOverlayKeys else { return }
+        for key in renderedImageViews.keys where !retainedRenderedOverlayKeys.contains(key) {
+            renderedImageViews.removeValue(forKey: key)?.imageView.removeFromSuperview()
+        }
+        for key in renderedTableViews.keys where !retainedRenderedOverlayKeys.contains(key) {
+            renderedTableViews.removeValue(forKey: key)?.tableView.removeFromSuperview()
+        }
+        self.retainedRenderedOverlayKeys = nil
+        scheduleRenderedImageLayout()
+    }
+
     func setRenderedImage(
         _ image: NSImage,
         alternative: String,
         sourceRange: NSRange
     ) {
         let key = sourceRange.location
+        retainedRenderedOverlayKeys?.insert(key)
         let imageView: RenderedMarkdownImageView
         if let existing = renderedImageViews[key], existing.sourceRange == sourceRange {
             imageView = existing.imageView
@@ -1735,15 +1873,46 @@ final class WindowAwareTextView: NSTextView {
         _ table: RenderedMarkdownTable,
         baseFont: NSFont,
         maximumWidth: CGFloat,
-        onLinkClick: @escaping (String) -> Void
+        linkActivation: LinkActivationPreference,
+        onLinkClick: @escaping (String) -> Void,
+        onEdit: @escaping (RenderedMarkdownTableEdit) -> Void
     ) -> NSSize {
         let key = table.sourceRange.utf16Range.location
+        retainedRenderedOverlayKeys?.insert(key)
+        if let existing = renderedTableViews[key],
+           existing.sourceRange == table.sourceRange.utf16Range,
+           existing.tableView.linkActivation == linkActivation
+        {
+            if existing.tableView.table == table
+                || existing.tableView.hasSameLiveRenderedContent(as: table)
+            {
+                existing.tableView.update(table: table, onEdit: onEdit)
+                return existing.tableView.renderedSize
+            }
+        }
+        if let reusable = renderedTableViews.first(where: { oldKey, state in
+            oldKey != key
+                && retainedRenderedOverlayKeys?.contains(oldKey) != true
+                && state.tableView.hasSameRenderedContent(as: table)
+                && state.tableView.linkActivation == linkActivation
+        }) {
+            renderedTableViews.removeValue(forKey: reusable.key)
+            reusable.value.tableView.update(table: table, onEdit: onEdit)
+            renderedTableViews[key] = RenderedTableViewState(
+                sourceRange: table.sourceRange.utf16Range,
+                tableView: reusable.value.tableView
+            )
+            scheduleRenderedImageLayout()
+            return reusable.value.tableView.renderedSize
+        }
         renderedTableViews[key]?.tableView.removeFromSuperview()
         let tableView = RenderedMarkdownTableView(
             table: table,
             baseFont: baseFont,
             maximumWidth: maximumWidth,
-            onLinkClick: onLinkClick
+            linkActivation: linkActivation,
+            onLinkClick: onLinkClick,
+            onEdit: onEdit
         )
         addSubview(tableView)
         renderedTableViews[key] = RenderedTableViewState(
@@ -1876,13 +2045,39 @@ final class WindowAwareTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         let localPoint = localPoint(forWindowPoint: event.locationInWindow)
-        if RenderedMarkdownLinkActivation.shouldNavigate(for: event.modifierFlags),
+        if RenderedMarkdownLinkActivation.shouldNavigate(
+            for: event.modifierFlags,
+            preference: linkActivation
+        ),
            let location = clickableLinkLocation(at: localPoint),
            linkClickHandler?(location) == true
         {
             return
         }
         super.mouseDown(with: event)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let localPoint = localPoint(forWindowPoint: event.locationInWindow)
+        guard let location = clickableLinkLocation(at: localPoint) else {
+            return super.menu(for: event)
+        }
+        let menu = NSMenu(title: "")
+        let item = NSMenuItem(
+            title: "打开链接",
+            action: #selector(openContextLink(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        item.representedObject = location
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc
+    private func openContextLink(_ sender: NSMenuItem) {
+        guard let location = sender.representedObject as? Int else { return }
+        _ = linkClickHandler?(location)
     }
 
     override func resetCursorRects() {
@@ -2012,18 +2207,36 @@ final class RenderedMarkdownImageView: NSImageView {
 
 @MainActor
 final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
-    private struct CellLayout {
+    private final class CellLayout {
         let row: Int
         let column: Int
-        let textView: NSTextView
+        let textView: RenderedMarkdownTableCellTextView
+        var originalText: String
+
+        init(
+            row: Int,
+            column: Int,
+            textView: RenderedMarkdownTableCellTextView,
+            originalText: String
+        ) {
+            self.row = row
+            self.column = column
+            self.textView = textView
+            self.originalText = originalText
+        }
     }
 
     private let columnWidths: [CGFloat]
     private let rowHeights: [CGFloat]
     private let cells: [CellLayout]
     private let onLinkClick: (String) -> Void
+    private var onEdit: (RenderedMarkdownTableEdit) -> Void
+    private var contextCell = (row: 0, column: 0)
+    private var contextLinkTarget: String?
     let renderedSize: NSSize
     let cellTexts: [[String]]
+    private(set) var table: RenderedMarkdownTable
+    let linkActivation: LinkActivationPreference
 
     override var isFlipped: Bool { true }
 
@@ -2031,9 +2244,14 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         table: RenderedMarkdownTable,
         baseFont: NSFont,
         maximumWidth: CGFloat,
-        onLinkClick: @escaping (String) -> Void
+        linkActivation: LinkActivationPreference,
+        onLinkClick: @escaping (String) -> Void,
+        onEdit: @escaping (RenderedMarkdownTableEdit) -> Void
     ) {
+        self.table = table
+        self.linkActivation = linkActivation
         self.onLinkClick = onLinkClick
+        self.onEdit = onEdit
         cellTexts = table.rows.map { $0.map(\.text) }
         let columnCount = table.rows.map(\.count).max() ?? 0
         var widths = Array(repeating: CGFloat(72), count: columnCount)
@@ -2104,8 +2322,8 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
                         range: link.visibleRange
                     )
                 }
-                let textView = NSTextView()
-                textView.isEditable = false
+                let textView = RenderedMarkdownTableCellTextView()
+                textView.isEditable = true
                 textView.isSelectable = true
                 textView.isRichText = true
                 textView.drawsBackground = false
@@ -2116,7 +2334,14 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
                 textView.textStorage?.setAttributedString(attributed)
                 textView.delegate = nil
                 textView.setAccessibilityLabel(cell.text)
-                layouts.append(CellLayout(row: rowIndex, column: column, textView: textView))
+                layouts.append(
+                    CellLayout(
+                        row: rowIndex,
+                        column: column,
+                        textView: textView,
+                        originalText: cell.text
+                    )
+                )
             }
         }
         cells = layouts
@@ -2128,6 +2353,13 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         setAccessibilityRole(.table)
         for layout in cells {
             layout.textView.delegate = self
+            layout.textView.linkActivation = linkActivation
+            layout.textView.onLinkClick = onLinkClick
+            layout.textView.contextMenuProvider = { [weak self, weak textView = layout.textView]
+                event in
+                guard let self, let textView else { return nil }
+                return self.tableMenu(for: layout.row, column: layout.column, event: event, in: textView)
+            }
             addSubview(layout.textView)
         }
         layoutCells()
@@ -2135,6 +2367,35 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
+
+    func hasSameRenderedContent(as other: RenderedMarkdownTable) -> Bool {
+        table.alignments == other.alignments
+            && table.rows.map { $0.map(\.text) } == other.rows.map { $0.map(\.text) }
+            && table.rows.map { $0.flatMap(\.links) } == other.rows.map { $0.flatMap(\.links) }
+    }
+
+    func hasSameLiveRenderedContent(as other: RenderedMarkdownTable) -> Bool {
+        guard table.alignments == other.alignments,
+              table.rows.count == other.rows.count,
+              table.rows.enumerated().allSatisfy({ row, cells in
+                  cells.count == other.rows[row].count
+              })
+        else { return false }
+        return cells.allSatisfy { cell in
+            other.rows[cell.row][cell.column].text == cell.textView.string
+        }
+    }
+
+    func update(
+        table: RenderedMarkdownTable,
+        onEdit: @escaping (RenderedMarkdownTableEdit) -> Void
+    ) {
+        self.table = table
+        self.onEdit = onEdit
+        for cell in cells {
+            cell.originalText = table.rows[cell.row][cell.column].text
+        }
+    }
 
     private func layoutCells() {
         let xOffsets = columnWidths.reduce(into: [CGFloat(0)]) { result, width in
@@ -2196,8 +2457,143 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         at charIndex: Int
     ) -> Bool {
         guard let target = link as? String else { return false }
+        guard linkActivation == .singleClick else { return false }
         onLinkClick(target)
         return true
+    }
+
+    func textDidEndEditing(_ notification: Notification) {
+        guard let textView = notification.object as? NSTextView,
+              let cell = cells.first(where: { $0.textView === textView }),
+              textView.string != cell.originalText
+        else { return }
+        onEdit(.updateCell(row: cell.row, column: cell.column, text: textView.string))
+    }
+
+    private func tableMenu(
+        for row: Int,
+        column: Int,
+        event: NSEvent,
+        in textView: RenderedMarkdownTableCellTextView
+    ) -> NSMenu {
+        contextCell = (row, column)
+        contextLinkTarget = textView.linkTarget(at: event)
+        let menu = NSMenu(title: "")
+        addResponderMenuItem("剪切", action: #selector(NSText.cut(_:)), to: menu)
+        addResponderMenuItem("复制", action: #selector(NSText.copy(_:)), to: menu)
+        addResponderMenuItem("粘贴", action: #selector(NSText.paste(_:)), to: menu)
+        menu.addItem(.separator())
+        if contextLinkTarget != nil {
+            addMenuItem("打开链接", action: #selector(openTableLink(_:)), to: menu)
+            menu.addItem(.separator())
+        }
+        addMenuItem("在上方插入行", action: #selector(insertRowAbove(_:)), to: menu)
+        addMenuItem("在下方插入行", action: #selector(insertRowBelow(_:)), to: menu)
+        addMenuItem("删除当前行", action: #selector(deleteCurrentRow(_:)), to: menu)
+        menu.addItem(.separator())
+        addMenuItem("在左侧插入列", action: #selector(insertColumnLeft(_:)), to: menu)
+        addMenuItem("在右侧插入列", action: #selector(insertColumnRight(_:)), to: menu)
+        addMenuItem("删除当前列", action: #selector(deleteCurrentColumn(_:)), to: menu)
+        menu.addItem(.separator())
+        addMenuItem("左对齐", action: #selector(alignColumnLeading(_:)), to: menu)
+        addMenuItem("居中对齐", action: #selector(alignColumnCenter(_:)), to: menu)
+        addMenuItem("右对齐", action: #selector(alignColumnTrailing(_:)), to: menu)
+        return menu
+    }
+
+    private func addMenuItem(_ title: String, action: Selector, to menu: NSMenu) {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+    }
+
+    private func addResponderMenuItem(_ title: String, action: Selector, to menu: NSMenu) {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = nil
+        menu.addItem(item)
+    }
+
+    @objc private func openTableLink(_ sender: Any?) {
+        if let contextLinkTarget { onLinkClick(contextLinkTarget) }
+    }
+
+    @objc private func insertRowAbove(_ sender: Any?) {
+        onEdit(.insertRow(at: contextCell.row))
+    }
+
+    @objc private func insertRowBelow(_ sender: Any?) {
+        onEdit(.insertRow(at: contextCell.row + 1))
+    }
+
+    @objc private func deleteCurrentRow(_ sender: Any?) {
+        onEdit(.deleteRow(contextCell.row))
+    }
+
+    @objc private func insertColumnLeft(_ sender: Any?) {
+        onEdit(.insertColumn(at: contextCell.column))
+    }
+
+    @objc private func insertColumnRight(_ sender: Any?) {
+        onEdit(.insertColumn(at: contextCell.column + 1))
+    }
+
+    @objc private func deleteCurrentColumn(_ sender: Any?) {
+        onEdit(.deleteColumn(contextCell.column))
+    }
+
+    @objc private func alignColumnLeading(_ sender: Any?) {
+        onEdit(.setAlignment(column: contextCell.column, alignment: .leading))
+    }
+
+    @objc private func alignColumnCenter(_ sender: Any?) {
+        onEdit(.setAlignment(column: contextCell.column, alignment: .center))
+    }
+
+    @objc private func alignColumnTrailing(_ sender: Any?) {
+        onEdit(.setAlignment(column: contextCell.column, alignment: .trailing))
+    }
+}
+
+@MainActor
+final class RenderedMarkdownTableCellTextView: NSTextView {
+    var contextMenuProvider: ((NSEvent) -> NSMenu?)?
+    var linkActivation = LinkActivationPreference.singleClick
+    var onLinkClick: ((String) -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        if linkActivation == .singleClick, let target = linkTarget(at: event) {
+            onLinkClick?(target)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        contextMenuProvider?(event) ?? super.menu(for: event)
+    }
+
+    func linkTarget(at event: NSEvent) -> String? {
+        guard let layoutManager, let textContainer else { return nil }
+        let point = convert(event.locationInWindow, from: nil)
+        let containerPoint = NSPoint(
+            x: point.x - textContainerOrigin.x,
+            y: point.y - textContainerOrigin.y
+        )
+        var fraction: CGFloat = 0
+        let glyph = layoutManager.glyphIndex(
+            for: containerPoint,
+            in: textContainer,
+            fractionOfDistanceThroughGlyph: &fraction
+        )
+        guard glyph < layoutManager.numberOfGlyphs else { return nil }
+        let glyphRect = layoutManager.boundingRect(
+            forGlyphRange: NSRange(location: glyph, length: 1),
+            in: textContainer
+        )
+        guard glyphRect.contains(containerPoint) else { return nil }
+        let character = layoutManager.characterIndexForGlyph(at: glyph)
+        guard character < (string as NSString).length else { return nil }
+        return textStorage?.attribute(.link, at: character, effectiveRange: nil) as? String
     }
 }
 
@@ -2212,6 +2608,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
     let onDropImage: ((URL) -> Void)?
     let onLinkClick: ((String) -> Void)?
     let renderedResourceContext: RenderedMarkdownResourceContext
+    let linkActivation: LinkActivationPreference
 
     init(
         text: Binding<String>,
@@ -2223,7 +2620,8 @@ struct MarkdownSourceEditor: NSViewRepresentable {
         onPasteImage: ((ClipboardImagePayload) -> Void)? = nil,
         onDropImage: ((URL) -> Void)? = nil,
         onLinkClick: ((String) -> Void)? = nil,
-        renderedResourceContext: RenderedMarkdownResourceContext = .unavailable
+        renderedResourceContext: RenderedMarkdownResourceContext = .unavailable,
+        linkActivation: LinkActivationPreference = .singleClick
     ) {
         _text = text
         self.selectionRequest = selectionRequest
@@ -2235,6 +2633,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
         self.onDropImage = onDropImage
         self.onLinkClick = onLinkClick
         self.renderedResourceContext = renderedResourceContext
+        self.linkActivation = linkActivation
     }
 
     func makeCoordinator() -> Coordinator {
@@ -2304,7 +2703,8 @@ struct MarkdownSourceEditor: NSViewRepresentable {
                 parent.presentation,
                 source: parent.text,
                 onLinkClick: parent.onLinkClick,
-                resourceContext: parent.renderedResourceContext
+                resourceContext: parent.renderedResourceContext,
+                linkActivation: parent.linkActivation
             )
 
             parent.session.applyPendingRestorationIfPossible()

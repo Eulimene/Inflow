@@ -242,6 +242,14 @@ struct InflowSettingsView: View {
                 .help("手动滚动预览后会暂停跟随，直到再次滚动源码编辑器。")
             Toggle("点击预览标题定位源码", isOn: $preferences.headingNavigationEnabled)
                 .help("定位时会从纯预览进入实时预览，不会修改 Markdown。")
+            Picker("链接打开方式", selection: $preferences.linkActivation) {
+                ForEach(LinkActivationPreference.allCases) { behavior in
+                    Text(behavior.label).tag(behavior)
+                }
+            }
+            Text("单击打开是默认行为；选择右键菜单后，单击只会定位光标。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .formStyle(.grouped)
     }

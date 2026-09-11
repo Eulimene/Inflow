@@ -82,9 +82,9 @@ Swift String 的规范等价不能替代精确字节身份。Rust 返回 UTF-8 b
 
 ### 4.3 即时编辑
 
-EditorViewMode 的内部历史 case 名 preview 对应用户可见的“即时编辑”。该模式始终挂载共享的 MarkdownSourceEditorSession，并以 RenderedMarkdownEditor 将 Rust Core 的 UTF-8 解析范围无损映射为 TextKit 展示属性。空行分隔的普通块以及表格、图片、Mermaid 等整体替换块都有确定的编辑范围。
+EditorViewMode 的内部历史 case 名 preview 对应用户可见的“即时编辑”。该模式始终挂载共享的 MarkdownSourceEditorSession，并以 RenderedMarkdownEditor 将 Rust Core 的 UTF-8 解析范围无损映射为 TextKit 展示属性。普通文字保持渲染属性直接编辑，选区变化时从当前可见字符同步 typing attributes，使光标高度、字号和基线与文字一致。
 
-光标所在块自动恢复等宽源码与全部 Markdown 标记，其他块保持渲染；光标进入表格、图片或 Mermaid 块时对应覆盖视图先卸载，移出后重新挂载，编辑器失去焦点时当前块也立即恢复渲染。该过程不需要手动模式按钮，不替换 NSTextView，不创建第二份内容事实，也不登记展示层 undo。输入、中文输入法、撤销、重做、链接导航和保存继续作用于原始 Markdown。
+只有围栏代码、Mermaid 和其他无法无损结构化编辑的块会在光标进入时局部恢复源码；普通文字和表格不进入该路径。表格覆盖视图拥有可编辑单元格与行列操作，展示计划更新时优先按内容复用已挂载视图，减少输入导致的拆装和布局抖动。链接激活策略作为持久偏好传入文本与表格链接，支持单击或右键菜单。该过程不替换 NSTextView，不创建第二份内容事实，也不登记展示层 undo。
 
 ## 5. 当前编辑命令边界
 

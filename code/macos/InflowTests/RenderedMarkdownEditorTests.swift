@@ -223,25 +223,22 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         }
     }
 
-    func testEditingBlockTracksCaretAcrossParagraphsAndRenderedBlocks() throws {
+    func testOnlySourceOnlyBlocksRevealMarkdownAtTheCaret() throws {
         let source = "第一段 **粗体**\n续行\n\n```mermaid\nflowchart LR\nA --> B\n```\n\n最后一段"
         let plan = RenderedMarkdownEditor.plan(for: source)
         let firstLocation = (source as NSString).range(of: "粗体").location
-        let firstBlock = try XCTUnwrap(
-            RenderedMarkdownEditor.editingBlockRange(
+        XCTAssertNil(
+            RenderedMarkdownEditor.sourceEditingBlockRange(
                 containingUTF16Location: firstLocation,
                 source: source,
                 plan: plan
-            )
-        )
-        XCTAssertEqual(
-            (source as NSString).substring(with: firstBlock),
-            "第一段 **粗体**\n续行\n"
+            ),
+            "ordinary prose must remain WYSIWYG while editing"
         )
 
         let diagram = try XCTUnwrap(plan.mermaidDiagrams.first)
         XCTAssertEqual(
-            RenderedMarkdownEditor.editingBlockRange(
+            RenderedMarkdownEditor.sourceEditingBlockRange(
                 containingUTF16Location: diagram.sourceRange.utf16Range.location + 4,
                 source: source,
                 plan: plan
@@ -249,15 +246,15 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             diagram.sourceRange.utf16Range
         )
 
-        let blankLocation = NSMaxRange(firstBlock)
-        XCTAssertEqual(
-            RenderedMarkdownEditor.editingBlockRange(
-                containingUTF16Location: blankLocation,
-                source: source,
-                plan: plan
-            )?.length,
-            1,
-            "a caret on the blank separator must not expose either neighboring block"
+        let tableSource = "| A | B |\n| --- | --- |\n| 1 | 2 |"
+        let tablePlan = RenderedMarkdownEditor.plan(for: tableSource)
+        XCTAssertNil(
+            RenderedMarkdownEditor.sourceEditingBlockRange(
+                containingUTF16Location: 3,
+                source: tableSource,
+                plan: tablePlan
+            ),
+            "tables are edited through their rendered cells"
         )
     }
 
@@ -382,6 +379,23 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
         XCTAssertEqual(activatedTarget, "guide.md")
 
+        activatedTarget = nil
+        session.setPresentation(
+            .rendered,
+            source: source,
+            onLinkClick: { activatedTarget = $0 },
+            linkActivation: .contextMenu
+        )
+        let contextMenuTable = try XCTUnwrap(
+            session.textView.renderedTable(
+                atUTF16Location: table.sourceRange.utf16Range.location
+            )
+        )
+        XCTAssertFalse(
+            contextMenuTable.textView(NSTextView(), clickedOnLink: "guide.md", at: 0)
+        )
+        XCTAssertNil(activatedTarget)
+
         let diagram = try XCTUnwrap(plan.mermaidDiagrams.first)
         XCTAssertNotNil(
             session.textView.renderedImage(
@@ -393,7 +407,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testRenderedSessionRevealsOnlyFocusedCaretBlockAndUnmountsMermaidWhileEditing() throws {
+    func testRenderedSessionKeepsProseRenderedAndUnmountsOnlySourceOnlyBlocks() throws {
         let source = "第一段 **粗体**\n\n```mermaid\nflowchart LR\nA --> B\n```\n\n第二段 *斜体*"
         let plan = RenderedMarkdownEditor.plan(for: source)
         let boldMarker = try XCTUnwrap(plan.markers.first { $0.kind == .strong })
@@ -419,7 +433,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             NSRange(location: boldMarker.sourceRange.utf16Range.location, length: 0)
         )
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
-        XCTAssertGreaterThan(try markerFont(boldMarker, in: session).pointSize, 1)
+        XCTAssertLessThan(try markerFont(boldMarker, in: session).pointSize, 1)
         XCTAssertLessThan(try markerFont(italicMarker, in: session).pointSize, 1)
         XCTAssertNotNil(
             session.textView.renderedImage(
@@ -465,7 +479,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
         XCTAssertLessThan(try markerFont(boldMarker, in: session).pointSize, 1)
-        XCTAssertGreaterThan(try markerFont(italicMarker, in: session).pointSize, 1)
+        XCTAssertLessThan(try markerFont(italicMarker, in: session).pointSize, 1)
         XCTAssertNotNil(
             session.textView.renderedImage(
                 atUTF16Location: diagram.sourceRange.utf16Range.location
@@ -665,7 +679,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testRenderedSessionResolvesLinkAndRequiresCommandForNavigation() throws {
+    func testRenderedSessionSupportsSingleClickAndContextMenuLinkPreferences() throws {
         let source = "Read [the guide](guide.md)."
         let session = MarkdownSourceEditorSession()
         session.textView.string = source
@@ -681,11 +695,153 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             session.textView.linkClickHandler?(link.textRange.utf16Range.location) == true
         )
         XCTAssertEqual(activatedTarget, "guide.md")
-        XCTAssertFalse(RenderedMarkdownLinkActivation.shouldNavigate(for: []))
-        XCTAssertTrue(RenderedMarkdownLinkActivation.shouldNavigate(for: [.command]))
         XCTAssertTrue(
-            RenderedMarkdownLinkActivation.shouldNavigate(for: [.command, .shift])
+            RenderedMarkdownLinkActivation.shouldNavigate(for: [], preference: .singleClick)
         )
+        XCTAssertTrue(
+            RenderedMarkdownLinkActivation.shouldNavigate(
+                for: [.command],
+                preference: .singleClick
+            )
+        )
+        XCTAssertTrue(
+            RenderedMarkdownLinkActivation.shouldNavigate(
+                for: [.command, .shift],
+                preference: .singleClick
+            ) == false
+        )
+        XCTAssertFalse(
+            RenderedMarkdownLinkActivation.shouldNavigate(for: [], preference: .contextMenu)
+        )
+    }
+
+    func testRenderedTableEditingPreservesMarkdownAndSupportsCommonOperations() throws {
+        let source = "| Name | Score |\n| :--- | ---: |\n| Alice | 9 |"
+        let table = try XCTUnwrap(RenderedMarkdownEditor.plan(for: source).tables.first)
+
+        XCTAssertEqual(
+            RenderedMarkdownTableEditing.replacement(
+                for: table,
+                applying: .updateCell(row: 1, column: 0, text: "A|B")
+            ),
+            "| Name | Score |\n| --- | ---: |\n| A\\|B | 9 |"
+        )
+        XCTAssertEqual(
+            RenderedMarkdownTableEditing.replacement(
+                for: table,
+                applying: .insertRow(at: 2)
+            ),
+            "| Name | Score |\n| --- | ---: |\n| Alice | 9 |\n|  |  |"
+        )
+        XCTAssertEqual(
+            RenderedMarkdownTableEditing.replacement(
+                for: table,
+                applying: .insertColumn(at: 1)
+            ),
+            "| Name |  | Score |\n| --- | --- | ---: |\n| Alice |  | 9 |"
+        )
+        XCTAssertEqual(
+            RenderedMarkdownTableEditing.replacement(
+                for: table,
+                applying: .setAlignment(column: 0, alignment: .center)
+            ),
+            "| Name | Score |\n| :---: | ---: |\n| Alice | 9 |"
+        )
+
+        let richSource = "| **Name** | Docs |\n| --- | --- |\n| Alice | [Open](guide.md) |"
+        let richTable = try XCTUnwrap(RenderedMarkdownEditor.plan(for: richSource).tables.first)
+        XCTAssertEqual(
+            RenderedMarkdownTableEditing.replacement(
+                for: richTable,
+                applying: .updateCell(row: 1, column: 0, text: "Bob")
+            ),
+            "| **Name** | Docs |\n| --- | --- |\n| Bob | [Open](guide.md) |",
+            "editing one cell must preserve Markdown in every untouched cell"
+        )
+    }
+
+    @MainActor
+    func testRenderedTableOverlaySurvivesUnrelatedProseTyping() async throws {
+        let source = "Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |"
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let firstPlan = RenderedMarkdownEditor.plan(for: source)
+        let firstTable = try XCTUnwrap(firstPlan.tables.first)
+        let mounted = try XCTUnwrap(
+            session.textView.renderedTable(
+                atUTF16Location: firstTable.sourceRange.utf16Range.location
+            )
+        )
+
+        session.textView.insertText("X", replacementRange: NSRange(location: 0, length: 0))
+        await settleRenderedPresentation()
+        let updatedSource = session.textView.string
+        let updatedTable = try XCTUnwrap(RenderedMarkdownEditor.plan(for: updatedSource).tables.first)
+        let retained = try XCTUnwrap(
+            session.textView.renderedTable(
+                atUTF16Location: updatedTable.sourceRange.utf16Range.location
+            )
+        )
+
+        XCTAssertTrue(mounted === retained, "unrelated typing must not rebuild the table overlay")
+    }
+
+    @MainActor
+    func testFencedCodeRendersUntilCaretRequestsItsSource() throws {
+        let source = "Before\n\n```swift\nprint(1)\n```\n\nAfter"
+        let plan = RenderedMarkdownEditor.plan(for: source)
+        let block = try XCTUnwrap(plan.localSourceBlocks.first { $0.reasons == [.fencedCode] })
+        let opening = block.sourceRange.utf16Range.location
+        let body = (source as NSString).range(of: "print(1)").location
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let storage = try XCTUnwrap(session.textView.textStorage)
+        XCTAssertLessThan(
+            try XCTUnwrap(storage.attribute(.font, at: opening, effectiveRange: nil) as? NSFont)
+                .pointSize,
+            1
+        )
+        XCTAssertTrue(
+            try XCTUnwrap(storage.attribute(.font, at: body, effectiveRange: nil) as? NSFont)
+                .fontDescriptor.symbolicTraits.contains(.monoSpace)
+        )
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = session.scrollView
+        defer { window.contentView = nil }
+        XCTAssertTrue(window.makeFirstResponder(session.textView))
+        session.textView.setSelectedRange(NSRange(location: body, length: 0))
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        XCTAssertGreaterThan(
+            try XCTUnwrap(storage.attribute(.font, at: opening, effectiveRange: nil) as? NSFont)
+                .pointSize,
+            1
+        )
+    }
+
+    @MainActor
+    func testRenderedCaretTypingFontMatchesTheVisibleText() throws {
+        let source = "# 同一基线"
+        let location = (source as NSString).range(of: "同").location
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        session.textView.setSelectedRange(NSRange(location: location, length: 0))
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let storage = try XCTUnwrap(session.textView.textStorage)
+        let visibleFont = try XCTUnwrap(
+            storage.attribute(.font, at: location, effectiveRange: nil) as? NSFont
+        )
+        let caretFont = try XCTUnwrap(session.textView.typingAttributes[.font] as? NSFont)
+
+        XCTAssertEqual(caretFont.pointSize, visibleFont.pointSize, accuracy: 0.001)
+        XCTAssertEqual(caretFont.fontName, visibleFont.fontName)
     }
 
     @MainActor

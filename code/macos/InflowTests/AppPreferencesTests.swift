@@ -23,6 +23,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.previewTheme, .standard)
             XCTAssertFalse(preferences.mathRenderingEnabled)
             XCTAssertTrue(preferences.mermaidRenderingEnabled)
+            XCTAssertEqual(preferences.linkActivation, .singleClick)
             XCTAssertEqual(preferences.increasedContrast, .followSystem)
             XCTAssertEqual(preferences.reduceMotion, .followSystem)
             XCTAssertEqual(preferences.workspaceViewMode, .automatic)
@@ -61,6 +62,7 @@ final class AppPreferencesTests: XCTestCase {
             first.previewTheme = .longform
             first.mathRenderingEnabled = false
             first.mermaidRenderingEnabled = false
+            first.linkActivation = .contextMenu
             first.increasedContrast = .enabled
             first.reduceMotion = .disabled
             first.workspaceViewMode = .preview
@@ -91,6 +93,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(second.previewTheme, .standard)
             XCTAssertFalse(second.mathRenderingEnabled)
             XCTAssertTrue(second.mermaidRenderingEnabled)
+            XCTAssertEqual(second.linkActivation, .contextMenu)
             XCTAssertEqual(second.increasedContrast, .followSystem)
             XCTAssertEqual(second.reduceMotion, .followSystem)
             XCTAssertEqual(second.workspaceViewMode, .preview)
@@ -144,6 +147,7 @@ final class AppPreferencesTests: XCTestCase {
             defaults.set(0, forKey: "preferences.editor.lineHeight")
             defaults.set(5_000, forKey: "preferences.preview.contentWidth")
             defaults.set("retired-theme", forKey: "preferences.preview.theme")
+            defaults.set("retired-link-mode", forKey: "preferences.preview.linkActivation")
             defaults.set("retired-view", forKey: "preferences.window.lastActiveEditorViewMode")
             defaults.set(
                 "not-a-boolean",
@@ -167,6 +171,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.editorLineHeight, 1.6)
             XCTAssertEqual(preferences.previewContentWidth, 1_200)
             XCTAssertEqual(preferences.previewTheme, .standard)
+            XCTAssertEqual(preferences.linkActivation, .singleClick)
             XCTAssertEqual(preferences.workspaceViewMode, .automatic)
             XCTAssertTrue(preferences.workspaceProjectSidebarVisible)
             XCTAssertFalse(preferences.workspaceOutlineVisible)
@@ -194,6 +199,7 @@ final class AppPreferencesTests: XCTestCase {
             preferences.previewZoom = 1.8
             preferences.syntaxHighlightingEnabled = false
             preferences.scrollSyncEnabled = false
+            preferences.linkActivation = .contextMenu
             preferences.increasedContrast = .enabled
             preferences.workspaceViewMode = .source
             preferences.workspaceProjectSidebarVisible = false
@@ -213,6 +219,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertTrue(preferences.syntaxHighlightingEnabled)
             XCTAssertEqual(preferences.previewZoom, 1.8)
             XCTAssertFalse(preferences.scrollSyncEnabled)
+            XCTAssertEqual(preferences.linkActivation, .contextMenu)
             XCTAssertEqual(preferences.increasedContrast, .enabled)
             XCTAssertEqual(preferences.workspaceViewMode, .source)
             XCTAssertFalse(preferences.workspaceProjectSidebarVisible)

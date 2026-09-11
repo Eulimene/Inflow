@@ -109,6 +109,8 @@ struct RenderedMarkdownTableCellLink: Equatable, Sendable {
 
 struct RenderedMarkdownTableCell: Equatable, Sendable {
     let sourceRange: RenderedMarkdownSourceRange
+    /// Exact Markdown inside the cell, excluding surrounding whitespace and pipes.
+    let markdown: String
     let text: String
     let links: [RenderedMarkdownTableCellLink]
 }
@@ -117,6 +119,90 @@ struct RenderedMarkdownTable: Equatable, Sendable {
     let sourceRange: RenderedMarkdownSourceRange
     let alignments: [RenderedMarkdownTableAlignment]
     let rows: [[RenderedMarkdownTableCell]]
+}
+
+enum RenderedMarkdownTableEdit: Equatable, Sendable {
+    case updateCell(row: Int, column: Int, text: String)
+    case insertRow(at: Int)
+    case deleteRow(Int)
+    case insertColumn(at: Int)
+    case deleteColumn(Int)
+    case setAlignment(column: Int, alignment: RenderedMarkdownTableAlignment)
+}
+
+enum RenderedMarkdownTableEditing {
+    static func replacement(
+        for table: RenderedMarkdownTable,
+        applying edit: RenderedMarkdownTableEdit
+    ) -> String? {
+        guard !table.rows.isEmpty else { return nil }
+        let columnCount = max(
+            table.alignments.count,
+            table.rows.map(\.count).max() ?? 0
+        )
+        guard columnCount > 0 else { return nil }
+        var rows = table.rows.map { row in
+            (0..<columnCount).map { index in index < row.count ? row[index].markdown : "" }
+        }
+        var alignments = (0..<columnCount).map { index in
+            index < table.alignments.count ? table.alignments[index] : .leading
+        }
+
+        switch edit {
+        case let .updateCell(row, column, text):
+            guard rows.indices.contains(row), rows[row].indices.contains(column) else { return nil }
+            rows[row][column] = escapedCell(text)
+        case let .insertRow(index):
+            guard (0...rows.count).contains(index) else { return nil }
+            rows.insert(Array(repeating: "", count: columnCount), at: index)
+        case let .deleteRow(index):
+            guard rows.count > 1, rows.indices.contains(index) else { return nil }
+            rows.remove(at: index)
+        case let .insertColumn(index):
+            guard (0...columnCount).contains(index) else { return nil }
+            rows = rows.map { row in
+                var row = row
+                row.insert("", at: index)
+                return row
+            }
+            alignments.insert(.leading, at: index)
+        case let .deleteColumn(index):
+            guard columnCount > 1, (0..<columnCount).contains(index) else { return nil }
+            rows = rows.map { row in
+                var row = row
+                row.remove(at: index)
+                return row
+            }
+            alignments.remove(at: index)
+        case let .setAlignment(column, alignment):
+            guard alignments.indices.contains(column) else { return nil }
+            alignments[column] = alignment
+        }
+
+        let header = markdownRow(rows[0])
+        let delimiter = markdownRow(alignments.map { alignment in
+            switch alignment {
+            case .leading: "---"
+            case .center: ":---:"
+            case .trailing: "---:"
+            }
+        })
+        return ([header, delimiter] + rows.dropFirst().map(markdownRow)).joined(separator: "\n")
+    }
+
+    private static func markdownRow(_ cells: [String]) -> String {
+        "| " + cells.joined(separator: " | ") + " |"
+    }
+
+    private static func escapedCell(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "|", with: "\\|")
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+    }
 }
 
 struct RenderedMarkdownMermaidDiagram: Equatable, Sendable {
@@ -206,10 +292,10 @@ enum RenderedMarkdownEditor {
         }
     }
 
-    /// Resolves the smallest source block that should become editable for the
-    /// current caret. Rendered replacement blocks take precedence; ordinary
-    /// Markdown falls back to the surrounding blank-line-delimited block.
-    static func editingBlockRange(
+    /// Resolves a block whose structure cannot be edited safely through its
+    /// rendered appearance. Ordinary prose and tables deliberately return nil:
+    /// their caret keeps the same font, baseline, and layout used while reading.
+    static func sourceEditingBlockRange(
         containingUTF16Location location: Int,
         source: String,
         plan: RenderedMarkdownPlan
@@ -218,75 +304,13 @@ enum RenderedMarkdownEditor {
         guard location >= 0, location <= sourceLength, !source.isEmpty else { return nil }
 
         let replacementRanges = plan.localSourceBlocks.map(\.sourceRange.utf16Range)
-            + plan.tables.map(\.sourceRange.utf16Range)
             + plan.mermaidDiagrams.map(\.sourceRange.utf16Range)
-            + plan.images.map(\.sourceRange.utf16Range)
         if let replacement = replacementRanges.first(where: {
             containsCaret(location, in: $0, sourceLength: sourceLength)
         }) {
             return replacement
         }
-
-        let lines = utf16Lines(in: source)
-        guard let selectedLine = lines.firstIndex(where: {
-            containsCaret(location, in: $0.fullRange, sourceLength: sourceLength)
-        }) else {
-            return nil
-        }
-        guard !lines[selectedLine].isBlank else { return lines[selectedLine].fullRange }
-
-        var first = selectedLine
-        var last = selectedLine
-        while first > 0, !lines[first - 1].isBlank { first -= 1 }
-        while last + 1 < lines.count, !lines[last + 1].isBlank { last += 1 }
-        return NSRange(
-            location: lines[first].fullRange.location,
-            length: NSMaxRange(lines[last].fullRange) - lines[first].fullRange.location
-        )
-    }
-
-    private struct UTF16Line {
-        let fullRange: NSRange
-        let isBlank: Bool
-    }
-
-    private static func utf16Lines(in source: String) -> [UTF16Line] {
-        let text = source as NSString
-        guard text.length > 0 else { return [] }
-        var result: [UTF16Line] = []
-        var cursor = 0
-        while cursor < text.length {
-            var lineStart = 0
-            var lineEnd = 0
-            var contentsEnd = 0
-            text.getLineStart(
-                &lineStart,
-                end: &lineEnd,
-                contentsEnd: &contentsEnd,
-                for: NSRange(location: cursor, length: 0)
-            )
-            let contentRange = NSRange(
-                location: lineStart,
-                length: contentsEnd - lineStart
-            )
-            let content = text.substring(with: contentRange)
-            result.append(
-                UTF16Line(
-                    fullRange: NSRange(location: lineStart, length: lineEnd - lineStart),
-                    isBlank: content.trimmingCharacters(in: .whitespaces).isEmpty
-                )
-            )
-            cursor = max(lineEnd, cursor + 1)
-        }
-        if source.last?.isNewline == true {
-            result.append(
-                UTF16Line(
-                    fullRange: NSRange(location: text.length, length: 0),
-                    isBlank: true
-                )
-            )
-        }
-        return result
+        return nil
     }
 
     private static func containsCaret(
@@ -585,6 +609,10 @@ private struct RenderedMarkdownPlanner {
                     try row.map { cell in
                         RenderedMarkdownTableCell(
                             sourceRange: try mappedRange(cell.utf8Range),
+                            markdown: String(
+                                decoding: bytes[cell.utf8Range],
+                                as: UTF8.self
+                            ),
                             text: cell.text,
                             links: cell.links
                         )
