@@ -366,7 +366,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         session.scrollView.frame = NSRect(x: 0, y: 0, width: 700, height: 520)
         session.scrollView.layoutSubtreeIfNeeded()
         session.textView.string = source
-        _ = await session.deriveContent(for: source, configuration: .default)
+        let derivedContent = await session.deriveContent(
+            for: source,
+            configuration: .default
+        )
+        let content = try XCTUnwrap(derivedContent)
         session.textView.undoManager?.removeAllActions()
         session.setPresentation(
             .rendered,
@@ -426,6 +430,45 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
         XCTAssertEqual(session.textView.string, source)
         XCTAssertFalse(session.textView.undoManager?.canUndo == true)
+
+        let readOnlySession = MarkdownSourceEditorSession()
+        readOnlySession.scrollView.frame = session.scrollView.frame
+        readOnlySession.textView.string = source
+        readOnlySession.textView.isEditable = false
+        readOnlySession.installSharedRenderedPlan(content.nativeRenderPlan, source: source)
+        readOnlySession.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let readOnlyTable = try XCTUnwrap(
+            readOnlySession.textView.renderedTable(
+                atUTF16Location: table.sourceRange.utf16Range.location
+            )
+        )
+        XCTAssertEqual(readOnlyTable.renderedSize, contextMenuTable.renderedSize)
+        XCTAssertEqual(
+            readOnlyTable.backgroundColor(forRow: 0),
+            contextMenuTable.backgroundColor(forRow: 0)
+        )
+        XCTAssertEqual(
+            readOnlyTable.backgroundColor(forRow: 1),
+            contextMenuTable.backgroundColor(forRow: 1)
+        )
+        let quoteLocation = (source as NSString).range(of: "行内引用").location
+        let editableQuote = try XCTUnwrap(
+            session.textView.textStorage?.attribute(
+                .paragraphStyle,
+                at: quoteLocation,
+                effectiveRange: nil
+            ) as? NSParagraphStyle
+        )
+        let readOnlyQuote = try XCTUnwrap(
+            readOnlySession.textView.textStorage?.attribute(
+                .paragraphStyle,
+                at: quoteLocation,
+                effectiveRange: nil
+            ) as? NSParagraphStyle
+        )
+        XCTAssertEqual(readOnlyQuote.lineHeightMultiple, editableQuote.lineHeightMultiple)
+        XCTAssertEqual(readOnlyQuote.headIndent, editableQuote.headIndent)
+        XCTAssertFalse(readOnlySession.textView.isEditable)
     }
 
     @MainActor
@@ -1089,7 +1132,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
 
     @MainActor
     func testRenderedSessionReappliesPresentationAfterSourceAppearanceChanges() async throws {
-        let source = "# Title\n"
+        let source = "# Title\n\nBody\n"
         let session = MarkdownSourceEditorSession()
         session.textView.string = source
         _ = await session.deriveContent(for: source, configuration: .default)
@@ -1134,6 +1177,22 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertTrue(NSFontManager.shared.traits(of: reappliedFont).contains(.boldFontMask))
         XCTAssertEqual(reappliedFont.pointSize, 27, accuracy: 0.001)
         XCTAssertEqual(paragraphStyle.lineHeightMultiple, 1.8, accuracy: 0.001)
+
+        session.setPresentation(
+            .rendered,
+            source: source,
+            onLinkClick: nil,
+            theme: .code
+        )
+        let bodyLocation = try XCTUnwrap((source as NSString).range(of: "Body").nonEmptyLocation)
+        let codeThemeBodyFont = try XCTUnwrap(
+            session.textView.textStorage?.attribute(
+                .font,
+                at: bodyLocation,
+                effectiveRange: nil
+            ) as? NSFont
+        )
+        XCTAssertTrue(codeThemeBodyFont.fontDescriptor.symbolicTraits.contains(.monoSpace))
         XCTAssertFalse(session.scrollView.hasVerticalRuler)
         XCTAssertEqual(Data(session.textView.string.utf8), Data(source.utf8))
         XCTAssertFalse(session.textView.undoManager?.canUndo == true)

@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct EditorViewState: Equatable {
-    var previewHTML: String
     var previewSourceSnapshot: String
     var previewFailureMessage: String?
     var analysisState: DocumentAnalysisState
@@ -9,7 +8,6 @@ struct EditorViewState: Equatable {
     var engineMode: EditorEngineMode
 
     static let initial = Self(
-        previewHTML: MarkdownRenderer.htmlDocument(for: ""),
         previewSourceSnapshot: "",
         previewFailureMessage: nil,
         analysisState: .updating(previous: .empty),
@@ -40,7 +38,7 @@ final class EditorStore: ObservableObject {
     @Published private(set) var state: EditorViewState
 
     private let sourceEditorSession: MarkdownSourceEditorSession
-    private let contentDeriver = DocumentContentDeriver()
+    private let renderedPreviewSession: MarkdownSourceEditorSession
     private var derivedContentGeneration = 0
     private var derivedContentTask: Task<Void, Never>?
     private var requestedMode: EditorEngineMode
@@ -48,9 +46,11 @@ final class EditorStore: ObservableObject {
 
     init(
         sourceEditorSession: MarkdownSourceEditorSession,
+        renderedPreviewSession: MarkdownSourceEditorSession = MarkdownSourceEditorSession(),
         initialState: EditorViewState = .initial
     ) {
         self.sourceEditorSession = sourceEditorSession
+        self.renderedPreviewSession = renderedPreviewSession
         state = initialState
         requestedMode = initialState.engineMode
     }
@@ -186,30 +186,35 @@ final class EditorStore: ObservableObject {
                 configuration: request.configuration
             )
             guard !Task.isCancelled else { return }
-            guard let content = await contentDeriver.derive(
-                request: request,
-                coreContent: coreContent
-            ) else {
+            guard let coreContent,
+                  UTF8Text.isExactlyEqual(coreContent.sourceSnapshot, request.markdown)
+            else {
                 guard generation == derivedContentGeneration else { return }
                 LocalFailureLogController.shared.record(.previewing, code: .previewFailed)
                 state.analysisState = .failed(
                     previous: state.analysisState.displayedAnalysis,
                     message: MarkdownRenderError.coreFailure.localizedDescription
                 )
+                state.previewFailureMessage = MarkdownRenderError.coreFailure.localizedDescription
                 return
             }
 
             guard !Task.isCancelled, generation == derivedContentGeneration else { return }
+            renderedPreviewSession.installSharedRenderedPlan(
+                coreContent.nativeRenderPlan,
+                source: request.markdown
+            )
             state = EditorViewState(
-                previewHTML: content.html,
-                previewSourceSnapshot: content.sourceSnapshot,
-                previewFailureMessage: content.previewFailureMessage,
-                analysisState: .ready(content.analysis),
-                references: content.references,
+                previewSourceSnapshot: coreContent.sourceSnapshot,
+                previewFailureMessage: nil,
+                analysisState: .ready(coreContent.analysis),
+                references: coreContent.references,
                 engineMode: state.engineMode
             )
             _ = sourceEditorSession.applySyntaxHighlighting(
-                content.syntaxHighlighting,
+                request.syntaxHighlightingEnabled
+                    ? coreContent.syntaxHighlighting
+                    : [],
                 source: request.markdown,
                 enabled: request.syntaxHighlightingEnabled
             )
@@ -219,8 +224,8 @@ final class EditorStore: ObservableObject {
     private func suspendDerived(markdown: String) {
         derivedContentTask?.cancel()
         derivedContentGeneration &+= 1
+        renderedPreviewSession.installSharedRenderedPlan(nil, source: markdown)
         state = EditorViewState(
-            previewHTML: MarkdownRenderer.htmlDocument(for: ""),
             previewSourceSnapshot: "",
             previewFailureMessage: nil,
             analysisState: .ready(.empty),
@@ -231,46 +236,6 @@ final class EditorStore: ObservableObject {
             [],
             source: markdown,
             enabled: false
-        )
-    }
-}
-
-private struct DerivedDocumentContent: Sendable {
-    let sourceSnapshot: String
-    let html: String
-    let previewFailureMessage: String?
-    let analysis: DocumentAnalysis
-    let syntaxHighlighting: [MarkdownSyntaxSpan]
-    let references: [MarkdownReference]
-}
-
-private actor DocumentContentDeriver {
-    func derive(
-        request: EditorDerivedContentRequest,
-        coreContent: EditorEngineDerivedContent?
-    ) -> DerivedDocumentContent? {
-        guard !Task.isCancelled,
-              let coreContent,
-              UTF8Text.isExactlyEqual(coreContent.sourceSnapshot, request.markdown)
-        else { return nil }
-        let previewDocument = MarkdownRenderer.previewDocument(
-            coreFragment: coreContent.previewHTMLFragment,
-            references: coreContent.references,
-            documentDirectory: request.documentDirectory,
-            projectRoot: request.projectRoot,
-            expectedProjectRootIdentity: request.expectedProjectRootIdentity,
-            requiresProjectBoundary: request.requiresProjectBoundary,
-            configuration: request.configuration
-        )
-        return DerivedDocumentContent(
-            sourceSnapshot: request.markdown,
-            html: previewDocument.html,
-            previewFailureMessage: previewDocument.failureMessage,
-            analysis: coreContent.analysis,
-            syntaxHighlighting: request.syntaxHighlightingEnabled
-                ? coreContent.syntaxHighlighting
-                : [],
-            references: coreContent.references
         )
     }
 }

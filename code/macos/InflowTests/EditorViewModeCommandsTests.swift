@@ -41,6 +41,9 @@ final class EditorViewModeCommandsTests: XCTestCase {
         XCTAssertFalse(EditorViewMode.source.usesCanonicalPreviewRenderer)
         XCTAssertTrue(EditorViewMode.split.usesCanonicalPreviewRenderer)
         XCTAssertTrue(EditorViewMode.preview.usesCanonicalPreviewRenderer)
+        XCTAssertNil(EditorViewMode.source.renderedSurfaceEngine)
+        XCTAssertEqual(EditorViewMode.split.renderedSurfaceEngine, .textKit)
+        XCTAssertEqual(EditorViewMode.preview.renderedSurfaceEngine, .textKit)
         XCTAssertEqual(EditorViewMode.preview.sourceVisible, .preview)
         XCTAssertEqual(EditorViewMode.split.sourceVisible, .split)
     }

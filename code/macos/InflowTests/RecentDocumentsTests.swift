@@ -12,6 +12,12 @@ final class RecentDocumentsTests: XCTestCase {
             .terminateNow,
             "short-lived Inflow UI work must not turn the system Quit command into a no-op"
         )
+        XCTAssertTrue(InflowTerminationPolicy.terminatesAfterLastWindowClosed)
+        let delegate = InflowApplicationDelegate { _ in }
+        XCTAssertTrue(
+            delegate.applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared),
+            "closing the final document window must terminate the application"
+        )
     }
 
     func testDocumentWindowResolutionNeverDisablesTheStandardCloseButton() {

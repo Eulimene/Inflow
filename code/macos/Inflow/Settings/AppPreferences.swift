@@ -39,6 +39,15 @@ enum PreviewColorScheme: String, CaseIterable, Identifiable, Sendable {
 
     var id: Self { self }
 
+    @MainActor
+    var nativeAppearance: NSAppearance? {
+        switch self {
+        case .system: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        }
+    }
+
     var label: String {
         switch self {
         case .system: "跟随系统"
@@ -205,6 +214,21 @@ struct PreviewAppearanceConfiguration: Equatable, Sendable {
         self.reduceMotion = reduceMotion
         self.mathRenderingEnabled = mathRenderingEnabled
         self.mermaidRenderingEnabled = mermaidRenderingEnabled
+    }
+
+    func nativeRenderedAppearance(spellingEnabled: Bool) -> SourceEditorAppearance {
+        let lineHeight = switch theme {
+        case .standard, .highContrast: 1.65
+        case .longform: 1.82
+        case .code: 1.58
+        }
+        return SourceEditorAppearance(
+            fontSize: 17 * zoom,
+            lineHeight: lineHeight,
+            spellingEnabled: spellingEnabled,
+            wrapsLines: true,
+            showsLineNumbers: false
+        )
     }
 
 }

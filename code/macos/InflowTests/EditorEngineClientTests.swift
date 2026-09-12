@@ -5,8 +5,15 @@ final class EditorEngineClientTests: XCTestCase {
     @MainActor
     func testEditorStorePublishesOnlyTheLatestDerivedIntent() async throws {
         let session = MarkdownSourceEditorSession()
+        let previewSession = MarkdownSourceEditorSession()
         session.textView.string = "# Old"
-        let store = EditorStore(sourceEditorSession: session)
+        previewSession.textView.string = "# Old"
+        previewSession.textView.isEditable = false
+        previewSession.setPresentation(.rendered, source: "# Old", onLinkClick: nil)
+        let store = EditorStore(
+            sourceEditorSession: session,
+            renderedPreviewSession: previewSession
+        )
 
         store.send(.refreshDerived(EditorDerivedContentRequest(
             markdown: "# Old",
@@ -19,6 +26,7 @@ final class EditorEngineClientTests: XCTestCase {
             delayNanoseconds: 1_000_000_000
         )))
         session.textView.string = "# New\n\n[next](note.md)"
+        previewSession.textView.string = "# New\n\n[next](note.md)"
         store.send(.refreshDerived(EditorDerivedContentRequest(
             markdown: "# New\n\n[next](note.md)",
             documentDirectory: nil,
@@ -36,8 +44,17 @@ final class EditorEngineClientTests: XCTestCase {
         XCTAssertEqual(store.state.previewSourceSnapshot, "# New\n\n[next](note.md)")
         XCTAssertEqual(store.state.analysisState.displayedAnalysis.headings.map(\.title), ["New"])
         XCTAssertEqual(store.state.references.map(\.target), ["note.md"])
-        XCTAssertTrue(store.state.previewHTML.contains(">New</h1>"))
-        XCTAssertFalse(store.state.previewHTML.contains(">Old</h1>"))
+        let previewHeadingLocation = (previewSession.textView.string as NSString)
+            .range(of: "New").location
+        let previewHeadingFont = try XCTUnwrap(
+            previewSession.textView.textStorage?.attribute(
+                .font,
+                at: previewHeadingLocation,
+                effectiveRange: nil
+            ) as? NSFont
+        )
+        XCTAssertEqual(previewHeadingFont.pointSize, 27, accuracy: 0.001)
+        XCTAssertFalse(previewSession.textView.isEditable)
 
         store.send(.suspendDerived(markdown: "# New\n\n[next](note.md)"))
         XCTAssertEqual(store.state.previewSourceSnapshot, "")

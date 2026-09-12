@@ -48,9 +48,14 @@ struct MarkdownEditorView: View {
         self.tearsDownWhenRemovedFromWorkspace = tearsDownWhenRemovedFromWorkspace
         self.isWorkspaceSurfaceActive = isWorkspaceSurfaceActive
         let sourceEditorSession = sourceEditorSessionOverride ?? MarkdownSourceEditorSession()
+        let renderedPreviewSession = MarkdownSourceEditorSession()
         _sourceEditorSession = StateObject(wrappedValue: sourceEditorSession)
+        _renderedPreviewSession = StateObject(wrappedValue: renderedPreviewSession)
         _editorStore = StateObject(
-            wrappedValue: EditorStore(sourceEditorSession: sourceEditorSession)
+            wrappedValue: EditorStore(
+                sourceEditorSession: sourceEditorSession,
+                renderedPreviewSession: renderedPreviewSession
+            )
         )
         let initialDocument = document.wrappedValue
         _recoveryRecordID = State(
@@ -73,9 +78,6 @@ struct MarkdownEditorView: View {
     private var isFocusModeEnabled: Bool { false }
     private var isTypewriterModeEnabled: Bool { false }
     @StateObject private var editorStore: EditorStore
-    @State private var previewScrollGeneration = 0
-    @State private var previewScrollRequest: PreviewScrollRequest?
-    @State private var previewScrollPausedByUser = false
     @State private var previewLinkGeneration = 0
     @State private var previewLinkTask: Task<Void, Never>?
     @State private var previewLinkWorker = PreviewLinkWorker()
@@ -83,6 +85,7 @@ struct MarkdownEditorView: View {
     @State private var incomingHeadingFragment: String?
     @State private var incomingNavigationIsPending = false
     @StateObject private var sourceEditorSession: MarkdownSourceEditorSession
+    @StateObject private var renderedPreviewSession: MarkdownSourceEditorSession
     @StateObject private var nativeDocumentHost = MarkdownEditorNativeDocumentHost()
     @State private var selectedHeadingID: DocumentHeading.ID?
     @State private var sourceSelectionRequest: SourceSelectionRequest?
@@ -124,7 +127,6 @@ struct MarkdownEditorView: View {
     @State private var isSavingDocument = false
     @State private var documentSaveFailureMessage: String?
 
-    private var previewHTML: String { editorStore.state.previewHTML }
     private var previewSourceSnapshot: String { editorStore.state.previewSourceSnapshot }
     private var previewFailureMessage: String? { editorStore.state.previewFailureMessage }
     private var analysisState: DocumentAnalysisState { editorStore.state.analysisState }
@@ -574,7 +576,6 @@ struct MarkdownEditorView: View {
             )
         }
         .onChange(of: preferences.scrollSyncEnabled) { _, isEnabled in
-            previewScrollPausedByUser = false
             if isEnabled {
                 requestPreviewScroll()
             }
@@ -619,7 +620,6 @@ struct MarkdownEditorView: View {
         }
         .onChange(of: sourceEditorSession.verticalScrollFraction) { _, _ in
             guard preferences.scrollSyncEnabled else { return }
-            previewScrollPausedByUser = false
             requestPreviewScroll()
         }
         .onChange(of: Data(findSession.query.utf8)) { _, _ in
@@ -1108,7 +1108,7 @@ struct MarkdownEditorView: View {
     }
 
     private var sourceEditor: some View {
-        MarkdownSourceEditor(
+        return MarkdownSourceEditor(
             text: $document.text,
             selectionRequest: sourceSelectionRequest,
             session: sourceEditorSession,
@@ -1122,18 +1122,39 @@ struct MarkdownEditorView: View {
     }
 
     private var renderedEditor: some View {
-        MarkdownSourceEditor(
-            text: $document.text,
-            selectionRequest: sourceSelectionRequest,
+        renderedSurface(
             session: sourceEditorSession,
-            isEditable: canEditDocument,
-            appearance: preferences.sourceEditorAppearance,
+            isEditable: canEditDocument
+        )
+    }
+
+    private func renderedSurface(
+        session: MarkdownSourceEditorSession,
+        isEditable: Bool
+    ) -> some View {
+        let selection = isEditable ? sourceSelectionRequest : nil
+        let pasteHandler: ((ClipboardImagePayload) -> Void)? = isEditable
+            ? { payload in pasteImage(payload) }
+            : nil
+        let dropHandler: ((URL) -> Void)? = isEditable
+            ? { url in dropImage(url) }
+            : nil
+        return MarkdownSourceEditor(
+            text: $document.text,
+            selectionRequest: selection,
+            session: session,
+            isEditable: isEditable,
+            appearance: preferences.previewConfiguration.nativeRenderedAppearance(
+                spellingEnabled: preferences.sourceEditorAppearance.spellingEnabled
+            ),
             presentation: .rendered,
-            onPasteImage: pasteImage,
-            onDropImage: dropImage,
+            onPasteImage: pasteHandler,
+            onDropImage: dropHandler,
             onLinkClick: activatePreviewLink,
             renderedResourceContext: renderedEditingResourceContext,
-            linkActivation: preferences.linkActivation
+            linkActivation: preferences.linkActivation,
+            renderedTheme: preferences.previewConfiguration.theme,
+            renderedColorScheme: preferences.previewConfiguration.colorScheme
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1159,21 +1180,9 @@ struct MarkdownEditorView: View {
             }
 
             ZStack {
-                MarkdownPreviewView(
-                    html: previewHTML,
-                    baseURL: fileURL?.deletingLastPathComponent(),
-                    scrollRequest: preferences.scrollSyncEnabled && !previewScrollPausedByUser
-                        ? previewScrollRequest
-                        : nil,
-                    onHeadingActivated: activatePreviewHeading,
-                    onLinkActivated: activatePreviewLink,
-                    onPreviewIssueAction: activatePreviewIssue,
-                    onImageIssueAction: activatePreviewImageIssue,
-                    onManualScroll: {
-                        if preferences.scrollSyncEnabled {
-                            previewScrollPausedByUser = true
-                        }
-                    }
+                renderedSurface(
+                    session: renderedPreviewSession,
+                    isEditable: false
                 )
 
                 if previewFailureMessage == nil,
@@ -1871,94 +1880,6 @@ struct MarkdownEditorView: View {
         recoveryCoordinator?.close(recoveryRecordID)
     }
 
-    private func activatePreviewHeading(sourceUTF8Offset: Int) {
-        guard preferences.headingNavigationEnabled,
-              analysisState.allowsNavigation,
-              let heading = analysisState.displayedAnalysis.headings.first(where: {
-                  $0.sourceUTF8Range.lowerBound == sourceUTF8Offset
-              })
-        else {
-            return
-        }
-        selectHeading(heading)
-    }
-
-    private func activatePreviewIssue(
-        action: PreviewIssueAction,
-        sourceUTF8Offset: Int
-    ) {
-        guard let validatedOffset = PreviewIssueNavigation.validatedOffset(
-            sourceUTF8Offset,
-            renderedSource: previewSourceSnapshot,
-            currentSource: document.text
-        ) else {
-            retryPreview()
-            return
-        }
-
-        switch action {
-        case .locate:
-            revealSourceSurface()
-            sourceSelectionGeneration &+= 1
-            sourceSelectionRequest = SourceSelectionRequest(
-                generation: sourceSelectionGeneration,
-                utf8Range: validatedOffset..<validatedOffset
-            )
-        case .retry:
-            retryPreview()
-        }
-    }
-
-    private func activatePreviewImageIssue(
-        action: PreviewImageIssueAction,
-        sourceUTF8Offset: Int,
-        target: String
-    ) {
-        guard let reference = PreviewImageIssueNavigation.validatedReference(
-            sourceUTF8Offset: sourceUTF8Offset,
-            target: target,
-            renderedSource: previewSourceSnapshot,
-            currentSource: document.text,
-            references: derivedReferences
-        ) else {
-            retryPreview()
-            return
-        }
-
-        switch action {
-        case .locate:
-            revealSourceSurface()
-            sourceSelectionGeneration &+= 1
-            sourceSelectionRequest = SourceSelectionRequest(
-                generation: sourceSelectionGeneration,
-                utf8Range: reference.sourceUTF8Range,
-                style: .match
-            )
-        case .copyTarget:
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            pasteboard.setString(reference.target, forType: .string)
-        case .ignore:
-            break
-        case .replace:
-            guard canEditDocument,
-                  let selection = MarkdownSourceRange.navigationTarget(
-                      forUTF8Range: reference.sourceUTF8Range,
-                      in: document.text
-                  )
-            else {
-                markdownFormatErrorMessage = canEditDocument
-                    ? "图片引用已变化，请重试。"
-                    : "文档为只读，无法替换图片引用。"
-                return
-            }
-            revealSourceSurface()
-            sourceEditorSession.textView.setSelectedRange(selection.revealRange)
-            sourceEditorSession.textView.scrollRangeToVisible(selection.revealRange)
-            insertImage()
-        }
-    }
-
     private func activatePreviewLink(_ target: String) {
         previewLinkTask?.cancel()
         previewLinkGeneration &+= 1
@@ -2350,10 +2271,8 @@ struct MarkdownEditorView: View {
 
     private func requestPreviewScroll() {
         guard preferences.scrollSyncEnabled else { return }
-        previewScrollGeneration &+= 1
-        previewScrollRequest = PreviewScrollRequest(
-            generation: previewScrollGeneration,
-            fraction: sourceEditorSession.verticalScrollFraction
+        renderedPreviewSession.scroll(
+            toFraction: sourceEditorSession.verticalScrollFraction
         )
     }
 

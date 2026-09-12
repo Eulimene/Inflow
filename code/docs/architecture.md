@@ -11,7 +11,7 @@
 当前架构只服务产品负责人本人的真实项目验证。核心目标是：
 
 - Markdown 纯文本始终是唯一内容事实；
-- 源码、分栏和即时编辑共享一份正文、保存路径与撤销历史；分栏右侧使用只读 HTML，块级即时编辑使用同一 Rust 解析结果驱动持久 NSTextView 的展示属性；
+- 源码、分栏和即时编辑共享一份正文、保存路径与撤销历史；即时编辑与分栏右侧消费同一份 Rust `NativeRenderPlan`，并由同一个 TextKit 最终布局实现呈现，仅编辑能力不同；
 - 文件与项目操作保持在 macOS 原生授权和生命周期边界内；
 - 解析、预览、图片、链接、恢复、PDF 或日志失败时，正文仍可继续手动保存；
 - 复杂或不确定结构失败关闭到可见源码，不猜测性改写；
@@ -43,11 +43,7 @@ revision，正文修改后立即失效。macOS 已用该单次请求作为分析
 高亮、引用、Render IR、原生渲染计划、普通 HTML 与带块定位 metadata 的预览 HTML；Engine 只负责 revision 校验、
 缓存和命令顺序。该端口也是测试替身和未来解析策略演进的唯一接入点。
 旧 `MarkdownAnalyzer` 与 `MarkdownHighlighter` 公开外观仍用于现有单元测试，但内部也已创建短生命 Engine 并消费同一 `RefreshDerived`，Swift 不再直接调用 analyze/highlight 数组 ABI。无预览 metadata 的普通 HTML 也来自这次派生；自包含交付 HTML 通过 revision-bound `PrepareHtmlExport` 返回 `HtmlExportPrepared` HostEffect，不再绕过 Engine 调用旧 render/export FFI。
-预览链接目标、标题 source range 与块 ID 在 Rust 生成对应 HTML 事件时直接写入 data attribute；
-Swift 不再把 HTML anchor、标题与引用列表做正则配对，也不再保留第二套 Markdown planner。
-Rust 同时把 RenderIR 的稳定 `block_id` 与 UTF-8 source range 写到顶层预览节点。WKWebView 首次加载
-完整文档，此后同一页面用隔离 content world 按 block id 复用未变化节点、替换变化节点并恢复顶部
-可见块的滚动锚点；补丁失败才回退 `loadHTMLString`。
+预览链接目标、标题 source range 与块 ID 都直接来自同一份 Rust IR；Swift 不再把 HTML anchor、标题与引用列表做正则配对，也不再保留第二套 Markdown planner。交互式写作界面不消费 HTML：同一个 `NativeRenderPlan` 被安装到可编辑和只读的 `MarkdownSourceEditorSession`，表格、引用、Mermaid、链接、字体、颜色与行高因此只经过一套 TextKit 布局逻辑。HTML/WebKit 只保留为 PDF 等非交互输出适配器，不能重新成为屏幕预览实现。
 当前菜单格式与图片、链接、表格等插入操作也只发送 selection 与 operation，由 Engine 生成
 revision-bound patch 后回写 NSTextView，不再由 View 调用一次性 formatter 规划。普通输入先由
 NSTextView 乐观显示，再串行提交 Engine 并逐字节对账。默认编辑会话关闭 AppKit 正文 undo
@@ -69,7 +65,7 @@ Swift 边界中可在 Store/View 传递的稳定领域 DTO 集中在 `CoreBridge
 
 SwiftUI 与 AppKit 负责：
 
-- `MarkdownEditorView` 通过 `EditorStore` 调度文档派生、格式、查找、替换和持久化命令并消费 `EditorViewState`；Store 统一持有 generation、取消，并原子发布预览、分析和引用；
+- `MarkdownEditorView` 通过 `EditorStore` 调度文档派生、格式、查找、替换和持久化命令并消费 `EditorViewState`；Store 统一持有 generation、取消，并把同一 revision 的原生渲染计划安装到只读预览会话，同时原子发布分析和引用；
 - 原生文档窗口、新建、打开、手动保存、另存和关闭确认；
 - 没有外部目标时由应用委托显式创建并聚焦未命名文档，普通启动或 Finder 双击 App 不弹文件选择器；带外部目标时复用统一打开路由且不残留多余空白窗口；
 - 普通文件夹项目、目录树、沙箱授权与项目根边界；
@@ -90,14 +86,15 @@ SwiftUI 与 AppKit 负责：
         ↕ optimistic display / reconciliation
     MarkdownSourceEditorSession + 持久 NSTextView
         ├─ 源码展示属性
-        ├─ 分栏预览派生结果
-        └─ 即时编辑属性
+        └─ NativeRenderPlan + TextKit 最终布局
+             ├─ 即时编辑（isEditable = true）
+             └─ 分栏预览（isEditable = false）
 
 必须同时保持以下约束：
 
 1. NSTextView 的 string 是乐观显示缓存，MarkdownDocument.text 是 Engine 已确认的 Swift 投影；命令排空后两者必须逐字节一致。
-2. 三种视图的可编辑侧都复用同一个 MarkdownSourceEditorSession；分栏右侧消费 previewHTML，即时编辑则把同一 Rust 解析范围映射到原始字符串的 TextKit 展示属性，不建立第二份可编辑内容。
-3. 分栏右侧只消费当前源快照生成的派生结果，不可反向成为正文事实。
+2. 即时编辑与分栏右侧使用两个 NSTextView 实例，但必须安装同一个 revision-bound `NativeRenderPlan`，调用同一个 TextKit 呈现实现；唯一行为差异是 `isEditable`。
+3. 分栏右侧是只读投影，不自行解析 Markdown，也不可反向成为正文事实。
 4. 展示属性、语法高亮和预览刷新不能发布正文变化，也不能登记正文 undo。
 5. 格式、插入、查找替换与正文撤销只通过 Engine Command 修改同一字符串；查找替换由 Engine 先生成 revision-bound patch，再由 Swift 回写显示缓存。
 6. NSTextView 为 1.5 秒内同类型、相邻的普通键入或删除复用一个 `group_id`；Engine 只在补丁确实相邻且可逆时合并 Memento。换行、粘贴、IME 提交、格式命令和不同分组始终保留独立撤销边界。
@@ -115,9 +112,7 @@ Swift String 的规范等价不能替代精确字节身份。Rust 返回 UTF-8 b
 
 ### 4.2 实时预览分栏
 
-分栏左侧仍是同一个持久 NSTextView，右侧是当前源快照的只读派生结果。本地图片通过宿主验证后以内存数据提供，`http`/`https` 图片可由 WebKit 直接加载。非持久数据存储、页面脚本关闭、HTML CSP 和宿主导航策略仍禁止连接 API、媒体、嵌入、文件 URL 和页面自行导航。
-
-标题定位和链接激活只接受当前快照中能够重新验证的封闭消息。派生失败不改变正文、保存或恢复。
+分栏左侧仍是同一个持久源码 NSTextView，右侧是 `isEditable = false` 的 `MarkdownSourceEditor`。右侧不生成 HTML、不启动 WKWebView，也不进行第二次解析；它直接安装即时编辑所用的同一份 revision-bound `NativeRenderPlan`。本地与远程图片、链接、表格、引用和 Mermaid 都复用原生表面的资源与安全策略。派生失败不改变正文、保存或恢复。
 
 ### 4.3 即时编辑
 

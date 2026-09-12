@@ -28,6 +28,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var engineRenderedPlan: RenderedMarkdownPlan?
     private var renderedEditingRange: NSRange?
     private var renderedAppliedAppearance: SourceEditorAppearance?
+    private var renderedTheme = PreviewTheme.standard
+    private var renderedAppliedTheme: PreviewTheme?
     private var renderedLinkHandler: ((String) -> Void)?
     private var renderedLinkActivation = LinkActivationPreference.singleClick
     private var renderedResourceContext = RenderedMarkdownResourceContext.unavailable
@@ -226,6 +228,25 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             applyRenderedPresentation(source: source, force: true)
         }
         return content
+    }
+
+    /// Installs the already-derived native plan in another TextKit surface.
+    ///
+    /// Split view owns two NSTextViews because one view cannot be mounted in two
+    /// places at once. They deliberately share this exact immutable render plan
+    /// instead of asking a second renderer (or a second parser) to interpret the
+    /// Markdown again.
+    func installSharedRenderedPlan(
+        _ plan: RenderedMarkdownPlan?,
+        source: String
+    ) {
+        guard plan?.exactlyMatches(source) != false else { return }
+        engineRenderedPlan = plan
+        guard presentation == .rendered,
+              UTF8Text.isExactlyEqual(textView.string, source),
+              !textView.hasMarkedText()
+        else { return }
+        applyRenderedPresentation(source: source, force: true)
     }
 
     @discardableResult
@@ -433,14 +454,17 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         source: String,
         onLinkClick: ((String) -> Void)?,
         resourceContext: RenderedMarkdownResourceContext = .unavailable,
-        linkActivation: LinkActivationPreference = .singleClick
+        linkActivation: LinkActivationPreference = .singleClick,
+        theme: PreviewTheme = .standard
     ) {
         let changed = self.presentation != presentation
         let resourceContextChanged = renderedResourceContext != resourceContext
         let linkActivationChanged = renderedLinkActivation != linkActivation
+        let themeChanged = renderedTheme != theme
         self.presentation = presentation
         renderedLinkHandler = onLinkClick
         renderedLinkActivation = linkActivation
+        renderedTheme = theme
         textView.linkActivation = linkActivation
         renderedResourceContext = resourceContext
         switch presentation {
@@ -483,6 +507,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 force: changed
                     || resourceContextChanged
                     || linkActivationChanged
+                    || themeChanged
                     || !renderedPresentationIsCurrent(source: source)
             )
         }
@@ -524,6 +549,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private func renderedPresentationIsCurrent(source: String) -> Bool {
         renderedPlan?.exactlyMatches(source) == true
             && renderedAppliedAppearance == sourceAppearance
+            && renderedAppliedTheme == renderedTheme
             && currentRenderedEditingRange(source: source) == renderedEditingRange
     }
 
@@ -553,7 +579,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         let selection = textView.selectedRange()
         if !force,
            renderedPlan?.exactlyMatches(source) == true,
-           renderedAppliedAppearance == sourceAppearance
+           renderedAppliedAppearance == sourceAppearance,
+           renderedAppliedTheme == renderedTheme
         {
             return
         }
@@ -593,7 +620,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         scrollView.hasVerticalRuler = false
         scrollView.rulersVisible = false
 
-        let baseFont = NSFont.systemFont(ofSize: max(15, CGFloat(sourceAppearance.fontSize)))
+        let baseFont = renderedBaseFont()
         textView.renderedReplacementBaseFont = baseFont
         textView.renderedReplacementMarkers = plan.markers.filter { marker in
             marker.replacementText != nil
@@ -822,6 +849,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.renderedAnchorSourceRanges = anchoredRanges
         textView.renderedCollapsedSourceRanges = collapsedRanges
         renderedAppliedAppearance = sourceAppearance
+        renderedAppliedTheme = renderedTheme
         textView.setSelectedRange(selection)
         syncRenderedTypingAttributes()
         refreshWritingModePresentation()
@@ -1290,6 +1318,22 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
     }
 
+    private func renderedBaseFont() -> NSFont {
+        let size = max(15, CGFloat(sourceAppearance.fontSize))
+        switch renderedTheme {
+        case .code:
+            return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        case .longform:
+            let fallback = NSFont.systemFont(ofSize: size)
+            guard let descriptor = fallback.fontDescriptor.withDesign(.serif) else {
+                return fallback
+            }
+            return NSFont(descriptor: descriptor, size: size) ?? fallback
+        case .standard, .highContrast:
+            return NSFont.systemFont(ofSize: size)
+        }
+    }
+
     private func applyRenderedTableRow(
         range: NSRange,
         storage: NSTextStorage,
@@ -1742,6 +1786,19 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         if abs(verticalScrollFraction - fraction) > 0.000_1 {
             verticalScrollFraction = fraction
         }
+    }
+
+    func scroll(toFraction requestedFraction: Double) {
+        let fraction = min(max(requestedFraction, 0), 1)
+        let clipView = scrollView.contentView
+        let documentHeight = scrollView.documentView?.bounds.height ?? 0
+        let maximumOffset = max(0, documentHeight - clipView.bounds.height)
+        let targetOffset = CGFloat(fraction) * maximumOffset
+        guard abs(clipView.bounds.origin.y - targetOffset) > 0.5 else { return }
+        clipView.scroll(to: NSPoint(x: clipView.bounds.origin.x, y: targetOffset))
+        scrollView.reflectScrolledClipView(clipView)
+        verticalScrollOffset = Double(targetOffset)
+        updateScrollFraction(using: clipView, offset: targetOffset)
     }
 
     @objc
@@ -3210,6 +3267,19 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
 
     override var isFlipped: Bool { true }
 
+    static func backgroundColor(forRow index: Int) -> NSColor {
+        if index == 0 {
+            return NSColor.controlAccentColor.withAlphaComponent(0.10)
+        }
+        return index.isMultiple(of: 2)
+            ? NSColor.quaternaryLabelColor.withAlphaComponent(0.18)
+            : NSColor.textBackgroundColor
+    }
+
+    func backgroundColor(forRow index: Int) -> NSColor {
+        Self.backgroundColor(forRow: index)
+    }
+
     init(
         table: RenderedMarkdownTable,
         baseFont: NSFont,
@@ -3413,12 +3483,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         var y = CGFloat(0)
         for (index, height) in rowHeights.enumerated() {
             let rowRect = NSRect(x: 0, y: y, width: renderedSize.width, height: height)
-            let color = index == 0
-                ? NSColor.controlAccentColor.withAlphaComponent(0.10)
-                : (index.isMultiple(of: 2)
-                    ? NSColor.quaternaryLabelColor.withAlphaComponent(0.18)
-                    : NSColor.textBackgroundColor)
-            color.setFill()
+            Self.backgroundColor(forRow: index).setFill()
             rowRect.fill()
             y += height
         }
@@ -3669,6 +3734,8 @@ struct MarkdownSourceEditor: NSViewRepresentable {
     let onLinkClick: ((String) -> Void)?
     let renderedResourceContext: RenderedMarkdownResourceContext
     let linkActivation: LinkActivationPreference
+    let renderedTheme: PreviewTheme
+    let renderedColorScheme: PreviewColorScheme
 
     init(
         text: Binding<String>,
@@ -3681,7 +3748,9 @@ struct MarkdownSourceEditor: NSViewRepresentable {
         onDropImage: ((URL) -> Void)? = nil,
         onLinkClick: ((String) -> Void)? = nil,
         renderedResourceContext: RenderedMarkdownResourceContext = .unavailable,
-        linkActivation: LinkActivationPreference = .singleClick
+        linkActivation: LinkActivationPreference = .singleClick,
+        renderedTheme: PreviewTheme = .standard,
+        renderedColorScheme: PreviewColorScheme = .system
     ) {
         _text = text
         self.selectionRequest = selectionRequest
@@ -3694,6 +3763,8 @@ struct MarkdownSourceEditor: NSViewRepresentable {
         self.onLinkClick = onLinkClick
         self.renderedResourceContext = renderedResourceContext
         self.linkActivation = linkActivation
+        self.renderedTheme = renderedTheme
+        self.renderedColorScheme = renderedColorScheme
     }
 
     func makeCoordinator() -> Coordinator {
@@ -3741,6 +3812,9 @@ struct MarkdownSourceEditor: NSViewRepresentable {
             textView.delegate = self
             textView.isEditable = parent.isEditable
             textView.isSelectable = true
+            textView.appearance = parent.presentation == .rendered
+                ? parent.renderedColorScheme.nativeAppearance
+                : nil
             textView.pasteImageHandler = parent.onPasteImage
             textView.dropImageHandler = parent.onDropImage
             textView.didAttachToWindow = { [weak self, weak textView] in
@@ -3773,7 +3847,8 @@ struct MarkdownSourceEditor: NSViewRepresentable {
                 source: displayedText,
                 onLinkClick: parent.onLinkClick,
                 resourceContext: parent.renderedResourceContext,
-                linkActivation: parent.linkActivation
+                linkActivation: parent.linkActivation,
+                theme: parent.renderedTheme
             )
 
             parent.session.applyPendingRestorationIfPossible()

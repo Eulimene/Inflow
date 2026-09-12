@@ -660,6 +660,15 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertTrue(html.contains(":focus-visible"))
         XCTAssertTrue(html.contains("default-src 'none'"))
         XCTAssertFalse(html.contains("<script"))
+
+        let nativeAppearance = configuration.nativeRenderedAppearance(spellingEnabled: true)
+        XCTAssertEqual(nativeAppearance.fontSize, 25.5)
+        XCTAssertEqual(nativeAppearance.lineHeight, 1.82)
+        XCTAssertTrue(nativeAppearance.spellingEnabled)
+        XCTAssertTrue(nativeAppearance.wrapsLines)
+        XCTAssertFalse(nativeAppearance.showsLineNumbers)
+        XCTAssertNil(PreviewColorScheme.system.nativeAppearance)
+        XCTAssertEqual(PreviewColorScheme.dark.nativeAppearance?.name, .darkAqua)
     }
 
     func testExportFreezesAppearanceSnapshot() throws {

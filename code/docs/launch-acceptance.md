@@ -21,16 +21,16 @@
 
 | UAT | 当前可检查的实现入口 | 必须由本人实际确认 | 当前人工状态 |
 | --- | --- | --- | --- |
-| UAT-PERSONAL-01 入口、新建、首次保存、编辑与关闭 | InflowApp、InflowLaunchPolicy、RecentDocuments、FolderBrowser、MarkdownDocument、ManualSaveDocumentHostPolicy、DocumentSaveCommands、AppPreferences、InflowSettingsView；相关 FolderBrowserTests、RecentDocumentsTests、MarkdownCodecTests、AppPreferencesTests | 普通启动和 Finder 双击 App 均不弹文件选择器、直接进入可编辑未命名文档；菜单与 Command+N；首次保存取消/成功；应用内多文件与项目；Finder“打开方式”与默认应用；拖到应用图标；去重和空白窗口复用；工作区偏好跨文件和应用重启保持；另存退出项目；临时文档退出时选择 Don't Save 后一次完成、不重复审查；保存失败；全程无自动保存 | **未执行** |
+| UAT-PERSONAL-01 入口、新建、首次保存、编辑与关闭 | InflowApp、InflowLaunchPolicy、RecentDocuments、FolderBrowser、MarkdownDocument、ManualSaveDocumentHostPolicy、DocumentSaveCommands、AppPreferences、InflowSettingsView；相关 FolderBrowserTests、RecentDocumentsTests、MarkdownCodecTests、AppPreferencesTests | 普通启动和 Finder 双击 App 均不弹文件选择器、直接进入可编辑未命名文档；菜单与 Command+N；首次保存取消/成功；应用内多文件与项目；Finder“打开方式”与默认应用；拖到应用图标；去重和空白窗口复用；工作区偏好跨文件和应用重启保持；另存退出项目；关闭最后一个窗口在未保存复核完成后直接退出应用；临时文档退出时选择 Don't Save 后一次完成、不重复审查；保存失败；全程无自动保存 | **未执行** |
 | UAT-PERSONAL-02 简单外部变化提示 | DocumentFileSafety、DocumentFileSafetyView、DocumentSaveCommands；相关 DocumentFileSafetyTests | 外部编辑器修改；重新加载或暂不处理；双方变化后手动保存的明确覆盖确认；取消时两边各自保持；无三版本比较或自动合并 | **未执行** |
 | UAT-PERSONAL-03 轻量单快照恢复 | DocumentRecovery、LightweightRecoveryPromptView；相关 DocumentRecoveryTests | 真实强制退出；每份文档只见一个最新快照；恢复为未命名文档或放弃；恢复前不覆盖原文件；手动保存后清理 | **未执行** |
 | UAT-PERSONAL-04 源码、分栏、查找格式与两类 Mermaid | MarkdownEditorView、DocumentOutlineView、OutlineCommands、MarkdownSourceEditor、MarkdownRenderer、MarkdownFormatter、查找组件；相关 EditorViewModeCommandsTests、MarkdownRendererTests、MarkdownFormatterTests、MarkdownInsertionTests | 源码与分栏共用正文；大纲默认折叠，顶部按钮可平滑展开或折叠且隐藏宽度为零；点击标题滚动正文、移动光标并聚焦编辑器，不显示查找高亮；查找替换与一次撤销；删除线、图片、CommonMark/GFM、带文字虚线且跨节点连线不穿模的 flowchart、stateDiagram-v2；即时编辑的普通文字与表格保持渲染态直接编辑，围栏代码与 Mermaid 在光标进入时局部显露源码并在移出或失焦后恢复渲染；成对三横线等不支持的构造完整保留源码；原始 HTML 安全；单图局部降级 | **未执行** |
-| UAT-PERSONAL-05 图片与本地链接 | ImageAssetImporter、LocalImageResolver、PreviewLinkNavigation、MarkdownPreviewView；相关 MarkdownInsertionTests、MarkdownRendererTests | 文件选择/拖放/剪贴板静态 PNG/JPEG；assets 与递增重名；撤销只移除引用且保留资源；本地/在线图片在分栏和即时编辑中呈现，需要修改图片语法时可切换到源码模式；已选项目内 Markdown 在重验边界与快照后打开原件并去重；项目外文件按设置的单击或右键菜单方式交给 macOS；http/https 按同一偏好交给浏览器；脚本和自定义 scheme 被阻止 | **未执行** |
+| UAT-PERSONAL-05 图片与本地链接 | ImageAssetImporter、LocalImageResolver、PreviewLinkNavigation、MarkdownSourceEditor；相关 MarkdownInsertionTests、RenderedMarkdownEditorTests | 文件选择/拖放/剪贴板静态 PNG/JPEG；assets 与递增重名；撤销只移除引用且保留资源；本地/在线图片在分栏和即时编辑中由同一 TextKit 资源覆盖层呈现，需要修改图片语法时可切换到源码模式；已选项目内 Markdown 在重验边界与快照后打开原件并去重；项目外文件按设置的单击或右键菜单方式交给 macOS；http/https 按同一偏好交给浏览器；脚本和自定义 scheme 被阻止 | **未执行** |
 | UAT-PERSONAL-06 基础浅色 PDF | HTMLExportCommands 当前只安装 PDF；PDFExporter 与 personalPDF 配置；相关 PDF 定向测试及“无 HTML 菜单”测试 | 空白禁用；导出时当前内容；基础浅色页面；PNG/JPEG、两类 Mermaid 与缺图占位；http/https 可点击且危险 scheme 无动作；同名覆盖确认；成功后打开/Finder；失败不误报 | **未执行** |
 | UAT-PERSONAL-07 本地最小日志与无自动遥测 | LocalFailureLogController、帮助菜单导出日志；LocalFailureLogTests | 当前与上一会话；仅时间、应用版本、操作类别和错误代码；无敏感内容；本人选择位置；Inflow 不上传、不打开上传渠道、不保留隐藏副本 | **未执行** |
 | UAT-PERSONAL-08 一个真实项目端到端与基础烟测 | 上述主流程及启动、左右导航区和持久工作区偏好的组合入口 | 从双击 App 不经文件选择器进入可编辑正文开始，用同一个真实项目完成产品文档列出的整段旅程；核对默认左侧目录树、右侧大纲与独立隐藏/显示，切换文件和重启后偏好保持；基础键盘和焦点；非颜色状态；可控异常不崩溃；较大文档继续工作或安全降级；记录实际环境与观察，不套用固定阈值或 30 次协议 | **未执行** |
 | UAT-PERSONAL-09 项目目录树、新建与相对资源 | MarkdownEditorView、PersistentEdgeSplitView、FolderBrowser、LightweightProjectCoordinator、ProjectDocumentSurface、ProjectDocumentTabSelection、AppPreferences、InflowSettingsView、项目资源边界与链接路径；相关 EditorViewModeCommandsTests、FolderBrowserTests、AppPreferencesTests、MarkdownRendererTests | 普通文件夹项目；首次默认显示左侧目录树、折叠右侧大纲；两侧在各自顶部就地展开/折叠，隐藏时宿主实例保持不变、宽度平滑归零，标签栏或编辑区顶部只占一个紧凑恢复按钮；目录树用单一动态按钮展开全部/折叠全部，且不改变内容状态；视图、显隐和三处分栏尺寸跨文件与重启保持；单一项目外壳、常驻标签栏和目录树实例保持不变，后台文档在布局前隐藏原生窗口，新表面挂载完成后才切换，打开前后项目窗口 frame 不变，源码可见时焦点返回编辑器；每个顶部标签有叉号，右键可关闭当前/其他/左侧/右侧文件，批量关闭不静默丢弃修改；递归树、隐藏项与手动刷新；按钮/右键安全新建；落盘前后失败差异；已选项目内 Markdown 无重复确认地导航、相对图片呈现；规范化和符号链接越界阻止 | **未执行** |
-| UAT-PERSONAL-10 即时编辑基础范围 | RenderedMarkdownEditor、MarkdownSourceEditorSession、MarkdownEditorView；RenderedMarkdownEditorTests、MarkdownRendererTests、EditorViewModeCommandsTests | 即时编辑始终使用同一个 NSTextView；普通文字、行内代码和引用在渲染态直接编辑，隐藏标记不缩小字号，段首/段尾光标字号与基线均与可见文字一致；围栏代码与 Mermaid 在光标进入时局部显露源码，Mermaid 直接消费 Rust SVG；表格宽度随 viewport 自适应，单元格可直接编辑，右键支持增删行列和对齐；文本与表格链接悬停有可见反馈，默认单击打开且可设为只用右键菜单；中文输入法、连续输入、粘贴、撤销/重做、三视图正文/路径及纯 Markdown 保存事实保持不变 | **未执行** |
+| UAT-PERSONAL-10 即时编辑基础范围 | RenderedMarkdownEditor、MarkdownSourceEditorSession、MarkdownEditorView；RenderedMarkdownEditorTests、EditorViewModeCommandsTests | 即时编辑与分栏右侧安装同一个 revision-bound NativeRenderPlan 并调用同一 TextKit 呈现实现，两者只以 isEditable 区分；普通文字、行内代码和引用在渲染态直接编辑，隐藏标记不缩小字号，段首/段尾光标字号与基线均与可见文字一致；围栏代码与 Mermaid 在光标进入时局部显露源码，Mermaid 直接消费 Rust SVG；表格宽度随 viewport 自适应，单元格可直接编辑，右键支持增删行列和对齐；文本与表格链接悬停有可见反馈，默认单击打开且可设为只用右键菜单；中文输入法、连续输入、粘贴、撤销/重做、三视图正文/路径及纯 Markdown 保存事实保持不变 | **未执行** |
 
 表中的测试名称只是定位入口。本文没有把它们写成一次新的全量测试回执，也没有因此改变人工状态；启动、左右导航区和设置默认的新增检查同样均未执行。
 
@@ -42,7 +42,7 @@
 - 删除线、围栏代码和图片内容通过源码编辑与预览验证，不写成格式菜单能力。
 - Mermaid 当前只验 flowchart 与 stateDiagram-v2；公式、脚注、sequenceDiagram、classDiagram 和其他 Mermaid 不计入通过。
 - 原始 HTML 只能可读或安全转义，不能执行样式、脚本、事件、表单、嵌入、导航或网络动作。
-- 断开网络后实时预览和即时编辑仍能完成首帧与内容刷新；即时编辑在普通文字和表格中保持所见即所得，仅对光标所在的围栏代码或 Mermaid 原位显露源码。已声明的 WebKit 客户端沙箱能力不得导致任何页面网络请求，`http`/`https` 只在用户按所选链接激活偏好操作后交给系统浏览器。
+- 断开网络后实时预览和即时编辑仍能完成首帧与内容刷新；两者的离线内容必须由同一个 TextKit 渲染计划得到一致结果。即时编辑在普通文字和表格中保持所见即所得，仅对光标所在的围栏代码或 Mermaid 原位显露源码；`http`/`https` 只在用户按所选链接激活偏好操作后交给系统浏览器。
 - 图片新增只接受静态 PNG/JPEG，写入 assets，重名递增；撤销不删除已写入资源。
 - 项目内 Markdown 打开可编辑原件；项目外本地文件在用户单击后交给 macOS 默认应用。即时编辑链接使用普通单击，本地与在线图片应直接呈现且不改写 Markdown。
 

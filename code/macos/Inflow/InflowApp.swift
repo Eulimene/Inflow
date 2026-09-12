@@ -2042,6 +2042,11 @@ private struct ProjectWorkspaceWindowTitle: NSViewRepresentable {
 }
 
 enum InflowTerminationPolicy {
+    /// Inflow is a document editor with no useful windowless runtime. Closing
+    /// the final document window therefore has the same lifecycle result as
+    /// choosing Quit (after AppKit has completed any save review).
+    static let terminatesAfterLastWindowClosed = true
+
     /// AppKit invokes the application delegate only after its document
     /// controller has completed the Save / Don't Save / Cancel review. Inflow
     /// has no second termination transaction of its own, so it must never
@@ -2145,6 +2150,10 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldOpenUntitledFile(_: NSApplication) -> Bool {
         InflowLaunchPolicy.letsAppKitOpenUntitledDocument
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
+        InflowTerminationPolicy.terminatesAfterLastWindowClosed
     }
 
     func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
