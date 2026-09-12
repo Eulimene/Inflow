@@ -55,6 +55,7 @@
 - Rust/Swift 边界通过 ABI major、minor 与 capability bits 协商；宿主要求 Engine、统一派生、Engine 历史、Engine 模式和 Render IR 能力，不再精确比较单一整数。C 声明由固定的 `cbindgen 0.29.4` 生成并提交，`cargo xtask verify-bindings` 与仓库门禁检查 Rust 导出与 header 一致，并由生成 header 的 64-bit layout assertion 在 C/Swift 编译期校验结构布局。Xcode 构建脚本按目标架构生成 arm64、x86_64 或 universal 静态库，并允许依赖分析在输入未变化时跳过 Rust 重建；`cargo xtask xcframework` 可复现地输出包含生成 header 的 arm64+x86_64 Release XCFramework。
 - Swift 桥接将 Store/View 可见的 Engine 命令、快照、patch 和派生结果收敛到 `CoreBridge/CoreDTO.swift`；`EditorEngineClient.swift` 专注于串行命令、FFI 传输和 revision/范围校验。
 - Engine 的 `RefreshDerived(revision)` 由一次 `DocumentIr` 解析同时产生分析、语法范围、引用、稳定块 ID 的 `RenderIr`、`NativeRenderPlan` 和安全 HTML，并缓存到对应 revision。Swift 文档派生热路径只消费这一响应；响应不存在、revision 不匹配或失败时保留上一份可用派生状态，不在 Swift 再解析正文。手写 `RenderedMarkdownPlanner` 已删除。文档查找也通过同一 Engine handle 执行 `Search(revision, query)`，旧全文搜索 FFI 不再位于产品热路径。
+- 兼容用 `MarkdownAnalyzer`/`MarkdownHighlighter` 也已改为消费短生命 Engine 的统一派生响应，macOS Swift 代码中不再存在 analyze/highlight 的独立 C ABI 调用。交付/语料所需的无定位 metadata HTML 仍保留独立低频渲染边界。
 - Engine 预览 HTML 的标题 source range、块 ID 和链接 target metadata 都在 Rust 遍历同一份 IR 时直接附着；Swift 只执行本地图片槽的平台权限解析与整页外壳组装，不再用正则改写标题或链接 HTML。
 - 顶层预览节点携带 Rust RenderIR 的稳定 `data-inflow-block-id` 与 source range；WKWebView 首次装载后通过隔离 content world 做块级 DOM patch，字节相同的节点保留实例，变化节点替换并按新顺序挂载，同时以原顶部可见块恢复滚动位置。只有初次装载、页面未就绪或补丁失败才执行完整 `loadHTMLString`。
 - 可编辑 WKWebView 实验及 DOM→Markdown 转换路径已经删除；“即时编辑”固定使用持久 NSTextView，WKWebView 只承担只读预览。

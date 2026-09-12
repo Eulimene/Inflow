@@ -109,86 +109,9 @@ enum MarkdownHighlightError: Error, LocalizedError {
 
 enum MarkdownHighlighter {
     static func spans(in source: String) throws -> [MarkdownSyntaxSpan] {
-        guard InflowCoreBridge.isCompatible else {
+        guard let derived = EditorEngineDerivedContent.deriveSynchronously(source: source) else {
             throw MarkdownHighlightError.coreFailure
         }
-
-        let sourceUTF8 = Data(source.utf8)
-        let result: InflowHighlightResult = sourceUTF8.withUnsafeBytes { buffer in
-            inflow_markdown_highlight(
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count)
-            )
-        }
-        defer {
-            inflow_owned_highlight_spans_free(result.spans.data, result.spans.length)
-        }
-
-        guard result.status == INFLOW_STATUS_OK else {
-            throw MarkdownHighlightError.coreFailure
-        }
-        guard let count = Int(exactly: result.spans.length) else {
-            throw MarkdownHighlightError.invalidCoreResult
-        }
-        let maximumCount = sourceUTF8.count.multipliedReportingOverflow(by: 4)
-        guard !maximumCount.overflow,
-              count <= max(1, maximumCount.partialValue),
-              count == 0 || result.spans.data != nil
-        else {
-            throw MarkdownHighlightError.invalidCoreResult
-        }
-
-        let rawSpans = UnsafeBufferPointer(start: result.spans.data, count: count)
-        var kinds: [MarkdownSyntaxKind] = []
-        var utf8Ranges: [Range<Int>] = []
-        kinds.reserveCapacity(count)
-        utf8Ranges.reserveCapacity(count)
-        for rawSpan in rawSpans {
-            guard let kind = MarkdownSyntaxKind(rawValue: rawSpan.kind),
-                  let start = Int(exactly: rawSpan.source_start),
-                  let end = Int(exactly: rawSpan.source_end),
-                  start >= 0,
-                  start < end,
-                  end <= sourceUTF8.count
-            else {
-                throw MarkdownHighlightError.invalidCoreResult
-            }
-            kinds.append(kind)
-            utf8Ranges.append(start..<end)
-        }
-        guard let utf16Ranges = MarkdownSyntaxRange.utf16Ranges(
-            for: utf8Ranges,
-            in: source
-        ) else {
-            throw MarkdownHighlightError.invalidCoreResult
-        }
-        let spans = zip(zip(kinds, utf8Ranges), utf16Ranges).map { element in
-            let ((kind, utf8Range), utf16Range) = element
-            return MarkdownSyntaxSpan(
-                kind: kind,
-                utf8Range: utf8Range,
-                utf16Range: utf16Range
-            )
-        }
-        return spans.sorted {
-            let leftPriority = stylingPriority($0.kind)
-            let rightPriority = stylingPriority($1.kind)
-            if leftPriority != rightPriority { return leftPriority < rightPriority }
-            if $0.utf8Range.lowerBound != $1.utf8Range.lowerBound {
-                return $0.utf8Range.lowerBound < $1.utf8Range.lowerBound
-            }
-            return $0.utf8Range.upperBound > $1.utf8Range.upperBound
-        }
-    }
-
-    private static func stylingPriority(_ kind: MarkdownSyntaxKind) -> Int {
-        switch kind {
-        case .blockQuote, .list, .table, .rule: 0
-        case .heading: 1
-        case .emphasis, .strong, .strikethrough: 2
-        case .link, .image, .footnote, .math: 3
-        case .raw: 4
-        case .code: 5
-        }
+        return derived.syntaxHighlighting
     }
 }
