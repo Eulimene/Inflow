@@ -48,7 +48,7 @@
 ### 2.2 单一正文与三种视图
 
 - Swift `EditorStore` 以 `EditorIntent` 接收派生刷新、暂停和取消意图，统一拥有任务 generation 及 `EditorViewState`；同时作为 View 发起格式、查找、替换、快照和保存 receipt 的用例门面。`MarkdownEditorView` 不再直接调用 `MarkdownSourceEditorSession` 的 Engine 命令方法，也不直接持有或发布预览 HTML、预览快照、分析状态和引用集合。预览链接、图片问题导航与文档迁移显式使用与该快照同 revision 的 Engine 引用，不在产品交互路径再扫描全文。
-- Rust `EditorEngine` 是默认正文、revision 与历史事实源；`MarkdownDocument.text` 是 FileDocument/SwiftUI 使用的已确认投影，`MarkdownSourceEditorSession` 中的持久 NSTextView 是可乐观更新的显示缓存。
+- Rust `EditorEngine` 是默认正文、revision 与历史事实源；撤销/重做栈、Memento 与连续输入合并已收敛到独立 `History` 模块。`MarkdownDocument.text` 是 FileDocument/SwiftUI 使用的已确认投影，`MarkdownSourceEditorSession` 中的持久 NSTextView 是可乐观更新的显示缓存。
 - `EditorEngine` 同时持有 revision-bound `editable/read_only` 模式。macOS 根据文件安全和展示状态由 Store 串行发送 `SetMode`；只读时即使上层误发命令，Rust 也会拒绝正文修改与历史变更。
 - NSTextView 完成一次非组合输入后，以 UTF-8 grapheme 边界的 `ReplaceText(base_revision, range, inserted)` 提交 Engine，并在 Engine 返回逐字节匹配的快照后才发布 Swift 文档投影。生产会话固定启用 Engine；当前菜单格式与图片、链接、表格等插入命令均发送 selection 与 operation，由 Engine 生成并执行 revision-bound patch 后回写 NSTextView。格式可用性同样通过 revision-bound `InspectFormat` 异步检查，会话只发布与当前正文和选区一致的缓存结果，SwiftUI 菜单构建不再同步调用 Rust。默认会话关闭 AppKit 正文 undo registration，Command-Z/Shift-Command-Z 发送 Engine `Undo/Redo`，Rust Memento 历史是撤销事实源；连续普通输入携带短时 `group_id`，Rust 仅合并相邻纯插入、连续向前删除或连续退格，换行、粘贴、IME 和格式操作断组。原位保存、另存和覆盖确认使用 `PrepareSave(revision, save_id)` 冻结权威正文与 hash；文件安全适配器确认磁盘字节后才回传 `SaveCompleted`，失败则回传 `SaveAborted`。保存期间继续输入不会被误标为已保存；Engine 以已保存 hash 计算 dirty。PDF 导出只冻结 snapshot，不改变保存状态。
 - IME 第一次 `setMarkedText` 会记录组合前正文与选区；marked text 存续期间不发布 Swift 文档投影、不刷新 Engine 正文，`unmarkText` 或最终 `insertText` 结束组合后只提交一次最终 replacement。保存触发提交组合后也等待这条命令完成。

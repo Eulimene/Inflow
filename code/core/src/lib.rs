@@ -10,6 +10,7 @@ mod export;
 mod ffi;
 mod format;
 mod highlight;
+mod history;
 mod markdown_adapter;
 mod markdown_ir;
 mod math;

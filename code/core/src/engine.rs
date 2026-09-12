@@ -9,6 +9,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::analysis::DocumentAnalysis;
 use crate::format::{self, FormatError, InlineFormat, ListFormat, MarkdownEdit};
 use crate::highlight::HighlightSpan;
+use crate::history::{History, HistoryEntry};
 use crate::markdown_adapter::CommonMarkAdapter;
 use crate::native_render::NativeRenderPlan;
 use crate::ports::MarkdownPort;
@@ -263,15 +264,6 @@ pub enum EngineError {
     RevisionOverflow,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct HistoryEntry {
-    forward: TextPatch,
-    inverse: TextPatch,
-    selection_before: Selection,
-    selection_after: Selection,
-    group_id: Option<String>,
-}
-
 pub struct EditorEngine {
     document_id: String,
     revision: Revision,
@@ -279,8 +271,7 @@ pub struct EditorEngine {
     selection: Selection,
     mode: EditorMode,
     derived: Option<DerivedState>,
-    undo: Vec<HistoryEntry>,
-    redo: Vec<HistoryEntry>,
+    history: History,
     saved_content_hash: String,
     prepared_saves: HashMap<String, String>,
     markdown: Box<dyn MarkdownPort>,
@@ -311,8 +302,7 @@ impl EditorEngine {
             selection: request.selection,
             mode: request.mode,
             derived: None,
-            undo: Vec::new(),
-            redo: Vec::new(),
+            history: History::default(),
             saved_content_hash,
             prepared_saves: HashMap::new(),
             markdown,
@@ -387,8 +377,8 @@ impl EditorEngine {
             mode: self.mode,
             content_hash: content_hash(&self.text),
             derived: self.derived.clone(),
-            can_undo: !self.undo.is_empty(),
-            can_redo: !self.redo.is_empty(),
+            can_undo: self.history.can_undo(),
+            can_redo: self.history.can_redo(),
             dirty: self.is_dirty(),
         }
     }
@@ -425,14 +415,7 @@ impl EditorEngine {
             selection_after,
             group_id,
         };
-        if !self
-            .undo
-            .last_mut()
-            .is_some_and(|previous| merge_history_entries(previous, &entry))
-        {
-            self.undo.push(entry);
-        }
-        self.redo.clear();
+        self.history.record(entry);
         Ok(self.with_history_state(patch))
     }
 
@@ -469,8 +452,8 @@ impl EditorEngine {
             format_capabilities: None,
             save_preparation: None,
             content_hash: content_hash(&self.text),
-            can_undo: !self.undo.is_empty(),
-            can_redo: !self.redo.is_empty(),
+            can_undo: self.history.can_undo(),
+            can_redo: self.history.can_redo(),
             dirty: self.is_dirty(),
         })
     }
@@ -502,8 +485,8 @@ impl EditorEngine {
             format_capabilities: None,
             save_preparation: None,
             content_hash: content_hash(&self.text),
-            can_undo: !self.undo.is_empty(),
-            can_redo: !self.redo.is_empty(),
+            can_undo: self.history.can_undo(),
+            can_redo: self.history.can_redo(),
             dirty: self.is_dirty(),
         })
     }
@@ -532,8 +515,8 @@ impl EditorEngine {
             }),
             save_preparation: None,
             content_hash: content_hash(&self.text),
-            can_undo: !self.undo.is_empty(),
-            can_redo: !self.redo.is_empty(),
+            can_undo: self.history.can_undo(),
+            can_redo: self.history.can_redo(),
             dirty: self.is_dirty(),
         })
     }
@@ -615,8 +598,7 @@ impl EditorEngine {
         self.selection = selection.clone();
         self.revision = revision;
         self.derived = None;
-        self.undo.clear();
-        self.redo.clear();
+        self.history.clear();
         self.saved_content_hash = saved_content_hash;
         self.prepared_saves.clear();
         Ok(StatePatch {
@@ -712,13 +694,13 @@ impl EditorEngine {
             return Err(EngineError::RevisionConflict);
         }
         self.ensure_editable()?;
-        let entry = self.undo.pop().ok_or(EngineError::NothingToUndo)?;
+        let entry = self.history.take_undo().ok_or(EngineError::NothingToUndo)?;
         let patch = self.apply_patch(
             base_revision,
             entry.inverse.clone(),
             entry.selection_before.clone(),
         )?;
-        self.redo.push(entry);
+        self.history.complete_undo(entry);
         Ok(self.with_history_state(patch))
     }
 
@@ -727,13 +709,13 @@ impl EditorEngine {
             return Err(EngineError::RevisionConflict);
         }
         self.ensure_editable()?;
-        let entry = self.redo.pop().ok_or(EngineError::NothingToRedo)?;
+        let entry = self.history.take_redo().ok_or(EngineError::NothingToRedo)?;
         let patch = self.apply_patch(
             base_revision,
             entry.forward.clone(),
             entry.selection_after.clone(),
         )?;
-        self.undo.push(entry);
+        self.history.complete_redo(entry);
         Ok(self.with_history_state(patch))
     }
 
@@ -766,8 +748,8 @@ impl EditorEngine {
             format_capabilities: None,
             save_preparation: None,
             content_hash: content_hash(&self.text),
-            can_undo: !self.undo.is_empty(),
-            can_redo: !self.redo.is_empty(),
+            can_undo: self.history.can_undo(),
+            can_redo: self.history.can_redo(),
             dirty: self.is_dirty(),
         })
     }
@@ -784,8 +766,8 @@ impl EditorEngine {
             format_capabilities: None,
             save_preparation: None,
             content_hash: content_hash(&self.text),
-            can_undo: !self.undo.is_empty(),
-            can_redo: !self.redo.is_empty(),
+            can_undo: self.history.can_undo(),
+            can_redo: self.history.can_redo(),
             dirty: self.is_dirty(),
         }
     }
@@ -803,8 +785,8 @@ impl EditorEngine {
     }
 
     fn with_history_state(&self, mut patch: StatePatch) -> StatePatch {
-        patch.can_undo = !self.undo.is_empty();
-        patch.can_redo = !self.redo.is_empty();
+        patch.can_undo = self.history.can_undo();
+        patch.can_redo = self.history.can_redo();
         patch
     }
 }
@@ -856,61 +838,6 @@ fn content_hash(text: &str) -> String {
         (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
     });
     format!("{hash:016x}")
-}
-
-fn merge_history_entries(previous: &mut HistoryEntry, next: &HistoryEntry) -> bool {
-    let Some(group_id) = previous.group_id.as_deref() else {
-        return false;
-    };
-    if next.group_id.as_deref() != Some(group_id) {
-        return false;
-    }
-
-    let previous_is_insertion = previous.forward.range.start == previous.forward.range.end
-        && !previous.forward.inserted.is_empty()
-        && previous.inverse.inserted.is_empty();
-    let next_is_insertion = next.forward.range.start == next.forward.range.end
-        && !next.forward.inserted.is_empty()
-        && next.inverse.inserted.is_empty();
-    if previous_is_insertion
-        && next_is_insertion
-        && next.forward.range.start
-            == previous.forward.range.start + previous.forward.inserted.len()
-    {
-        previous.forward.inserted.push_str(&next.forward.inserted);
-        previous.inverse.range.end += next.forward.inserted.len();
-        previous.selection_after = next.selection_after.clone();
-        return true;
-    }
-
-    let previous_is_deletion = previous.forward.inserted.is_empty()
-        && previous.inverse.range.start == previous.inverse.range.end
-        && !previous.inverse.inserted.is_empty();
-    let next_is_deletion = next.forward.inserted.is_empty()
-        && next.inverse.range.start == next.inverse.range.end
-        && !next.inverse.inserted.is_empty();
-    if !previous_is_deletion || !next_is_deletion {
-        return false;
-    }
-
-    if next.forward.range.end == previous.forward.range.start {
-        previous.forward.range.start = next.forward.range.start;
-        previous.inverse.range.start = next.inverse.range.start;
-        previous.inverse.range.end = next.inverse.range.end;
-        previous.inverse.inserted =
-            format!("{}{}", next.inverse.inserted, previous.inverse.inserted);
-        previous.selection_after = next.selection_after.clone();
-        return true;
-    }
-
-    if next.forward.range.start == previous.forward.range.start {
-        previous.forward.range.end += next.inverse.inserted.len();
-        previous.inverse.inserted.push_str(&next.inverse.inserted);
-        previous.selection_after = next.selection_after.clone();
-        return true;
-    }
-
-    false
 }
 
 #[cfg(test)]
