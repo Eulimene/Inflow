@@ -6,13 +6,13 @@ use std::ops::Range;
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::analysis::{DocumentAnalysis, analyze_document};
+use crate::analysis::DocumentAnalysis;
 use crate::format::{self, FormatError, InlineFormat, ListFormat, MarkdownEdit};
-use crate::highlight::{HighlightSpan, spans_from_document};
-use crate::markdown_ir::{DocumentIr, dialect_options};
+use crate::highlight::HighlightSpan;
+use crate::markdown_adapter::CommonMarkAdapter;
 use crate::native_render::NativeRenderPlan;
-use crate::reference::{MarkdownReference, references_from_document};
-use crate::render::{RenderConfiguration, html_fragment_for_preview_from_document};
+use crate::ports::MarkdownPort;
+use crate::reference::MarkdownReference;
 use crate::render_ir::RenderIr;
 use crate::search::find_literal;
 
@@ -283,10 +283,18 @@ pub struct EditorEngine {
     redo: Vec<HistoryEntry>,
     saved_content_hash: String,
     prepared_saves: HashMap<String, String>,
+    markdown: Box<dyn MarkdownPort>,
 }
 
 impl EditorEngine {
     pub fn create(request: EngineCreateRequest) -> Result<Self, EngineError> {
+        Self::create_with_markdown(request, Box::<CommonMarkAdapter>::default())
+    }
+
+    fn create_with_markdown(
+        request: EngineCreateRequest,
+        markdown: Box<dyn MarkdownPort>,
+    ) -> Result<Self, EngineError> {
         if request.schema_version != ENGINE_SCHEMA_VERSION {
             return Err(EngineError::UnsupportedSchema);
         }
@@ -307,6 +315,7 @@ impl EditorEngine {
             redo: Vec::new(),
             saved_content_hash,
             prepared_saves: HashMap::new(),
+            markdown,
         })
     }
 
@@ -435,24 +444,9 @@ impl EditorEngine {
         {
             derived.clone()
         } else {
-            let document = DocumentIr::parse(&self.text, dialect_options(math_enabled));
-            let configuration = RenderConfiguration {
-                math_enabled,
-                mermaid_enabled,
-            };
-            let render = RenderIr::from_document(&document);
-            let native_render = NativeRenderPlan::from_document(&document, &render);
-            let derived = DerivedState {
-                revision,
-                analysis: analyze_document(&document),
-                highlights: spans_from_document(&document),
-                references: references_from_document(&document),
-                render,
-                native_render,
-                html_fragment: html_fragment_for_preview_from_document(&document, configuration),
-                math_enabled,
-                mermaid_enabled,
-            };
+            let derived = self
+                .markdown
+                .derive(&self.text, revision, math_enabled, mermaid_enabled);
             self.derived = Some(derived.clone());
             derived
         };
@@ -860,6 +854,25 @@ fn content_hash(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingMarkdownPort {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl MarkdownPort for CountingMarkdownPort {
+        fn derive(
+            &self,
+            source: &str,
+            revision: Revision,
+            math_enabled: bool,
+            mermaid_enabled: bool,
+        ) -> DerivedState {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            CommonMarkAdapter.derive(source, revision, math_enabled, mermaid_enabled)
+        }
+    }
 
     fn engine(text: &str) -> EditorEngine {
         EditorEngine::create(EngineCreateRequest {
@@ -1026,6 +1039,53 @@ mod tests {
             Err(EngineError::RevisionConflict)
         );
         assert!(engine.dispatch(refresh(1)).is_ok());
+    }
+
+    #[test]
+    fn engine_caches_the_markdown_port_result_by_revision_and_configuration() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut engine = EditorEngine::create_with_markdown(
+            EngineCreateRequest {
+                schema_version: ENGINE_SCHEMA_VERSION,
+                document_id: "document-with-port".to_owned(),
+                text: "# Title\n".to_owned(),
+                selection: Selection { start: 0, end: 0 },
+                mode: EditorMode::Editable,
+            },
+            Box::new(CountingMarkdownPort {
+                calls: Arc::clone(&calls),
+            }),
+        )
+        .expect("engine with injected port should be valid");
+
+        engine.dispatch(refresh(0)).expect("initial derivation");
+        engine.dispatch(refresh(0)).expect("cached derivation");
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        engine
+            .dispatch(command(
+                "different-configuration",
+                EditorCommand::RefreshDerived {
+                    revision: 0,
+                    math_enabled: false,
+                    mermaid_enabled: true,
+                },
+            ))
+            .expect("configuration change derives again");
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+
+        engine
+            .dispatch(replace(
+                0,
+                0..0,
+                "Intro\n\n",
+                Selection { start: 0, end: 0 },
+            ))
+            .expect("edit invalidates the cache");
+        engine
+            .dispatch(refresh(1))
+            .expect("new revision derives again");
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
     }
 
     #[test]

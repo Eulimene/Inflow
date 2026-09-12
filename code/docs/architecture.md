@@ -37,6 +37,11 @@ Rust 核心负责不依赖平台的纯值逻辑，并正在通过版本化 Engin
 `DocumentIr`，分析、语法范围、引用、`RenderIr`、`NativeRenderPlan` 与安全 HTML 都消费该事件流；派生缓存严格绑定
 revision，正文修改后立即失效。macOS 已用该单次请求作为分析、高亮、引用、原生展示计划和预览的唯一文档派生热路径。
 这份 revision-bound 引用集合由 `EditorStore` 与预览快照原子发布，预览链接、图片问题导航与文档迁移均显式消费它，不在交互时再把全文传入旧引用扫描 FFI。旧 scanner 入口仅作为隔离测试和迁移兼容层保留。
+
+`EditorEngine` 通过 `MarkdownPort` 获取派生模型，不再直接依赖具体 Markdown
+解析器或 renderer。默认 `CommonMarkAdapter` 负责从同一份 `DocumentIr` 一次生成分析、
+高亮、引用、Render IR、原生渲染计划与预览 HTML；Engine 只负责 revision 校验、
+缓存和命令顺序。该端口也是测试替身和未来解析策略演进的唯一接入点。
 旧 `MarkdownAnalyzer` 与 `MarkdownHighlighter` 公开外观仍用于现有单元测试，但内部也已创建短生命 Engine 并消费同一 `RefreshDerived`，Swift 不再直接调用 analyze/highlight 数组 ABI。无预览 metadata 的交付 HTML 仍是独立低频边界，不与交互预览 HTML 混用。
 预览链接目标、标题 source range 与块 ID 在 Rust 生成对应 HTML 事件时直接写入 data attribute；
 Swift 不再把 HTML anchor、标题与引用列表做正则配对，也不再保留第二套 Markdown planner。
