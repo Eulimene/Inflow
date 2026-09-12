@@ -51,12 +51,12 @@
 - NSTextView 完成一次非组合输入后，以 UTF-8 grapheme 边界的 `ReplaceText(base_revision, range, inserted)` 提交 Engine，并在 Engine 返回逐字节匹配的快照后才发布 Swift 文档投影。生产会话固定启用 Engine；当前菜单格式与图片、链接、表格等插入命令均发送 selection 与 operation，由 Engine 生成并执行 revision-bound patch 后回写 NSTextView。默认会话关闭 AppKit 正文 undo registration，Command-Z/Shift-Command-Z 发送 Engine `Undo/Redo`，Rust Memento 历史是撤销事实源。原位保存、另存、覆盖确认与 PDF 导出开始前会提交 marked text、排空 Engine 队列并冻结权威 snapshot，再把该文本写入 FileDocument 投影。
 - IME 第一次 `setMarkedText` 会记录组合前正文与选区；marked text 存续期间不发布 Swift 文档投影、不刷新 Engine 正文，`unmarkText` 或最终 `insertText` 结束组合后只提交一次最终 replacement。保存触发提交组合后也等待这条命令完成。
 - Rust/Swift 边界通过 ABI major、minor 与 capability bits 协商；宿主要求 Engine、统一派生、Engine 历史和 Render IR 能力，不再精确比较单一整数。Xcode 构建脚本按目标架构生成 arm64、x86_64 或 universal 静态库，并允许依赖分析在输入未变化时跳过 Rust 重建。
-- Engine 的 `RefreshDerived(revision)` 由一次 `DocumentIr` 解析同时产生分析、语法范围、引用、稳定块 ID 的 `RenderIr` 和安全 HTML，并缓存到对应 revision；Swift 文档派生热路径直接消费这一响应，失败才回退旧散点调用。旧 `RenderedMarkdownPlanner` 尚未删除，因此不能据此声称双解析器已经完全清除。
-- Engine 预览 HTML 的链接 target metadata 在 Rust 处理 `Link` AST 事件时直接附着到同一个 `<a>`；默认派生热路径跳过 Swift 的 anchor/reference 正则配对。标题 DOM id 的旧后处理和关闭 Engine 时的完整旧 renderer 仍待清理。
+- Engine 的 `RefreshDerived(revision)` 由一次 `DocumentIr` 解析同时产生分析、语法范围、引用、稳定块 ID 的 `RenderIr`、`NativeRenderPlan` 和安全 HTML，并缓存到对应 revision。Swift 文档派生热路径只消费这一响应；响应不存在、revision 不匹配或失败时保留上一份可用派生状态，不在 Swift 再解析正文。手写 `RenderedMarkdownPlanner` 已删除。
+- Engine 预览 HTML 的标题 source range、块 ID 和链接 target metadata 都在 Rust 遍历同一份 IR 时直接附着；Swift 只执行本地图片槽的平台权限解析与整页外壳组装，不再用正则改写标题或链接 HTML。
 - 顶层预览节点携带 Rust RenderIR 的稳定 `data-inflow-block-id` 与 source range；WKWebView 首次装载后通过隔离 content world 做块级 DOM patch，字节相同的节点保留实例，变化节点替换并按新顺序挂载，同时以原顶部可见块恢复滚动位置。只有初次装载、页面未就绪或补丁失败才执行完整 `loadHTMLString`。
 - 可编辑 WKWebView 实验及 DOM→Markdown 转换路径已经删除；“即时编辑”固定使用持久 NSTextView，WKWebView 只承担只读预览。
 - 源码编辑、实时预览分栏左侧与即时编辑复用同一个 MarkdownSourceEditor 和 MarkdownSourceEditorSession；分栏右侧使用当前内存正文生成的只读 WebKit 结果，即时编辑在原始字符串上应用 Rust 解析范围对应的 TextKit 展示属性。
-- 文本修改由 NSTextView 发布回同一个绑定；默认撤销与重做走 Rust Engine 历史，旧 AppKit UndoManager 只在关闭 Engine 的回退路径中使用。展示属性和 Engine patch 回写不登记正文 undo。
+- 文本修改由 NSTextView 发布回同一个绑定；生产会话的撤销与重做只走 Rust Engine 历史。AppKit UndoManager 仅保留给不创建 Engine 的隔离测试/工具会话；展示属性和 Engine patch 回写不登记正文 undo。
 - EditorViewMode 的历史内部 case 名 preview 现在对应用户可见的“即时编辑”。
 - 视图切换复用同一选区与源范围导航入口。点击大纲后当前可编辑视图直接滚动到标题，把插入光标放到标题起点并聚焦编辑器；不切换视图，caret 导航不显示查找匹配高亮。
 
@@ -128,7 +128,7 @@
 
 判断当前能力时，以已批准的个人首版范围、实际安装的菜单和主流程、以及 UAT-PERSONAL-01 至 10 为准，而不是以某个源文件或测试名称是否存在为准。
 
-自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 403 个 XCTest method：297 个 `current-direct`、13 个依赖真实 `NSApplication` 菜单或生命周期的 `current-host`、88 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
+自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 401 个 XCTest method：295 个 `current-direct`、13 个依赖真实 `NSApplication` 菜单或生命周期的 `current-host`、88 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
 
 ## 4. 人工 UAT 状态
 

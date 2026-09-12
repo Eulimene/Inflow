@@ -29,10 +29,7 @@ final class MarkdownRendererTests: XCTestCase {
         let highlighting = try MarkdownHighlighter.spans(in: source)
         let highlightingElapsed = ProcessInfo.processInfo.systemUptime - highlightingStarted
         let previewStarted = ProcessInfo.processInfo.systemUptime
-        let preview = MarkdownRenderer.previewDocument(
-            for: source,
-            navigationHeadings: analysis.headings
-        )
+        let preview = MarkdownRenderer.previewDocument(for: source)
         let previewElapsed = ProcessInfo.processInfo.systemUptime - previewStarted
 
         XCTAssertNil(preview.failureMessage)
@@ -257,13 +254,7 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(PreviewFailurePrompt.retryTitle, "重试预览")
         XCTAssertEqual(PreviewFailurePrompt.hideTitle, "隐藏预览")
 
-        let result = MarkdownRenderer.previewDocument(
-            for: "# private source",
-            documentDirectory: nil,
-            configuration: .default,
-            navigationHeadings: [],
-            fragmentRenderer: { _, _ in throw MarkdownRenderError.coreFailure }
-        )
+        let result = MarkdownRenderer.previewFailureDocument()
 
         XCTAssertEqual(
             result.failureMessage,
@@ -280,7 +271,7 @@ final class MarkdownRendererTests: XCTestCase {
         let result = MarkdownRenderer.previewDocument(for: "# Ready")
 
         XCTAssertNil(result.failureMessage)
-        XCTAssertTrue(result.html.contains("<h1>Ready</h1>"))
+        XCTAssertTrue(result.html.contains(">Ready</h1>"))
         XCTAssertFalse(result.html.contains(PreviewFailurePrompt.title))
     }
 
@@ -574,7 +565,7 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertTrue(html.contains("connect-src 'none'"))
         XCTAssertTrue(html.contains("img-src data: https: http:"))
         XCTAssertFalse(html.contains("img-src data: https: http: file:"))
-        XCTAssertTrue(html.contains("<h1>Safe preview</h1>"))
+        XCTAssertTrue(html.contains(">Safe preview</h1>"))
     }
 
     func testLocalStaticPNGIsInlinedWithoutGivingWebKitAFilePath() throws {
@@ -801,41 +792,25 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(EditorViewMode.allCases.count, 3)
     }
 
-    func testPreviewHeadingsCarryExactSourceOffsetsOnlyWhenEnabled() throws {
+    func testPreviewHeadingsCarryCoreOwnedSourceOffsetsWithoutHTMLPostprocessing() throws {
         let markdown = "# 重复\n\n正文\n\n## 重复\n"
         let analysis = try MarkdownAnalyzer.analyze(markdown)
-        let enabled = MarkdownRenderer.htmlDocument(
-            for: markdown,
-            navigationHeadings: analysis.headings
-        )
+        let enabled = MarkdownRenderer.htmlDocument(for: markdown)
 
-        XCTAssertEqual(enabled.components(separatedBy: "<h1 id=\"重复\" data-inflow-source-start").count - 1, 1)
-        XCTAssertEqual(enabled.components(separatedBy: "<h2 id=\"重复-1\" data-inflow-source-start").count - 1, 1)
         XCTAssertTrue(enabled.contains(
-            "<h1 id=\"重复\" data-inflow-source-start=\"\(analysis.headings[0].sourceUTF8Range.lowerBound)\" tabindex=\"0\""
+            "data-inflow-source-start=\"\(analysis.headings[0].sourceUTF8Range.lowerBound)\""
         ))
         XCTAssertTrue(enabled.contains(
-            "<h2 id=\"重复-1\" data-inflow-source-start=\"\(analysis.headings[1].sourceUTF8Range.lowerBound)\" tabindex=\"0\""
+            "data-inflow-source-start=\"\(analysis.headings[1].sourceUTF8Range.lowerBound)\""
         ))
+        XCTAssertTrue(enabled.contains("<h1 data-inflow-block-id="))
+        XCTAssertTrue(enabled.contains("<h2 data-inflow-block-id="))
+        XCTAssertFalse(enabled.contains("<h1 id="))
         XCTAssertFalse(enabled.contains("<script"))
 
         let disabled = MarkdownRenderer.htmlDocument(for: markdown)
-        XCTAssertFalse(disabled.contains("<h1 data-inflow-source-start"))
-        XCTAssertFalse(disabled.contains("<h1 id="))
-        XCTAssertFalse(disabled.contains("id=\"重复\""))
-    }
-
-    func testHeadingAnnotationFailsClosedWhenAnalysisDoesNotMatchRenderedHeadings() {
-        let fragment = "<h1>One</h1><h2>Two</h2>"
-        let mismatched = [
-            DocumentHeading(level: 2, title: "One", sourceUTF8Range: 0..<5),
-            DocumentHeading(level: 1, title: "Two", sourceUTF8Range: 6..<11),
-        ]
-
-        XCTAssertEqual(
-            PreviewNavigationMarkup.annotateHeadings(in: fragment, headings: mismatched),
-            fragment
-        )
+        XCTAssertTrue(disabled.contains("<h1 data-inflow-block-id="))
+        XCTAssertTrue(disabled.contains("data-inflow-source-start=\"0\""))
     }
 
     func testHeadingIdentifiersUseOneStableNormalizedContract() {
@@ -854,22 +829,7 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(HeadingIdentifier.base(for: "中文 _ 42"), "中文-_-42")
     }
 
-    func testHeadingAnnotationWritesOnlyEscapedGeneratedDOMIdentifiers() {
-        let heading = DocumentHeading(
-            level: 1,
-            title: "\"&<>",
-            sourceUTF8Range: 0..<4
-        )
-        let annotated = PreviewNavigationMarkup.annotateHeadings(
-            in: "<h1>unsafe</h1>",
-            headings: [heading]
-        )
-
-        XCTAssertTrue(annotated.contains("<h1 id=\"section\" data-inflow-source-start=\"0\""))
-        XCTAssertFalse(annotated.contains("id=\"\"&<>"))
-    }
-
-    func testLinkAnnotationCarriesExactParsedTargetAndFailsClosedOnCountDrift() throws {
+    func testCoreLinkMetadataCarriesExactParsedTargetWithoutHTMLPostprocessing() throws {
         let markdown = "Footnote[^n] [space](<https://example.com/a b>) [资料](资料/说明.md)\n\n[^n]: Note"
         let html = MarkdownRenderer.htmlDocument(for: markdown)
 
@@ -882,12 +842,6 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertTrue(html.contains(
             "data-inflow-link-target-hex=\"\(hex("资料/说明.md"))\""
         ))
-
-        let fragment = try MarkdownRenderer.htmlFragment(for: markdown)
-        XCTAssertEqual(
-            PreviewNavigationMarkup.annotateLinks(in: fragment, targets: ["only-one"]),
-            fragment
-        )
     }
 
     func testPreviewBridgeAcceptsOnlyClosedNavigationMessages() {

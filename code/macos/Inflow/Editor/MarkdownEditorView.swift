@@ -1012,7 +1012,6 @@ struct MarkdownEditorView: View {
                 documentDirectory: fileURL?.deletingLastPathComponent(),
                 projectRoot: activeProjectRoot,
                 configuration: preferences.previewConfiguration,
-                headingNavigationEnabled: preferences.headingNavigationEnabled,
                 syntaxHighlightingEnabled: preferences.syntaxHighlightingEnabled,
                 delayNanoseconds: 0
             )
@@ -1063,7 +1062,6 @@ struct MarkdownEditorView: View {
                 documentDirectory: fileURL?.deletingLastPathComponent(),
                 projectRoot: activeProjectRoot,
                 configuration: preferences.previewConfiguration,
-                headingNavigationEnabled: preferences.headingNavigationEnabled,
                 syntaxHighlightingEnabled: preferences.syntaxHighlightingEnabled,
                 delayNanoseconds: 120_000_000
             )
@@ -1092,7 +1090,6 @@ struct MarkdownEditorView: View {
                 documentDirectory: newURL?.deletingLastPathComponent(),
                 projectRoot: projectRoot(for: newURL),
                 configuration: preferences.previewConfiguration,
-                headingNavigationEnabled: preferences.headingNavigationEnabled,
                 syntaxHighlightingEnabled: preferences.syntaxHighlightingEnabled,
                 delayNanoseconds: 0
             )
@@ -1106,7 +1103,6 @@ struct MarkdownEditorView: View {
                 documentDirectory: fileURL?.deletingLastPathComponent(),
                 projectRoot: projectRoot(for: fileURL),
                 configuration: preferences.previewConfiguration,
-                headingNavigationEnabled: preferences.headingNavigationEnabled,
                 syntaxHighlightingEnabled: preferences.syntaxHighlightingEnabled,
                 delayNanoseconds: 0
             )
@@ -1151,18 +1147,6 @@ struct MarkdownEditorView: View {
                 documentDirectory: fileURL?.deletingLastPathComponent(),
                 projectRoot: activeProjectRoot,
                 configuration: configuration,
-                headingNavigationEnabled: preferences.headingNavigationEnabled,
-                syntaxHighlightingEnabled: preferences.syntaxHighlightingEnabled,
-                delayNanoseconds: 0
-            )
-        }
-        .onChange(of: preferences.headingNavigationEnabled) { _, isEnabled in
-            scheduleDerivedContent(
-                for: document.text,
-                documentDirectory: fileURL?.deletingLastPathComponent(),
-                projectRoot: activeProjectRoot,
-                configuration: preferences.previewConfiguration,
-                headingNavigationEnabled: isEnabled,
                 syntaxHighlightingEnabled: preferences.syntaxHighlightingEnabled,
                 delayNanoseconds: 0
             )
@@ -1180,7 +1164,6 @@ struct MarkdownEditorView: View {
                 documentDirectory: fileURL?.deletingLastPathComponent(),
                 projectRoot: activeProjectRoot,
                 configuration: preferences.previewConfiguration,
-                headingNavigationEnabled: preferences.headingNavigationEnabled,
                 syntaxHighlightingEnabled: isEnabled,
                 delayNanoseconds: 0
             )
@@ -3941,7 +3924,6 @@ struct MarkdownEditorView: View {
         documentDirectory: URL?,
         projectRoot: URL?,
         configuration: PreviewAppearanceConfiguration,
-        headingNavigationEnabled: Bool,
         syntaxHighlightingEnabled: Bool,
         delayNanoseconds: UInt64
     ) {
@@ -3990,7 +3972,6 @@ struct MarkdownEditorView: View {
                 expectedProjectRootIdentity: projectRootIdentity,
                 requiresProjectBoundary: requiresProjectBoundary,
                 configuration: configuration,
-                headingNavigationEnabled: headingNavigationEnabled,
                 syntaxHighlightingEnabled: syntaxHighlightingEnabled
             ) else { return }
 
@@ -4023,7 +4004,6 @@ struct MarkdownEditorView: View {
             documentDirectory: fileURL?.deletingLastPathComponent(),
             projectRoot: activeProjectRoot,
             configuration: preferences.previewConfiguration,
-            headingNavigationEnabled: preferences.headingNavigationEnabled,
             syntaxHighlightingEnabled: preferences.syntaxHighlightingEnabled,
             delayNanoseconds: 0
         )
@@ -4127,75 +4107,29 @@ private actor DocumentContentDeriver {
         expectedProjectRootIdentity: FolderProjectDirectoryIdentity?,
         requiresProjectBoundary: Bool,
         configuration: PreviewAppearanceConfiguration,
-        headingNavigationEnabled: Bool,
         syntaxHighlightingEnabled: Bool
     ) -> DerivedDocumentContent? {
         guard !Task.isCancelled else { return nil }
-        if let coreContent,
-           UTF8Text.isExactlyEqual(coreContent.sourceSnapshot, markdown)
-        {
-            let headings = headingNavigationEnabled ? coreContent.analysis.headings : []
-            let previewDocument = MarkdownRenderer.previewDocument(
-                coreFragment: coreContent.htmlFragment,
-                references: coreContent.references,
-                documentDirectory: documentDirectory,
-                projectRoot: projectRoot,
-                expectedProjectRootIdentity: expectedProjectRootIdentity,
-                requiresProjectBoundary: requiresProjectBoundary,
-                configuration: configuration,
-                navigationHeadings: headings,
-                coreContainsLinkMetadata: true
-            )
-            return DerivedDocumentContent(
-                sourceSnapshot: markdown,
-                html: previewDocument.html,
-                previewFailureMessage: previewDocument.failureMessage,
-                analysis: .success(coreContent.analysis),
-                syntaxHighlighting: syntaxHighlightingEnabled
-                    ? coreContent.syntaxHighlighting
-                    : []
-            )
-        }
-
-        let analysis: DocumentAnalysisOutcome
-        do {
-            analysis = .success(try MarkdownAnalyzer.analyze(markdown))
-        } catch {
-            let message = (error as? LocalizedError)?.errorDescription
-                ?? MarkdownAnalysisError.coreFailure.localizedDescription
-            analysis = .failure(message)
-        }
-
-        guard !Task.isCancelled else { return nil }
-        let syntaxHighlighting: [MarkdownSyntaxSpan] = if syntaxHighlightingEnabled {
-            (try? MarkdownHighlighter.spans(in: markdown)) ?? []
-        } else {
-            []
-        }
-
-        guard !Task.isCancelled else { return nil }
-        let headings: [DocumentHeading]
-        if headingNavigationEnabled, case let .success(documentAnalysis) = analysis {
-            headings = documentAnalysis.headings
-        } else {
-            headings = []
-        }
+        guard let coreContent,
+              UTF8Text.isExactlyEqual(coreContent.sourceSnapshot, markdown)
+        else { return nil }
         let previewDocument = MarkdownRenderer.previewDocument(
-            for: markdown,
+            coreFragment: coreContent.htmlFragment,
+            references: coreContent.references,
             documentDirectory: documentDirectory,
             projectRoot: projectRoot,
             expectedProjectRootIdentity: expectedProjectRootIdentity,
             requiresProjectBoundary: requiresProjectBoundary,
-            configuration: configuration,
-            navigationHeadings: headings
+            configuration: configuration
         )
-        guard !Task.isCancelled else { return nil }
         return DerivedDocumentContent(
             sourceSnapshot: markdown,
             html: previewDocument.html,
             previewFailureMessage: previewDocument.failureMessage,
-            analysis: analysis,
-            syntaxHighlighting: syntaxHighlighting
+            analysis: .success(coreContent.analysis),
+            syntaxHighlighting: syntaxHighlightingEnabled
+                ? coreContent.syntaxHighlighting
+                : []
         )
     }
 }

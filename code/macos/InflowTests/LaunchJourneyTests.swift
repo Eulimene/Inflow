@@ -23,10 +23,7 @@ final class LaunchJourneyTests: XCTestCase {
         )
         let document = try MarkdownDocument(fileData: original)
         let analysis = try MarkdownAnalyzer.analyze(document.text)
-        let preview = MarkdownRenderer.previewDocument(
-            for: document.text,
-            navigationHeadings: analysis.headings
-        )
+        let preview = MarkdownRenderer.previewDocument(for: document.text)
         let delivered = try HTMLExporter.generate(
             snapshot: HTMLExportSnapshot(markdown: document.text)
         )
@@ -63,10 +60,7 @@ final class LaunchJourneyTests: XCTestCase {
         [^note]: Footnote body.
         """
         let analysis = try MarkdownAnalyzer.analyze(source)
-        let preview = MarkdownRenderer.previewDocument(
-            for: source,
-            navigationHeadings: analysis.headings
-        )
+        let preview = MarkdownRenderer.previewDocument(for: source)
         let delivered = try HTMLExporter.generate(snapshot: HTMLExportSnapshot(markdown: source))
         let deliveredHTML = try XCTUnwrap(String(data: delivered, encoding: .utf8))
 
@@ -77,8 +71,14 @@ final class LaunchJourneyTests: XCTestCase {
             analysis.headings[2].sourceUTF8Range
         )
         XCTAssertNil(preview.failureMessage)
+        let headingPattern = try NSRegularExpression(
+            pattern: #"<h[1-6][^>]*data-inflow-source-start="#
+        )
         XCTAssertEqual(
-            preview.html.components(separatedBy: "data-inflow-source-start=").count - 1,
+            headingPattern.numberOfMatches(
+                in: preview.html,
+                range: NSRange(location: 0, length: (preview.html as NSString).length)
+            ),
             3
         )
         XCTAssertTrue(deliveredHTML.contains("<table>"))
@@ -104,12 +104,8 @@ final class LaunchJourneyTests: XCTestCase {
         A[开始] --> B[结束]
         ```
         """#
-        let analysis = try MarkdownAnalyzer.analyze(source)
         let highlights = try MarkdownHighlighter.spans(in: source)
-        let preview = MarkdownRenderer.previewDocument(
-            for: source,
-            navigationHeadings: analysis.headings
-        )
+        let preview = MarkdownRenderer.previewDocument(for: source)
         let delivered = try HTMLExporter.generate(snapshot: HTMLExportSnapshot(markdown: source))
         let deliveredHTML = try XCTUnwrap(String(data: delivered, encoding: .utf8))
 

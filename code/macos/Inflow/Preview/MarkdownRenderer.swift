@@ -75,8 +75,7 @@ enum MarkdownRenderer {
         projectRoot: URL? = nil,
         expectedProjectRootIdentity: FolderProjectDirectoryIdentity? = nil,
         requiresProjectBoundary: Bool = false,
-        configuration: PreviewAppearanceConfiguration = .default,
-        navigationHeadings: [DocumentHeading] = []
+        configuration: PreviewAppearanceConfiguration = .default
     ) -> String {
         previewDocument(
             for: markdown,
@@ -84,8 +83,7 @@ enum MarkdownRenderer {
             projectRoot: projectRoot,
             expectedProjectRootIdentity: expectedProjectRootIdentity,
             requiresProjectBoundary: requiresProjectBoundary,
-            configuration: configuration,
-            navigationHeadings: navigationHeadings
+            configuration: configuration
         ).html
     }
 
@@ -95,53 +93,23 @@ enum MarkdownRenderer {
         projectRoot: URL? = nil,
         expectedProjectRootIdentity: FolderProjectDirectoryIdentity? = nil,
         requiresProjectBoundary: Bool = false,
-        configuration: PreviewAppearanceConfiguration = .default,
-        navigationHeadings: [DocumentHeading] = []
+        configuration: PreviewAppearanceConfiguration = .default
     ) -> MarkdownPreviewDocument {
-        previewDocument(
-            for: markdown,
+        guard let derived = EditorEngineDerivedContent.deriveSynchronously(
+            source: markdown,
+            configuration: configuration
+        ) else {
+            return previewFailureDocument(configuration: configuration)
+        }
+        return previewDocument(
+            coreFragment: derived.htmlFragment,
+            references: derived.references,
             documentDirectory: documentDirectory,
             projectRoot: projectRoot,
             expectedProjectRootIdentity: expectedProjectRootIdentity,
             requiresProjectBoundary: requiresProjectBoundary,
-            configuration: configuration,
-            navigationHeadings: navigationHeadings,
-            fragmentRenderer: htmlFragment
+            configuration: configuration
         )
-    }
-
-    static func previewDocument(
-        for markdown: String,
-        documentDirectory: URL?,
-        projectRoot: URL? = nil,
-        expectedProjectRootIdentity: FolderProjectDirectoryIdentity? = nil,
-        requiresProjectBoundary: Bool = false,
-        configuration: PreviewAppearanceConfiguration,
-        navigationHeadings: [DocumentHeading],
-        fragmentRenderer: (String, PreviewAppearanceConfiguration) throws -> String
-    ) -> MarkdownPreviewDocument {
-        do {
-            let fragment = try fragmentRenderer(markdown, configuration)
-            let references = try MarkdownReferenceScanner.references(in: markdown)
-            return previewDocument(
-                coreFragment: fragment,
-                references: references,
-                documentDirectory: documentDirectory,
-                projectRoot: projectRoot,
-                expectedProjectRootIdentity: expectedProjectRootIdentity,
-                requiresProjectBoundary: requiresProjectBoundary,
-                configuration: configuration,
-                navigationHeadings: navigationHeadings
-            )
-        } catch {
-            let message = (error as? LocalizedError)?.errorDescription
-                ?? MarkdownRenderError.coreFailure.localizedDescription
-            return MarkdownPreviewDocument(
-                html: errorDocument(configuration: configuration),
-                failureMessage: message,
-                hasRelativeResources: false
-            )
-        }
     }
 
     static func previewDocument(
@@ -151,28 +119,12 @@ enum MarkdownRenderer {
         projectRoot: URL?,
         expectedProjectRootIdentity: FolderProjectDirectoryIdentity?,
         requiresProjectBoundary: Bool,
-        configuration: PreviewAppearanceConfiguration,
-        navigationHeadings: [DocumentHeading],
-        coreContainsLinkMetadata: Bool = false
+        configuration: PreviewAppearanceConfiguration
     ) -> MarkdownPreviewDocument {
-        let headingFragment = PreviewNavigationMarkup.annotateHeadings(
-            in: coreFragment,
-            headings: navigationHeadings
-        )
-        let fragment: String
-        if coreContainsLinkMetadata {
-            fragment = headingFragment
-        } else {
-            let linkTargets = references.filter { $0.kind == .link }.map(\.target)
-            fragment = PreviewNavigationMarkup.annotateLinks(
-                in: headingFragment,
-                targets: linkTargets
-            )
-        }
         return MarkdownPreviewDocument(
             html: document(
                 containing: LocalImageResolver.resolveSlots(
-                    in: fragment,
+                    in: coreFragment,
                     documentDirectory: documentDirectory,
                     imageReferences: references.filter { $0.kind == .image },
                     projectRoot: projectRoot,
@@ -273,6 +225,16 @@ enum MarkdownRenderer {
         """
     }
 
+    static func previewFailureDocument(
+        configuration: PreviewAppearanceConfiguration = .default
+    ) -> MarkdownPreviewDocument {
+        MarkdownPreviewDocument(
+            html: errorDocument(configuration: configuration),
+            failureMessage: MarkdownRenderError.coreFailure.localizedDescription,
+            hasRelativeResources: false
+        )
+    }
+
     private static func errorDocument(configuration: PreviewAppearanceConfiguration) -> String {
         return document(
             containing: """
@@ -283,117 +245,6 @@ enum MarkdownRenderer {
             """,
             configuration: configuration
         )
-    }
-}
-
-enum PreviewNavigationMarkup {
-    private static let maximumLinkTargetBytes = 16 * 1_024
-
-    static func annotateHeadings(
-        in fragment: String,
-        headings: [DocumentHeading]
-    ) -> String {
-        guard !headings.isEmpty,
-              let headingPattern = try? NSRegularExpression(pattern: #"<h([1-6])([^>]*)>"#)
-        else {
-            return fragment
-        }
-        let fullRange = NSRange(location: 0, length: (fragment as NSString).length)
-        let matches = headingPattern.matches(in: fragment, range: fullRange)
-        guard matches.count == headings.count else { return fragment }
-
-        for (match, heading) in zip(matches, headings) {
-            guard match.numberOfRanges == 3,
-                  let levelRange = Range(match.range(at: 1), in: fragment),
-                  Int(fragment[levelRange]) == heading.level
-            else {
-                return fragment
-            }
-        }
-
-        let identifiers = HeadingIdentifier.identifiers(for: headings)
-        let result = NSMutableString(string: fragment)
-        for ((match, heading), identifier) in zip(zip(matches, headings), identifiers).reversed() {
-            let attributes = (fragment as NSString).substring(with: match.range(at: 2))
-            let sourceAttribute = attributes.contains("data-inflow-source-start=")
-                ? ""
-                : " data-inflow-source-start=\"\(heading.sourceUTF8Range.lowerBound)\""
-            result.replaceCharacters(
-                in: match.range,
-                with: "<h\(heading.level) id=\"\(escapeHTMLAttribute(identifier))\"\(sourceAttribute) tabindex=\"0\" title=\"在源码中定位\"\(attributes)>"
-            )
-        }
-        return result as String
-    }
-
-    static func annotateLinks(in fragment: String, targets: [String]) -> String {
-        guard !targets.isEmpty,
-              let linkPattern = try? NSRegularExpression(pattern: #"<a href=\"([^\"]*)\""#)
-        else {
-            return fragment
-        }
-        let source = fragment as NSString
-        let fullRange = NSRange(location: 0, length: (fragment as NSString).length)
-        let matches = linkPattern.matches(in: fragment, range: fullRange)
-        var selectedMatches: [(NSTextCheckingResult, String)] = []
-        var searchIndex = 0
-        for target in targets {
-            guard let renderedTarget = URL(string: target)?.relativeString else { return fragment }
-            let expectedHref = escapeHTMLAttribute(renderedTarget)
-            var selected: NSTextCheckingResult?
-            while searchIndex < matches.count {
-                let candidate = matches[searchIndex]
-                searchIndex += 1
-                guard candidate.numberOfRanges == 2,
-                      source.substring(with: candidate.range(at: 1)) == expectedHref,
-                      !isGeneratedFootnoteAnchor(candidate, in: source)
-                else {
-                    continue
-                }
-                selected = candidate
-                break
-            }
-            guard let selected else { return fragment }
-            selectedMatches.append((selected, target))
-        }
-
-        let result = NSMutableString(string: fragment)
-        for (match, target) in selectedMatches.reversed() {
-            guard target.utf8.count <= maximumLinkTargetBytes,
-                  !target.unicodeScalars.contains(where: { scalar in
-                      CharacterSet.controlCharacters.contains(scalar)
-                  })
-            else {
-                continue
-            }
-            let original = result.substring(with: match.range)
-            let targetHex = Data(target.utf8).map { String(format: "%02x", $0) }.joined()
-            result.replaceCharacters(
-                in: match.range,
-                with: "\(original) data-inflow-link-target-hex=\"\(targetHex)\""
-            )
-        }
-        return result as String
-    }
-
-    private static func isGeneratedFootnoteAnchor(
-        _ match: NSTextCheckingResult,
-        in source: NSString
-    ) -> Bool {
-        let marker = #"<sup class="footnote-reference">"#
-        let start = max(0, match.range.location - (marker as NSString).length)
-        let prefix = source.substring(
-            with: NSRange(location: start, length: match.range.location - start)
-        )
-        return prefix.hasSuffix(marker)
-    }
-
-    private static func escapeHTMLAttribute(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
     }
 }
 
