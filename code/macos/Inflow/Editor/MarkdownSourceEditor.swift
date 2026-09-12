@@ -438,6 +438,40 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         )
     }
 
+    @discardableResult
+    func applyEngineFormat(
+        _ operation: EditorEngineFormatOperation,
+        expectedText: String,
+        selectedUTF16Range: NSRange,
+        actionName: String
+    ) async -> Bool {
+        guard textView.isEditable,
+              !textView.hasMarkedText(),
+              UTF8Text.isExactlyEqual(textView.string, expectedText)
+        else { return false }
+        guard let mutation = await engineShadow.format(
+            text: expectedText,
+            selectionUTF16: selectedUTF16Range,
+            operation: operation
+        ) else { return false }
+        let plan = MarkdownFormatPlan(
+            sourceSnapshot: mutation.sourceSnapshot,
+            replaceUTF8Range: mutation.replaceUTF8Range,
+            replacement: mutation.replacement,
+            resultingSource: mutation.resultingSource,
+            selectionUTF8Range: mutation.selectionUTF8Range
+        )
+        return applyMarkdownFormat(plan, actionName: actionName)
+    }
+
+    func authoritativeSnapshot() async -> EditorEngineDocumentSnapshot? {
+        guard !textView.hasMarkedText() else { return nil }
+        return await engineShadow.authoritativeSnapshot(
+            matching: textView.string,
+            selectionUTF16: textView.selectedRange()
+        )
+    }
+
     func setPresentation(
         _ presentation: MarkdownEditorPresentation,
         source: String,

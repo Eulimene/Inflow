@@ -98,6 +98,32 @@ enum MarkdownFormatCommand: Equatable, Sendable {
     }
 }
 
+extension MarkdownFormatCommand {
+    var engineOperation: EditorEngineFormatOperation {
+        switch self {
+        case let .inline(format):
+            switch format {
+            case .bold: return .bold
+            case .italic: return .italic
+            case .strikethrough: return .strikethrough
+            }
+        case .inlineCode: return .inlineCode
+        case .codeBlock: return .codeBlock
+        case .heading(let level): return .heading(level: level.rawValue)
+        case .blockQuote: return .blockQuote
+        case .list(let format):
+            let style: String
+            switch format {
+            case .ordered: style = "ordered"
+            case .unordered: style = "unordered"
+            case .task: style = "task"
+            }
+            return .list(style: style)
+        case .clear: return .clear
+        }
+    }
+}
+
 struct MarkdownFormatPlan: Sendable {
     let sourceSnapshot: String
     let replaceUTF8Range: Range<Int>

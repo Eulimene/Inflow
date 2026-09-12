@@ -3411,28 +3411,20 @@ struct MarkdownEditorView: View {
     private func applyMarkdownFormat(_ command: MarkdownFormatCommand) {
         guard canEditDocument, !usesSourceOnlyExperience else { return }
         let source = document.text
-
-        do {
-            let plan = try MarkdownFormatter.plan(
-                source: source,
-                selectedUTF16Range: sourceEditorSession.textView.selectedRange(),
-                command: command
-            )
-            revealSourceSurface()
-            guard sourceEditorSession.applyMarkdownFormat(
-                plan,
+        let selection = sourceEditorSession.textView.selectedRange()
+        revealSourceSurface()
+        Task { @MainActor in
+            guard await sourceEditorSession.applyEngineFormat(
+                command.engineOperation,
+                expectedText: source,
+                selectedUTF16Range: selection,
                 actionName: command.undoActionName
             ) else {
                 markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未修改文档。"
                 return
             }
-            Task { @MainActor in
-                await Task.yield()
-                _ = sourceEditorSession.focusEditor()
-            }
-        } catch {
-            markdownFormatErrorMessage = (error as? LocalizedError)?.errorDescription
-                ?? MarkdownFormatError.coreFailure.localizedDescription
+            await Task.yield()
+            _ = sourceEditorSession.focusEditor()
         }
     }
 

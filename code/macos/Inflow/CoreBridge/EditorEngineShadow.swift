@@ -33,6 +33,46 @@ struct EditorEngineShadowTextEdit: Equatable, Sendable {
     let inserted: String
 }
 
+struct EditorEngineMutation: Equatable, Sendable {
+    let baseRevision: UInt64
+    let revision: UInt64
+    let sourceSnapshot: String
+    let replaceUTF8Range: Range<Int>
+    let replacement: String
+    let resultingSource: String
+    let selectionUTF8Range: Range<Int>
+    let canUndo: Bool
+    let canRedo: Bool
+}
+
+struct EditorEngineDocumentSnapshot: Equatable, Sendable {
+    let revision: UInt64
+    let text: String
+    let selectionUTF8Range: Range<Int>
+    let contentHash: String
+    let canUndo: Bool
+    let canRedo: Bool
+}
+
+enum EditorEngineFormatOperation: Equatable, Sendable {
+    case bold
+    case italic
+    case strikethrough
+    case inlineCode
+    case codeBlock
+    case clear
+    case heading(level: UInt8)
+    case blockQuote
+    case list(style: String)
+    case link(destination: String)
+    case image(destination: String, defaultAlternative: String)
+    case table
+    case horizontalRule
+    case footnote
+    case math
+    case mermaid
+}
+
 enum EditorEngineShadowTextDiff {
     static func replacement(from old: String, to new: String) -> EditorEngineShadowTextEdit? {
         guard !old.utf8.elementsEqual(new.utf8) else { return nil }
@@ -113,6 +153,36 @@ final class EditorEngineShadowQueue {
             mathEnabled: configuration.mathRenderingEnabled,
             mermaidEnabled: configuration.mermaidRenderingEnabled
         )
+    }
+
+    func format(
+        text: String,
+        selectionUTF16: NSRange,
+        operation: EditorEngineFormatOperation
+    ) async -> EditorEngineMutation? {
+        submit(text: text, selectionUTF16: selectionUTF16)
+        await pending?.value
+        guard !Task.isCancelled,
+              let mutation = await client?.format(
+                  expectedText: text,
+                  selectionUTF16: selectionUTF16,
+                  operation: operation
+              )
+        else { return nil }
+        if lastSubmittedText?.utf8.elementsEqual(text.utf8) == true {
+            lastSubmittedText = mutation.resultingSource
+        }
+        return mutation
+    }
+
+    func authoritativeSnapshot(
+        matching text: String,
+        selectionUTF16: NSRange
+    ) async -> EditorEngineDocumentSnapshot? {
+        submit(text: text, selectionUTF16: selectionUTF16)
+        await pending?.value
+        guard !Task.isCancelled else { return nil }
+        return await client?.snapshot(expectedText: text)
     }
 
     deinit {
@@ -236,6 +306,71 @@ private actor EditorEngineShadowClient {
         }
     }
 
+    func format(
+        expectedText: String,
+        selectionUTF16: NSRange,
+        operation: EditorEngineFormatOperation
+    ) -> EditorEngineMutation? {
+        do {
+            guard projection.utf8.elementsEqual(expectedText.utf8) else {
+                throw EditorEngineShadowError.mismatch(revision: revision)
+            }
+            let selection = try Self.byteSelection(selectionUTF16, in: expectedText)
+            let requestID = UUID().uuidString
+            let envelope = EditorEngineFormatEnvelope(
+                schemaVersion: Self.schemaVersion,
+                requestID: requestID,
+                command: EditorEngineFormatCommand(
+                    type: "format",
+                    baseRevision: revision,
+                    selection: selection,
+                    operation: operation
+                )
+            )
+            let response: EditorEngineDispatchResponse = try dispatch(envelope)
+            guard response.schemaVersion == Self.schemaVersion,
+                  response.requestID == requestID,
+                  response.patch.baseRevision == revision,
+                  response.patch.revision == revision + 1
+            else { throw EditorEngineShadowError.invalidResponse }
+            let mutation = try response.patch.validatedMutation(source: expectedText)
+            revision = mutation.revision
+            projection = mutation.resultingSource
+            try compareSnapshot(to: mutation.resultingSource)
+            return mutation
+        } catch {
+            logger.error(
+                "Engine format failed; revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    func snapshot(expectedText: String) -> EditorEngineDocumentSnapshot? {
+        do {
+            guard projection.utf8.elementsEqual(expectedText.utf8) else {
+                throw EditorEngineShadowError.mismatch(revision: revision)
+            }
+            let snapshot = try readSnapshot()
+            guard snapshot.text.utf8.elementsEqual(expectedText.utf8),
+                  let selection = snapshot.selection.validated(in: snapshot.text, permitsEmpty: true)
+            else { throw EditorEngineShadowError.invalidResponse }
+            return EditorEngineDocumentSnapshot(
+                revision: snapshot.revision,
+                text: snapshot.text,
+                selectionUTF8Range: selection,
+                contentHash: snapshot.contentHash,
+                canUndo: snapshot.canUndo,
+                canRedo: snapshot.canRedo
+            )
+        } catch {
+            logger.error(
+                "Engine snapshot failed; revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
     private func create(text: String, selection: EditorEngineSelection) throws {
         let request = EditorEngineCreateRequest(
             schemaVersion: Self.schemaVersion,
@@ -287,19 +422,23 @@ private actor EditorEngineShadowClient {
     }
 
     private func compareSnapshot(to swiftText: String) throws {
-        guard let handle else { throw EditorEngineShadowError.invalidHandle }
-        let result = inflow_engine_snapshot(handle.pointer)
-        let payload = try InflowCoreBridge.copyAndFree(result.bytes)
-        guard result.status == INFLOW_STATUS_OK else {
-            throw Self.bridgeError(status: result.status, payload: payload)
-        }
-        let snapshot = try JSONDecoder().decode(EditorEngineSnapshot.self, from: payload)
+        let snapshot = try readSnapshot()
         guard snapshot.schemaVersion == Self.schemaVersion,
               snapshot.revision == revision,
               snapshot.text.utf8.elementsEqual(swiftText.utf8)
         else {
             throw EditorEngineShadowError.mismatch(revision: snapshot.revision)
         }
+    }
+
+    private func readSnapshot() throws -> EditorEngineSnapshot {
+        guard let handle else { throw EditorEngineShadowError.invalidHandle }
+        let result = inflow_engine_snapshot(handle.pointer)
+        let payload = try InflowCoreBridge.copyAndFree(result.bytes)
+        guard result.status == INFLOW_STATUS_OK else {
+            throw Self.bridgeError(status: result.status, payload: payload)
+        }
+        return try JSONDecoder().decode(EditorEngineSnapshot.self, from: payload)
     }
 
     private static func byteSelection(
@@ -387,6 +526,73 @@ private struct EditorEngineRefreshEnvelope: Encodable {
     }
 }
 
+private struct EditorEngineFormatEnvelope: Encodable {
+    let schemaVersion: UInt32
+    let requestID: String
+    let command: EditorEngineFormatCommand
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case requestID = "request_id"
+        case command
+    }
+}
+
+private struct EditorEngineFormatCommand: Encodable {
+    let type: String
+    let baseRevision: UInt64
+    let selection: EditorEngineSelection
+    let operation: EditorEngineFormatOperation
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case baseRevision = "base_revision"
+        case selection
+        case operation
+    }
+}
+
+extension EditorEngineFormatOperation: Encodable {
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case level
+        case style
+        case destination
+        case defaultAlternative = "default_alternative"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .bold: try container.encode("bold", forKey: .kind)
+        case .italic: try container.encode("italic", forKey: .kind)
+        case .strikethrough: try container.encode("strikethrough", forKey: .kind)
+        case .inlineCode: try container.encode("inline_code", forKey: .kind)
+        case .codeBlock: try container.encode("code_block", forKey: .kind)
+        case .clear: try container.encode("clear", forKey: .kind)
+        case let .heading(level):
+            try container.encode("heading", forKey: .kind)
+            try container.encode(level, forKey: .level)
+        case .blockQuote: try container.encode("block_quote", forKey: .kind)
+        case let .list(style):
+            try container.encode("list", forKey: .kind)
+            try container.encode(style, forKey: .style)
+        case let .link(destination):
+            try container.encode("link", forKey: .kind)
+            try container.encode(destination, forKey: .destination)
+        case let .image(destination, defaultAlternative):
+            try container.encode("image", forKey: .kind)
+            try container.encode(destination, forKey: .destination)
+            try container.encode(defaultAlternative, forKey: .defaultAlternative)
+        case .table: try container.encode("table", forKey: .kind)
+        case .horizontalRule: try container.encode("horizontal_rule", forKey: .kind)
+        case .footnote: try container.encode("footnote", forKey: .kind)
+        case .math: try container.encode("math", forKey: .kind)
+        case .mermaid: try container.encode("mermaid", forKey: .kind)
+        }
+    }
+}
+
 private struct EditorEngineRefreshCommand: Encodable {
     let type: String
     let revision: UInt64
@@ -434,6 +640,8 @@ private struct EditorEngineSnapshot: Decodable {
     let text: String
     let selection: EditorEngineSelection
     let contentHash: String
+    let canUndo: Bool
+    let canRedo: Bool
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
@@ -442,6 +650,8 @@ private struct EditorEngineSnapshot: Decodable {
         case text
         case selection
         case contentHash = "content_hash"
+        case canUndo = "can_undo"
+        case canRedo = "can_redo"
     }
 }
 
@@ -460,13 +670,54 @@ private struct EditorEngineDispatchResponse: Decodable {
 private struct EditorEngineStatePatch: Decodable {
     let baseRevision: UInt64
     let revision: UInt64
+    let text: EditorEngineTextPatch?
+    let selection: EditorEngineSelection?
     let derived: EditorEngineDerivedState?
+    let canUndo: Bool
+    let canRedo: Bool
 
     enum CodingKeys: String, CodingKey {
         case baseRevision = "base_revision"
         case revision
+        case text
+        case selection
         case derived
+        case canUndo = "can_undo"
+        case canRedo = "can_redo"
     }
+
+
+    func validatedMutation(source: String) throws -> EditorEngineMutation {
+        guard let text,
+              let selection,
+              let replaceRange = text.range.validated(in: source, permitsEmpty: true)
+        else { throw EditorEngineShadowError.invalidResponse }
+        var bytes = Array(source.utf8)
+        bytes.replaceSubrange(replaceRange, with: text.inserted.utf8)
+        let resultingSource = String(decoding: bytes, as: UTF8.self)
+        guard Array(resultingSource.utf8) == bytes,
+              let selectionRange = selection.validated(
+                  in: resultingSource,
+                  permitsEmpty: true
+              )
+        else { throw EditorEngineShadowError.invalidResponse }
+        return EditorEngineMutation(
+            baseRevision: baseRevision,
+            revision: revision,
+            sourceSnapshot: source,
+            replaceUTF8Range: replaceRange,
+            replacement: text.inserted,
+            resultingSource: resultingSource,
+            selectionUTF8Range: selectionRange,
+            canUndo: canUndo,
+            canRedo: canRedo
+        )
+    }
+}
+
+private struct EditorEngineTextPatch: Decodable {
+    let range: EditorEngineByteRange
+    let inserted: String
 }
 
 private struct EditorEngineDerivedState: Decodable {
@@ -630,6 +881,15 @@ private extension EditorEngineByteRange {
               MarkdownSourceRange.navigationTarget(forUTF8Range: start..<end, in: source) != nil
         else { return nil }
         return start..<end
+    }
+}
+
+private extension EditorEngineSelection {
+    func validated(in source: String, permitsEmpty: Bool) -> Range<Int>? {
+        EditorEngineByteRange(start: start, end: end).validated(
+            in: source,
+            permitsEmpty: permitsEmpty
+        )
     }
 }
 
