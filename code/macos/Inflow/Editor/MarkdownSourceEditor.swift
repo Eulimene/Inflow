@@ -284,13 +284,13 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var renderedImageTask: Task<Void, Never>?
     private var renderedInteractionTask: Task<Void, Never>?
     private let lineNumberRuler: MarkdownLineNumberRulerView
-    private let engineShadow: EditorEngineShadowQueue
+    private let engineClient: EditorEngineClient
     private var isApplyingEngineMutation = false
     private var focusModeEnabled = false
     private var typewriterModeEnabled = false
 
-    init(engineEnabled: Bool = EditorEngineShadowFeature.isEnabled) {
-        engineShadow = EditorEngineShadowQueue(isEnabled: engineEnabled)
+    init(engineEnabled: Bool = true) {
+        engineClient = EditorEngineClient(isEnabled: engineEnabled)
         let scrollView = NSScrollView()
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = true
@@ -340,9 +340,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         self.textView = textView
         self.lineNumberRuler = lineNumberRuler
         super.init()
-        textView.usesEngineHistory = engineShadow.isEnabled
-        textView.allowsUndo = !engineShadow.isEnabled
-        if engineShadow.isEnabled {
+        textView.usesEngineHistory = engineClient.isEnabled
+        textView.allowsUndo = !engineClient.isEnabled
+        if engineClient.isEnabled {
             textView.undoManager?.disableUndoRegistration()
         }
         textView.engineUndoHandler = { [weak self] in
@@ -351,11 +351,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.engineRedoHandler = { [weak self] in
             self?.performEngineHistory(.redo)
         }
-        engineShadow.onHistoryStateChange = { [weak textView] canUndo, canRedo in
+        engineClient.onHistoryStateChange = { [weak textView] canUndo, canRedo in
             textView?.engineCanUndo = canUndo
             textView?.engineCanRedo = canRedo
         }
-        engineShadow.onAuthoritativeSnapshot = { [weak self] snapshot in
+        engineClient.onAuthoritativeSnapshot = { [weak self] snapshot in
             guard let self,
                   !self.isApplyingEngineMutation,
                   UTF8Text.isExactlyEqual(self.textView.string, snapshot.text)
@@ -363,12 +363,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             self.updateBoundText?(snapshot.text)
         }
         textView.compositionDidCommitHandler = { [weak self] text, selection in
-            guard let self, self.engineShadow.isEnabled else { return }
-            self.engineShadow.submit(text: text, selectionUTF16: selection)
+            guard let self, self.engineClient.isEnabled else { return }
+            self.engineClient.submit(text: text, selectionUTF16: selection)
         }
         textView.textDidChangeHandler = { [weak self] text in
             if let self, !self.isApplyingEngineMutation, !self.textView.hasMarkedText() {
-                self.engineShadow.submit(
+                self.engineClient.submit(
                     text: text,
                     selectionUTF16: self.textView.selectedRange()
                 )
@@ -376,7 +376,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             self?.invalidateSyntaxApplication()
             self?.lineNumberRuler.updateText(text)
             self?.refreshWritingModePresentation()
-            if self?.engineShadow.isEnabled != true {
+            if self?.engineClient.isEnabled != true {
                 self?.updateBoundText?(text)
             }
             self?.scheduleRenderedPresentation(for: text)
@@ -461,7 +461,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         for source: String,
         configuration: PreviewAppearanceConfiguration
     ) async -> EditorEngineDerivedContent? {
-        await engineShadow.derive(
+        await engineClient.derive(
             text: source,
             selectionUTF16: textView.selectedRange(),
             configuration: configuration
@@ -479,7 +479,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
               !textView.hasMarkedText(),
               UTF8Text.isExactlyEqual(textView.string, expectedText)
         else { return false }
-        guard let mutation = await engineShadow.format(
+        guard let mutation = await engineClient.format(
             text: expectedText,
             selectionUTF16: selectedUTF16Range,
             operation: operation
@@ -508,12 +508,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             let mutation: EditorEngineMutation?
             switch action {
             case .undo:
-                mutation = await self.engineShadow.undo(
+                mutation = await self.engineClient.undo(
                     text: source,
                     selectionUTF16: selection
                 )
             case .redo:
-                mutation = await self.engineShadow.redo(
+                mutation = await self.engineClient.redo(
                     text: source,
                     selectionUTF16: selection
                 )
@@ -573,13 +573,13 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
 
     func authoritativeSnapshot() async -> EditorEngineDocumentSnapshot? {
         guard !textView.hasMarkedText() else { return nil }
-        return await engineShadow.authoritativeSnapshot(
+        return await engineClient.authoritativeSnapshot(
             matching: textView.string,
             selectionUTF16: textView.selectedRange()
         )
     }
 
-    var usesEngineAuthority: Bool { engineShadow.isEnabled }
+    var usesEngineAuthority: Bool { engineClient.isEnabled }
 
     func persistenceSnapshot() async -> EditorEngineDocumentSnapshot? {
         if textView.hasMarkedText() {
@@ -1590,7 +1590,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         invalidateSyntaxApplication()
         lineNumberRuler.updateText(textView.string)
         if !textView.hasMarkedText() {
-            engineShadow.submit(
+            engineClient.submit(
                 text: textView.string,
                 selectionUTF16: textView.selectedRange()
             )
@@ -1614,9 +1614,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         refreshWritingModePresentation()
     }
 
-    fileprivate func synchronizeEngineShadow(text: String, selection: NSRange) {
+    fileprivate func synchronizeEngine(text: String, selection: NSRange) {
         guard !textView.hasMarkedText() else { return }
-        engineShadow.submit(text: text, selectionUTF16: selection)
+        engineClient.submit(text: text, selectionUTF16: selection)
     }
 
     func requestRestoration(_ state: MarkdownRestorationState) {
@@ -1635,7 +1635,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.setSelectedRange(selection)
         updateSelectedRange(selection)
         textView.undoManager?.removeAllActions()
-        engineShadow.reset(text: text, selectionUTF16: selection)
+        engineClient.reset(text: text, selectionUTF16: selection)
         lineNumberRuler.updateText(text)
         refreshWritingModePresentation()
     }
@@ -3294,7 +3294,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
                 let length = min(selection.length, utf16Length - location)
                 textView.setSelectedRange(NSRange(location: location, length: length))
             }
-            parent.session.synchronizeEngineShadow(
+            parent.session.synchronizeEngine(
                 text: parent.text,
                 selection: textView.selectedRange()
             )

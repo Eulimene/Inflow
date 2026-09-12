@@ -92,7 +92,7 @@ SwiftUI 与 AppKit 负责：
 5. 格式、插入与正文撤销只通过 Engine Command 修改同一字符串；尚未迁移的查找替换先作为普通 `ReplaceText` 对账，不能建立第二套权威历史。
 6. 结果必须绑定精确 UTF-8 字节快照；正文变化后，旧范围和旧链接决定立即失效。
 7. 默认写入方向已经反转：NSTextView 只保留乐观显示缓存，Rust 接受命令后才发布 Swift 文档投影；
-   禁止 Swift 与 Rust 同时独立接受正文写入。`INFLOW_EDITOR_ENGINE_SHADOW=0` 仅保留为迁移回退。
+   禁止 Swift 与 Rust 同时独立接受正文写入。生产路径不再提供关闭 Engine 事实源的环境开关。
 
 Swift String 的规范等价不能替代精确字节身份。Rust 返回 UTF-8 byte range，TextKit 使用 UTF-16 NSRange，转换必须同时验证边界、长度和完整扩展字素，不能截断 Unicode 或 ZWJ 序列。
 

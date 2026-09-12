@@ -1,13 +1,6 @@
 import Foundation
 import os
 
-enum EditorEngineShadowFeature {
-    static var isEnabled: Bool {
-        let override = ProcessInfo.processInfo.environment["INFLOW_EDITOR_ENGINE_SHADOW"]
-        return override != "0"
-    }
-}
-
 struct EditorEngineDerivedContent: Sendable {
     let revision: UInt64
     let sourceSnapshot: String
@@ -16,6 +9,7 @@ struct EditorEngineDerivedContent: Sendable {
     let syntaxHighlighting: [MarkdownSyntaxSpan]
     let references: [MarkdownReference]
     let renderBlocks: [EditorEngineRenderBlock]
+
 }
 
 struct EditorEngineRenderBlock: Equatable, Sendable {
@@ -27,7 +21,7 @@ struct EditorEngineRenderBlock: Equatable, Sendable {
     let visibleText: String
 }
 
-struct EditorEngineShadowTextEdit: Equatable, Sendable {
+struct EditorEngineTextEdit: Equatable, Sendable {
     let start: Int
     let end: Int
     let inserted: String
@@ -73,8 +67,8 @@ enum EditorEngineFormatOperation: Equatable, Sendable {
     case mermaid
 }
 
-enum EditorEngineShadowTextDiff {
-    static func replacement(from old: String, to new: String) -> EditorEngineShadowTextEdit? {
+enum EditorEngineTextDiff {
+    static func replacement(from old: String, to new: String) -> EditorEngineTextEdit? {
         guard !old.utf8.elementsEqual(new.utf8) else { return nil }
 
         var oldPrefix = old.startIndex
@@ -97,7 +91,7 @@ enum EditorEngineShadowTextDiff {
         }
 
         let start = old[..<oldPrefix].utf8.count
-        return EditorEngineShadowTextEdit(
+        return EditorEngineTextEdit(
             start: start,
             end: start + old[oldPrefix..<oldSuffix].utf8.count,
             inserted: String(new[newPrefix..<newSuffix])
@@ -118,8 +112,8 @@ enum EditorEngineShadowTextDiff {
 }
 
 @MainActor
-final class EditorEngineShadowQueue {
-    private let client: EditorEngineShadowClient?
+final class EditorEngineClient {
+    private let client: EditorEngineTransport?
     private var lastSubmittedText: String?
     private var pending: Task<Void, Never>?
     var onHistoryStateChange: ((Bool, Bool) -> Void)?
@@ -127,8 +121,8 @@ final class EditorEngineShadowQueue {
 
     var isEnabled: Bool { client != nil }
 
-    init(isEnabled: Bool = EditorEngineShadowFeature.isEnabled) {
-        client = isEnabled ? EditorEngineShadowClient() : nil
+    init(isEnabled: Bool = true) {
+        client = isEnabled ? EditorEngineTransport() : nil
     }
 
     func submit(text: String, selectionUTF16: NSRange) {
@@ -257,7 +251,7 @@ private enum EditorEngineHistoryDirection: String, Sendable {
     case redo
 }
 
-private final class EditorEngineShadowHandle: @unchecked Sendable {
+private final class EditorEngineHandle: @unchecked Sendable {
     let pointer: OpaquePointer
 
     init(pointer: OpaquePointer) {
@@ -269,10 +263,10 @@ private final class EditorEngineShadowHandle: @unchecked Sendable {
     }
 }
 
-private actor EditorEngineShadowClient {
+private actor EditorEngineTransport {
     private static let schemaVersion: UInt32 = 1
-    private let logger = Logger(subsystem: "com.inflow.desktop", category: "EditorEngineShadow")
-    private var handle: EditorEngineShadowHandle?
+    private let logger = Logger(subsystem: "com.inflow.desktop", category: "EditorEngine")
+    private var handle: EditorEngineHandle?
     private var projection = ""
     private var revision: UInt64 = 0
 
@@ -283,7 +277,7 @@ private actor EditorEngineShadowClient {
                 try create(text: swiftText, selection: selection)
                 return
             }
-            guard let edit = EditorEngineShadowTextDiff.replacement(
+            guard let edit = EditorEngineTextDiff.replacement(
                 from: projection,
                 to: swiftText
             ) else {
@@ -309,7 +303,7 @@ private actor EditorEngineShadowClient {
                   response.patch.baseRevision == revision,
                   response.patch.revision == revision + 1
             else {
-                throw EditorEngineShadowError.invalidResponse
+                throw EditorEngineBridgeError.invalidResponse
             }
 
             revision = response.patch.revision
@@ -317,7 +311,7 @@ private actor EditorEngineShadowClient {
             try compareSnapshot(to: swiftText)
         } catch {
             logger.error(
-                "Shadow synchronization failed; command=replace_text revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                "Engine synchronization failed; command=replace_text revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
             handle = nil
             projection = ""
@@ -327,7 +321,7 @@ private actor EditorEngineShadowClient {
                 try create(text: swiftText, selection: selection)
             } catch {
                 logger.error(
-                    "Shadow resync failed; command=create revision=0 error=\(String(describing: error), privacy: .public)"
+                    "Engine resync failed; command=create revision=0 error=\(String(describing: error), privacy: .public)"
                 )
             }
         }
@@ -362,7 +356,7 @@ private actor EditorEngineShadowClient {
     ) -> EditorEngineDerivedContent? {
         do {
             guard projection.utf8.elementsEqual(expectedText.utf8) else {
-                throw EditorEngineShadowError.mismatch(revision: revision)
+                throw EditorEngineBridgeError.mismatch(revision: revision)
             }
             let requestID = UUID().uuidString
             let envelope = EditorEngineRefreshEnvelope(
@@ -384,7 +378,7 @@ private actor EditorEngineShadowClient {
                   raw.mathEnabled == mathEnabled,
                   raw.mermaidEnabled == mermaidEnabled
             else {
-                throw EditorEngineShadowError.invalidResponse
+                throw EditorEngineBridgeError.invalidResponse
             }
             return try raw.validated(source: expectedText)
         } catch {
@@ -402,7 +396,7 @@ private actor EditorEngineShadowClient {
     ) -> EditorEngineMutation? {
         do {
             guard projection.utf8.elementsEqual(expectedText.utf8) else {
-                throw EditorEngineShadowError.mismatch(revision: revision)
+                throw EditorEngineBridgeError.mismatch(revision: revision)
             }
             let selection = try Self.byteSelection(selectionUTF16, in: expectedText)
             let requestID = UUID().uuidString
@@ -421,7 +415,7 @@ private actor EditorEngineShadowClient {
                   response.requestID == requestID,
                   response.patch.baseRevision == revision,
                   response.patch.revision == revision + 1
-            else { throw EditorEngineShadowError.invalidResponse }
+            else { throw EditorEngineBridgeError.invalidResponse }
             let mutation = try response.patch.validatedMutation(source: expectedText)
             revision = mutation.revision
             projection = mutation.resultingSource
@@ -441,7 +435,7 @@ private actor EditorEngineShadowClient {
     ) -> EditorEngineMutation? {
         do {
             guard projection.utf8.elementsEqual(expectedText.utf8) else {
-                throw EditorEngineShadowError.mismatch(revision: revision)
+                throw EditorEngineBridgeError.mismatch(revision: revision)
             }
             let requestID = UUID().uuidString
             let envelope = EditorEngineHistoryEnvelope(
@@ -457,7 +451,7 @@ private actor EditorEngineShadowClient {
                   response.requestID == requestID,
                   response.patch.baseRevision == revision,
                   response.patch.revision == revision + 1
-            else { throw EditorEngineShadowError.invalidResponse }
+            else { throw EditorEngineBridgeError.invalidResponse }
             let mutation = try response.patch.validatedMutation(source: expectedText)
             revision = mutation.revision
             projection = mutation.resultingSource
@@ -474,12 +468,12 @@ private actor EditorEngineShadowClient {
     func snapshot(expectedText: String) -> EditorEngineDocumentSnapshot? {
         do {
             guard projection.utf8.elementsEqual(expectedText.utf8) else {
-                throw EditorEngineShadowError.mismatch(revision: revision)
+                throw EditorEngineBridgeError.mismatch(revision: revision)
             }
             let snapshot = try readSnapshot()
             guard snapshot.text.utf8.elementsEqual(expectedText.utf8),
                   let selection = snapshot.selection.validated(in: snapshot.text, permitsEmpty: true)
-            else { throw EditorEngineShadowError.invalidResponse }
+            else { throw EditorEngineBridgeError.invalidResponse }
             return EditorEngineDocumentSnapshot(
                 revision: snapshot.revision,
                 text: snapshot.text,
@@ -522,15 +516,15 @@ private actor EditorEngineShadowClient {
               snapshot.selection == selection
         else {
             inflow_engine_free(pointer)
-            throw EditorEngineShadowError.mismatch(revision: snapshot.revision)
+            throw EditorEngineBridgeError.mismatch(revision: snapshot.revision)
         }
-        handle = EditorEngineShadowHandle(pointer: pointer)
+        handle = EditorEngineHandle(pointer: pointer)
         projection = text
         revision = snapshot.revision
     }
 
     private func dispatch<T: Encodable, Response: Decodable>(_ command: T) throws -> Response {
-        guard let handle else { throw EditorEngineShadowError.invalidHandle }
+        guard let handle else { throw EditorEngineBridgeError.invalidHandle }
         let encoded = try JSONEncoder().encode(command)
         let result: InflowBytesResult = encoded.withUnsafeBytes { buffer in
             inflow_engine_dispatch(
@@ -552,12 +546,12 @@ private actor EditorEngineShadowClient {
               snapshot.revision == revision,
               snapshot.text.utf8.elementsEqual(swiftText.utf8)
         else {
-            throw EditorEngineShadowError.mismatch(revision: snapshot.revision)
+            throw EditorEngineBridgeError.mismatch(revision: snapshot.revision)
         }
     }
 
     private func readSnapshot() throws -> EditorEngineSnapshot {
-        guard let handle else { throw EditorEngineShadowError.invalidHandle }
+        guard let handle else { throw EditorEngineBridgeError.invalidHandle }
         let result = inflow_engine_snapshot(handle.pointer)
         let payload = try InflowCoreBridge.copyAndFree(result.bytes)
         guard result.status == INFLOW_STATUS_OK else {
@@ -574,7 +568,7 @@ private actor EditorEngineShadowClient {
               let lower = range.lowerBound.samePosition(in: text.utf8),
               let upper = range.upperBound.samePosition(in: text.utf8)
         else {
-            throw EditorEngineShadowError.invalidSelection
+            throw EditorEngineBridgeError.invalidSelection
         }
         return EditorEngineSelection(
             start: text.utf8.distance(from: text.utf8.startIndex, to: lower),
@@ -584,17 +578,17 @@ private actor EditorEngineShadowClient {
 
     private static func bridgeError(status: InflowStatus, payload: Data) -> Error {
         if let response = try? JSONDecoder().decode(EditorEngineErrorResponse.self, from: payload) {
-            return EditorEngineShadowError.core(
+            return EditorEngineBridgeError.core(
                 status: status,
                 code: response.code,
                 revision: response.revision
             )
         }
-        return EditorEngineShadowError.core(status: status, code: "unknown", revision: nil)
+        return EditorEngineBridgeError.core(status: status, code: "unknown", revision: nil)
     }
 }
 
-private enum EditorEngineShadowError: Error, CustomStringConvertible {
+private enum EditorEngineBridgeError: Error, CustomStringConvertible {
     case invalidHandle
     case invalidResponse
     case invalidSelection
@@ -838,7 +832,7 @@ private struct EditorEngineStatePatch: Decodable {
         guard let text,
               let selection,
               let replaceRange = text.range.validated(in: source, permitsEmpty: true)
-        else { throw EditorEngineShadowError.invalidResponse }
+        else { throw EditorEngineBridgeError.invalidResponse }
         var bytes = Array(source.utf8)
         bytes.replaceSubrange(replaceRange, with: text.inserted.utf8)
         let resultingSource = String(decoding: bytes, as: UTF8.self)
@@ -847,7 +841,7 @@ private struct EditorEngineStatePatch: Decodable {
                   in: resultingSource,
                   permitsEmpty: true
               )
-        else { throw EditorEngineShadowError.invalidResponse }
+        else { throw EditorEngineBridgeError.invalidResponse }
         return EditorEngineMutation(
             baseRevision: baseRevision,
             revision: revision,
@@ -892,24 +886,24 @@ private struct EditorEngineDerivedState: Decodable {
         let headings = try analysis.headings.map { heading in
             guard (1...6).contains(heading.level),
                   let range = heading.sourceRange.validated(in: source, permitsEmpty: false)
-            else { throw EditorEngineShadowError.invalidResponse }
+            else { throw EditorEngineBridgeError.invalidResponse }
             return DocumentHeading(level: heading.level, title: heading.title, sourceUTF8Range: range)
         }
         guard let wordCount = Int(exactly: analysis.wordCount),
               let withSpaces = Int(exactly: analysis.characterCountWithSpaces),
               let withoutSpaces = Int(exactly: analysis.characterCountWithoutSpaces)
-        else { throw EditorEngineShadowError.invalidResponse }
+        else { throw EditorEngineBridgeError.invalidResponse }
 
         let highlightRanges = try highlights.map { highlight in
             guard let kind = highlight.kind.syntaxKind,
                   let range = highlight.sourceRange.validated(in: source, permitsEmpty: false)
-            else { throw EditorEngineShadowError.invalidResponse }
+            else { throw EditorEngineBridgeError.invalidResponse }
             return (kind, range)
         }
         guard let utf16Ranges = MarkdownSyntaxRange.utf16Ranges(
             for: highlightRanges.map(\.1),
             in: source
-        ) else { throw EditorEngineShadowError.invalidResponse }
+        ) else { throw EditorEngineBridgeError.invalidResponse }
         let syntax = zip(highlightRanges, utf16Ranges).map { value, utf16Range in
             MarkdownSyntaxSpan(kind: value.0, utf8Range: value.1, utf16Range: utf16Range)
         }
@@ -917,13 +911,13 @@ private struct EditorEngineDerivedState: Decodable {
         let validatedReferences = try references.map { reference in
             guard let kind = MarkdownReferenceKind(rawValue: reference.kind),
                   let range = reference.sourceRange.validated(in: source, permitsEmpty: false)
-            else { throw EditorEngineShadowError.invalidResponse }
+            else { throw EditorEngineBridgeError.invalidResponse }
             return MarkdownReference(kind: kind, target: reference.target, sourceUTF8Range: range)
         }
         let blocks = try render.blocks.map { block in
             guard let range = block.sourceRange.validated(in: source, permitsEmpty: false),
                   let depth = Int(exactly: block.depth)
-            else { throw EditorEngineShadowError.invalidResponse }
+            else { throw EditorEngineBridgeError.invalidResponse }
             return EditorEngineRenderBlock(
                 id: block.blockID,
                 kind: block.kind,
