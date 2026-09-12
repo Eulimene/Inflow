@@ -705,7 +705,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
         let baseParagraph = NSMutableParagraphStyle()
         baseParagraph.lineHeightMultiple = CGFloat(sourceAppearance.lineHeight)
-        baseParagraph.paragraphSpacing = 6
+        baseParagraph.paragraphSpacing = 0
         textView.font = baseFont
         textView.defaultParagraphStyle = baseParagraph
         textView.typingAttributes = [
@@ -750,7 +750,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         {
             let editingParagraph = NSMutableParagraphStyle()
             editingParagraph.lineHeightMultiple = CGFloat(sourceAppearance.lineHeight)
-            editingParagraph.paragraphSpacing = 6
+            editingParagraph.paragraphSpacing = 0
             storage.addAttributes(
                 [
                     .font: NSFont.monospacedSystemFont(
@@ -885,6 +885,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 alternative: "Mermaid 图表",
                 sourceRange: diagram.sourceRange.utf16Range,
                 fillsAvailableWidth: false,
+                collapsesSourceLines: true,
                 storage: storage
             )
         }
@@ -985,6 +986,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         alternative: String,
         sourceRange: NSRange,
         fillsAvailableWidth: Bool,
+        collapsesSourceLines: Bool = false,
         storage: NSTextStorage
     ) {
         guard sourceRange.length > 0, NSMaxRange(sourceRange) <= storage.length else { return }
@@ -1012,6 +1014,14 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             sourceRange: sourceRange,
             fillsAvailableWidth: fillsAvailableWidth
         )
+        if collapsesSourceLines {
+            reserveRenderedOverlaySpace(
+                sourceRange: sourceRange,
+                size: renderedSize,
+                storage: storage
+            )
+            return
+        }
         storage.addAttribute(
             .kern,
             value: renderedSize.width,
@@ -1053,16 +1063,47 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             ],
             range: sourceRange
         )
+        reserveRenderedOverlaySpace(sourceRange: sourceRange, size: size, storage: storage)
+    }
+
+    /// A rendered block is represented by one visible layout anchor. The remaining source must
+    /// keep its characters for lossless editing, but must not keep one TextKit line fragment per
+    /// Markdown row. Otherwise a long table or Mermaid block leaves a matching column of empty
+    /// line fragments below its overlay.
+    private func reserveRenderedOverlaySpace(
+        sourceRange: NSRange,
+        size: NSSize,
+        storage: NSTextStorage
+    ) {
+        guard sourceRange.length > 0, NSMaxRange(sourceRange) <= storage.length else { return }
+        let inheritedStyle = (
+            storage.attribute(.paragraphStyle, at: sourceRange.location, effectiveRange: nil)
+                as? NSParagraphStyle
+        )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+        let collapsedStyle = inheritedStyle.mutableCopy() as? NSMutableParagraphStyle
+            ?? NSMutableParagraphStyle()
+        collapsedStyle.minimumLineHeight = 0.1
+        collapsedStyle.maximumLineHeight = 0.1
+        collapsedStyle.lineHeightMultiple = 0.01
+        collapsedStyle.lineSpacing = 0
+        collapsedStyle.paragraphSpacingBefore = 0
+        collapsedStyle.paragraphSpacing = 0
+        storage.addAttribute(.paragraphStyle, value: collapsedStyle, range: sourceRange)
+
         storage.addAttribute(
             .kern,
             value: size.width,
             range: NSRange(location: sourceRange.location, length: 1)
         )
-        let paragraphStyle = (
-            storage.attribute(.paragraphStyle, at: sourceRange.location, effectiveRange: nil)
-                as? NSParagraphStyle
-        )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
-        paragraphStyle.minimumLineHeight = max(paragraphStyle.minimumLineHeight, size.height + 10)
+        let paragraphStyle = inheritedStyle
+        let anchorHeight = size.height + 10
+        paragraphStyle.minimumLineHeight = anchorHeight
+        paragraphStyle.maximumLineHeight = anchorHeight
+        paragraphStyle.lineHeightMultiple = 1
+        paragraphStyle.lineSpacing = 0
+        paragraphStyle.paragraphSpacingBefore = 0
+        paragraphStyle.paragraphSpacing = 0
+        paragraphStyle.lineBreakMode = .byClipping
         storage.addAttribute(
             .paragraphStyle,
             value: paragraphStyle,
@@ -2751,6 +2792,7 @@ final class WindowAwareTextView: NSTextView {
                             as? NSParagraphStyle
                     )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
                     paragraph.minimumLineHeight = size.height + 10
+                    paragraph.maximumLineHeight = size.height + 10
                     storage.addAttribute(
                         .paragraphStyle,
                         value: paragraph,
@@ -2764,6 +2806,7 @@ final class WindowAwareTextView: NSTextView {
                             as? NSParagraphStyle
                     )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
                     paragraph.minimumLineHeight = size.height + 10
+                    paragraph.maximumLineHeight = size.height + 10
                     storage.addAttribute(
                         .paragraphStyle,
                         value: paragraph,

@@ -481,6 +481,111 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
+    func testRenderedTableUsesOneLayoutAnchorAndCollapsesBackingRows() async throws {
+        let source = """
+        表格之前
+
+        | 名称 | 说明 |
+        | --- | --- |
+        | A | 第一行 |
+        | B | 第二行 |
+        | C | 第三行 |
+        | D | 第四行 |
+
+        表格之后
+        """
+        let session = MarkdownSourceEditorSession()
+        session.scrollView.frame = NSRect(x: 0, y: 0, width: 700, height: 520)
+        session.scrollView.layoutSubtreeIfNeeded()
+        session.textView.string = source
+        let derivedContent = await session.deriveContent(for: source, configuration: .default)
+        let content = try XCTUnwrap(derivedContent)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+
+        let table = try XCTUnwrap(content.nativeRenderPlan.tables.first)
+        let tableRange = table.sourceRange.utf16Range
+        let tableView = try XCTUnwrap(
+            session.textView.renderedTable(atUTF16Location: tableRange.location)
+        )
+        let storage = try XCTUnwrap(session.textView.textStorage)
+        let anchorStyle = try XCTUnwrap(
+            storage.attribute(
+                .paragraphStyle,
+                at: tableRange.location,
+                effectiveRange: nil
+            ) as? NSParagraphStyle
+        )
+        let backingRowLocation = (source as NSString).range(of: "| B | 第二行 |").location
+        let backingRowStyle = try XCTUnwrap(
+            storage.attribute(
+                .paragraphStyle,
+                at: backingRowLocation,
+                effectiveRange: nil
+            ) as? NSParagraphStyle
+        )
+
+        XCTAssertEqual(
+            anchorStyle.minimumLineHeight,
+            tableView.renderedSize.height + 10,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            anchorStyle.maximumLineHeight,
+            anchorStyle.minimumLineHeight,
+            accuracy: 0.001
+        )
+        XCTAssertLessThanOrEqual(backingRowStyle.maximumLineHeight, 0.101)
+        XCTAssertEqual(backingRowStyle.paragraphSpacingBefore, 0, accuracy: 0.001)
+        XCTAssertEqual(backingRowStyle.paragraphSpacing, 0, accuracy: 0.001)
+
+        let layoutManager = try XCTUnwrap(session.textView.layoutManager)
+        let textContainer = try XCTUnwrap(session.textView.textContainer)
+        layoutManager.ensureLayout(for: textContainer)
+        let anchorGlyph = layoutManager.glyphIndexForCharacter(at: tableRange.location)
+        let followingLocation = (source as NSString).range(of: "表格之后").location
+        let followingGlyph = layoutManager.glyphIndexForCharacter(at: followingLocation)
+        let anchorLine = layoutManager.lineFragmentRect(
+            forGlyphAt: anchorGlyph,
+            effectiveRange: nil,
+            withoutAdditionalLayout: true
+        )
+        let followingLine = layoutManager.lineFragmentRect(
+            forGlyphAt: followingGlyph,
+            effectiveRange: nil,
+            withoutAdditionalLayout: true
+        )
+        XCTAssertLessThanOrEqual(
+            followingLine.minY - anchorLine.minY,
+            tableView.renderedSize.height + 40,
+            "hidden Markdown rows must not leave a large blank region after the table"
+        )
+    }
+
+    @MainActor
+    func testRenderedParagraphsDoNotAddExtraParagraphSpacing() async throws {
+        let source = "第一段\n\n第二段"
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let storage = try XCTUnwrap(session.textView.textStorage)
+
+        for text in ["第一段", "第二段"] {
+            let location = (source as NSString).range(of: text).location
+            let style = try XCTUnwrap(
+                storage.attribute(
+                    .paragraphStyle,
+                    at: location,
+                    effectiveRange: nil
+                ) as? NSParagraphStyle
+            )
+            XCTAssertEqual(style.paragraphSpacing, 0, accuracy: 0.001)
+        }
+        let defaultStyle = try XCTUnwrap(session.textView.defaultParagraphStyle)
+        XCTAssertEqual(defaultStyle.paragraphSpacing, 0, accuracy: 0.001)
+    }
+
+    @MainActor
     func testRenderedSessionKeepsProseRenderedAndUnmountsOnlySourceOnlyBlocks() async throws {
         let source = "第一段 **粗体**\n\n```mermaid\nflowchart LR\nA --> B\n```\n\n第二段 *斜体*"
         let plan = RenderedMarkdownEditor.plan(for: source)
