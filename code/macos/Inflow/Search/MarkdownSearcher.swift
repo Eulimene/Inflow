@@ -51,78 +51,14 @@ enum MarkdownSearcher {
         query: String,
         caseSensitive: Bool
     ) throws -> DocumentSearchResult {
-        guard InflowCoreBridge.isCompatible else {
+        guard let result = DocumentSearchResult.searchSynchronously(
+            source: source,
+            query: query,
+            caseSensitive: caseSensitive
+        ) else {
             throw MarkdownSearchError.coreFailure
         }
-
-        let sourceUTF8 = Data(source.utf8)
-        let queryUTF8 = Data(query.utf8)
-        let result: InflowSearchResult = sourceUTF8.withUnsafeBytes { sourceBuffer in
-            queryUTF8.withUnsafeBytes { queryBuffer in
-                inflow_document_search(
-                    sourceBuffer.bindMemory(to: UInt8.self).baseAddress,
-                    UInt(sourceBuffer.count),
-                    queryBuffer.bindMemory(to: UInt8.self).baseAddress,
-                    UInt(queryBuffer.count),
-                    caseSensitive ? 1 : 0
-                )
-            }
-        }
-        defer {
-            inflow_owned_search_matches_free(result.matches.data, result.matches.length)
-        }
-
-        guard result.status == INFLOW_STATUS_OK else {
-            throw MarkdownSearchError.coreFailure
-        }
-
-        let count = try checkedInt(result.matches.length)
-        guard count == 0 || result.matches.data != nil else {
-            throw MarkdownSearchError.invalidCoreResult
-        }
-
-        let rawMatches = UnsafeBufferPointer(start: result.matches.data, count: count)
-        var matches: [DocumentSearchMatch] = []
-        matches.reserveCapacity(count)
-        var matchedTextCounts: [Data: Int] = [:]
-        var previousEnd = 0
-
-        for rawMatch in rawMatches {
-            let start = try checkedInt(rawMatch.source_start)
-            let end = try checkedInt(rawMatch.source_end)
-            guard start >= previousEnd,
-                  start < end,
-                  end <= sourceUTF8.count,
-                  MarkdownSourceRange.navigationTarget(
-                      forUTF8Range: start..<end,
-                      in: source
-                  ) != nil
-            else {
-                throw MarkdownSearchError.invalidCoreResult
-            }
-
-            let matchedUTF8 = sourceUTF8.subdata(in: start..<end)
-            matches.append(
-                DocumentSearchMatch(
-                    utf8Range: start..<end,
-                    matchedUTF8: matchedUTF8
-                )
-            )
-            matchedTextCounts[matchedUTF8, default: 0] += 1
-            previousEnd = end
-        }
-
-        return DocumentSearchResult(
-            matches: matches,
-            matchedTextCounts: matchedTextCounts
-        )
-    }
-
-    private static func checkedInt<T: BinaryInteger>(_ value: T) throws -> Int {
-        guard let value = Int(exactly: value) else {
-            throw MarkdownSearchError.invalidCoreResult
-        }
-        return value
+        return result
     }
 }
 

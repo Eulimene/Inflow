@@ -1,60 +1,108 @@
 import Foundation
 import os
 
+private func withTemporaryEditorEngine<Result>(
+    source: String,
+    selection: EditorEngineSelection = EditorEngineSelection(start: 0, end: 0),
+    _ body: (OpaquePointer) -> Result?
+) -> Result? {
+    guard InflowCoreBridge.isCompatible else { return nil }
+    let request = EditorEngineCreateRequest(
+        schemaVersion: 1,
+        documentID: UUID().uuidString,
+        text: source,
+        selection: selection,
+        mode: .editable
+    )
+    guard let data = try? JSONEncoder().encode(request) else { return nil }
+    let created: InflowEngineCreateResult = data.withUnsafeBytes { bytes in
+        inflow_engine_create(
+            bytes.bindMemory(to: UInt8.self).baseAddress,
+            UInt(bytes.count)
+        )
+    }
+    guard created.status == INFLOW_STATUS_OK, let handle = created.engine else {
+        _ = try? InflowCoreBridge.copyAndFree(created.payload)
+        return nil
+    }
+    defer { inflow_engine_free(handle) }
+    _ = try? InflowCoreBridge.copyAndFree(created.payload)
+    return body(handle)
+}
+
+private func dispatchTemporaryEditorEngine<Envelope: Encodable>(
+    _ envelope: Envelope,
+    to handle: OpaquePointer
+) -> EditorEngineDispatchResponse? {
+    guard let encoded = try? JSONEncoder().encode(envelope) else { return nil }
+    let result: InflowBytesResult = encoded.withUnsafeBytes { bytes in
+        inflow_engine_dispatch(
+            handle,
+            bytes.bindMemory(to: UInt8.self).baseAddress,
+            UInt(bytes.count)
+        )
+    }
+    guard let payload = try? InflowCoreBridge.copyAndFree(result.bytes),
+          result.status == INFLOW_STATUS_OK
+    else { return nil }
+    return try? JSONDecoder().decode(EditorEngineDispatchResponse.self, from: payload)
+}
+
 extension EditorEngineDerivedContent {
     static func deriveSynchronously(
         source: String,
         configuration: PreviewAppearanceConfiguration = .default
     ) -> Self? {
-        guard InflowCoreBridge.isCompatible else { return nil }
-        let request = EditorEngineCreateRequest(
-            schemaVersion: 1,
-            documentID: UUID().uuidString,
-            text: source,
-            selection: EditorEngineSelection(start: 0, end: 0),
-            mode: .editable
-        )
-        guard let data = try? JSONEncoder().encode(request) else { return nil }
-        let created: InflowEngineCreateResult = data.withUnsafeBytes { bytes in
-            inflow_engine_create(
-                bytes.bindMemory(to: UInt8.self).baseAddress,
-                UInt(bytes.count)
+        withTemporaryEditorEngine(source: source) { handle in
+            let requestID = UUID().uuidString
+            let envelope = EditorEngineRefreshEnvelope(
+                schemaVersion: 1,
+                requestID: requestID,
+                command: EditorEngineRefreshCommand(
+                    type: "refresh_derived",
+                    revision: 0,
+                    mathEnabled: configuration.mathRenderingEnabled,
+                    mermaidEnabled: configuration.mermaidRenderingEnabled
+                )
             )
+            guard let response = dispatchTemporaryEditorEngine(envelope, to: handle),
+                  response.requestID == requestID,
+                  let derived = response.patch.derived
+            else { return nil }
+            return try? derived.validated(source: source)
         }
-        guard created.status == INFLOW_STATUS_OK, let handle = created.engine else {
-            _ = try? InflowCoreBridge.copyAndFree(created.payload)
-            return nil
-        }
-        defer { inflow_engine_free(handle) }
-        _ = try? InflowCoreBridge.copyAndFree(created.payload)
-        let requestID = UUID().uuidString
-        let envelope = EditorEngineRefreshEnvelope(
-            schemaVersion: 1,
-            requestID: requestID,
-            command: EditorEngineRefreshCommand(
-                type: "refresh_derived",
-                revision: 0,
-                mathEnabled: configuration.mathRenderingEnabled,
-                mermaidEnabled: configuration.mermaidRenderingEnabled
-            )
-        )
-        guard let encoded = try? JSONEncoder().encode(envelope) else { return nil }
-        let result: InflowBytesResult = encoded.withUnsafeBytes { bytes in
-            inflow_engine_dispatch(
-                handle,
-                bytes.bindMemory(to: UInt8.self).baseAddress,
-                UInt(bytes.count)
-            )
-        }
-        guard let payload = try? InflowCoreBridge.copyAndFree(result.bytes),
-              result.status == INFLOW_STATUS_OK,
-              let response = try? JSONDecoder().decode(EditorEngineDispatchResponse.self, from: payload),
-              response.requestID == requestID,
-              let derived = response.patch.derived
-        else { return nil }
-        return try? derived.validated(source: source)
     }
 
+}
+
+extension DocumentSearchResult {
+    static func searchSynchronously(
+        source: String,
+        query: String,
+        caseSensitive: Bool
+    ) -> Self? {
+        withTemporaryEditorEngine(source: source) { handle in
+            let requestID = UUID().uuidString
+            let envelope = EditorEngineSearchEnvelope(
+                schemaVersion: 1,
+                requestID: requestID,
+                command: EditorEngineSearchCommand(
+                    type: "search",
+                    revision: 0,
+                    query: query,
+                    caseSensitive: caseSensitive
+                )
+            )
+            guard let response = dispatchTemporaryEditorEngine(envelope, to: handle),
+                  response.requestID == requestID,
+                  response.patch.baseRevision == 0,
+                  response.patch.revision == 0,
+                  let search = response.patch.search,
+                  search.revision == 0
+            else { return nil }
+            return try? search.validated(source: source)
+        }
+    }
 }
 
 @MainActor
