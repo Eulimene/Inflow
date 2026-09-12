@@ -57,20 +57,7 @@ pub fn html_fragment_for_preview_from_document(
     let events = safe_events(document, configuration, false, true);
     let mut output = String::with_capacity(document.source().len());
     html::push_html(&mut output, events.into_iter());
-    annotate_blocks(output, document, configuration, false)
-}
-
-/// Renders the canonical in-app fragment and adds inert source metadata used
-/// by the editable `WebKit` host. The rendered elements and presentation are
-/// otherwise byte-for-byte the same as the read-only preview fragment.
-pub fn html_fragment_for_editor(markdown: &str, configuration: RenderConfiguration) -> String {
-    let document = DocumentIr::parse(markdown, options_with_configuration(configuration));
-    annotate_blocks(
-        html_fragment_from_document(&document, configuration),
-        &document,
-        configuration,
-        true,
-    )
+    annotate_blocks(output, document, configuration)
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -89,7 +76,6 @@ fn annotate_blocks(
     mut html: String,
     document: &DocumentIr,
     configuration: RenderConfiguration,
-    include_source_hex: bool,
 ) -> String {
     let annotations = editable_block_annotations(document, configuration);
     let mut search_start = 0;
@@ -104,7 +90,6 @@ fn annotate_blocks(
         };
         let tag_end = tag_start + relative_end;
         let opening = &html[tag_start..=tag_end];
-        let source = &document.source().as_bytes()[annotation.source_range.clone()];
         let mut attributes = String::new();
         if !opening.contains("data-inflow-source-start=") {
             write!(
@@ -113,10 +98,6 @@ fn annotate_blocks(
                 annotation.block_id, annotation.source_range.start, annotation.source_range.end
             )
             .expect("writing to a String cannot fail");
-        }
-        if include_source_hex {
-            write!(attributes, " data-inflow-source-hex=\"{}\"", hex(source))
-                .expect("writing to a String cannot fail");
         }
         let insertion = if html.as_bytes().get(tag_end.wrapping_sub(1)) == Some(&b'/') {
             tag_end - 1
@@ -520,16 +501,17 @@ mod tests {
     }
 
     #[test]
-    fn preview_blocks_carry_core_owned_edit_ranges_without_changing_delivery_html() {
+    fn preview_blocks_carry_core_owned_ranges_without_changing_delivery_html() {
         let markdown = "# 标题\n\n正文 **加粗**\n\n| A | B |\n| - | - |\n| 1 | 2 |\n";
-        let preview = html_fragment_for_editor(markdown, RenderConfiguration::default());
+        let document = DocumentIr::parse(markdown, options());
+        let preview =
+            html_fragment_for_preview_from_document(&document, RenderConfiguration::default());
 
         let heading_end = markdown.find('\n').expect("heading line ending") + 1;
         assert!(preview.contains("<h1 data-inflow-block-id=\"heading-"));
         assert!(preview.contains(&format!(
             "data-inflow-source-start=\"0\" data-inflow-source-end=\"{heading_end}\""
         )));
-        assert!(preview.contains("data-inflow-source-hex=\"2320e6a087e9a2980a\""));
         assert!(preview.contains("<p data-inflow-block-id=\"paragraph-"));
         assert!(preview.contains("<table data-inflow-block-id=\"table-"));
 

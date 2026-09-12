@@ -54,7 +54,7 @@
 - Engine 的 `RefreshDerived(revision)` 由一次 `DocumentIr` 解析同时产生分析、语法范围、引用、稳定块 ID 的 `RenderIr` 和安全 HTML，并缓存到对应 revision；Swift 文档派生热路径直接消费这一响应，失败才回退旧散点调用。旧 `RenderedMarkdownPlanner` 尚未删除，因此不能据此声称双解析器已经完全清除。
 - Engine 预览 HTML 的链接 target metadata 在 Rust 处理 `Link` AST 事件时直接附着到同一个 `<a>`；默认派生热路径跳过 Swift 的 anchor/reference 正则配对。标题 DOM id 的旧后处理和关闭 Engine 时的完整旧 renderer 仍待清理。
 - 顶层预览节点携带 Rust RenderIR 的稳定 `data-inflow-block-id` 与 source range；WKWebView 首次装载后通过隔离 content world 做块级 DOM patch，字节相同的节点保留实例，变化节点替换并按新顺序挂载，同时以原顶部可见块恢复滚动位置。只有初次装载、页面未就绪或补丁失败才执行完整 `loadHTMLString`。
-- 可编辑 WKWebView 只保留在显式环境开关 `INFLOW_EDITABLE_WEB_PREVIEW=1` 后作为实验；默认“即时编辑”仍是持久 NSTextView，不把 DOM 转换结果写成主编辑路径。
+- 可编辑 WKWebView 实验及 DOM→Markdown 转换路径已经删除；“即时编辑”固定使用持久 NSTextView，WKWebView 只承担只读预览。
 - 源码编辑、实时预览分栏左侧与即时编辑复用同一个 MarkdownSourceEditor 和 MarkdownSourceEditorSession；分栏右侧使用当前内存正文生成的只读 WebKit 结果，即时编辑在原始字符串上应用 Rust 解析范围对应的 TextKit 展示属性。
 - 文本修改由 NSTextView 发布回同一个绑定；默认撤销与重做走 Rust Engine 历史，旧 AppKit UndoManager 只在关闭 Engine 的回退路径中使用。展示属性和 Engine patch 回写不登记正文 undo。
 - EditorViewMode 的历史内部 case 名 preview 现在对应用户可见的“即时编辑”。
@@ -128,7 +128,7 @@
 
 判断当前能力时，以已批准的个人首版范围、实际安装的菜单和主流程、以及 UAT-PERSONAL-01 至 10 为准，而不是以某个源文件或测试名称是否存在为准。
 
-自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 403 个 XCTest method：297 个 `current-direct`、13 个依赖真实 `NSApplication` 菜单或生命周期的 `current-host`、88 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
+自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 402 个 XCTest method：296 个 `current-direct`、13 个依赖真实 `NSApplication` 菜单或生命周期的 `current-host`、88 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
 
 ## 4. 人工 UAT 状态
 

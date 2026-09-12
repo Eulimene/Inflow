@@ -849,8 +849,9 @@ pub unsafe extern "C" fn inflow_markdown_render_html_with_options(
     .unwrap_or_else(|_| InflowEncodeResult::error(STATUS_PANIC))
 }
 
-/// Renders the same safe HTML fragment as preview and adds inert source-range
-/// metadata for the editable `WebKit` host.
+/// Compatibility alias for clients built while the editable `WebKit` experiment
+/// existed. It now returns the canonical read-only fragment and never embeds
+/// source text or editing metadata.
 ///
 /// # Safety
 ///
@@ -862,25 +863,7 @@ pub unsafe extern "C" fn inflow_markdown_render_editor_html_with_options(
     length: usize,
     options: u32,
 ) -> InflowEncodeResult {
-    catch_unwind(AssertUnwindSafe(|| {
-        let Some(configuration) = render_configuration(options) else {
-            return InflowEncodeResult::error(STATUS_INVALID_ARGUMENT);
-        };
-        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
-            return InflowEncodeResult::error(STATUS_INVALID_ARGUMENT);
-        };
-        let Ok(markdown) = std::str::from_utf8(input) else {
-            return InflowEncodeResult::error(STATUS_INVALID_UTF8);
-        };
-
-        InflowEncodeResult {
-            status: STATUS_OK,
-            bytes: InflowOwnedBytes::from_vec(
-                render::html_fragment_for_editor(markdown, configuration).into_bytes(),
-            ),
-        }
-    }))
-    .unwrap_or_else(|_| InflowEncodeResult::error(STATUS_PANIC))
+    unsafe { inflow_markdown_render_html_with_options(utf8, length, options) }
 }
 
 /// Renders one UTF-8 Mermaid fenced Markdown block into a deterministic,
@@ -1979,16 +1962,9 @@ mod tests {
     }
 
     #[test]
-    fn ffi_editor_renderer_preserves_preview_markup_and_adds_source_metadata() {
+    fn ffi_legacy_editor_renderer_is_read_only_and_does_not_embed_source() {
         let markdown = "正文 **加粗**";
-        let preview = unsafe {
-            inflow_markdown_render_html_with_options(
-                markdown.as_ptr(),
-                markdown.len(),
-                RENDER_OPTIONS_DEFAULT,
-            )
-        };
-        let editor = unsafe {
+        let result = unsafe {
             inflow_markdown_render_editor_html_with_options(
                 markdown.as_ptr(),
                 markdown.len(),
@@ -1996,22 +1972,13 @@ mod tests {
             )
         };
 
-        assert_eq!(preview.status, STATUS_OK);
-        assert_eq!(editor.status, STATUS_OK);
-        let preview_html = unsafe {
-            std::slice::from_raw_parts(preview.bytes.data, preview.bytes.length).to_vec()
-        };
-        let editor_html =
-            unsafe { std::slice::from_raw_parts(editor.bytes.data, editor.bytes.length).to_vec() };
-        unsafe { inflow_owned_bytes_free(preview.bytes.data, preview.bytes.length) };
-        unsafe { inflow_owned_bytes_free(editor.bytes.data, editor.bytes.length) };
-        let preview_html = String::from_utf8(preview_html).expect("preview UTF-8");
-        let editor_html = String::from_utf8(editor_html).expect("editor UTF-8");
-
-        assert_eq!(preview_html, "<p>正文 <strong>加粗</strong></p>\n");
-        assert!(editor_html.starts_with("<p data-inflow-block-id=\"paragraph-"));
-        assert!(editor_html.contains("data-inflow-source-start=\"0\""));
-        assert!(editor_html.ends_with(">正文 <strong>加粗</strong></p>\n"));
+        assert_eq!(result.status, STATUS_OK);
+        let html =
+            unsafe { std::slice::from_raw_parts(result.bytes.data, result.bytes.length).to_vec() };
+        unsafe { inflow_owned_bytes_free(result.bytes.data, result.bytes.length) };
+        let html = String::from_utf8(html).expect("renderer returns UTF-8");
+        assert_eq!(html, "<p>正文 <strong>加粗</strong></p>\n");
+        assert!(!html.contains("data-inflow-source-"));
     }
 
     #[test]

@@ -314,10 +314,9 @@ InflowEncodeResult inflow_markdown_render_html_with_options(
     InflowRenderOptions options
 );
 
-/// Renders the canonical in-app HTML fragment with inert source-range
-/// metadata used only by the editable WebKit host. Its visible markup is the
-/// same as inflow_markdown_render_html_with_options. Returned bytes belong to
-/// Inflow and must be released with inflow_owned_bytes_free.
+/// Legacy compatibility alias. The editable WebKit experiment has been
+/// removed; this returns the same read-only fragment as
+/// inflow_markdown_render_html_with_options and never embeds source text.
 InflowEncodeResult inflow_markdown_render_editor_html_with_options(
     const uint8_t *utf8,
     uintptr_t length,
