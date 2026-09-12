@@ -249,6 +249,19 @@ final class EditorEngineClient {
         )
     }
 
+    func canClearFormat(
+        text: String,
+        selectionUTF16: NSRange
+    ) async -> Bool {
+        submit(text: text, selectionUTF16: selectionUTF16)
+        await pending?.value
+        guard !Task.isCancelled else { return false }
+        return await client?.canClearFormat(
+            expectedText: text,
+            selectionUTF16: selectionUTF16
+        ) ?? false
+    }
+
     func undo(text: String, selectionUTF16: NSRange) async -> EditorEngineMutation? {
         await historyMutation(
             direction: .undo,
@@ -535,6 +548,42 @@ private actor EditorEngineTransport {
         }
     }
 
+    func canClearFormat(
+        expectedText: String,
+        selectionUTF16: NSRange
+    ) -> Bool {
+        do {
+            guard projection.utf8.elementsEqual(expectedText.utf8) else {
+                throw EditorEngineBridgeError.mismatch(revision: revision)
+            }
+            let selection = try Self.byteSelection(selectionUTF16, in: expectedText)
+            let requestID = UUID().uuidString
+            let envelope = EditorEngineInspectFormatEnvelope(
+                schemaVersion: Self.schemaVersion,
+                requestID: requestID,
+                command: EditorEngineInspectFormatCommand(
+                    type: "inspect_format",
+                    revision: revision,
+                    selection: selection
+                )
+            )
+            let response: EditorEngineDispatchResponse = try dispatch(envelope)
+            guard response.schemaVersion == Self.schemaVersion,
+                  response.requestID == requestID,
+                  response.patch.baseRevision == revision,
+                  response.patch.revision == revision,
+                  let capabilities = response.patch.formatCapabilities,
+                  capabilities.revision == revision
+            else { throw EditorEngineBridgeError.invalidResponse }
+            return capabilities.canClear
+        } catch {
+            logger.error(
+                "Engine format inspection failed; revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
     func historyMutation(
         direction: EditorEngineHistoryDirection,
         expectedText: String
@@ -775,6 +824,18 @@ private struct EditorEngineSearchEnvelope: Encodable {
     }
 }
 
+private struct EditorEngineInspectFormatEnvelope: Encodable {
+    let schemaVersion: UInt32
+    let requestID: String
+    let command: EditorEngineInspectFormatCommand
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case requestID = "request_id"
+        case command
+    }
+}
+
 private struct EditorEngineHistoryEnvelope: Encodable {
     let schemaVersion: UInt32
     let requestID: String
@@ -809,6 +870,12 @@ private struct EditorEngineSearchCommand: Encodable {
         case query
         case caseSensitive = "case_sensitive"
     }
+}
+
+private struct EditorEngineInspectFormatCommand: Encodable {
+    let type: String
+    let revision: UInt64
+    let selection: EditorEngineSelection
 }
 
 private struct EditorEngineFormatCommand: Encodable {
@@ -947,6 +1014,7 @@ private struct EditorEngineStatePatch: Decodable {
     let selection: EditorEngineSelection?
     let derived: EditorEngineDerivedState?
     let search: EditorEngineRawSearchResult?
+    let formatCapabilities: EditorEngineRawFormatCapabilities?
     let canUndo: Bool
     let canRedo: Bool
 
@@ -957,6 +1025,7 @@ private struct EditorEngineStatePatch: Decodable {
         case selection
         case derived
         case search
+        case formatCapabilities = "format_capabilities"
         case canUndo = "can_undo"
         case canRedo = "can_redo"
     }
@@ -987,6 +1056,16 @@ private struct EditorEngineStatePatch: Decodable {
             canUndo: canUndo,
             canRedo: canRedo
         )
+    }
+}
+
+private struct EditorEngineRawFormatCapabilities: Decodable {
+    let revision: UInt64
+    let canClear: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case revision
+        case canClear = "can_clear"
     }
 }
 

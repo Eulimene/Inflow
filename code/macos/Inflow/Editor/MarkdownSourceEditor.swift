@@ -260,6 +260,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     let scrollView: NSScrollView
     let textView: WindowAwareTextView
     @Published private(set) var selectedUTF16Range = NSRange(location: 0, length: 0)
+    @Published private(set) var canClearFormat = false
     @Published private(set) var verticalScrollOffset = 0.0
     @Published private(set) var verticalScrollFraction = 0.0
     fileprivate var appliedSelectionGeneration: Int?
@@ -286,6 +287,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var renderedInteractionTask: Task<Void, Never>?
     private let lineNumberRuler: MarkdownLineNumberRulerView
     private let engineClient: EditorEngineClient
+    private var formatInspectionGeneration = 0
+    private var formatInspectionTask: Task<Void, Never>?
     private var isApplyingEngineMutation = false
     private var focusModeEnabled = false
     private var typewriterModeEnabled = false
@@ -375,6 +378,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 )
             }
             self?.invalidateSyntaxApplication()
+            self?.scheduleFormatInspection()
             self?.lineNumberRuler.updateText(text)
             self?.refreshWritingModePresentation()
             if self?.engineClient.isEnabled != true {
@@ -1644,10 +1648,40 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     fileprivate func updateSelectedRange(_ range: NSRange) {
         if selectedUTF16Range != range {
             selectedUTF16Range = range
+            scheduleFormatInspection()
             scheduleRenderedInteractionPresentation()
         }
         syncRenderedTypingAttributes()
         refreshWritingModePresentation()
+    }
+
+    private func scheduleFormatInspection() {
+        formatInspectionTask?.cancel()
+        formatInspectionGeneration &+= 1
+        let generation = formatInspectionGeneration
+        let source = textView.string
+        let selection = textView.selectedRange()
+        guard !textView.hasMarkedText(), selection.length > 0 else {
+            canClearFormat = false
+            return
+        }
+        canClearFormat = false
+
+        formatInspectionTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            let result = await engineClient.canClearFormat(
+                text: source,
+                selectionUTF16: selection
+            )
+            guard !Task.isCancelled,
+                  generation == formatInspectionGeneration,
+                  UTF8Text.isExactlyEqual(textView.string, source),
+                  textView.selectedRange() == selection
+            else { return }
+            canClearFormat = result
+        }
     }
 
     fileprivate func synchronizeEngine(text: String, selection: NSRange) {

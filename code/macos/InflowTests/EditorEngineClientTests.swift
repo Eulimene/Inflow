@@ -121,6 +121,21 @@ final class EditorEngineClientTests: XCTestCase {
         XCTAssertEqual(snapshot.text, mutation.resultingSource)
         XCTAssertEqual(snapshot.selectionUTF8Range, mutation.selectionUTF8Range)
         XCTAssertTrue(snapshot.canUndo)
+
+        let formattedSelection = NSRange(
+            location: 0,
+            length: (mutation.resultingSource as NSString).length
+        )
+        let canClearFormattedSelection = await queue.canClearFormat(
+            text: mutation.resultingSource,
+            selectionUTF16: formattedSelection
+        )
+        let canClearPlainSelection = await queue.canClearFormat(
+            text: mutation.resultingSource,
+            selectionUTF16: NSRange(location: 0, length: 5)
+        )
+        XCTAssertTrue(canClearFormattedSelection)
+        XCTAssertFalse(canClearPlainSelection)
     }
 
     @MainActor

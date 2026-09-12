@@ -90,6 +90,10 @@ pub enum EditorCommand {
         query: String,
         case_sensitive: bool,
     },
+    InspectFormat {
+        revision: Revision,
+        selection: Selection,
+    },
 }
 
 const fn default_true() -> bool {
@@ -155,6 +159,7 @@ pub struct StatePatch {
     pub selection: Option<Selection>,
     pub derived: Option<DerivedState>,
     pub search: Option<SearchResult>,
+    pub format_capabilities: Option<FormatCapabilities>,
     pub content_hash: String,
     pub can_undo: bool,
     pub can_redo: bool,
@@ -164,6 +169,12 @@ pub struct StatePatch {
 pub struct SearchResult {
     pub revision: Revision,
     pub matches: Vec<ByteRange>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct FormatCapabilities {
+    pub revision: Revision,
+    pub can_clear: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -280,6 +291,10 @@ impl EditorEngine {
                 query,
                 case_sensitive,
             } => self.search(revision, &query, case_sensitive)?,
+            EditorCommand::InspectFormat {
+                revision,
+                selection,
+            } => self.inspect_format(revision, &selection)?,
         };
 
         Ok(DispatchResponse {
@@ -382,6 +397,7 @@ impl EditorEngine {
             selection: None,
             derived: Some(derived),
             search: None,
+            format_capabilities: None,
             content_hash: content_hash(&self.text),
             can_undo: !self.undo.is_empty(),
             can_redo: !self.redo.is_empty(),
@@ -411,6 +427,34 @@ impl EditorEngine {
             selection: None,
             derived: None,
             search: Some(SearchResult { revision, matches }),
+            format_capabilities: None,
+            content_hash: content_hash(&self.text),
+            can_undo: !self.undo.is_empty(),
+            can_redo: !self.redo.is_empty(),
+        })
+    }
+
+    fn inspect_format(
+        &self,
+        revision: Revision,
+        selection: &Selection,
+    ) -> Result<StatePatch, EngineError> {
+        if revision != self.revision {
+            return Err(EngineError::RevisionConflict);
+        }
+        validate_selection(&self.text, selection)?;
+        let can_clear = format::clear_format(&self.text, selection.start..selection.end).is_ok();
+        Ok(StatePatch {
+            base_revision: revision,
+            revision,
+            text: None,
+            selection: None,
+            derived: None,
+            search: None,
+            format_capabilities: Some(FormatCapabilities {
+                revision,
+                can_clear,
+            }),
             content_hash: content_hash(&self.text),
             can_undo: !self.undo.is_empty(),
             can_redo: !self.redo.is_empty(),
@@ -535,6 +579,7 @@ impl EditorEngine {
             selection: Some(selection_after),
             derived: None,
             search: None,
+            format_capabilities: None,
             content_hash: content_hash(&self.text),
             can_undo: !self.undo.is_empty(),
             can_redo: !self.redo.is_empty(),
@@ -805,6 +850,40 @@ mod tests {
             )),
             Err(EngineError::RevisionConflict)
         );
+    }
+
+    #[test]
+    fn format_inspection_is_revision_bound_and_does_not_mutate_history() {
+        let mut engine = engine("# **Title** and plain\n");
+        let response = engine
+            .dispatch(command(
+                "inspect-format",
+                EditorCommand::InspectFormat {
+                    revision: 0,
+                    selection: Selection { start: 0, end: 11 },
+                },
+            ))
+            .expect("complete formatted selection should be inspectable");
+        let capabilities = response
+            .patch
+            .format_capabilities
+            .expect("format capabilities");
+
+        assert_eq!(capabilities.revision, 0);
+        assert!(capabilities.can_clear);
+        assert_eq!(engine.snapshot().revision, 0);
+        assert!(!engine.snapshot().can_undo);
+
+        let plain = engine
+            .dispatch(command(
+                "inspect-plain",
+                EditorCommand::InspectFormat {
+                    revision: 0,
+                    selection: Selection { start: 16, end: 21 },
+                },
+            ))
+            .expect("plain selection should still produce capabilities");
+        assert!(!plain.patch.format_capabilities.unwrap().can_clear);
     }
 
     #[test]

@@ -2909,10 +2909,7 @@ struct MarkdownEditorView: View {
 
     private var markdownFormatCommandActions: MarkdownFormatCommandActions {
         let formattingIsAvailable = canEditDocument && !usesSourceOnlyExperience
-        let canClearFormat = formattingIsAvailable && MarkdownFormatter.canClearFormat(
-            source: document.text,
-            selectedUTF16Range: sourceEditorSession.selectedUTF16Range
-        )
+        let canClearFormat = formattingIsAvailable && sourceEditorSession.canClearFormat
         return MarkdownFormatCommandActions(
             canFormat: formattingIsAvailable,
             canClearFormat: canClearFormat,
