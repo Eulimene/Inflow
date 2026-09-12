@@ -1,18 +1,38 @@
 import SwiftUI
 
+enum EditorRenderedSurfacePhase: Equatable {
+    case preparing
+    case ready(sourceSnapshot: String)
+    case optimistic(sourceSnapshot: String)
+    case fallback(sourceSnapshot: String)
+
+    func canDisplay(documentText: String) -> Bool {
+        switch self {
+        case .preparing:
+            false
+        case let .ready(sourceSnapshot),
+             let .optimistic(sourceSnapshot),
+             let .fallback(sourceSnapshot):
+            UTF8Text.isExactlyEqual(sourceSnapshot, documentText)
+        }
+    }
+}
+
 struct EditorViewState: Equatable {
     var previewSourceSnapshot: String
     var previewFailureMessage: String?
     var analysisState: DocumentAnalysisState
     var references: [MarkdownReference]
     var engineMode: EditorEngineMode
+    var renderedSurfacePhase: EditorRenderedSurfacePhase
 
     static let initial = Self(
         previewSourceSnapshot: "",
         previewFailureMessage: nil,
         analysisState: .updating(previous: .empty),
         references: [],
-        engineMode: .editable
+        engineMode: .editable,
+        renderedSurfacePhase: .preparing
     )
 }
 
@@ -67,6 +87,9 @@ final class EditorStore: ObservableObject {
         self.renderedPreviewSession = renderedPreviewSession
         state = initialState
         requestedMode = initialState.engineMode
+        sourceEditorSession.localTextProjectionDidPublish = { [weak self] sourceSnapshot in
+            self?.state.renderedSurfacePhase = .optimistic(sourceSnapshot: sourceSnapshot)
+        }
     }
 
     deinit {
@@ -183,6 +206,14 @@ final class EditorStore: ObservableObject {
         }
     }
 
+    func prepareForDocumentReplacement() {
+        derivedContentTask?.cancel()
+        derivedContentGeneration &+= 1
+        activeDerivedRequest = nil
+        completedDerivedRequest = nil
+        state.renderedSurfacePhase = .preparing
+    }
+
     private func refreshDerived(_ request: EditorDerivedContentRequest) {
         if activeDerivedRequest?.hasSameDerivationInput(as: request) == true
             || completedDerivedRequest?.hasSameDerivationInput(as: request) == true
@@ -219,6 +250,7 @@ final class EditorStore: ObservableObject {
                     message: MarkdownRenderError.coreFailure.localizedDescription
                 )
                 state.previewFailureMessage = MarkdownRenderError.coreFailure.localizedDescription
+                state.renderedSurfacePhase = .fallback(sourceSnapshot: request.markdown)
                 return
             }
 
@@ -234,7 +266,8 @@ final class EditorStore: ObservableObject {
                 previewFailureMessage: nil,
                 analysisState: .ready(coreContent.analysis),
                 references: coreContent.references,
-                engineMode: state.engineMode
+                engineMode: state.engineMode,
+                renderedSurfacePhase: .ready(sourceSnapshot: coreContent.sourceSnapshot)
             )
             _ = sourceEditorSession.applySyntaxHighlighting(
                 request.syntaxHighlightingEnabled
@@ -257,7 +290,8 @@ final class EditorStore: ObservableObject {
             previewFailureMessage: nil,
             analysisState: .ready(.empty),
             references: [],
-            engineMode: state.engineMode
+            engineMode: state.engineMode,
+            renderedSurfacePhase: .preparing
         )
         _ = sourceEditorSession.applySyntaxHighlighting(
             [],

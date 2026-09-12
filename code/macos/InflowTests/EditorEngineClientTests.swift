@@ -2,6 +2,52 @@ import XCTest
 @testable import Inflow
 
 final class EditorEngineClientTests: XCTestCase {
+    func testRenderedSurfacePhaseHidesOnlyUnpreparedDocumentReplacements() {
+        let ready = EditorRenderedSurfacePhase.ready(sourceSnapshot: "old")
+
+        XCTAssertFalse(
+            EditorRenderedSurfacePhase.preparing.canDisplay(
+                documentText: "new"
+            )
+        )
+        XCTAssertFalse(ready.canDisplay(documentText: "new"))
+        XCTAssertTrue(
+            EditorRenderedSurfacePhase.optimistic(sourceSnapshot: "new").canDisplay(
+                documentText: "new"
+            ),
+            "optimistic typing must keep the already-mounted editor visible"
+        )
+        XCTAssertTrue(ready.canDisplay(documentText: "old"))
+        XCTAssertTrue(
+            EditorRenderedSurfacePhase.fallback(sourceSnapshot: "new").canDisplay(
+                documentText: "new"
+            )
+        )
+    }
+
+    @MainActor
+    func testStoreReceivesExplicitOptimisticProjectionEventsFromTheEditor() async throws {
+        let source = "正文"
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        session.textView.isEditable = true
+        let store = EditorStore(sourceEditorSession: session)
+        session.textView.setSelectedRange(NSRange(location: 2, length: 0))
+
+        session.textView.insertText("a", replacementRange: session.textView.selectedRange())
+
+        let expected = "正文a"
+        for _ in 0..<100
+        where store.state.renderedSurfacePhase != .optimistic(sourceSnapshot: expected) {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(
+            store.state.renderedSurfacePhase,
+            .optimistic(sourceSnapshot: expected)
+        )
+        XCTAssertTrue(store.state.renderedSurfacePhase.canDisplay(documentText: expected))
+    }
+
     @MainActor
     func testEquivalentDerivedRequestsDoNotRestartOrRepaintRenderedEditing() async throws {
         let source = "# 标题\n\n正文"
@@ -43,6 +89,10 @@ final class EditorEngineClientTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(5))
         }
         XCTAssertEqual(store.state.previewSourceSnapshot, source)
+        XCTAssertEqual(
+            store.state.renderedSurfacePhase,
+            .ready(sourceSnapshot: source)
+        )
         XCTAssertEqual(session.renderedPresentationPassCount, 1)
         XCTAssertEqual(previewSession.renderedPresentationPassCount, 1)
 
@@ -50,6 +100,15 @@ final class EditorEngineClientTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(20))
         XCTAssertEqual(session.renderedPresentationPassCount, 1)
         XCTAssertEqual(previewSession.renderedPresentationPassCount, 1)
+
+        store.prepareForDocumentReplacement()
+        XCTAssertEqual(store.state.renderedSurfacePhase, .preparing)
+        store.send(.refreshDerived(immediate))
+        for _ in 0..<100
+        where store.state.renderedSurfacePhase != .ready(sourceSnapshot: source) {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(store.state.renderedSurfacePhase, .ready(sourceSnapshot: source))
     }
 
     @MainActor

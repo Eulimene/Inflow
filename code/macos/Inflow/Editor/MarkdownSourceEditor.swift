@@ -18,6 +18,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     fileprivate var pendingSelectionRequest: SourceSelectionRequest?
     fileprivate var pendingRestorationState: MarkdownRestorationState?
     var updateBoundText: ((String) -> Void)?
+    var localTextProjectionDidPublish: ((String) -> Void)?
     private(set) var sourceAppearance = SourceEditorAppearance.default
     private var hasAppliedSourceAppearance = false
     private var syntaxHighlightingEnabled = false
@@ -52,7 +53,6 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var configuredLineWrapping: Bool?
     private let role: MarkdownSourceEditorSessionRole
     private(set) var renderedPresentationPassCount = 0
-    private(set) var isRenderedPresentationSuppressed = false
 
     override convenience init() {
         self.init(role: .document)
@@ -286,16 +286,6 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         applyRenderedPresentation(source: source, force: planChanged)
     }
 
-    func prepareForBoundTextReplacement(
-        with source: String,
-        presentation: MarkdownEditorPresentation
-    ) {
-        guard presentation == .rendered,
-              engineRenderedPlan?.exactlyMatches(source) != true
-        else { return }
-        suppressRenderedPresentation()
-    }
-
     @discardableResult
     func applyEngineFormat(
         _ operation: EditorEngineFormatOperation,
@@ -397,6 +387,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.scrollRangeToVisible(finalSelection.revealRange)
         pendingOptimisticText = nil
         updateBoundText?(mutation.resultingSource)
+        localTextProjectionDidPublish?(mutation.resultingSource)
         return true
     }
 
@@ -425,8 +416,14 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             refreshWritingModePresentation()
             scheduleRenderedPresentation(for: snapshot.text)
         }
+        let publishesOptimisticText = pendingOptimisticText.map {
+            UTF8Text.isExactlyEqual($0, snapshot.text)
+        } == true
         pendingOptimisticText = nil
         updateBoundText?(snapshot.text)
+        if publishesOptimisticText {
+            localTextProjectionDidPublish?(snapshot.text)
+        }
     }
 
     func authoritativeSnapshot() async -> EditorEngineDocumentSnapshot? {
@@ -516,7 +513,6 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         renderedResourceContext = resourceContext
         switch presentation {
         case .source:
-            revealRenderedPresentation()
             renderedInteractionTask?.cancel()
             renderedInteractionTask = nil
             cancelRenderedImageLoading()
@@ -534,11 +530,6 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             textView.setAccessibilityLabel("Markdown 源码编辑器")
             applySourceAppearance(sourceAppearance, force: changed)
         case .rendered:
-            if renderedPlan == nil,
-               engineRenderedPlan?.exactlyMatches(source) != true
-            {
-                suppressRenderedPresentation()
-            }
             configureLineWrapping(true)
             textView.setAccessibilityLabel("Markdown 即时编辑器")
             textView.linkClickHandler = { [weak self] location in
@@ -907,22 +898,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.setSelectedRange(selection)
         syncRenderedTypingAttributes()
         refreshWritingModePresentation()
-        if isRenderedPresentationSuppressed {
-            revealRenderedPresentation()
-        }
         loadRenderedImages(for: plan)
-    }
-
-    private func suppressRenderedPresentation() {
-        guard !isRenderedPresentationSuppressed else { return }
-        isRenderedPresentationSuppressed = true
-        textView.alphaValue = 0
-    }
-
-    private func revealRenderedPresentation() {
-        guard isRenderedPresentationSuppressed || textView.alphaValue != 1 else { return }
-        isRenderedPresentationSuppressed = false
-        textView.alphaValue = 1
     }
 
     private func cancelRenderedImageLoading() {
@@ -1884,6 +1860,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             )
         }
         updateBoundText?(textView.string)
+        localTextProjectionDidPublish?(textView.string)
         scheduleRenderedPresentation(for: textView.string)
     }
 
@@ -1953,7 +1930,6 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     func resetAfterExternalReload(_ text: String) {
-        prepareForBoundTextReplacement(with: text, presentation: presentation)
         invalidateSyntaxApplication()
         pendingOptimisticText = nil
         let previousSelection = textView.selectedRange()
@@ -3910,10 +3886,6 @@ struct MarkdownSourceEditor: NSViewRepresentable {
                 && !preservesOptimisticText
                 && !UTF8Text.isExactlyEqual(textView.string, parent.text)
             if textChanged {
-                parent.session.prepareForBoundTextReplacement(
-                    with: parent.text,
-                    presentation: parent.presentation
-                )
                 let selection = textView.selectedRange()
                 textView.string = parent.text
                 let utf16Length = (parent.text as NSString).length

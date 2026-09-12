@@ -131,6 +131,11 @@ struct MarkdownEditorView: View {
     private var previewFailureMessage: String? { editorStore.state.previewFailureMessage }
     private var analysisState: DocumentAnalysisState { editorStore.state.analysisState }
     private var derivedReferences: [MarkdownReference] { editorStore.state.references }
+    private var renderedSurfaceCanDisplay: Bool {
+        editorStore.state.renderedSurfacePhase.canDisplay(
+            documentText: document.text
+        )
+    }
 
     private var viewMode: EditorViewMode {
         get {
@@ -1122,10 +1127,26 @@ struct MarkdownEditorView: View {
     }
 
     private var renderedEditor: some View {
-        renderedSurface(
-            session: sourceEditorSession,
-            isEditable: canEditDocument
-        )
+        ZStack {
+            renderedSurface(
+                session: sourceEditorSession,
+                isEditable: canEditDocument
+            )
+            .opacity(renderedSurfaceCanDisplay ? 1 : 0)
+            .allowsHitTesting(renderedSurfaceCanDisplay)
+            .accessibilityHidden(!renderedSurfaceCanDisplay)
+
+            if !renderedSurfaceCanDisplay {
+                VStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("正在准备即时编辑…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
     }
 
     private func renderedSurface(
@@ -1419,6 +1440,7 @@ struct MarkdownEditorView: View {
         // document. The subsequent revert consumes only the already-frozen
         // bytes, never the now-mutable source pathname.
         let result = try await fileSafetySession.commitReload(reloadEnvelope)
+        editorStore.prepareForDocumentReplacement()
         try NativeDocumentSaveCoordinator.revert(
             document: nativeDocument,
             using: nativeRevert
