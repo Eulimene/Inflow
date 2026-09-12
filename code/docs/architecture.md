@@ -32,7 +32,7 @@ Rust 核心负责不依赖平台的纯值逻辑，并正在通过版本化 Engin
 - 可复用的 UTF-8 end-exclusive 范围与版本化 C ABI；
 - 不访问用户任意文件，不持有 AppKit 对象。
 
-当前迁移阶段已经引入有状态 `EditorEngine` 的 opaque handle、`revision`、UTF-8
+当前编辑会话必须持有有状态 `EditorEngine` 的 opaque handle、`revision`、UTF-8
 `ReplaceText`、格式 Command、Memento undo/redo、快照和 `RefreshDerived`。每次 `RefreshDerived` 只创建一个 owned
 `DocumentIr`，分析、语法范围、引用、`RenderIr`、`NativeRenderPlan` 与安全 HTML 都消费该事件流；派生缓存严格绑定
 revision，正文修改后立即失效。macOS 已用该单次请求作为分析、高亮、引用、原生展示计划和预览的唯一文档派生热路径。
@@ -82,12 +82,13 @@ SwiftUI 与 AppKit 负责：
 
 ## 3. 单一正文不变量
 
-迁移期间主数据流为：
+主数据流为：
 
-    MarkdownDocument.text
-        ↕
+    Rust EditorEngine（text + revision + history）
+        ↓ StatePatch / Snapshot
+    MarkdownDocument.text（已确认投影）
+        ↕ optimistic display / reconciliation
     MarkdownSourceEditorSession + 持久 NSTextView
-        └─ ReplaceText 镜像 → Rust EditorEngine（revision + 字节快照对账）
         ├─ 源码展示属性
         ├─ 分栏预览派生结果
         └─ 即时编辑属性
@@ -98,11 +99,11 @@ SwiftUI 与 AppKit 负责：
 2. 三种视图的可编辑侧都复用同一个 MarkdownSourceEditorSession；分栏右侧消费 previewHTML，即时编辑则把同一 Rust 解析范围映射到原始字符串的 TextKit 展示属性，不建立第二份可编辑内容。
 3. 分栏右侧只消费当前源快照生成的派生结果，不可反向成为正文事实。
 4. 展示属性、语法高亮和预览刷新不能发布正文变化，也不能登记正文 undo。
-5. 格式、插入与正文撤销只通过 Engine Command 修改同一字符串；尚未迁移的查找替换先作为普通 `ReplaceText` 对账，不能建立第二套权威历史。
+5. 格式、插入、查找替换与正文撤销只通过 Engine Command 修改同一字符串；查找替换由 Engine 先生成 revision-bound patch，再由 Swift 回写显示缓存。
 6. NSTextView 为 1.5 秒内同类型、相邻的普通键入或删除复用一个 `group_id`；Engine 只在补丁确实相邻且可逆时合并 Memento。换行、粘贴、IME 提交、格式命令和不同分组始终保留独立撤销边界。
 6. 结果必须绑定精确 UTF-8 字节快照；正文变化后，旧范围和旧链接决定立即失效。
-7. 默认写入方向已经反转：NSTextView 只保留乐观显示缓存，Rust 接受命令后才发布 Swift 文档投影；
-   禁止 Swift 与 Rust 同时独立接受正文写入。生产路径不再提供关闭 Engine 事实源的环境开关。
+7. 写入方向已经反转：NSTextView 只保留乐观显示缓存，Rust 接受命令后才发布 Swift 文档投影；
+   禁止 Swift 与 Rust 同时独立接受正文写入。编辑会话不再提供关闭 Engine 事实源的开关或 AppKit 正文撤销备用路径。
 
 Swift String 的规范等价不能替代精确字节身份。Rust 返回 UTF-8 byte range，TextKit 使用 UTF-16 NSRange，转换必须同时验证边界、长度和完整扩展字素，不能截断 Unicode 或 ZWJ 序列。
 

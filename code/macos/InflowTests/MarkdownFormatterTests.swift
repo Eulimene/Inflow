@@ -439,7 +439,7 @@ final class MarkdownFormatterTests: XCTestCase {
     }
 
     @MainActor
-    func testClearFormatAvailabilityPlanAndSingleUndo() throws {
+    func testClearFormatAvailabilityPlanAndSingleUndo() async throws {
         let source = "# **标题👩‍💻** and `code`\n"
         let fullSelection = NSRange(location: 0, length: (source as NSString).length)
         XCTAssertTrue(
@@ -468,27 +468,35 @@ final class MarkdownFormatterTests: XCTestCase {
         )
         XCTAssertEqual(plan.resultingSource, "标题👩‍💻 and code\n")
 
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.isEditable = true
         session.textView.string = source
         session.textView.setSelectedRange(fullSelection)
-        XCTAssertTrue(session.applyMarkdownFormat(plan, actionName: "清除格式标记"))
+        let cleared = await session.applyEngineFormat(
+            .clear,
+            expectedText: source,
+            selectedUTF16Range: fullSelection,
+            actionName: "清除格式标记"
+        )
+        XCTAssertTrue(cleared)
         XCTAssertEqual(session.textView.string, "标题👩‍💻 and code\n")
         XCTAssertEqual(
             session.selectedUTF16Range,
             NSRange(location: 0, length: (session.textView.string as NSString).length)
         )
 
-        session.textView.undoManager?.undo()
+        session.textView.undo(nil)
+        for _ in 0..<20 where session.textView.string != source { await Task.yield() }
         XCTAssertEqual(session.textView.string, source)
-        session.textView.undoManager?.redo()
+        session.textView.redo(nil)
+        for _ in 0..<20 where session.textView.string != plan.resultingSource { await Task.yield() }
         XCTAssertEqual(session.textView.string, "标题👩‍💻 and code\n")
     }
 
     @MainActor
-    func testSessionAppliesFormatAsOneUndoUnitAndRestoresSelection() throws {
+    func testSessionAppliesFormatAsOneUndoUnitAndRestoresSelection() async throws {
         let source = "Hello 世界"
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.isEditable = true
         session.textView.string = source
         session.textView.setSelectedRange((source as NSString).range(of: "世界"))
@@ -498,7 +506,13 @@ final class MarkdownFormatterTests: XCTestCase {
             selectedUTF16Range: session.textView.selectedRange(),
             format: .bold
         )
-        XCTAssertTrue(session.applyMarkdownFormat(plan, actionName: "粗体格式"))
+        let bold = await session.applyEngineFormat(
+            .bold,
+            expectedText: source,
+            selectedUTF16Range: session.textView.selectedRange(),
+            actionName: "粗体格式"
+        )
+        XCTAssertTrue(bold)
         XCTAssertEqual(session.textView.string, "Hello **世界**")
         XCTAssertEqual(
             (session.textView.string as NSString).substring(
@@ -507,24 +521,35 @@ final class MarkdownFormatterTests: XCTestCase {
             "世界"
         )
 
-        session.textView.undoManager?.undo()
+        session.textView.undo(nil)
+        for _ in 0..<20 where session.textView.string != source { await Task.yield() }
         XCTAssertEqual(session.textView.string, source)
-        session.textView.undoManager?.redo()
+        session.textView.redo(nil)
+        for _ in 0..<20 where session.textView.string != plan.resultingSource { await Task.yield() }
         XCTAssertEqual(session.textView.string, "Hello **世界**")
 
-        session.textView.string = "Title\nBody\n"
+        session.resetAfterExternalReload("Title\nBody\n")
+        _ = await session.authoritativeSnapshot()
         session.textView.setSelectedRange(NSRange(location: 2, length: 0))
         let heading = try MarkdownFormatter.plan(
             source: session.textView.string,
             selectedUTF16Range: session.textView.selectedRange(),
             heading: .two
         )
-        XCTAssertTrue(session.applyMarkdownFormat(heading, actionName: "标题格式"))
+        let headed = await session.applyEngineFormat(
+            .heading(level: 2),
+            expectedText: "Title\nBody\n",
+            selectedUTF16Range: session.textView.selectedRange(),
+            actionName: "标题格式"
+        )
+        XCTAssertTrue(headed)
         XCTAssertEqual(session.textView.string, "## Title\nBody\n")
-        session.textView.undoManager?.undo()
+        session.textView.undo(nil)
+        for _ in 0..<20 where session.textView.string != "Title\nBody\n" { await Task.yield() }
         XCTAssertEqual(session.textView.string, "Title\nBody\n")
 
-        session.textView.string = "one\ntwo\n"
+        session.resetAfterExternalReload("one\ntwo\n")
+        _ = await session.authoritativeSnapshot()
         session.textView.setSelectedRange(
             NSRange(location: 0, length: (session.textView.string as NSString).length)
         )
@@ -533,14 +558,23 @@ final class MarkdownFormatterTests: XCTestCase {
             selectedUTF16Range: session.textView.selectedRange(),
             command: .list(.ordered)
         )
-        XCTAssertTrue(session.applyMarkdownFormat(list, actionName: "列表格式"))
+        let listed = await session.applyEngineFormat(
+            .list(style: "ordered"),
+            expectedText: "one\ntwo\n",
+            selectedUTF16Range: session.textView.selectedRange(),
+            actionName: "列表格式"
+        )
+        XCTAssertTrue(listed)
         XCTAssertEqual(session.textView.string, "1. one\n1. two\n")
-        session.textView.undoManager?.undo()
+        session.textView.undo(nil)
+        for _ in 0..<20 where session.textView.string != "one\ntwo\n" { await Task.yield() }
         XCTAssertEqual(session.textView.string, "one\ntwo\n")
-        session.textView.undoManager?.redo()
+        session.textView.redo(nil)
+        for _ in 0..<20 where session.textView.string != list.resultingSource { await Task.yield() }
         XCTAssertEqual(session.textView.string, "1. one\n1. two\n")
 
-        session.textView.string = "let value = `raw`;\n"
+        session.resetAfterExternalReload("let value = `raw`;\n")
+        _ = await session.authoritativeSnapshot()
         session.textView.setSelectedRange(
             NSRange(location: 0, length: (session.textView.string as NSString).length)
         )
@@ -549,16 +583,24 @@ final class MarkdownFormatterTests: XCTestCase {
             selectedUTF16Range: session.textView.selectedRange(),
             command: .codeBlock
         )
-        XCTAssertTrue(session.applyMarkdownFormat(codeBlock, actionName: "代码块格式"))
+        let fenced = await session.applyEngineFormat(
+            .codeBlock,
+            expectedText: "let value = `raw`;\n",
+            selectedUTF16Range: session.textView.selectedRange(),
+            actionName: "代码块格式"
+        )
+        XCTAssertTrue(fenced)
         XCTAssertEqual(session.textView.string, "```\nlet value = `raw`;\n```\n")
-        session.textView.undoManager?.undo()
+        session.textView.undo(nil)
+        for _ in 0..<20 where session.textView.string != "let value = `raw`;\n" { await Task.yield() }
         XCTAssertEqual(session.textView.string, "let value = `raw`;\n")
-        session.textView.undoManager?.redo()
+        session.textView.redo(nil)
+        for _ in 0..<20 where session.textView.string != codeBlock.resultingSource { await Task.yield() }
         XCTAssertEqual(session.textView.string, "```\nlet value = `raw`;\n```\n")
     }
 
     @MainActor
-    func testSessionRejectsStaleAndReadOnlyPlansWithoutChangingText() throws {
+    func testSessionRejectsStaleAndReadOnlyPlansWithoutChangingText() async throws {
         let plan = try MarkdownFormatter.plan(
             source: "source",
             selectedUTF16Range: NSRange(location: 0, length: 6),
@@ -567,18 +609,30 @@ final class MarkdownFormatterTests: XCTestCase {
         let session = MarkdownSourceEditorSession()
         session.textView.string = "changed"
         session.textView.isEditable = true
-        XCTAssertFalse(session.applyMarkdownFormat(plan, actionName: "斜体格式"))
+        let stale = await session.applyEngineFormat(
+            .italic,
+            expectedText: plan.sourceSnapshot,
+            selectedUTF16Range: NSRange(location: 0, length: 6),
+            actionName: "斜体格式"
+        )
+        XCTAssertFalse(stale)
         XCTAssertEqual(session.textView.string, "changed")
 
         session.textView.string = "source"
         session.textView.isEditable = false
-        XCTAssertFalse(session.applyMarkdownFormat(plan, actionName: "斜体格式"))
+        let readOnly = await session.applyEngineFormat(
+            .italic,
+            expectedText: plan.sourceSnapshot,
+            selectedUTF16Range: NSRange(location: 0, length: 6),
+            actionName: "斜体格式"
+        )
+        XCTAssertFalse(readOnly)
         XCTAssertEqual(session.textView.string, "source")
         XCTAssertFalse(session.textView.undoManager?.canUndo == true)
     }
 
     @MainActor
-    func testSessionRejectsFormattingDuringIMECompositionWithoutChangingMarkedText() throws {
+    func testSessionRejectsFormattingDuringIMECompositionWithoutChangingMarkedText() async throws {
         let session = MarkdownSourceEditorSession()
         session.textView.isEditable = true
         session.textView.string = "source"
@@ -599,7 +653,16 @@ final class MarkdownFormatterTests: XCTestCase {
             ),
             format: .italic
         )
-        XCTAssertFalse(session.applyMarkdownFormat(plan, actionName: "斜体格式"))
+        let formatted = await session.applyEngineFormat(
+            .italic,
+            expectedText: plan.sourceSnapshot,
+            selectedUTF16Range: NSRange(
+                location: 0,
+                length: (markedSource as NSString).length
+            ),
+            actionName: "斜体格式"
+        )
+        XCTAssertFalse(formatted)
         XCTAssertEqual(session.textView.string, markedSource)
         XCTAssertTrue(session.textView.hasMarkedText())
     }

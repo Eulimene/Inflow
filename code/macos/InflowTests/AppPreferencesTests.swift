@@ -601,9 +601,10 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertFalse(session.scrollView.rulersVisible)
     }
 
-    func testLineNumbersTrackPhysicalLinesWithoutChangingTextOrUndo() throws {
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+    func testLineNumbersTrackPhysicalLinesWithoutChangingTextOrUndo() async throws {
+        let session = MarkdownSourceEditorSession()
         session.textView.string = "first\nsecond\n"
+        _ = await session.authoritativeSnapshot()
         session.applySourceAppearance(
             SourceEditorAppearance(
                 fontSize: 15,
@@ -624,8 +625,13 @@ final class AppPreferencesTests: XCTestCase {
 
         XCTAssertEqual(ruler.lineCount, 4)
         XCTAssertEqual(session.textView.string, "first\ninserted\nsecond\n")
-        XCTAssertTrue(try XCTUnwrap(session.textView.undoManager).canUndo)
-        session.textView.undoManager?.undo()
+        for _ in 0..<20 where !session.textView.engineCanUndo { await Task.yield() }
+        XCTAssertTrue(session.textView.engineCanUndo)
+        XCTAssertFalse(try XCTUnwrap(session.textView.undoManager).canUndo)
+        session.textView.undo(nil)
+        for _ in 0..<20 where session.textView.string != "first\nsecond\n" {
+            await Task.yield()
+        }
         XCTAssertEqual(ruler.lineCount, 3)
         XCTAssertEqual(session.textView.string, "first\nsecond\n")
     }

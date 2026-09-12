@@ -4,7 +4,7 @@ import XCTest
 
 final class RenderedMarkdownEditorTests: XCTestCase {
     @MainActor
-    func testPlanCoversPersonalEditionDirectEditingStructures() {
+    func testPlanCoversPersonalEditionDirectEditingStructures() async {
         let source = """
         普通段落
         # H1
@@ -133,8 +133,9 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             "Reference definitions are metadata and must not render as body text"
         )
 
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
         session.textView.undoManager?.removeAllActions()
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
         let storage = try? XCTUnwrap(session.textView.textStorage)
@@ -335,7 +336,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testRenderedSessionMountsTableQuoteAndMermaidWithoutChangingSource() throws {
+    func testRenderedSessionMountsTableQuoteAndMermaidWithoutChangingSource() async throws {
         let source = """
         > 行内引用
 
@@ -354,8 +355,9 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertEqual(plan.mermaidDiagrams.count, 1)
 
         var activatedTarget: String?
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
         session.textView.undoManager?.removeAllActions()
         session.setPresentation(
             .rendered,
@@ -405,14 +407,15 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testRenderedSessionKeepsProseRenderedAndUnmountsOnlySourceOnlyBlocks() throws {
+    func testRenderedSessionKeepsProseRenderedAndUnmountsOnlySourceOnlyBlocks() async throws {
         let source = "第一段 **粗体**\n\n```mermaid\nflowchart LR\nA --> B\n```\n\n第二段 *斜体*"
         let plan = RenderedMarkdownEditor.plan(for: source)
         let boldMarker = try XCTUnwrap(plan.markers.first { $0.kind == .strong })
         let italicMarker = try XCTUnwrap(plan.markers.first { $0.kind == .emphasis })
         let diagram = try XCTUnwrap(plan.mermaidDiagrams.first)
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 720, height: 520),
@@ -514,7 +517,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertTrue(plan.tables.isEmpty)
         XCTAssertTrue(plan.mermaidDiagrams.isEmpty)
 
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.string = source
         session.textView.undoManager?.removeAllActions()
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
@@ -677,10 +680,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testRenderedSessionSupportsSingleClickAndContextMenuLinkPreferences() throws {
+    func testRenderedSessionSupportsSingleClickAndContextMenuLinkPreferences() async throws {
         let source = "Read [the guide](guide.md)."
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
         var activatedTarget: String?
         session.setPresentation(
             .rendered,
@@ -776,8 +780,9 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     @MainActor
     func testRenderedTableOverlaySurvivesUnrelatedProseTyping() async throws {
         let source = "Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |"
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
         let firstPlan = RenderedMarkdownEditor.plan(for: source)
         let firstTable = try XCTUnwrap(firstPlan.tables.first)
@@ -788,6 +793,10 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
 
         session.textView.insertText("X", replacementRange: NSRange(location: 0, length: 0))
+        _ = await session.deriveContent(
+            for: session.textView.string,
+            configuration: .default
+        )
         await settleRenderedPresentation()
         let updatedSource = session.textView.string
         let updatedTable = try XCTUnwrap(RenderedMarkdownEditor.plan(for: updatedSource).tables.first)
@@ -801,14 +810,15 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testFencedCodeRendersUntilCaretRequestsItsSource() throws {
+    func testFencedCodeRendersUntilCaretRequestsItsSource() async throws {
         let source = "Before\n\n```swift\nprint(1)\n```\n\nAfter"
         let plan = RenderedMarkdownEditor.plan(for: source)
         let block = try XCTUnwrap(plan.localSourceBlocks.first { $0.reasons == [.fencedCode] })
         let opening = block.sourceRange.utf16Range.location
         let body = (source as NSString).range(of: "print(1)").location
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
         let storage = try XCTUnwrap(session.textView.textStorage)
         XCTAssertLessThan(
@@ -840,11 +850,12 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testRenderedCaretTypingFontMatchesTheVisibleText() throws {
+    func testRenderedCaretTypingFontMatchesTheVisibleText() async throws {
         let source = "# 同一基线"
         let location = (source as NSString).range(of: "同").location
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
         session.textView.setSelectedRange(NSRange(location: location, length: 0))
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
         let storage = try XCTUnwrap(session.textView.textStorage)
@@ -858,11 +869,12 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testRenderedCaretAtHeadingEndSkipsHiddenMarkersAndNewline() throws {
+    func testRenderedCaretAtHeadingEndSkipsHiddenMarkersAndNewline() async throws {
         let source = "# **同一基线**\n下一段"
         let insertion = (source as NSString).range(of: "\n").location
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
         session.textView.setSelectedRange(NSRange(location: insertion, length: 0))
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
 
@@ -877,7 +889,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testLongChineseBlockQuoteUsesRenderedTypographyWithoutExposingMarker() throws {
+    func testLongChineseBlockQuoteUsesRenderedTypographyWithoutExposingMarker() async throws {
         let source = "> 接手文件 → 形成内容 → 理解结构 → 验证结果 → 交付成果 → 继续演进"
         let plan = RenderedMarkdownEditor.plan(for: source)
         XCTAssertTrue(plan.localSourceBlocks.isEmpty)
@@ -891,8 +903,9 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             )
         )
 
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
         let storage = try XCTUnwrap(session.textView.textStorage)
         assertVisuallyHidden(NSRange(location: 0, length: 2), in: storage)
@@ -928,8 +941,9 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             context: context
         )
         XCTAssertEqual(loadedData, imageData)
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
         session.textView.undoManager?.removeAllActions()
         session.setPresentation(
             .rendered,
@@ -1024,10 +1038,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testRenderedSessionReappliesPresentationAfterSourceAppearanceChanges() throws {
+    func testRenderedSessionReappliesPresentationAfterSourceAppearanceChanges() async throws {
         let source = "# Title\n"
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
         session.textView.undoManager?.removeAllActions()
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
 
@@ -1075,10 +1090,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testRenderedSessionRendersStructuralMarkersWithoutLeakingQuoteSource() throws {
+    func testRenderedSessionRendersStructuralMarkersWithoutLeakingQuoteSource() async throws {
         let source = "> quote\n- item\n1. ordered\n- [x] done\n\nparagraph **bold**"
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
         let inlineMarker = (source as NSString).range(of: "**bold**")
         session.textView.setSelectedRange(NSRange(location: inlineMarker.location, length: 0))
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
@@ -1126,10 +1142,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testRenderedSessionComposesEveryInlineStyleWithoutShrinkingHeadingText() throws {
+    func testRenderedSessionComposesEveryInlineStyleWithoutShrinkingHeadingText() async throws {
         let source = "# **Bold** *italic* ~~gone~~ `code` [link](https://example.com)"
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
         session.textView.undoManager?.removeAllActions()
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
 
@@ -1199,8 +1216,9 @@ final class RenderedMarkdownEditorTests: XCTestCase {
 
     @MainActor
     func testRenderedSessionRefreshesAfterTypingUndoAndRedo() async throws {
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.string = "plain"
+        _ = await session.deriveContent(for: "plain", configuration: .default)
         session.textView.setSelectedRange(NSRange(location: 5, length: 0))
         session.textView.undoManager?.removeAllActions()
         session.setPresentation(.rendered, source: "plain", onLinkClick: nil)
@@ -1209,15 +1227,28 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             " **bold**",
             replacementRange: session.textView.selectedRange()
         )
+        _ = await session.deriveContent(
+            for: session.textView.string,
+            configuration: .default
+        )
         await settleRenderedPresentation()
         XCTAssertEqual(session.textView.string, "plain **bold**")
         try assertStrongTextIsRendered(in: session, source: session.textView.string)
 
-        session.textView.undoManager?.undo()
+        session.textView.undo(nil)
+        for _ in 0..<20 where session.textView.string != "plain" { await Task.yield() }
+        _ = await session.deriveContent(for: "plain", configuration: .default)
         await settleRenderedPresentation()
         XCTAssertEqual(session.textView.string, "plain")
 
-        session.textView.undoManager?.redo()
+        session.textView.redo(nil)
+        for _ in 0..<20 where session.textView.string != "plain **bold**" {
+            await Task.yield()
+        }
+        _ = await session.deriveContent(
+            for: "plain **bold**",
+            configuration: .default
+        )
         await settleRenderedPresentation()
         XCTAssertEqual(session.textView.string, "plain **bold**")
         try assertStrongTextIsRendered(in: session, source: session.textView.string)
@@ -1243,7 +1274,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testRenderedLinkPublishesHoverRangeAtItsVisibleGlyphs() throws {
+    func testRenderedLinkPublishesHoverRangeAtItsVisibleGlyphs() async throws {
         let source = "Read [guide](guide.md)"
         let plan = RenderedMarkdownEditor.plan(for: source)
         let link = try XCTUnwrap(plan.links.first)
@@ -1253,9 +1284,10 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             backing: .buffered,
             defer: false
         )
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         window.contentView = session.scrollView
         session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
         session.textView.layoutManager?.ensureLayout(for: session.textView.textContainer!)
         let glyph = try XCTUnwrap(session.textView.layoutManager).glyphIndexForCharacter(

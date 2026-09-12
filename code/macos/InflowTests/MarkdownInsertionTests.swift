@@ -847,7 +847,7 @@ final class MarkdownInsertionTests: XCTestCase {
                 originalFilename: sourceURL.lastPathComponent
             )
         )
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.isEditable = true
         session.textView.string = "Before "
         session.textView.setSelectedRange(NSRange(location: 7, length: 0))
@@ -857,25 +857,28 @@ final class MarkdownInsertionTests: XCTestCase {
             destination: asset.relativeMarkdownPath,
             defaultAlternative: "photo"
         )
-        var resourceError: String?
-        XCTAssertTrue(session.applyMarkdownImage(
-            plan,
-            asset: asset,
-            actionName: "插入图片",
-            onResourceError: { resourceError = $0 }
-        ))
+        let inserted = await session.applyEngineFormat(
+            .image(
+                destination: asset.relativeMarkdownPath,
+                defaultAlternative: "photo"
+            ),
+            expectedText: "Before ",
+            selectedUTF16Range: NSRange(location: 7, length: 0),
+            actionName: "插入图片"
+        )
+        XCTAssertTrue(inserted)
         XCTAssertEqual(session.textView.string, "Before ![photo](<assets/photo.png>)")
         XCTAssertTrue(FileManager.default.fileExists(atPath: asset.destinationURL.path))
 
-        session.textView.undoManager?.undo()
+        session.textView.undo(nil)
+        for _ in 0..<20 where session.textView.string != "Before " { await Task.yield() }
         XCTAssertEqual(session.textView.string, "Before ")
         XCTAssertEqual(try Data(contentsOf: asset.destinationURL), image.data)
-        XCTAssertNil(resourceError)
 
-        session.textView.undoManager?.redo()
+        session.textView.redo(nil)
+        for _ in 0..<20 where session.textView.string != plan.resultingSource { await Task.yield() }
         XCTAssertEqual(session.textView.string, "Before ![photo](<assets/photo.png>)")
         XCTAssertEqual(try Data(contentsOf: asset.destinationURL), image.data)
-        XCTAssertNil(resourceError)
     }
 
     @MainActor
@@ -899,7 +902,7 @@ final class MarkdownInsertionTests: XCTestCase {
                 originalFilename: sourceURL.lastPathComponent
             )
         )
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.isEditable = true
         let plan = try MarkdownFormatter.imagePlan(
             source: "",
@@ -907,19 +910,22 @@ final class MarkdownInsertionTests: XCTestCase {
             destination: asset.relativeMarkdownPath,
             defaultAlternative: "photo"
         )
-        var resourceError: String?
-        XCTAssertTrue(session.applyMarkdownImage(
-            plan,
-            asset: asset,
-            actionName: "插入图片",
-            onResourceError: { resourceError = $0 }
-        ))
+        let inserted = await session.applyEngineFormat(
+            .image(
+                destination: asset.relativeMarkdownPath,
+                defaultAlternative: "photo"
+            ),
+            expectedText: "",
+            selectedUTF16Range: NSRange(location: 0, length: 0),
+            actionName: "插入图片"
+        )
+        XCTAssertTrue(inserted)
 
         let externalChange = Data("external change".utf8)
         try externalChange.write(to: asset.destinationURL, options: .atomic)
-        session.textView.undoManager?.undo()
+        session.textView.undo(nil)
+        for _ in 0..<20 where !session.textView.string.isEmpty { await Task.yield() }
         XCTAssertEqual(try Data(contentsOf: asset.destinationURL), externalChange)
-        XCTAssertNil(resourceError)
     }
 
     func testTablePlanCreatesThreeByThreeTemplateAndEscapesSelection() throws {
@@ -1074,9 +1080,9 @@ final class MarkdownInsertionTests: XCTestCase {
     }
 
     @MainActor
-    func testInsertionPlansApplyAsOneUndoUnit() throws {
+    func testInsertionPlansApplyAsOneUndoUnit() async throws {
         let source = "Read docs"
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         session.textView.isEditable = true
         session.textView.string = source
         session.textView.setSelectedRange((source as NSString).range(of: "docs"))
@@ -1085,76 +1091,129 @@ final class MarkdownInsertionTests: XCTestCase {
             selectedUTF16Range: session.textView.selectedRange(),
             destination: "https://example.com"
         )
-        XCTAssertTrue(session.applyMarkdownFormat(plan, actionName: "插入链接"))
+        let linked = await session.applyEngineFormat(
+            .link(destination: "https://example.com"),
+            expectedText: source,
+            selectedUTF16Range: session.textView.selectedRange(),
+            actionName: "插入链接"
+        )
+        XCTAssertTrue(linked)
         XCTAssertEqual(session.textView.string, "Read [docs](<https://example.com>)")
-        session.textView.undoManager?.undo()
+        session.textView.undo(nil)
+        for _ in 0..<20 where session.textView.string != source { await Task.yield() }
         XCTAssertEqual(session.textView.string, source)
-        session.textView.undoManager?.redo()
+        session.textView.redo(nil)
+        for _ in 0..<20 where session.textView.string != plan.resultingSource { await Task.yield() }
         XCTAssertEqual(session.textView.string, "Read [docs](<https://example.com>)")
 
-        session.textView.string = "Header"
+        session.resetAfterExternalReload("Header")
+        _ = await session.authoritativeSnapshot()
         session.textView.setSelectedRange(NSRange(location: 0, length: 6))
         let table = try MarkdownFormatter.tablePlan(
             source: session.textView.string,
             selectedUTF16Range: session.textView.selectedRange()
         )
-        XCTAssertTrue(session.applyMarkdownFormat(table, actionName: "插入表格"))
+        let tableInserted = await session.applyEngineFormat(
+            .table,
+            expectedText: "Header",
+            selectedUTF16Range: session.textView.selectedRange(),
+            actionName: "插入表格"
+        )
+        XCTAssertTrue(tableInserted)
         XCTAssertTrue(session.textView.string.hasPrefix("| Header | 标题 2 |"))
-        session.textView.undoManager?.undo()
+        session.textView.undo(nil)
+        for _ in 0..<20 where session.textView.string != "Header" { await Task.yield() }
         XCTAssertEqual(session.textView.string, "Header")
-        session.textView.undoManager?.redo()
+        session.textView.redo(nil)
+        for _ in 0..<20 where session.textView.string != table.resultingSource { await Task.yield() }
         XCTAssertTrue(session.textView.string.hasPrefix("| Header | 标题 2 |"))
 
-        session.textView.string = "Before"
+        session.resetAfterExternalReload("Before")
+        _ = await session.authoritativeSnapshot()
         session.textView.setSelectedRange(NSRange(location: 6, length: 0))
         let horizontalRule = try MarkdownFormatter.horizontalRulePlan(
             source: session.textView.string,
             selectedUTF16Range: session.textView.selectedRange()
         )
-        XCTAssertTrue(session.applyMarkdownFormat(horizontalRule, actionName: "插入分隔线"))
+        let ruleInserted = await session.applyEngineFormat(
+            .horizontalRule,
+            expectedText: "Before",
+            selectedUTF16Range: session.textView.selectedRange(),
+            actionName: "插入分隔线"
+        )
+        XCTAssertTrue(ruleInserted)
         XCTAssertEqual(session.textView.string, "Before\n\n---\n\n")
-        session.textView.undoManager?.undo()
+        session.textView.undo(nil)
+        for _ in 0..<20 where session.textView.string != "Before" { await Task.yield() }
         XCTAssertEqual(session.textView.string, "Before")
-        session.textView.undoManager?.redo()
+        session.textView.redo(nil)
+        for _ in 0..<20 where session.textView.string != horizontalRule.resultingSource { await Task.yield() }
         XCTAssertEqual(session.textView.string, "Before\n\n---\n\n")
 
-        session.textView.string = "Anchor"
+        session.resetAfterExternalReload("Anchor")
+        _ = await session.authoritativeSnapshot()
         session.textView.setSelectedRange(NSRange(location: 0, length: 6))
         let footnote = try MarkdownFormatter.footnotePlan(
             source: session.textView.string,
             selectedUTF16Range: session.textView.selectedRange()
         )
-        XCTAssertTrue(session.applyMarkdownFormat(footnote, actionName: "插入脚注"))
+        let footnoteInserted = await session.applyEngineFormat(
+            .footnote,
+            expectedText: "Anchor",
+            selectedUTF16Range: session.textView.selectedRange(),
+            actionName: "插入脚注"
+        )
+        XCTAssertTrue(footnoteInserted)
         XCTAssertEqual(session.textView.string, "Anchor[^note-1]\n\n[^note-1]: 脚注内容\n")
-        session.textView.undoManager?.undo()
+        session.textView.undo(nil)
+        for _ in 0..<20 where session.textView.string != "Anchor" { await Task.yield() }
         XCTAssertEqual(session.textView.string, "Anchor")
-        session.textView.undoManager?.redo()
+        session.textView.redo(nil)
+        for _ in 0..<20 where session.textView.string != footnote.resultingSource { await Task.yield() }
         XCTAssertEqual(session.textView.string, "Anchor[^note-1]\n\n[^note-1]: 脚注内容\n")
 
-        session.textView.string = "x^2"
+        session.resetAfterExternalReload("x^2")
+        _ = await session.authoritativeSnapshot()
         session.textView.setSelectedRange(NSRange(location: 0, length: 3))
         let formula = try MarkdownFormatter.mathPlan(
             source: session.textView.string,
             selectedUTF16Range: session.textView.selectedRange()
         )
-        XCTAssertTrue(session.applyMarkdownFormat(formula, actionName: "插入公式"))
+        let formulaInserted = await session.applyEngineFormat(
+            .math,
+            expectedText: "x^2",
+            selectedUTF16Range: session.textView.selectedRange(),
+            actionName: "插入公式"
+        )
+        XCTAssertTrue(formulaInserted)
         XCTAssertEqual(session.textView.string, "$x^2$")
-        session.textView.undoManager?.undo()
+        session.textView.undo(nil)
+        for _ in 0..<20 where session.textView.string != "x^2" { await Task.yield() }
         XCTAssertEqual(session.textView.string, "x^2")
-        session.textView.undoManager?.redo()
+        session.textView.redo(nil)
+        for _ in 0..<20 where session.textView.string != formula.resultingSource { await Task.yield() }
         XCTAssertEqual(session.textView.string, "$x^2$")
 
-        session.textView.string = ""
+        session.resetAfterExternalReload("")
+        _ = await session.authoritativeSnapshot()
         session.textView.setSelectedRange(NSRange(location: 0, length: 0))
         let diagram = try MarkdownFormatter.mermaidPlan(
             source: session.textView.string,
             selectedUTF16Range: session.textView.selectedRange()
         )
-        XCTAssertTrue(session.applyMarkdownFormat(diagram, actionName: "插入图表"))
+        let diagramInserted = await session.applyEngineFormat(
+            .mermaid,
+            expectedText: "",
+            selectedUTF16Range: session.textView.selectedRange(),
+            actionName: "插入图表"
+        )
+        XCTAssertTrue(diagramInserted)
         XCTAssertTrue(session.textView.string.hasPrefix("```mermaid\nflowchart TD"))
-        session.textView.undoManager?.undo()
+        session.textView.undo(nil)
+        for _ in 0..<20 where !session.textView.string.isEmpty { await Task.yield() }
         XCTAssertEqual(session.textView.string, "")
-        session.textView.undoManager?.redo()
+        session.textView.redo(nil)
+        for _ in 0..<20 where session.textView.string != diagram.resultingSource { await Task.yield() }
         XCTAssertTrue(session.textView.string.hasPrefix("```mermaid\nflowchart TD"))
     }
 

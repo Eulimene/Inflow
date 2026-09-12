@@ -67,6 +67,8 @@ pub enum EditorCommand {
         base_revision: Revision,
         range: ByteRange,
         inserted: String,
+        #[serde(default)]
+        selection_before: Option<Selection>,
         selection_after: Selection,
         #[serde(default)]
         group_id: Option<String>,
@@ -323,13 +325,14 @@ impl EditorEngine {
                 base_revision,
                 range,
                 inserted,
+                selection_before,
                 selection_after,
                 group_id,
             } => {
-                let selection_before = Selection {
+                let selection_before = selection_before.unwrap_or(Selection {
                     start: range.start,
                     end: range.end,
-                };
+                });
                 self.replace_text(
                     base_revision,
                     range,
@@ -915,6 +918,7 @@ mod tests {
                     end: range.end,
                 },
                 inserted: inserted.to_owned(),
+                selection_before: None,
                 selection_after,
                 group_id: group_id.map(str::to_owned),
             },

@@ -1469,7 +1469,6 @@ struct MarkdownEditorView: View {
 
     @discardableResult
     private func freezeAuthoritativeTextForPersistence() async throws -> String {
-        guard editorStore.usesEngineAuthority else { return document.text }
         guard let snapshot = await editorStore.persistenceSnapshot(),
               UTF8Text.isExactlyEqual(snapshot.text, editorStore.textProjection)
         else {
@@ -1484,8 +1483,7 @@ struct MarkdownEditorView: View {
     private func prepareAuthoritativeSaveForPersistence() async throws
         -> EditorEngineSavePreparation
     {
-        guard editorStore.usesEngineAuthority,
-              let preparation = await editorStore.preparePersistenceSave(),
+        guard let preparation = await editorStore.preparePersistenceSave(),
               UTF8Text.isExactlyEqual(
                   preparation.text,
                   editorStore.textProjection
@@ -3246,25 +3244,26 @@ struct MarkdownEditorView: View {
             return
         }
         pendingReplacementRange = match.utf8Range.lowerBound..<replacementEnd
-        let replaced = editorStore.replaceCurrent(
-            utf8Range: match.utf8Range,
-            with: findSession.replacement,
-            expectedText: document.text
-        )
-        guard replaced else {
-            pendingReplacementRange = nil
-            scheduleFindSearch(
-                source: document.text,
-                position: .preserve,
-                revealAfterSearch: false,
-                delayNanoseconds: 0
+        Task { @MainActor in
+            let replaced = await editorStore.replaceCurrent(
+                utf8Range: match.utf8Range,
+                with: findSession.replacement,
+                expectedText: document.text
             )
-            findSession.showNotice("当前匹配已变化，未执行替换。")
-            return
+            guard replaced else {
+                pendingReplacementRange = nil
+                scheduleFindSearch(
+                    source: document.text,
+                    position: .preserve,
+                    revealAfterSearch: false,
+                    delayNanoseconds: 0
+                )
+                findSession.showNotice("当前匹配已变化，未执行替换。")
+                return
+            }
+            focusSourceForDocumentUndo()
+            findSession.showNotice("已替换 1 处。")
         }
-
-        focusSourceForDocumentUndo()
-        findSession.showNotice("已替换 1 处。")
     }
 
     private func previewReplaceAll() {
@@ -3300,25 +3299,26 @@ struct MarkdownEditorView: View {
             return
         }
 
-        let replaced = editorStore.replaceAll(
-            utf8Ranges: plan.matches.map(\.utf8Range),
-            with: plan.replacement,
-            expectedText: plan.source
-        )
         replaceAllPlan = nil
-        guard replaced else {
-            scheduleFindSearch(
-                source: document.text,
-                position: .preserve,
-                revealAfterSearch: false,
-                delayNanoseconds: 0
+        Task { @MainActor in
+            let replaced = await editorStore.replaceAll(
+                utf8Ranges: plan.matches.map(\.utf8Range),
+                with: plan.replacement,
+                expectedText: plan.source
             )
-            findSession.showNotice("正文已变化，未执行全部替换。")
-            return
+            guard replaced else {
+                scheduleFindSearch(
+                    source: document.text,
+                    position: .preserve,
+                    revealAfterSearch: false,
+                    delayNanoseconds: 0
+                )
+                findSession.showNotice("正文已变化，未执行全部替换。")
+                return
+            }
+            focusSourceForDocumentUndo()
+            findSession.showNotice("已替换 \(plan.matches.count) 处；可用“撤销”一次恢复。")
         }
-
-        focusSourceForDocumentUndo()
-        findSession.showNotice("已替换 \(plan.matches.count) 处；可用“撤销”一次恢复。")
     }
 
     private func focusSourceForDocumentUndo() {

@@ -106,7 +106,7 @@ final class MarkdownSearcherTests: XCTestCase {
     }
 
     @MainActor
-    func testCanonicalEquivalentTextUsesExactUTF8SnapshotIdentity() throws {
+    func testCanonicalEquivalentTextUsesExactUTF8SnapshotIdentity() async throws {
         let decomposed = "e\u{301}"
         let precomposed = "é"
         XCTAssertEqual(decomposed, precomposed)
@@ -123,13 +123,12 @@ final class MarkdownSearcherTests: XCTestCase {
 
         let editorSession = MarkdownSourceEditorSession()
         editorSession.textView.string = precomposed
-        XCTAssertFalse(
-            editorSession.replaceCurrent(
-                utf8Range: 0..<decomposed.utf8.count,
-                with: "changed",
-                expectedText: decomposed
-            )
+        let replacedCanonicalMismatch = await editorSession.replaceCurrent(
+            utf8Range: 0..<decomposed.utf8.count,
+            with: "changed",
+            expectedText: decomposed
         )
+        XCTAssertFalse(replacedCanonicalMismatch)
         XCTAssertTrue(UTF8Text.isExactlyEqual(editorSession.textView.string, precomposed))
 
         let model = SearchEditorHarnessModel(text: decomposed)
@@ -577,29 +576,28 @@ final class MarkdownSearcherTests: XCTestCase {
     }
 
     @MainActor
-    func testReplaceCurrentChangesOnlyRequestedUnicodeRange() throws {
+    func testReplaceCurrentChangesOnlyRequestedUnicodeRange() async throws {
         let source = "🚀 Alpha alpha Alpha"
         let match = try XCTUnwrap(
             MarkdownSearcher.matches(in: source, query: "alpha", caseSensitive: true).first
         )
         let model = SearchEditorHarnessModel(text: source)
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         let window = makeHarnessWindow(model: model, session: session)
         defer { window.orderOut(nil) }
         renderPendingUI()
 
-        XCTAssertTrue(
-            session.replaceCurrent(
-                utf8Range: match.utf8Range,
-                with: "中文",
-                expectedText: source
-            )
+        let replaced = await session.replaceCurrent(
+            utf8Range: match.utf8Range,
+            with: "中文",
+            expectedText: source
         )
+        XCTAssertTrue(replaced)
         renderPendingUI()
 
         XCTAssertEqual(model.text, "🚀 Alpha 中文 Alpha")
-        session.textView.undoManager?.undo()
-        renderPendingUI()
+        session.textView.undo(nil)
+        for _ in 0..<20 where model.text != source { await Task.yield() }
         XCTAssertEqual(model.text, source)
     }
 
@@ -623,13 +621,12 @@ final class MarkdownSearcherTests: XCTestCase {
         XCTAssertTrue(window.makeFirstResponder(findField))
         model.resetTextUpdateCount()
 
-        XCTAssertTrue(
-            session.replaceAll(
-                utf8Ranges: matches.map(\.utf8Range),
-                with: "beta alpha",
-                expectedText: source
-            )
+        let replaced = await session.replaceAll(
+            utf8Ranges: matches.map(\.utf8Range),
+            with: "beta alpha",
+            expectedText: source
         )
+        XCTAssertTrue(replaced)
         renderPendingUI()
         for _ in 0..<20 where !session.textView.engineCanUndo {
             await Task.yield()
@@ -667,7 +664,7 @@ final class MarkdownSearcherTests: XCTestCase {
     }
 
     @MainActor
-    func testReplaceAllSupportsDeletionAndRejectsStaleOrReadOnlySource() throws {
+    func testReplaceAllSupportsDeletionAndRejectsStaleOrReadOnlySource() async throws {
         let source = "one one"
         let matches = try MarkdownSearcher.matches(
             in: source,
@@ -675,45 +672,42 @@ final class MarkdownSearcherTests: XCTestCase {
             caseSensitive: true
         )
         let model = SearchEditorHarnessModel(text: source)
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         let window = makeHarnessWindow(model: model, session: session)
         defer { window.orderOut(nil) }
         renderPendingUI()
 
-        XCTAssertFalse(
-            session.replaceAll(
-                utf8Ranges: matches.map(\.utf8Range),
-                with: "",
-                expectedText: "stale snapshot"
-            )
+        let replacedStale = await session.replaceAll(
+            utf8Ranges: matches.map(\.utf8Range),
+            with: "",
+            expectedText: "stale snapshot"
         )
+        XCTAssertFalse(replacedStale)
         XCTAssertEqual(model.text, source)
 
-        XCTAssertTrue(
-            session.replaceAll(
-                utf8Ranges: matches.map(\.utf8Range),
-                with: "",
-                expectedText: source
-            )
+        let replacedAll = await session.replaceAll(
+            utf8Ranges: matches.map(\.utf8Range),
+            with: "",
+            expectedText: source
         )
+        XCTAssertTrue(replacedAll)
         renderPendingUI()
         XCTAssertEqual(model.text, " ")
 
-        session.textView.undoManager?.undo()
-        renderPendingUI()
+        session.textView.undo(nil)
+        for _ in 0..<20 where model.text != source { await Task.yield() }
         session.textView.isEditable = false
-        XCTAssertFalse(
-            session.replaceCurrent(
-                utf8Range: matches[0].utf8Range,
-                with: "two",
-                expectedText: source
-            )
+        let replacedReadOnly = await session.replaceCurrent(
+            utf8Range: matches[0].utf8Range,
+            with: "two",
+            expectedText: source
         )
+        XCTAssertFalse(replacedReadOnly)
         XCTAssertEqual(model.text, source)
     }
 
     @MainActor
-    func testReplaceAllSupportsMultilineQueryAndReplacement() throws {
+    func testReplaceAllSupportsMultilineQueryAndReplacement() async throws {
         let source = "begin\nmiddle\nend\nmiddle\nend"
         let matches = try MarkdownSearcher.matches(
             in: source,
@@ -721,24 +715,23 @@ final class MarkdownSearcherTests: XCTestCase {
             caseSensitive: true
         )
         let model = SearchEditorHarnessModel(text: source)
-        let session = MarkdownSourceEditorSession(engineEnabled: false)
+        let session = MarkdownSourceEditorSession()
         let window = makeHarnessWindow(model: model, session: session)
         defer { window.orderOut(nil) }
         renderPendingUI()
 
         XCTAssertEqual(matches.count, 2)
-        XCTAssertTrue(
-            session.replaceAll(
-                utf8Ranges: matches.map(\.utf8Range),
-                with: "段落\n完成",
-                expectedText: source
-            )
+        let replaced = await session.replaceAll(
+            utf8Ranges: matches.map(\.utf8Range),
+            with: "段落\n完成",
+            expectedText: source
         )
+        XCTAssertTrue(replaced)
         renderPendingUI()
         XCTAssertEqual(model.text, "begin\n段落\n完成\n段落\n完成")
 
-        session.textView.undoManager?.undo()
-        renderPendingUI()
+        session.textView.undo(nil)
+        for _ in 0..<20 where model.text != source { await Task.yield() }
         XCTAssertEqual(model.text, source)
     }
 

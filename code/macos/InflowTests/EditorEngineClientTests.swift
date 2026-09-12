@@ -54,7 +54,7 @@ final class EditorEngineClientTests: XCTestCase {
 
     @MainActor
     func testUnifiedDerivationReturnsOneRevisionBoundResult() async throws {
-        let queue = EditorEngineClient(isEnabled: true)
+        let queue = EditorEngineClient()
         let source = "# 标题\n\n正文 **加粗** [链接](note.md)"
 
         let content = await queue.derive(
@@ -103,7 +103,7 @@ final class EditorEngineClientTests: XCTestCase {
 
     @MainActor
     func testFormatAndSnapshotUseTheSameRevisionedEngine() async throws {
-        let queue = EditorEngineClient(isEnabled: true)
+        let queue = EditorEngineClient()
         let source = "Hello 世界"
         let selection = (source as NSString).range(of: "世界")
 
@@ -166,7 +166,7 @@ final class EditorEngineClientTests: XCTestCase {
 
     @MainActor
     func testSearchUsesTheSameRevisionedEngineAndPreservesMatchedBytes() async throws {
-        let queue = EditorEngineClient(isEnabled: true)
+        let queue = EditorEngineClient()
         let source = "Straße STRASSE straße"
 
         let result = await queue.search(
@@ -224,7 +224,7 @@ final class EditorEngineClientTests: XCTestCase {
 
     @MainActor
     func testEngineHistoryOwnsUndoAndRedoPatches() async throws {
-        let queue = EditorEngineClient(isEnabled: true)
+        let queue = EditorEngineClient()
         let source = "Hello 世界"
         let selection = (source as NSString).range(of: "世界")
         let formattedResult = await queue.format(

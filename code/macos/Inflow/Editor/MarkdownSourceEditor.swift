@@ -43,8 +43,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var focusModeEnabled = false
     private var typewriterModeEnabled = false
 
-    init(engineEnabled: Bool = true) {
-        engineClient = EditorEngineClient(isEnabled: engineEnabled)
+    override init() {
+        engineClient = EditorEngineClient()
         let scrollView = NSScrollView()
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = true
@@ -94,11 +94,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         self.textView = textView
         self.lineNumberRuler = lineNumberRuler
         super.init()
-        textView.usesEngineHistory = engineClient.isEnabled
-        textView.allowsUndo = !engineClient.isEnabled
-        if engineClient.isEnabled {
-            textView.undoManager?.disableUndoRegistration()
-        }
+        textView.usesEngineHistory = true
+        textView.allowsUndo = false
+        textView.undoManager?.disableUndoRegistration()
         textView.engineUndoHandler = { [weak self] in
             self?.performEngineHistory(.undo)
         }
@@ -118,15 +116,13 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             self.updateBoundText?(snapshot.text)
         }
         textView.compositionDidCommitHandler = { [weak self] text, selection in
-            guard let self, self.engineClient.isEnabled else { return }
+            guard let self else { return }
             self.pendingOptimisticText = text
             self.engineClient.submit(text: text, selectionUTF16: selection)
         }
         textView.textDidChangeHandler = { [weak self] text in
             if let self, !self.isApplyingEngineMutation, !self.textView.hasMarkedText() {
-                if self.engineClient.isEnabled {
-                    self.pendingOptimisticText = text
-                }
+                self.pendingOptimisticText = text
                 self.engineClient.submit(
                     text: text,
                     selectionUTF16: self.textView.selectedRange(),
@@ -139,9 +135,6 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             self?.scheduleFormatInspection()
             self?.lineNumberRuler.updateText(text)
             self?.refreshWritingModePresentation()
-            if self?.engineClient.isEnabled != true {
-                self?.updateBoundText?(text)
-            }
             self?.scheduleRenderedPresentation(for: text)
         }
         textView.focusDidChangeHandler = { [weak self] in
@@ -370,8 +363,6 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         return .success(result)
     }
 
-    var usesEngineAuthority: Bool { engineClient.isEnabled }
-
     func persistenceSnapshot() async -> EditorEngineDocumentSnapshot? {
         if textView.hasMarkedText() {
             textView.unmarkText()
@@ -539,15 +530,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
 
         invalidateSyntaxApplication()
-        let plan: RenderedMarkdownPlan
-        if engineClient.isEnabled {
-            guard let engineRenderedPlan,
-                  engineRenderedPlan.exactlyMatches(source)
-            else { return }
-            plan = engineRenderedPlan
-        } else {
-            plan = RenderedMarkdownEditor.plan(for: source)
-        }
+        guard let plan = engineRenderedPlan,
+              plan.exactlyMatches(source)
+        else { return }
         renderedPlan = plan
         let editingRange: NSRange? = if textView.isEditable,
                                        textView.window?.firstResponder === textView
@@ -1684,7 +1669,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     fileprivate func preservesOptimisticText(over boundText: String) -> Bool {
-        guard engineClient.isEnabled, let pendingOptimisticText else { return false }
+        guard let pendingOptimisticText else { return false }
         return UTF8Text.isExactlyEqual(textView.string, pendingOptimisticText)
             && !UTF8Text.isExactlyEqual(boundText, pendingOptimisticText)
     }
@@ -1744,20 +1729,27 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         utf8Range: Range<Int>,
         with replacement: String,
         expectedText: String
-    ) -> Bool {
+    ) async -> Bool {
         guard textView.isEditable,
+              !textView.hasMarkedText(),
               UTF8Text.isExactlyEqual(textView.string, expectedText),
-              let target = MarkdownSourceRange.navigationTarget(
+              MarkdownSourceRange.navigationTarget(
                   forUTF8Range: utf8Range,
                   in: expectedText
-              )
+              ) != nil
         else {
             return false
         }
-
-        textView.insertText(replacement, replacementRange: target.revealRange)
-        textView.undoManager?.setActionName("替换")
-        return true
+        let selectionOffset = utf8Range.lowerBound + replacement.utf8.count
+        guard let mutation = await engineClient.replace(
+            text: expectedText,
+            range: utf8Range,
+            replacement: replacement,
+            selectionBeforeUTF16: textView.selectedRange(),
+            selectionAfterUTF8: selectionOffset..<selectionOffset,
+            groupID: "replace"
+        ) else { return false }
+        return applyEngineMutation(mutation, plan: nil, actionName: "替换")
     }
 
     @discardableResult
@@ -1765,7 +1757,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         utf8Ranges: [Range<Int>],
         with replacement: String,
         expectedText: String
-    ) -> Bool {
+    ) async -> Bool {
         guard textView.isEditable,
               UTF8Text.isExactlyEqual(textView.string, expectedText),
               !utf8Ranges.isEmpty
@@ -1809,60 +1801,18 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         output.append(contentsOf: sourceBytes[cursor...])
 
         let finalText = String(decoding: output, as: UTF8.self)
-        let fullRange = NSRange(location: 0, length: (expectedText as NSString).length)
-        textView.insertText(finalText, replacementRange: fullRange)
-        textView.undoManager?.setActionName("全部替换")
-        return true
+        let selectionOffset = finalText.utf8.count
+        guard let mutation = await engineClient.replace(
+            text: expectedText,
+            range: 0..<expectedText.utf8.count,
+            replacement: finalText,
+            selectionBeforeUTF16: textView.selectedRange(),
+            selectionAfterUTF8: selectionOffset..<selectionOffset,
+            groupID: "replace_all"
+        ) else { return false }
+        return applyEngineMutation(mutation, plan: nil, actionName: "全部替换")
     }
 
-    @discardableResult
-    func applyMarkdownFormat(
-        _ plan: MarkdownFormatPlan,
-        actionName: String
-    ) -> Bool {
-        guard textView.isEditable,
-              !textView.hasMarkedText(),
-              UTF8Text.isExactlyEqual(textView.string, plan.sourceSnapshot),
-              let replacementTarget = MarkdownSourceRange.navigationTarget(
-                  forUTF8Range: plan.replaceUTF8Range,
-                  in: plan.sourceSnapshot
-              ),
-              let finalSelection = MarkdownSourceRange.navigationTarget(
-                  forUTF8Range: plan.selectionUTF8Range,
-                  in: plan.resultingSource
-              )
-        else {
-            return false
-        }
-
-        textView.insertText(
-            plan.replacement,
-            replacementRange: replacementTarget.revealRange
-        )
-        guard UTF8Text.isExactlyEqual(textView.string, plan.resultingSource) else {
-            textView.undoManager?.undo()
-            return false
-        }
-
-        textView.setSelectedRange(finalSelection.revealRange)
-        updateSelectedRange(finalSelection.revealRange)
-        textView.scrollRangeToVisible(finalSelection.revealRange)
-        textView.undoManager?.setActionName(actionName)
-        return true
-    }
-
-    @discardableResult
-    func applyMarkdownImage(
-        _ plan: MarkdownFormatPlan,
-        asset _: ImportedImageAsset,
-        actionName: String,
-        onResourceError _: @escaping @MainActor (String) -> Void
-    ) -> Bool {
-        // The imported file is a durable project resource. Undo owns only the
-        // Markdown reference; removing the asset could break another document
-        // that started using it after insertion.
-        applyMarkdownFormat(plan, actionName: actionName)
-    }
 }
 
 @MainActor

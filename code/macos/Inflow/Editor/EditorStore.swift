@@ -60,10 +60,6 @@ final class EditorStore: ObservableObject {
         modeSynchronizationTask?.cancel()
     }
 
-    var usesEngineAuthority: Bool {
-        sourceEditorSession.usesEngineAuthority
-    }
-
     var textProjection: String {
         sourceEditorSession.textView.string
     }
@@ -96,8 +92,8 @@ final class EditorStore: ObservableObject {
         utf8Range: Range<Int>,
         with replacement: String,
         expectedText: String
-    ) -> Bool {
-        sourceEditorSession.replaceCurrent(
+    ) async -> Bool {
+        await sourceEditorSession.replaceCurrent(
             utf8Range: utf8Range,
             with: replacement,
             expectedText: expectedText
@@ -108,8 +104,8 @@ final class EditorStore: ObservableObject {
         utf8Ranges: [Range<Int>],
         with replacement: String,
         expectedText: String
-    ) -> Bool {
-        sourceEditorSession.replaceAll(
+    ) async -> Bool {
+        await sourceEditorSession.replaceAll(
             utf8Ranges: utf8Ranges,
             with: replacement,
             expectedText: expectedText

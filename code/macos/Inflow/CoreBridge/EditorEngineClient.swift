@@ -225,25 +225,18 @@ enum EditorEngineSynchronousCommands {
 
 @MainActor
 final class EditorEngineClient {
-    private let client: EditorEngineTransport?
+    private let client = EditorEngineTransport()
     private var lastSubmittedText: String?
     private var pending: Task<Void, Never>?
     var onHistoryStateChange: ((Bool, Bool) -> Void)?
     var onAuthoritativeSnapshot: ((EditorEngineDocumentSnapshot) -> Void)?
-
-    var isEnabled: Bool { client != nil }
-
-    init(isEnabled: Bool = true) {
-        client = isEnabled ? EditorEngineTransport() : nil
-    }
 
     func submit(
         text: String,
         selectionUTF16: NSRange,
         groupID: String? = nil
     ) {
-        guard let client,
-              lastSubmittedText.map({ !$0.utf8.elementsEqual(text.utf8) }) ?? true
+        guard lastSubmittedText.map({ !$0.utf8.elementsEqual(text.utf8) }) ?? true
         else { return }
         lastSubmittedText = text
         let previous = pending
@@ -272,7 +265,7 @@ final class EditorEngineClient {
         submit(text: text, selectionUTF16: selectionUTF16)
         await pending?.value
         guard !Task.isCancelled else { return nil }
-        return await client?.derive(
+        return await client.derive(
             expectedText: text,
             mathEnabled: configuration.mathRenderingEnabled,
             mermaidEnabled: configuration.mermaidRenderingEnabled
@@ -287,7 +280,7 @@ final class EditorEngineClient {
         submit(text: text, selectionUTF16: selectionUTF16)
         await pending?.value
         guard !Task.isCancelled,
-              let mutation = await client?.format(
+              let mutation = await client.format(
                   expectedText: text,
                   selectionUTF16: selectionUTF16,
                   operation: operation
@@ -296,6 +289,31 @@ final class EditorEngineClient {
         if lastSubmittedText?.utf8.elementsEqual(text.utf8) == true {
             lastSubmittedText = mutation.resultingSource
         }
+        onHistoryStateChange?(mutation.canUndo, mutation.canRedo)
+        return mutation
+    }
+
+    func replace(
+        text: String,
+        range: Range<Int>,
+        replacement: String,
+        selectionBeforeUTF16: NSRange,
+        selectionAfterUTF8: Range<Int>,
+        groupID: String
+    ) async -> EditorEngineMutation? {
+        submit(text: text, selectionUTF16: selectionBeforeUTF16)
+        await pending?.value
+        guard !Task.isCancelled,
+              let mutation = await client.replace(
+                  expectedText: text,
+                  range: range,
+                  replacement: replacement,
+                  selectionBeforeUTF16: selectionBeforeUTF16,
+                  selectionAfterUTF8: selectionAfterUTF8,
+                  groupID: groupID
+              )
+        else { return nil }
+        lastSubmittedText = mutation.resultingSource
         onHistoryStateChange?(mutation.canUndo, mutation.canRedo)
         return mutation
     }
@@ -309,7 +327,7 @@ final class EditorEngineClient {
         submit(text: text, selectionUTF16: selectionUTF16)
         await pending?.value
         guard !Task.isCancelled else { return nil }
-        return await client?.search(
+        return await client.search(
             expectedText: text,
             query: query,
             caseSensitive: caseSensitive
@@ -323,10 +341,10 @@ final class EditorEngineClient {
         submit(text: text, selectionUTF16: selectionUTF16)
         await pending?.value
         guard !Task.isCancelled else { return false }
-        return await client?.canClearFormat(
+        return await client.canClearFormat(
             expectedText: text,
             selectionUTF16: selectionUTF16
-        ) ?? false
+        )
     }
 
     func undo(text: String, selectionUTF16: NSRange) async -> EditorEngineMutation? {
@@ -352,7 +370,7 @@ final class EditorEngineClient {
         submit(text: text, selectionUTF16: selectionUTF16)
         await pending?.value
         guard !Task.isCancelled else { return nil }
-        return await client?.snapshot(expectedText: text)
+        return await client.snapshot(expectedText: text)
     }
 
     func prepareSave(
@@ -362,19 +380,19 @@ final class EditorEngineClient {
         submit(text: text, selectionUTF16: selectionUTF16)
         await pending?.value
         guard !Task.isCancelled else { return nil }
-        return await client?.prepareSave(expectedText: text)
+        return await client.prepareSave(expectedText: text)
     }
 
     func saveCompleted(_ preparation: EditorEngineSavePreparation) async -> Bool {
         await pending?.value
         guard !Task.isCancelled else { return false }
-        return await client?.finishSave(saveID: preparation.saveID, completed: true) ?? false
+        return await client.finishSave(saveID: preparation.saveID, completed: true)
     }
 
     func saveAborted(_ preparation: EditorEngineSavePreparation) async {
         await pending?.value
         guard !Task.isCancelled else { return }
-        _ = await client?.finishSave(saveID: preparation.saveID, completed: false)
+        _ = await client.finishSave(saveID: preparation.saveID, completed: false)
     }
 
     func setMode(
@@ -385,11 +403,10 @@ final class EditorEngineClient {
         submit(text: text, selectionUTF16: selectionUTF16)
         await pending?.value
         guard !Task.isCancelled else { return false }
-        return await client?.setMode(mode, expectedText: text) ?? false
+        return await client.setMode(mode, expectedText: text)
     }
 
     func reset(text: String, selectionUTF16: NSRange) {
-        guard let client else { return }
         lastSubmittedText = text
         let previous = pending
         pending = Task {
@@ -417,7 +434,7 @@ final class EditorEngineClient {
         submit(text: text, selectionUTF16: selectionUTF16)
         await pending?.value
         guard !Task.isCancelled,
-              let mutation = await client?.historyMutation(
+              let mutation = await client.historyMutation(
                   direction: direction,
                   expectedText: text
               )
@@ -481,6 +498,7 @@ private actor EditorEngineTransport {
                     baseRevision: revision,
                     range: EditorEngineByteRange(start: edit.start, end: edit.end),
                     inserted: edit.inserted,
+                    selectionBefore: nil,
                     selectionAfter: selection,
                     groupID: groupID
                 )
@@ -613,6 +631,63 @@ private actor EditorEngineTransport {
         } catch {
             logger.error(
                 "Engine format failed; revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    func replace(
+        expectedText: String,
+        range: Range<Int>,
+        replacement: String,
+        selectionBeforeUTF16: NSRange,
+        selectionAfterUTF8: Range<Int>,
+        groupID: String
+    ) -> EditorEngineMutation? {
+        do {
+            guard projection.utf8.elementsEqual(expectedText.utf8),
+                  range.lowerBound >= 0,
+                  range.lowerBound <= range.upperBound,
+                  range.upperBound <= expectedText.utf8.count
+            else { throw EditorEngineBridgeError.invalidSelection }
+            let resultingLength = expectedText.utf8.count - range.count + replacement.utf8.count
+            guard
+                  selectionAfterUTF8.lowerBound >= 0,
+                  selectionAfterUTF8.lowerBound <= selectionAfterUTF8.upperBound,
+                  selectionAfterUTF8.upperBound <= resultingLength
+            else { throw EditorEngineBridgeError.invalidSelection }
+            let selectionBefore = try Self.byteSelection(selectionBeforeUTF16, in: expectedText)
+            let requestID = UUID().uuidString
+            let envelope = EditorEngineCommandEnvelope(
+                schemaVersion: Self.schemaVersion,
+                requestID: requestID,
+                command: EditorEngineReplaceCommand(
+                    type: "replace_text",
+                    baseRevision: revision,
+                    range: EditorEngineByteRange(start: range.lowerBound, end: range.upperBound),
+                    inserted: replacement,
+                    selectionBefore: selectionBefore,
+                    selectionAfter: EditorEngineSelection(
+                        start: selectionAfterUTF8.lowerBound,
+                        end: selectionAfterUTF8.upperBound
+                    ),
+                    groupID: groupID
+                )
+            )
+            let response: EditorEngineDispatchResponse = try dispatch(envelope)
+            guard response.schemaVersion == Self.schemaVersion,
+                  response.requestID == requestID,
+                  response.patch.baseRevision == revision,
+                  response.patch.revision == revision + 1
+            else { throw EditorEngineBridgeError.invalidResponse }
+            let mutation = try response.patch.validatedMutation(source: expectedText)
+            revision = mutation.revision
+            projection = mutation.resultingSource
+            try compareSnapshot(to: mutation.resultingSource)
+            return mutation
+        } catch {
+            logger.error(
+                "Engine replacement failed; revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
             return nil
         }
@@ -1286,6 +1361,7 @@ private struct EditorEngineReplaceCommand: Encodable {
     let baseRevision: UInt64
     let range: EditorEngineByteRange
     let inserted: String
+    let selectionBefore: EditorEngineSelection?
     let selectionAfter: EditorEngineSelection
     let groupID: String?
 
@@ -1294,6 +1370,7 @@ private struct EditorEngineReplaceCommand: Encodable {
         case baseRevision = "base_revision"
         case range
         case inserted
+        case selectionBefore = "selection_before"
         case selectionAfter = "selection_after"
         case groupID = "group_id"
     }
