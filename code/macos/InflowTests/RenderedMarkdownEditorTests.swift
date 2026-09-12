@@ -141,12 +141,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertNotNil(storage)
 
         for marker in plan.markers where marker.kind == .referenceDefinition {
-            let font = storage?.attribute(
-                .font,
-                at: marker.sourceRange.utf16Range.location,
-                effectiveRange: nil
-            ) as? NSFont
-            XCTAssertLessThan(font?.pointSize ?? .greatestFiniteMagnitude, 1)
+            assertVisuallyHidden(marker.sourceRange.utf16Range, in: storage)
         }
 
         let tableDelimiter = plan.markers.first { $0.kind == .tableDelimiterRow }
@@ -167,7 +162,10 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                 effectiveRange: nil
             ) as? NSFont
         }
-        XCTAssertLessThan(quoteMarkerFont?.pointSize ?? .greatestFiniteMagnitude, 1)
+        XCTAssertGreaterThanOrEqual(quoteMarkerFont?.pointSize ?? 0, 15)
+        if let quoteMarker {
+            assertVisuallyHidden(quoteMarker.sourceRange.utf16Range, in: storage)
+        }
         XCTAssertEqual(session.textView.renderedQuoteRanges.count, 1)
         XCTAssertNotNil(
             plan.tables.first.flatMap {
@@ -433,8 +431,8 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             NSRange(location: boldMarker.sourceRange.utf16Range.location, length: 0)
         )
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
-        XCTAssertLessThan(try markerFont(boldMarker, in: session).pointSize, 1)
-        XCTAssertLessThan(try markerFont(italicMarker, in: session).pointSize, 1)
+        assertVisuallyHidden(boldMarker.sourceRange.utf16Range, in: session.textView.textStorage)
+        assertVisuallyHidden(italicMarker.sourceRange.utf16Range, in: session.textView.textStorage)
         XCTAssertNotNil(
             session.textView.renderedImage(
                 atUTF16Location: diagram.sourceRange.utf16Range.location
@@ -466,7 +464,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             NSRange(location: diagram.sourceRange.utf16Range.location + 4, length: 0)
         )
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
-        XCTAssertLessThan(try markerFont(boldMarker, in: session).pointSize, 1)
+        assertVisuallyHidden(boldMarker.sourceRange.utf16Range, in: session.textView.textStorage)
         XCTAssertNil(
             session.textView.renderedImage(
                 atUTF16Location: diagram.sourceRange.utf16Range.location
@@ -478,8 +476,8 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             NSRange(location: italicMarker.sourceRange.utf16Range.location, length: 0)
         )
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
-        XCTAssertLessThan(try markerFont(boldMarker, in: session).pointSize, 1)
-        XCTAssertLessThan(try markerFont(italicMarker, in: session).pointSize, 1)
+        assertVisuallyHidden(boldMarker.sourceRange.utf16Range, in: session.textView.textStorage)
+        assertVisuallyHidden(italicMarker.sourceRange.utf16Range, in: session.textView.textStorage)
         XCTAssertNotNil(
             session.textView.renderedImage(
                 atUTF16Location: diagram.sourceRange.utf16Range.location
@@ -488,7 +486,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
 
         _ = window.makeFirstResponder(nil)
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
-        XCTAssertLessThan(try markerFont(italicMarker, in: session).pointSize, 1)
+        assertVisuallyHidden(italicMarker.sourceRange.utf16Range, in: session.textView.textStorage)
     }
 
     func testUnsupportedMermaidRemainsReadableLocalSource() {
@@ -760,6 +758,21 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
     }
 
+    func testAdaptiveTableLayoutFillsAndRespondsToTheViewport() throws {
+        let source = "| A much longer heading | B |\n| --- | ---: |\n| value | 1 |"
+        let table = try XCTUnwrap(RenderedMarkdownEditor.plan(for: source).tables.first)
+        let strategy = AdaptiveRenderedMarkdownTableLayoutStrategy()
+        let font = NSFont.systemFont(ofSize: 15)
+        let wide = strategy.columnWidths(for: table, font: font, availableWidth: 680)
+        let narrow = strategy.columnWidths(for: table, font: font, availableWidth: 320)
+
+        XCTAssertEqual(wide.reduce(0, +), 680, accuracy: 2)
+        XCTAssertEqual(narrow.reduce(0, +), 320, accuracy: 2)
+        XCTAssertGreaterThan(wide[0], wide[1])
+        XCTAssertGreaterThan(narrow[0], narrow[1])
+        XCTAssertTrue(narrow.allSatisfy { $0 >= 56 })
+    }
+
     @MainActor
     func testRenderedTableOverlaySurvivesUnrelatedProseTyping() async throws {
         let source = "Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |"
@@ -842,6 +855,54 @@ final class RenderedMarkdownEditorTests: XCTestCase {
 
         XCTAssertEqual(caretFont.pointSize, visibleFont.pointSize, accuracy: 0.001)
         XCTAssertEqual(caretFont.fontName, visibleFont.fontName)
+    }
+
+    @MainActor
+    func testRenderedCaretAtHeadingEndSkipsHiddenMarkersAndNewline() throws {
+        let source = "# **同一基线**\n下一段"
+        let insertion = (source as NSString).range(of: "\n").location
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        session.textView.setSelectedRange(NSRange(location: insertion, length: 0))
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+
+        let font = try XCTUnwrap(session.textView.typingAttributes[.font] as? NSFont)
+        XCTAssertEqual(font.pointSize, 27, accuracy: 0.001)
+        let rect = RenderedMarkdownCaretStyleResolver.adjustedInsertionRect(
+            NSRect(x: 10, y: 10, width: 1, height: 40),
+            font: font
+        )
+        XCTAssertEqual(rect.midY, 30, accuracy: 0.001)
+        XCTAssertGreaterThan(rect.height, 20)
+    }
+
+    @MainActor
+    func testLongChineseBlockQuoteUsesRenderedTypographyWithoutExposingMarker() throws {
+        let source = "> 接手文件 → 形成内容 → 理解结构 → 验证结果 → 交付成果 → 继续演进"
+        let plan = RenderedMarkdownEditor.plan(for: source)
+        XCTAssertTrue(plan.localSourceBlocks.isEmpty)
+        XCTAssertTrue(hasMarker(.blockQuote, text: "> ", source: source, plan: plan))
+        XCTAssertTrue(
+            hasStyle(
+                .blockQuote,
+                text: "接手文件 → 形成内容 → 理解结构 → 验证结果 → 交付成果 → 继续演进",
+                source: source,
+                plan: plan
+            )
+        )
+
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let storage = try XCTUnwrap(session.textView.textStorage)
+        assertVisuallyHidden(NSRange(location: 0, length: 2), in: storage)
+        let contentLocation = (source as NSString).range(of: "接手文件").location
+        let color = try XCTUnwrap(
+            storage.attribute(.foregroundColor, at: contentLocation, effectiveRange: nil)
+                as? NSColor
+        )
+        XCTAssertEqual(color, NSColor.secondaryLabelColor)
+        XCTAssertEqual(session.textView.renderedQuoteRanges.count, 1)
     }
 
     @MainActor
@@ -1030,7 +1091,12 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                 effectiveRange: nil
             ) as? NSFont
         )
-        XCTAssertLessThan(quoteFont.pointSize, 1, "quote source marker must be hidden")
+        XCTAssertGreaterThanOrEqual(quoteFont.pointSize, 15)
+        assertVisuallyHidden(
+            NSRange(location: quoteLocation, length: 2),
+            in: session.textView.textStorage,
+            message: "quote source marker must be hidden without shrinking the caret"
+        )
 
         for marker in ["- ", "1. ", "[x] "] {
             let location = try XCTUnwrap((source as NSString).range(of: marker).nonEmptyLocation)
@@ -1051,10 +1117,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                 effectiveRange: nil
             ) as? NSFont
         )
-        XCTAssertLessThan(
-            inlineMarkerFont.pointSize,
-            1,
-            "inline Markdown delimiters must stay visually collapsed while editing"
+        XCTAssertGreaterThanOrEqual(inlineMarkerFont.pointSize, 15)
+        assertVisuallyHidden(
+            NSRange(location: inlineMarker.location, length: 2),
+            in: session.textView.textStorage,
+            message: "inline Markdown delimiters must stay visually collapsed while editing"
         )
     }
 
@@ -1086,7 +1153,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
         XCTAssertEqual(boldFont.pointSize, 27, accuracy: 0.001)
         XCTAssertTrue(NSFontManager.shared.traits(of: boldFont).contains(.boldFontMask))
-        XCTAssertEqual(codeFont.pointSize, 26, accuracy: 0.001)
+        XCTAssertEqual(codeFont.pointSize, 27, accuracy: 0.001)
         XCTAssertTrue(codeFont.fontDescriptor.symbolicTraits.contains(.monoSpace))
         XCTAssertEqual(linkFont.pointSize, 27, accuracy: 0.001)
         let obliqueness = try XCTUnwrap(
@@ -1109,7 +1176,12 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             let markerFont = try XCTUnwrap(
                 storage.attribute(.font, at: location, effectiveRange: nil) as? NSFont
             )
-            XCTAssertLessThan(markerFont.pointSize, 1, "\(marker.kind) should be collapsed")
+            XCTAssertGreaterThanOrEqual(markerFont.pointSize, 15)
+            assertVisuallyHidden(
+                marker.sourceRange.utf16Range,
+                in: storage,
+                message: "\(marker.kind) should be collapsed without changing line metrics"
+            )
             XCTAssertEqual(
                 (storage.attribute(.underlineStyle, at: location, effectiveRange: nil)
                     as? NSNumber)?.intValue,
@@ -1170,6 +1242,39 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testRenderedLinkPublishesHoverRangeAtItsVisibleGlyphs() throws {
+        let source = "Read [guide](guide.md)"
+        let plan = RenderedMarkdownEditor.plan(for: source)
+        let link = try XCTUnwrap(plan.links.first)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 300),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let session = MarkdownSourceEditorSession()
+        window.contentView = session.scrollView
+        session.textView.string = source
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        session.textView.layoutManager?.ensureLayout(for: session.textView.textContainer!)
+        let glyph = try XCTUnwrap(session.textView.layoutManager).glyphIndexForCharacter(
+            at: link.textRange.utf16Range.location
+        )
+        let glyphRect = try XCTUnwrap(session.textView.layoutManager).boundingRect(
+            forGlyphRange: NSRange(location: glyph, length: 1),
+            in: try XCTUnwrap(session.textView.textContainer)
+        )
+        let viewPoint = NSPoint(
+            x: session.textView.textContainerOrigin.x + glyphRect.midX,
+            y: session.textView.textContainerOrigin.y + glyphRect.midY
+        )
+        session.textView.updateHoveredLink(atLocalPoint: viewPoint)
+        XCTAssertEqual(session.textView.hoveredLinkRange, link.textRange.utf16Range)
+        session.textView.updateHoveredLink(atLocalPoint: NSPoint(x: -20, y: -20))
+        XCTAssertNil(session.textView.hoveredLinkRange)
+    }
+
     private func hasMarker(
         _ kind: RenderedMarkdownMarkerKind,
         text: String,
@@ -1211,20 +1316,6 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             + plan.mermaidDiagrams.map(\.sourceRange)
     }
 
-    @MainActor
-    private func markerFont(
-        _ marker: RenderedMarkdownMarker,
-        in session: MarkdownSourceEditorSession
-    ) throws -> NSFont {
-        try XCTUnwrap(
-            session.textView.textStorage?.attribute(
-                .font,
-                at: marker.sourceRange.utf16Range.location,
-                effectiveRange: nil
-            ) as? NSFont
-        )
-    }
-
     private func rangesOverlap(_ lhs: Range<Int>, _ rhs: Range<Int>) -> Bool {
         lhs.lowerBound < rhs.upperBound && lhs.upperBound > rhs.lowerBound
     }
@@ -1248,7 +1339,27 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             storage.attribute(.font, at: markerLocation, effectiveRange: nil) as? NSFont
         )
         XCTAssertTrue(NSFontManager.shared.traits(of: contentFont).contains(.boldFontMask))
-        XCTAssertLessThan(markerFont.pointSize, 1)
+        XCTAssertGreaterThanOrEqual(markerFont.pointSize, 15)
+        assertVisuallyHidden(
+            NSRange(location: markerLocation, length: 2),
+            in: storage
+        )
+    }
+
+    private func assertVisuallyHidden(
+        _ range: NSRange,
+        in storage: NSTextStorage?,
+        message: String = "Markdown marker must be visually hidden",
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard let storage, range.length > 0, NSMaxRange(range) <= storage.length else {
+            XCTFail("Invalid hidden marker range", file: file, line: line)
+            return
+        }
+        let color = storage.attribute(.foregroundColor, at: range.location, effectiveRange: nil)
+            as? NSColor
+        XCTAssertEqual(color?.alphaComponent ?? 1, 0, accuracy: 0.001, message, file: file, line: line)
     }
 
     @MainActor

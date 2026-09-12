@@ -35,10 +35,10 @@ Inflow 是一款本地优先的 Markdown 写作工作台。当前代码只为产
 ### 三种写作视图
 
 - 源码编辑、实时预览分栏和即时编辑都绑定同一 Markdown 文本与同一保存路径；源码与分栏左侧复用同一个持久 NSTextView 会话。
-- 即时编辑直接复用持久 NSTextView 与 Rust Core 的解析范围：普通文字、标题、行内样式、引用和列表在渲染态直接编辑，光标字号与所在文字一致；只有围栏代码、Mermaid 等必须暴露结构的块才在光标进入时局部显示源码。
+- 即时编辑直接复用持久 NSTextView 与 Rust Core 的解析范围：普通文字、标题、行内代码、引用和列表在渲染态直接编辑。隐藏的 Markdown 标记保留所在文字的真实字号和行高，插入光标由可见字符的排版属性决定；只有围栏代码、Mermaid 等必须暴露结构的块才在光标进入时局部显示源码。
 - 光标移到另一块或编辑器失去焦点后，旧块立即恢复渲染；不再需要右上角“编辑源码/完成编辑”按钮，也不创建富文本副本。正文修改继续进入同一个原生撤销与重做历史。
-- 图片以不改写原文的布局覆盖呈现，加载前显示占位；表格保持带表头、对齐和网格线的原生渲染，单元格可直接编辑，右键菜单提供行列增删与列对齐；表格外的输入会复用既有表格视图，不会反复拆装。引用隐藏 `>` 并显示引用条。受支持的 Mermaid 由离线 Rust Core 生成带明确尺寸的 SVG，跨越中间节点的连线绕开节点；编辑 Mermaid 块时图表覆盖层会先卸载。围栏代码非编辑时隐藏围栏并呈现代码内容，光标进入时切换为局部源码。
-- 输入法存在 marked text 时保留现有展示；链接默认单击导航，也可在“设置 > 预览”中改为只允许从右键菜单打开。
+- 图片以不改写原文的布局覆盖呈现，加载前显示占位；表格保持带表头、对齐和网格线的原生渲染，宽度随编辑区自适应，单元格可直接编辑，右键菜单提供行列增删与列对齐；表格外的输入会复用既有表格视图。引用隐藏 `>` 并显示引用条。受支持的 Mermaid 通过专用 C ABI 由离线 Rust Core 直接生成 SVG，不再从 HTML 中截取；编辑 Mermaid 块时图表覆盖层会先卸载。围栏代码非编辑时隐藏围栏并呈现代码内容，光标进入时切换为局部源码。
+- 输入法存在 marked text 时保留现有展示；链接默认单击导航，也可在“设置 > 预览”中改为只允许从右键菜单打开。文本和表格链接在鼠标悬停时都显示 Hover 背景。
 - 当前格式菜单只暴露粗体、斜体、行内代码、H1–H6、引用和无序/有序/任务列表；链接与固定表格模板位于插入菜单。
 
 ### Markdown、资源与链接
@@ -117,7 +117,7 @@ Rust 核心的独立检查：
 
     scripts/verify-launch.sh --personal
 
-该配置只执行 Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查；不创建归档或发布证据，也不执行固定设备/30 次性能协议、扩展生态合同、签名、公证或分发门禁。[`quality/personal-xctest-scope.tsv`](quality/personal-xctest-scope.tsv) 把当前 380 个 XCTest method 逐项分为 274 个 `current-direct`、13 个 `current-host`、88 个 `deferred` 和 5 个 `fixed-performance`。`--personal` 只执行 `current-direct`；其余三类不计为通过。13 个宿主用例保留为 App-host 专项验证或真实应用 UAT，后置与固定性能用例由 deferred profile 的全量测试保留。脚本会对重复、陈旧、未分类、非法分区和四类精确计数失败关闭；新增测试不能默认混入当前门禁。可用 `scripts/verify-launch.sh --describe-profile personal` 无副作用查看边界。
+该配置只执行 Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查；不创建归档或发布证据，也不执行固定设备/30 次性能协议、扩展生态合同、签名、公证或分发门禁。[`quality/personal-xctest-scope.tsv`](quality/personal-xctest-scope.tsv) 把当前 394 个 XCTest method 逐项分为 288 个 `current-direct`、13 个 `current-host`、88 个 `deferred` 和 5 个 `fixed-performance`。`--personal` 只执行 `current-direct`；其余三类不计为通过。13 个宿主用例保留为 App-host 专项验证或真实应用 UAT，后置与固定性能用例由 deferred profile 的全量测试保留。脚本会对重复、陈旧、未分类、非法分区和四类精确计数失败关闭；新增测试不能默认混入当前门禁。可用 `scripts/verify-launch.sh --describe-profile personal` 无副作用查看边界。
 
 `--deferred-release-local`、`--deferred-signed-archive` 以及 `scripts/release-workflow.sh` 只为后续公共分发决策保留，不属于个人首版完成条件。
 

@@ -27,6 +27,7 @@ Rust 核心负责不依赖平台的纯值逻辑：
 
 - UTF-8 Markdown 分析、标题、统计、查找与格式计划；
 - CommonMark/GFM 派生结果和安全的语法范围；
+- Mermaid 围栏识别、语法校验和可确定复现的 SVG 生成；
 - 可复用的 UTF-8 end-exclusive 范围与版本化 C ABI；
 - 不访问用户任意文件，不持有 AppKit 对象。
 
@@ -84,7 +85,7 @@ Swift String 的规范等价不能替代精确字节身份。Rust 返回 UTF-8 b
 
 EditorViewMode 的内部历史 case 名 preview 对应用户可见的“即时编辑”。该模式始终挂载共享的 MarkdownSourceEditorSession，并以 RenderedMarkdownEditor 将 Rust Core 的 UTF-8 解析范围无损映射为 TextKit 展示属性。普通文字保持渲染属性直接编辑，选区变化时从当前可见字符同步 typing attributes，使光标高度、字号和基线与文字一致。
 
-只有围栏代码、Mermaid 和其他无法无损结构化编辑的块会在光标进入时局部恢复源码；普通文字和表格不进入该路径。表格覆盖视图拥有可编辑单元格与行列操作，展示计划更新时优先按内容复用已挂载视图，减少输入导致的拆装和布局抖动。链接激活策略作为持久偏好传入文本与表格链接，支持单击或右键菜单。该过程不替换 NSTextView，不创建第二份内容事实，也不登记展示层 undo。
+只有围栏代码、Mermaid 和其他无法无损结构化编辑的块会在光标进入时局部恢复源码；普通文字和表格不进入该路径。RenderedMarkdownMermaidRenderer 是 Rust C ABI 的 Adapter，不再通过 HTML 字符串截取 SVG。表格宽度计算委托给 RenderedMarkdownTableLayoutStrategy，默认策略按内容和当前 viewport 自适应，并复用已挂载视图。CaretStyleResolver 负责跳过透明标记和换行符选择排版属性；隐藏标记不再使用微小字体改变光标和行高。链接激活策略作为持久偏好传入文本与表格链接，两者共享 Hover 反馈。该过程不替换 NSTextView，不创建第二份内容事实，也不登记展示层 undo。
 
 ## 5. 当前编辑命令边界
 

@@ -121,6 +121,57 @@ struct RenderedMarkdownTable: Equatable, Sendable {
     let rows: [[RenderedMarkdownTableCell]]
 }
 
+/// Strategy object for translating semantic table content into native editor widths.
+/// Markdown parsing stays in Rust; this policy owns only platform typography and the
+/// currently available viewport width.
+protocol RenderedMarkdownTableLayoutStrategy {
+    func columnWidths(
+        for table: RenderedMarkdownTable,
+        font: NSFont,
+        availableWidth: CGFloat
+    ) -> [CGFloat]
+}
+
+struct AdaptiveRenderedMarkdownTableLayoutStrategy: RenderedMarkdownTableLayoutStrategy {
+    let minimumColumnWidth: CGFloat = 56
+    let minimumPreferredWidth: CGFloat = 72
+    let maximumPreferredWidth: CGFloat = 360
+    let horizontalCellPadding: CGFloat = 24
+
+    func columnWidths(
+        for table: RenderedMarkdownTable,
+        font: NSFont,
+        availableWidth: CGFloat
+    ) -> [CGFloat] {
+        let columnCount = table.rows.map(\.count).max() ?? 0
+        guard columnCount > 0 else { return [] }
+        var widths = Array(repeating: minimumPreferredWidth, count: columnCount)
+        for row in table.rows {
+            for (column, cell) in row.enumerated() {
+                let measured = (cell.text as NSString).size(withAttributes: [.font: font]).width
+                    + horizontalCellPadding
+                widths[column] = max(
+                    widths[column],
+                    min(maximumPreferredWidth, ceil(measured))
+                )
+            }
+        }
+
+        let target = max(minimumColumnWidth * CGFloat(columnCount), availableWidth)
+        let preferredTotal = widths.reduce(0, +)
+        guard preferredTotal > 0 else { return widths }
+        if preferredTotal < target {
+            let extra = (target - preferredTotal) / CGFloat(columnCount)
+            return widths.map { floor($0 + extra) }
+        }
+        if preferredTotal > target {
+            let scale = target / preferredTotal
+            return widths.map { max(minimumColumnWidth, floor($0 * scale)) }
+        }
+        return widths
+    }
+}
+
 enum RenderedMarkdownTableEdit: Equatable, Sendable {
     case updateCell(row: Int, column: Int, text: String)
     case insertRow(at: Int)
@@ -239,17 +290,25 @@ enum RenderedMarkdownRefreshDecision: Equatable, Sendable {
 }
 
 enum RenderedMarkdownMermaidRenderer {
-    /// Reuses the bundled Rust renderer. It produces deterministic SVG without JavaScript or
-    /// network access, so instant editing and Preview share exactly the same Mermaid grammar.
+    /// Uses the dedicated Rust SVG entry point. It produces deterministic SVG without
+    /// JavaScript, HTML extraction, or network access, so instant editing and Preview share
+    /// exactly the same CommonMark fence and Mermaid grammar.
     static func svg(forMarkdown markdown: String) -> String? {
-        guard let fragment = try? MarkdownRenderer.htmlFragment(for: markdown),
-              fragment.contains("class=\"mermaid-diagram\""),
-              let start = fragment.range(of: "<svg"),
-              let end = fragment.range(of: "</svg>", range: start.lowerBound..<fragment.endIndex)
-        else {
-            return nil
+        guard InflowCoreBridge.isCompatible else { return nil }
+        let utf8 = Data(markdown.utf8)
+        let result: InflowEncodeResult = utf8.withUnsafeBytes { buffer in
+            inflow_mermaid_render_svg(
+                buffer.bindMemory(to: UInt8.self).baseAddress,
+                UInt(buffer.count)
+            )
         }
-        return String(fragment[start.lowerBound..<end.upperBound])
+        guard result.status == INFLOW_STATUS_OK,
+              let data = try? InflowCoreBridge.copyAndFree(result.bytes),
+              let figure = String(data: data, encoding: .utf8),
+              let start = figure.range(of: "<svg"),
+              let end = figure.range(of: "</svg>", range: start.lowerBound..<figure.endIndex)
+        else { return nil }
+        return String(figure[start.lowerBound..<end.upperBound])
     }
 }
 

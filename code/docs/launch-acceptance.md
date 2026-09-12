@@ -30,7 +30,7 @@
 | UAT-PERSONAL-07 本地最小日志与无自动遥测 | LocalFailureLogController、帮助菜单导出日志；LocalFailureLogTests | 当前与上一会话；仅时间、应用版本、操作类别和错误代码；无敏感内容；本人选择位置；Inflow 不上传、不打开上传渠道、不保留隐藏副本 | **未执行** |
 | UAT-PERSONAL-08 一个真实项目端到端与基础烟测 | 上述主流程及启动、左右导航区和持久工作区偏好的组合入口 | 从双击 App 不经文件选择器进入可编辑正文开始，用同一个真实项目完成产品文档列出的整段旅程；核对默认左侧目录树、右侧大纲与独立隐藏/显示，切换文件和重启后偏好保持；基础键盘和焦点；非颜色状态；可控异常不崩溃；较大文档继续工作或安全降级；记录实际环境与观察，不套用固定阈值或 30 次协议 | **未执行** |
 | UAT-PERSONAL-09 项目目录树、新建与相对资源 | MarkdownEditorView、PersistentEdgeSplitView、FolderBrowser、LightweightProjectCoordinator、ProjectDocumentSurface、ProjectDocumentTabSelection、AppPreferences、InflowSettingsView、项目资源边界与链接路径；相关 EditorViewModeCommandsTests、FolderBrowserTests、AppPreferencesTests、MarkdownRendererTests | 普通文件夹项目；首次默认显示左侧目录树、折叠右侧大纲；两侧在各自顶部就地展开/折叠，隐藏时宿主实例保持不变、宽度平滑归零，标签栏或编辑区顶部只占一个紧凑恢复按钮；目录树用单一动态按钮展开全部/折叠全部，且不改变内容状态；视图、显隐和三处分栏尺寸跨文件与重启保持；单一项目外壳、常驻标签栏和目录树实例保持不变，后台文档在布局前隐藏原生窗口，新表面挂载完成后才切换，打开前后项目窗口 frame 不变，源码可见时焦点返回编辑器；每个顶部标签有叉号，右键可关闭当前/其他/左侧/右侧文件，批量关闭不静默丢弃修改；递归树、隐藏项与手动刷新；按钮/右键安全新建；落盘前后失败差异；已选项目内 Markdown 无重复确认地导航、相对图片呈现；规范化和符号链接越界阻止 | **未执行** |
-| UAT-PERSONAL-10 即时编辑基础范围 | RenderedMarkdownEditor、MarkdownSourceEditorSession、MarkdownEditorView；RenderedMarkdownEditorTests、MarkdownRendererTests、EditorViewModeCommandsTests | 即时编辑始终使用同一个 NSTextView；普通文字在渲染态直接编辑且光标字号/基线与文字一致；围栏代码与 Mermaid 在光标进入时局部显露源码；表格单元格可直接编辑，右键支持增删行列和对齐，表格外输入不重建表格实例；链接默认单击打开且可设为只用右键菜单；中文输入法、连续输入、粘贴、撤销/重做、三视图正文/路径及纯 Markdown 保存事实保持不变 | **未执行** |
+| UAT-PERSONAL-10 即时编辑基础范围 | RenderedMarkdownEditor、MarkdownSourceEditorSession、MarkdownEditorView；RenderedMarkdownEditorTests、MarkdownRendererTests、EditorViewModeCommandsTests | 即时编辑始终使用同一个 NSTextView；普通文字、行内代码和引用在渲染态直接编辑，隐藏标记不缩小字号，段首/段尾光标字号与基线均与可见文字一致；围栏代码与 Mermaid 在光标进入时局部显露源码，Mermaid 直接消费 Rust SVG；表格宽度随 viewport 自适应，单元格可直接编辑，右键支持增删行列和对齐；文本与表格链接悬停有可见反馈，默认单击打开且可设为只用右键菜单；中文输入法、连续输入、粘贴、撤销/重做、三视图正文/路径及纯 Markdown 保存事实保持不变 | **未执行** |
 
 表中的测试名称只是定位入口。本文没有把它们写成一次新的全量测试回执，也没有因此改变人工状态；启动、左右导航区和设置默认的新增检查同样均未执行。
 
@@ -55,7 +55,7 @@
 - 通过、失败、跳过与未执行数量；
 - 已知测试宿主或环境阻塞。
 
-仓库级当前自动检查的唯一配置是 `scripts/verify-launch.sh --personal`。它运行 Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查，不生成归档或发布证据。`quality/personal-xctest-scope.tsv` 将当前 380 个 XCTest method 逐项分为 274 个 `current-direct`、13 个 `current-host`、88 个 `deferred` 与 5 个 `fixed-performance`；personal profile 只执行第一类，其他三类不计为通过。13 个宿主用例保留为 App-host 专项验证或真实应用 UAT；deferred profile 仍运行 macOS 全量测试。清单只要出现重复、陈旧、未分类、非法分区或计数变化，脚本就失败关闭。`--deferred-release-local`、`--deferred-signed-archive`、`scripts/release-workflow.sh`、固定性能协议和扩展合同均为显式后置门禁；即使单独通过，也不改变本表的人工状态。
+仓库级当前自动检查的唯一配置是 `scripts/verify-launch.sh --personal`。它运行 Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查，不生成归档或发布证据。`quality/personal-xctest-scope.tsv` 将当前 394 个 XCTest method 逐项分为 288 个 `current-direct`、13 个 `current-host`、88 个 `deferred` 与 5 个 `fixed-performance`；personal profile 只执行第一类，其他三类不计为通过。13 个宿主用例保留为 App-host 专项验证或真实应用 UAT；deferred profile 仍运行 macOS 全量测试。清单只要出现重复、陈旧、未分类、非法分区或计数变化，脚本就失败关闭。`--deferred-release-local`、`--deferred-signed-archive`、`scripts/release-workflow.sh`、固定性能协议和扩展合同均为显式后置门禁；即使单独通过，也不改变本表的人工状态。
 
 可用 `scripts/verify-launch.sh --describe-profile personal` 查看当前配置，也可查看两个 deferred profile；描述命令不构建、不归档、不签名、不联网。
 

@@ -2,6 +2,10 @@
 
 use std::fmt::Write as _;
 
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
+
+use crate::render;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Direction {
     Horizontal,
@@ -34,6 +38,36 @@ struct Diagram {
 pub enum MermaidError {
     UnsupportedType,
     InvalidSyntax,
+}
+
+/// Extracts one parser-validated Mermaid fence and renders its body. Keeping
+/// fence recognition here ensures preview and native instant editing consume
+/// the same `CommonMark` event stream.
+pub fn svg_from_markdown(markdown: &str) -> Result<String, MermaidError> {
+    let mut events = Parser::new_ext(markdown, render::options());
+    let Some(Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))) = events.next() else {
+        return Err(MermaidError::InvalidSyntax);
+    };
+    if !info
+        .split_ascii_whitespace()
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case("mermaid"))
+    {
+        return Err(MermaidError::UnsupportedType);
+    }
+    let mut source = String::new();
+    loop {
+        match events.next() {
+            Some(Event::Text(text) | Event::Code(text)) => source.push_str(&text),
+            Some(Event::End(TagEnd::CodeBlock)) => break,
+            Some(_) => {}
+            None => return Err(MermaidError::InvalidSyntax),
+        }
+    }
+    if events.any(|event| !matches!(event, Event::SoftBreak | Event::HardBreak)) {
+        return Err(MermaidError::InvalidSyntax);
+    }
+    svg(source.trim_end())
 }
 
 pub fn svg(source: &str) -> Result<String, MermaidError> {
@@ -482,6 +516,17 @@ mod tests {
             assert!(output.contains("marker-end"));
             assert!(!output.contains("<script"));
         }
+    }
+
+    #[test]
+    fn fenced_entry_point_uses_commonmark_fence_parsing() {
+        let output = svg_from_markdown("~~~ mermaid\nflowchart LR\nA[开始] --> B[结束]\n~~~\n")
+            .expect("validated Mermaid fence");
+        assert!(output.contains("开始"));
+        assert_eq!(
+            svg_from_markdown("```rust\nfn main() {}\n```"),
+            Err(MermaidError::UnsupportedType)
+        );
     }
 
     #[test]

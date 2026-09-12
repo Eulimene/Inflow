@@ -55,10 +55,10 @@
 
 ### 2.3 即时编辑与分栏预览
 
-- 即时编辑始终挂载同一个 MarkdownSourceEditor。普通文字与行内样式在渲染态直接输入，光标的字体、字号和行高从所在可见文字同步，不再把整个段落改成等宽源码。围栏代码平时隐藏围栏呈现代码，光标进入才局部显示源码；Mermaid 也使用同样的局部切换。整个过程没有“编辑源码/完成编辑”按钮，保存内容和 undo 始终属于原始 Markdown。
-- 分栏右侧的 MarkdownPreviewView 使用 MarkdownRenderer 把当前内存正文生成 HTML，并在禁用页面脚本的 WKWebView 中展示。Mermaid `flowchart` 支持普通连线和仓库已有的 `-.文字.->` 带标签虚线，生成有明确固有尺寸的本地自包含 SVG；跨越或反向连接使用外围正交路径，避免线条穿过中间节点。即时编辑进入 Mermaid 源码块时会先卸载图表覆盖视图，移出后再挂载。CSP 只放行 `data:` 以及 `http`/`https` 图片，仍禁止脚本、连接 API、媒体、嵌入、文件 URL 和页面自行导航；非持久数据存储不保留站点数据。
+- 即时编辑始终挂载同一个 MarkdownSourceEditor。普通文字、行内代码与引用在渲染态直接输入；Markdown 标记以透明和负字距折叠，不再用 0.1pt 字体改变行度量。CaretStyleResolver 从最近可见字符解析字体、字号和行高，并将插入光标在行框中居中。围栏代码平时隐藏围栏呈现代码，光标进入才局部显示源码；Mermaid 也使用同样的局部切换。保存内容和 undo 始终属于原始 Markdown。
+- 分栏右侧的 MarkdownPreviewView 使用 MarkdownRenderer 把当前内存正文生成 HTML，并在禁用页面脚本的 WKWebView 中展示。Mermaid `flowchart` 支持普通连线和仓库已有的 `-.文字.->` 带标签虚线，生成有明确固有尺寸的本地自包含 SVG；即时编辑通过 `inflow_mermaid_render_svg` 直接获取同一 Rust 渲染器的 SVG，不再解析或截取预览 HTML。进入 Mermaid 源码块时会先卸载图表覆视图，移出后再挂载。CSP 只放行 `data:` 以及 `http`/`https` 图片，仍禁止脚本、连接 API、媒体、嵌入、文件 URL 和页面自行导航；非持久数据存储不保留站点数据。
 - 展示属性不登记正文 undo；三种视图间切换时保持同一正文、修改状态、保存路径和撤销历史。
-- 即时编辑中的链接默认单击执行导航，“设置 > 预览”可改为只从右键菜单打开，此时单击只定位光标。表格使用可编辑原生单元格，右键提供行列增删和列对齐；表格外的输入会保留已挂载的表格实例。链接导航、本地图片和失败降级继续受当前内容快照与封闭宿主消息约束。
+- 即时编辑中的链接默认单击执行导航，“设置 > 预览”可改为只从右键菜单打开，此时单击只定位光标；文本与表格中的链接共享 Hover 高亮反馈。表格使用 AdaptiveRenderedMarkdownTableLayoutStrategy 按内容测量列宽，再随编辑区扩张或压缩；单元格可编辑，右键提供行列增删和列对齐。链接导航、本地图片和失败降级继续受当前内容快照与封闭宿主消息约束。
 
 对应组件入口在 RenderedMarkdownEditorTests；这些测试不能代替 UAT-PERSONAL-10 的中文输入法、富文本粘贴、跨视图撤销与真实链接操作。
 
@@ -121,7 +121,7 @@
 
 判断当前能力时，以已批准的个人首版范围、实际安装的菜单和主流程、以及 UAT-PERSONAL-01 至 10 为准，而不是以某个源文件或测试名称是否存在为准。
 
-自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 380 个 XCTest method：274 个 `current-direct`、13 个依赖真实 `NSApplication` 菜单或生命周期的 `current-host`、88 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
+自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 394 个 XCTest method：288 个 `current-direct`、13 个依赖真实 `NSApplication` 菜单或生命周期的 `current-host`、88 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
 
 ## 4. 人工 UAT 状态
 

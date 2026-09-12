@@ -8,6 +8,7 @@ use crate::document::{self, DecodeError, LineEnding};
 use crate::export::{self, ExportError};
 use crate::format::{self, FormatError, InlineFormat, ListFormat};
 use crate::highlight;
+use crate::mermaid;
 use crate::reference::{self, ReferenceKind};
 use crate::render;
 use crate::search;
@@ -533,6 +534,36 @@ pub unsafe extern "C" fn inflow_markdown_render_html_with_options(
             bytes: InflowOwnedBytes::from_vec(
                 render::html_fragment_with_configuration(markdown, configuration).into_bytes(),
             ),
+        }
+    }))
+    .unwrap_or_else(|_| InflowEncodeResult::error(STATUS_PANIC))
+}
+
+/// Renders one UTF-8 Mermaid fenced Markdown block into a deterministic,
+/// script-free SVG.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `utf8` must point to `length` readable bytes for
+/// the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_mermaid_render_svg(
+    utf8: *const u8,
+    length: usize,
+) -> InflowEncodeResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(utf8, length) }) else {
+            return InflowEncodeResult::error(STATUS_INVALID_ARGUMENT);
+        };
+        let Ok(source) = std::str::from_utf8(input) else {
+            return InflowEncodeResult::error(STATUS_INVALID_UTF8);
+        };
+        match mermaid::svg_from_markdown(source) {
+            Ok(svg) => InflowEncodeResult {
+                status: STATUS_OK,
+                bytes: InflowOwnedBytes::from_vec(svg.into_bytes()),
+            },
+            Err(_) => InflowEncodeResult::error(STATUS_UNSUPPORTED_CONTENT),
         }
     }))
     .unwrap_or_else(|_| InflowEncodeResult::error(STATUS_PANIC))
@@ -1489,6 +1520,28 @@ mod tests {
             String::from_utf8(html).expect("renderer returns UTF-8"),
             "<h1>标题</h1>\n<p><strong>Body</strong></p>\n"
         );
+    }
+
+    #[test]
+    fn ffi_renders_mermaid_svg_without_an_html_extraction_step() {
+        let source = "```mermaid\nflowchart LR\nA[开始] --> B[结束]\n```";
+        let result = unsafe { inflow_mermaid_render_svg(source.as_ptr(), source.len()) };
+
+        assert_eq!(result.status, STATUS_OK);
+        let svg =
+            unsafe { std::slice::from_raw_parts(result.bytes.data, result.bytes.length).to_vec() };
+        unsafe { inflow_owned_bytes_free(result.bytes.data, result.bytes.length) };
+        let svg = String::from_utf8(svg).expect("renderer returns UTF-8");
+        assert!(svg.starts_with("<figure class=\"mermaid-diagram\""));
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("开始"));
+
+        let unsupported = "```mermaid\nsequenceDiagram\nA->>B: hi\n```";
+        let unsupported_result =
+            unsafe { inflow_mermaid_render_svg(unsupported.as_ptr(), unsupported.len()) };
+        assert_eq!(unsupported_result.status, STATUS_UNSUPPORTED_CONTENT);
+        assert!(unsupported_result.bytes.data.is_null());
+        assert_eq!(unsupported_result.bytes.length, 0);
     }
 
     #[test]

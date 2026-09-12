@@ -258,6 +258,15 @@ InflowEncodeResult inflow_markdown_render_html_with_options(
     InflowRenderOptions options
 );
 
+/// Renders one Mermaid fenced Markdown block directly as deterministic,
+/// script-free SVG. Unsupported or malformed syntax returns
+/// INFLOW_STATUS_UNSUPPORTED_CONTENT and no bytes. Returned bytes belong to
+/// Inflow and must be released with inflow_owned_bytes_free.
+InflowEncodeResult inflow_mermaid_render_svg(
+    const uint8_t *utf8,
+    uintptr_t length
+);
+
 /// Exports an immutable UTF-8 Markdown snapshot as one self-contained HTML
 /// document. The result never references local resources or runtime scripts.
 /// Unsupported images, local links and unsafe link schemes are reported
