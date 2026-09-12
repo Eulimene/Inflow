@@ -42,7 +42,7 @@ assert_line() {
 PERSONAL_PLAN="$("${VERIFIER}" --describe-profile personal)"
 assert_line "${PERSONAL_PLAN}" 'profile=personal'
 assert_line "${PERSONAL_PLAN}" \
-  'current_checks=rust-format,rust-clippy,rust-tests,macos-current-direct-xctest,analyze,diff-check'
+  'current_checks=generated-bindings,rust-format,rust-clippy,rust-tests,macos-current-direct-xctest,analyze,diff-check'
 assert_line "${PERSONAL_PLAN}" 'deferred_checks=none'
 assert_line "${PERSONAL_PLAN}" 'archive=none'
 assert_line "${PERSONAL_PLAN}" 'selector_manifest=quality/personal-xctest-scope.tsv'

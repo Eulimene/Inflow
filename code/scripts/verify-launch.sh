@@ -23,7 +23,7 @@ describe_profile() {
     personal)
       cat <<'EOF'
 profile=personal
-current_checks=rust-format,rust-clippy,rust-tests,macos-current-direct-xctest,analyze,diff-check
+current_checks=generated-bindings,rust-format,rust-clippy,rust-tests,macos-current-direct-xctest,analyze,diff-check
 deferred_checks=none
 archive=none
 selector_manifest=quality/personal-xctest-scope.tsv
@@ -37,7 +37,7 @@ EOF
     deferred-release-local)
       cat <<'EOF'
 profile=deferred-release-local
-current_checks=rust-format,rust-clippy,rust-tests,macos-debug-tests,analyze,diff-check
+current_checks=generated-bindings,rust-format,rust-clippy,rust-tests,macos-debug-tests,analyze,diff-check
 deferred_checks=release-evidence-contract,fixed-performance-contract,release-archive-contract,extension-contract,fixed-performance-smoke
 archive=unsigned-local
 completion=not-personal-uat
@@ -46,7 +46,7 @@ EOF
     deferred-signed-archive)
       cat <<'EOF'
 profile=deferred-signed-archive
-current_checks=rust-format,rust-clippy,rust-tests,macos-debug-tests,analyze,diff-check
+current_checks=generated-bindings,rust-format,rust-clippy,rust-tests,macos-debug-tests,analyze,diff-check
 deferred_checks=release-evidence-contract,fixed-performance-contract,release-archive-contract,extension-contract,fixed-performance-smoke,release-evidence
 archive=provided-signed
 completion=not-personal-uat
@@ -392,6 +392,8 @@ run_personal_macos_tests() {
 }
 
 cd "${CODE_ROOT}"
+
+"${CARGO_BIN}" run --manifest-path xtask/Cargo.toml --locked -- verify-bindings
 
 if [ "${IS_DEFERRED_RELEASE}" -eq 1 ]; then
   "${SCRIPT_DIRECTORY}/test-release-evidence-gate.sh"

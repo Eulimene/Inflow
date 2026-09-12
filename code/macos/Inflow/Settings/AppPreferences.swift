@@ -210,10 +210,10 @@ struct PreviewAppearanceConfiguration: Equatable, Sendable {
     var coreRenderOptions: UInt32 {
         var options = UInt32(0)
         if mathRenderingEnabled {
-            options |= INFLOW_RENDER_OPTION_MATH
+            options |= UInt32(INFLOW_RENDER_OPTION_MATH)
         }
         if mermaidRenderingEnabled {
-            options |= INFLOW_RENDER_OPTION_MERMAID
+            options |= UInt32(INFLOW_RENDER_OPTION_MERMAID)
         }
         return options
     }

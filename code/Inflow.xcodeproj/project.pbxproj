@@ -402,6 +402,7 @@
 			inputPaths = (
 				"$(PROJECT_DIR)/core/Cargo.toml",
 				"$(PROJECT_DIR)/core/Cargo.lock",
+				"$(PROJECT_DIR)/core/cbindgen.toml",
 				"$(PROJECT_DIR)/core/src/analysis.rs",
 				"$(PROJECT_DIR)/core/src/code_highlight.rs",
 				"$(PROJECT_DIR)/core/src/document.rs",
@@ -420,6 +421,7 @@
 				"$(PROJECT_DIR)/core/src/render_ir.rs",
 				"$(PROJECT_DIR)/core/src/search.rs",
 				"$(PROJECT_DIR)/core/include/inflow_core.h",
+				"$(PROJECT_DIR)/core/include/generated/inflow_core.h",
 				"$(PROJECT_DIR)/rust-toolchain.toml",
 				"$(PROJECT_DIR)/scripts/build-rust.sh",
 			);

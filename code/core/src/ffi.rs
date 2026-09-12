@@ -59,6 +59,9 @@ pub const HIGHLIGHT_KIND_MATH: u8 = 12;
 pub const HIGHLIGHT_KIND_RAW: u8 = 13;
 pub const HIGHLIGHT_KIND_RULE: u8 = 14;
 
+/// Status code returned by the stable C ABI.
+pub type InflowStatus = i32;
+
 #[repr(C)]
 pub struct InflowOwnedBytes {
     pub data: *mut u8,
@@ -223,7 +226,7 @@ impl InflowOwnedHighlightSpans {
 
 #[repr(C)]
 pub struct InflowDecodeResult {
-    pub status: i32,
+    pub status: InflowStatus,
     pub utf8: InflowOwnedBytes,
     pub has_utf8_bom: u8,
     pub line_ending: u8,
@@ -231,7 +234,7 @@ pub struct InflowDecodeResult {
 
 #[repr(C)]
 pub struct InflowDocumentOpenResult {
-    pub status: i32,
+    pub status: InflowStatus,
     pub utf8: InflowOwnedBytes,
     pub has_utf8_bom: u8,
     pub line_ending: u8,
@@ -263,7 +266,7 @@ impl InflowDecodeResult {
 
 #[repr(C)]
 pub struct InflowEncodeResult {
-    pub status: i32,
+    pub status: InflowStatus,
     pub bytes: InflowOwnedBytes,
 }
 
@@ -276,14 +279,14 @@ impl InflowEncodeResult {
     }
 }
 
-#[repr(C)]
+/// Opaque editor state owned by Rust and accessed only through engine functions.
 pub struct InflowEditorEngine {
     engine: EditorEngine,
 }
 
 #[repr(C)]
 pub struct InflowEngineCreateResult {
-    pub status: i32,
+    pub status: InflowStatus,
     pub engine: *mut InflowEditorEngine,
     pub payload: InflowOwnedBytes,
 }
@@ -300,7 +303,7 @@ impl InflowEngineCreateResult {
 
 #[repr(C)]
 pub struct InflowBytesResult {
-    pub status: i32,
+    pub status: InflowStatus,
     pub bytes: InflowOwnedBytes,
 }
 
@@ -325,7 +328,7 @@ struct EngineErrorResponse<'a> {
 
 #[repr(C)]
 pub struct InflowAnalysisResult {
-    pub status: i32,
+    pub status: InflowStatus,
     pub headings: InflowOwnedHeadings,
     pub heading_text_utf8: InflowOwnedBytes,
     pub word_count: u64,
@@ -348,20 +351,20 @@ impl InflowAnalysisResult {
 
 #[repr(C)]
 pub struct InflowSearchResult {
-    pub status: i32,
+    pub status: InflowStatus,
     pub matches: InflowOwnedSearchMatches,
 }
 
 #[repr(C)]
 pub struct InflowReferenceResult {
-    pub status: i32,
+    pub status: InflowStatus,
     pub references: InflowOwnedReferences,
     pub target_text_utf8: InflowOwnedBytes,
 }
 
 #[repr(C)]
 pub struct InflowHighlightResult {
-    pub status: i32,
+    pub status: InflowStatus,
     pub spans: InflowOwnedHighlightSpans,
 }
 
@@ -386,14 +389,14 @@ impl InflowReferenceResult {
 
 #[repr(C)]
 pub struct InflowHTMLExportResult {
-    pub status: i32,
+    pub status: InflowStatus,
     pub html: InflowOwnedBytes,
     pub blocking_issues: u64,
 }
 
 #[repr(C)]
 pub struct InflowMarkdownEditResult {
-    pub status: i32,
+    pub status: InflowStatus,
     pub replacement: InflowOwnedBytes,
     pub replace_start: usize,
     pub replace_end: usize,

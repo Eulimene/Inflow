@@ -333,15 +333,15 @@ final class MarkdownRendererTests: XCTestCase {
     }
 
     func testRenderOptionValuesMatchRustContract() {
-        XCTAssertEqual(INFLOW_RENDER_OPTION_MATH, UInt32(1 << 0))
-        XCTAssertEqual(INFLOW_RENDER_OPTION_MERMAID, UInt32(1 << 1))
+        XCTAssertEqual(UInt32(INFLOW_RENDER_OPTION_MATH), UInt32(1 << 0))
+        XCTAssertEqual(UInt32(INFLOW_RENDER_OPTION_MERMAID), UInt32(1 << 1))
         XCTAssertEqual(
-            INFLOW_RENDER_OPTIONS_DEFAULT,
-            INFLOW_RENDER_OPTION_MATH | INFLOW_RENDER_OPTION_MERMAID
+            UInt32(INFLOW_RENDER_OPTIONS_DEFAULT),
+            UInt32(INFLOW_RENDER_OPTION_MATH | INFLOW_RENDER_OPTION_MERMAID)
         )
         XCTAssertEqual(
             PreviewAppearanceConfiguration.default.coreRenderOptions,
-            INFLOW_RENDER_OPTIONS_DEFAULT
+            UInt32(INFLOW_RENDER_OPTIONS_DEFAULT)
         )
     }
 
