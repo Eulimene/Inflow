@@ -32,10 +32,11 @@ Rust 核心负责不依赖平台的纯值逻辑，并正在通过版本化 Engin
 - 不访问用户任意文件，不持有 AppKit 对象。
 
 当前迁移阶段已经引入有状态 `EditorEngine` 的 opaque handle、`revision`、UTF-8
-`ReplaceText`、快照和 `RefreshDerived`。每次 `RefreshDerived` 只创建一个 owned
+`ReplaceText`、格式 Command、Memento undo/redo、快照和 `RefreshDerived`。每次 `RefreshDerived` 只创建一个 owned
 `DocumentIr`，分析、语法范围、引用、`RenderIr` 与安全 HTML 都消费该事件流；派生缓存严格绑定
-revision，正文修改后立即失效。macOS 仍以影子模式镜像已提交的 NSTextView 修改并逐字节对账，
-保存和撤销尚未切换权威，因此此时不能把 Rust Engine 描述为已经完成接管。
+revision，正文修改后立即失效。macOS 已用该单次请求作为分析、高亮、引用和预览的默认派生热路径；
+NSTextView 修改仍以影子方式逐字节对账。保存和撤销尚未切换权威，因此此时不能把 Rust Engine
+描述为已经完成正文接管。
 
 核心可能保留比个人首版更宽的解析或导出实现。产品能力必须由 macOS 当前入口与 UAT 再收窄，不能直接从核心函数存在性推导。
 

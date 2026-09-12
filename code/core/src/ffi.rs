@@ -641,11 +641,14 @@ fn engine_bytes_error(
 const fn engine_error_status(error: EngineError) -> i32 {
     match error {
         EngineError::RevisionConflict => STATUS_REVISION_CONFLICT,
+        EngineError::AmbiguousFormat => STATUS_AMBIGUOUS_FORMAT,
         EngineError::UnsupportedSchema
         | EngineError::EmptyDocumentId
         | EngineError::EmptyRequestId
         | EngineError::InvalidRange
-        | EngineError::InvalidSelection => STATUS_INVALID_ARGUMENT,
+        | EngineError::InvalidSelection
+        | EngineError::NothingToUndo
+        | EngineError::NothingToRedo => STATUS_INVALID_ARGUMENT,
         EngineError::RevisionOverflow => STATUS_PANIC,
     }
 }
@@ -676,6 +679,12 @@ const fn engine_error_details(error: EngineError) -> (&'static str, &'static str
             "invalid_selection",
             "The selection is not an extended-grapheme-aligned UTF-8 range.",
         ),
+        EngineError::AmbiguousFormat => (
+            "ambiguous_format",
+            "The requested Markdown format cannot be applied without ambiguity.",
+        ),
+        EngineError::NothingToUndo => ("nothing_to_undo", "The undo history is empty."),
+        EngineError::NothingToRedo => ("nothing_to_redo", "The redo history is empty."),
         EngineError::RevisionOverflow => (
             "revision_overflow",
             "The document revision cannot be incremented.",

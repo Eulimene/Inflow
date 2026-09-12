@@ -18,6 +18,12 @@ enum PreviewImageIssueAction: String, Equatable, Sendable {
     case ignore
 }
 
+struct PreviewMarkdownEdit: Equatable, Sendable {
+    let sourceUTF8Range: Range<Int>
+    let originalSource: String
+    let replacement: String
+}
+
 enum PreviewWebNavigationPolicy {
     static func allows(navigationType: WKNavigationType, scheme: String?) -> Bool {
         guard navigationType != .linkActivated else { return false }
@@ -33,6 +39,7 @@ enum PreviewNavigationMessage: Equatable {
     case heading(sourceUTF8Offset: Int)
     case link(target: String)
     case edit(sourceUTF8Offset: Int?)
+    case markdownEdit(PreviewMarkdownEdit)
     case previewIssue(action: PreviewIssueAction, sourceUTF8Offset: Int)
     case imageIssue(
         action: PreviewImageIssueAction,
@@ -69,6 +76,24 @@ enum PreviewNavigationMessage: Equatable {
             }
             guard let offset = decodeSourceOffset(dictionary) else { return nil }
             return .edit(sourceUTF8Offset: offset)
+        case "markdownEdit":
+            guard let start = decodeSourceOffset(dictionary, key: "sourceStart"),
+                  let end = decodeSourceOffset(dictionary, key: "sourceEnd"),
+                  start <= end,
+                  let originalHex = dictionary["originalHex"] as? String,
+                  let replacementHex = dictionary["replacementHex"] as? String,
+                  let original = decodeHex(originalHex, maximumBytes: 1_048_576),
+                  let replacement = decodeHex(replacementHex, maximumBytes: 1_048_576)
+            else {
+                return nil
+            }
+            return .markdownEdit(
+                PreviewMarkdownEdit(
+                    sourceUTF8Range: start..<end,
+                    originalSource: original,
+                    replacement: replacement
+                )
+            )
         case "previewIssue":
             guard let actionName = dictionary["action"] as? String,
                   let action = PreviewIssueAction(rawValue: actionName),
@@ -99,8 +124,11 @@ enum PreviewNavigationMessage: Equatable {
         }
     }
 
-    private static func decodeSourceOffset(_ dictionary: [String: Any]) -> Int? {
-        guard let number = dictionary["sourceUTF8Offset"] as? NSNumber else { return nil }
+    private static func decodeSourceOffset(
+        _ dictionary: [String: Any],
+        key: String = "sourceUTF8Offset"
+    ) -> Int? {
+        guard let number = dictionary[key] as? NSNumber else { return nil }
         let value = number.doubleValue
         guard CFGetTypeID(number) != CFBooleanGetTypeID(),
               value.isFinite,
@@ -114,8 +142,12 @@ enum PreviewNavigationMessage: Equatable {
     }
 
     private static func decodeHexTarget(_ hex: String) -> String? {
+        decodeHex(hex, maximumBytes: 16 * 1_024)
+    }
+
+    private static func decodeHex(_ hex: String, maximumBytes: Int) -> String? {
         let bytes = Array(hex.utf8)
-        guard bytes.count <= 32 * 1_024, bytes.count.isMultiple(of: 2) else { return nil }
+        guard bytes.count <= maximumBytes * 2, bytes.count.isMultiple(of: 2) else { return nil }
         var decoded = Data(capacity: bytes.count / 2)
         var index = 0
         while index < bytes.count {
@@ -145,10 +177,12 @@ struct MarkdownPreviewView: NSViewRepresentable {
 
     let html: String
     let baseURL: URL?
+    let isEditable: Bool
     let scrollRequest: PreviewScrollRequest?
     let onHeadingActivated: (Int) -> Void
     let onLinkActivated: (String) -> Void
     let onEditRequested: (Int?) -> Void
+    let onMarkdownEditCommitted: (PreviewMarkdownEdit) -> Void
     let onPreviewIssueAction: (PreviewIssueAction, Int) -> Void
     let onImageIssueAction: (PreviewImageIssueAction, Int, String) -> Void
     let onManualScroll: () -> Void
@@ -156,20 +190,24 @@ struct MarkdownPreviewView: NSViewRepresentable {
     init(
         html: String,
         baseURL: URL?,
+        isEditable: Bool = false,
         scrollRequest: PreviewScrollRequest? = nil,
         onHeadingActivated: @escaping (Int) -> Void = { _ in },
         onLinkActivated: @escaping (String) -> Void = { _ in },
         onEditRequested: @escaping (Int?) -> Void = { _ in },
+        onMarkdownEditCommitted: @escaping (PreviewMarkdownEdit) -> Void = { _ in },
         onPreviewIssueAction: @escaping (PreviewIssueAction, Int) -> Void = { _, _ in },
         onImageIssueAction: @escaping (PreviewImageIssueAction, Int, String) -> Void = { _, _, _ in },
         onManualScroll: @escaping () -> Void = {}
     ) {
         self.html = html
         self.baseURL = baseURL
+        self.isEditable = isEditable
         self.scrollRequest = scrollRequest
         self.onHeadingActivated = onHeadingActivated
         self.onLinkActivated = onLinkActivated
         self.onEditRequested = onEditRequested
+        self.onMarkdownEditCommitted = onMarkdownEditCommitted
         self.onPreviewIssueAction = onPreviewIssueAction
         self.onImageIssueAction = onImageIssueAction
         self.onManualScroll = onManualScroll
@@ -201,10 +239,12 @@ struct MarkdownPreviewView: NSViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.setAccessibilityLabel("Markdown 预览")
         context.coordinator.update(
+            isEditable: isEditable,
             scrollRequest: scrollRequest,
             onHeadingActivated: onHeadingActivated,
             onLinkActivated: onLinkActivated,
             onEditRequested: onEditRequested,
+            onMarkdownEditCommitted: onMarkdownEditCommitted,
             onPreviewIssueAction: onPreviewIssueAction,
             onImageIssueAction: onImageIssueAction,
             onManualScroll: onManualScroll,
@@ -215,10 +255,12 @@ struct MarkdownPreviewView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.update(
+            isEditable: isEditable,
             scrollRequest: scrollRequest,
             onHeadingActivated: onHeadingActivated,
             onLinkActivated: onLinkActivated,
             onEditRequested: onEditRequested,
+            onMarkdownEditCommitted: onMarkdownEditCommitted,
             onPreviewIssueAction: onPreviewIssueAction,
             onImageIssueAction: onImageIssueAction,
             onManualScroll: onManualScroll,
@@ -257,30 +299,37 @@ struct MarkdownPreviewView: NSViewRepresentable {
         private var isDocumentLoaded = false
         private var documentLoadTask: Task<Void, Never>?
         private var documentLoadGeneration = 0
+        private var isEditable = false
         private var onHeadingActivated: (Int) -> Void = { _ in }
         private var onLinkActivated: (String) -> Void = { _ in }
         private var onEditRequested: (Int?) -> Void = { _ in }
+        private var onMarkdownEditCommitted: (PreviewMarkdownEdit) -> Void = { _ in }
         private var onPreviewIssueAction: (PreviewIssueAction, Int) -> Void = { _, _ in }
         private var onImageIssueAction: (PreviewImageIssueAction, Int, String) -> Void = { _, _, _ in }
         private var onManualScroll: () -> Void = {}
 
         func update(
+            isEditable: Bool = false,
             scrollRequest: PreviewScrollRequest?,
             onHeadingActivated: @escaping (Int) -> Void,
             onLinkActivated: @escaping (String) -> Void,
             onEditRequested: @escaping (Int?) -> Void = { _ in },
+            onMarkdownEditCommitted: @escaping (PreviewMarkdownEdit) -> Void = { _ in },
             onPreviewIssueAction: @escaping (PreviewIssueAction, Int) -> Void,
             onImageIssueAction: @escaping (PreviewImageIssueAction, Int, String) -> Void = { _, _, _ in },
             onManualScroll: @escaping () -> Void,
             webView: WKWebView
         ) {
+            self.isEditable = isEditable
             requestedScroll = scrollRequest
             self.onHeadingActivated = onHeadingActivated
             self.onLinkActivated = onLinkActivated
             self.onEditRequested = onEditRequested
+            self.onMarkdownEditCommitted = onMarkdownEditCommitted
             self.onPreviewIssueAction = onPreviewIssueAction
             self.onImageIssueAction = onImageIssueAction
             self.onManualScroll = onManualScroll
+            applyEditingModeIfPossible(to: webView)
             applyScrollIfPossible(to: webView)
         }
 
@@ -344,6 +393,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
         func webView(_ webView: WKWebView, didFinish _: WKNavigation?) {
             isDocumentLoaded = true
             webView.setAccessibilityValue("Markdown 预览已加载")
+            applyEditingModeIfPossible(to: webView)
             applyScrollIfPossible(to: webView)
         }
 
@@ -386,6 +436,8 @@ struct MarkdownPreviewView: NSViewRepresentable {
                 onLinkActivated(target)
             case let .edit(sourceUTF8Offset):
                 onEditRequested(sourceUTF8Offset)
+            case let .markdownEdit(edit):
+                onMarkdownEditCommitted(edit)
             case let .previewIssue(action, sourceUTF8Offset):
                 onPreviewIssueAction(action, sourceUTF8Offset)
             case let .imageIssue(action, sourceUTF8Offset, target):
@@ -433,6 +485,17 @@ struct MarkdownPreviewView: NSViewRepresentable {
             }
         }
 
+        private func applyEditingModeIfPossible(to webView: WKWebView) {
+            guard isDocumentLoaded else { return }
+            webView.callAsyncJavaScript(
+                "document.body.dataset.inflowEditable = editable ? 'true' : 'false'; return true;",
+                arguments: ["editable": NSNumber(value: isEditable)],
+                in: nil,
+                in: .defaultClient
+            ) { _ in }
+            webView.setAccessibilityLabel(isEditable ? "Markdown 即时编辑器" : "Markdown 预览")
+        }
+
         private static let scrollFunction = """
         const maximum = Math.max(
           0,
@@ -453,6 +516,158 @@ struct MarkdownPreviewView: NSViewRepresentable {
         const value = Number(heading.dataset.inflowSourceStart);
         if (Number.isSafeInteger(value) && value >= 0) {
           handler.postMessage({ type: 'heading', sourceUTF8Offset: value });
+        }
+      };
+      const isEditable = () => document.body.dataset.inflowEditable === 'true';
+      const hexToText = (hex) => {
+        if (typeof hex !== 'string' || hex.length % 2 !== 0) return null;
+        const bytes = new Uint8Array(hex.length / 2);
+        for (let index = 0; index < hex.length; index += 2) {
+          const value = Number.parseInt(hex.slice(index, index + 2), 16);
+          if (!Number.isFinite(value)) return null;
+          bytes[index / 2] = value;
+        }
+        try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+        catch (_) { return null; }
+      };
+      const textToHex = (value) => Array.from(new TextEncoder().encode(value))
+        .map((byte) => byte.toString(16).padStart(2, '0')).join('');
+      const inlineMarkdown = (node) => {
+        if (node.nodeType === Node.TEXT_NODE) return node.nodeValue ?? '';
+        if (!(node instanceof Element)) return '';
+        const content = Array.from(node.childNodes).map(inlineMarkdown).join('');
+        switch (node.tagName) {
+        case 'STRONG': case 'B': return `**${content}**`;
+        case 'EM': case 'I': return `*${content}*`;
+        case 'DEL': case 'S': return `~~${content}~~`;
+        case 'CODE': {
+          const delimiter = content.includes('`') ? '``' : '`';
+          return `${delimiter}${content}${delimiter}`;
+        }
+        case 'A': {
+          const encoded = node.getAttribute('data-inflow-link-target-hex');
+          const target = hexToText(encoded) ?? node.getAttribute('href') ?? '';
+          return `[${content}](${target})`;
+        }
+        case 'BR': return '\n';
+        case 'IMG': {
+          const encoded = node.getAttribute('data-inflow-markdown-target-hex');
+          const target = hexToText(encoded);
+          return target === null ? '' : `![${node.getAttribute('alt') ?? ''}](${target})`;
+        }
+        case 'INPUT': return '';
+        default: return content;
+        }
+      };
+      const listItemMarkdown = (item, ordered, index) => {
+        const nested = Array.from(item.children).filter((child) =>
+          child.tagName === 'UL' || child.tagName === 'OL');
+        const clone = item.cloneNode(true);
+        for (const child of Array.from(clone.children)) {
+          if (child.tagName === 'UL' || child.tagName === 'OL') child.remove();
+        }
+        const checkbox = item.querySelector(':scope > input[type="checkbox"]');
+        const marker = ordered ? `${index + 1}. ` : '- ';
+        const task = checkbox ? `[${checkbox.checked ? 'x' : ' '}] ` : '';
+        let result = marker + task + inlineMarkdown(clone).trim();
+        for (const child of nested) {
+          const rendered = blockMarkdown(child);
+          result += '\n' + rendered.split('\n').map((line) => `  ${line}`).join('\n');
+        }
+        return result;
+      };
+      const tableMarkdown = (table, original) => {
+        const rows = Array.from(table.querySelectorAll('tr'));
+        if (rows.length === 0) return original;
+        const cells = rows.map((row) => Array.from(row.querySelectorAll(':scope > th, :scope > td'))
+          .map((cell) => inlineMarkdown(cell).trim().split('|').join('\\|')));
+        const widths = Math.max(...cells.map((row) => row.length));
+        const normalized = cells.map((row) => Array.from({ length: widths }, (_, column) => row[column] ?? ''));
+        const headerCells = Array.from(rows[0].querySelectorAll(':scope > th, :scope > td'));
+        const delimiter = Array.from({ length: widths }, (_, column) => {
+          const alignment = getComputedStyle(headerCells[column] ?? rows[0]).textAlign;
+          if (alignment === 'center') return ':---:';
+          if (alignment === 'right' || alignment === 'end') return '---:';
+          return '---';
+        });
+        const line = (row) => `| ${row.join(' | ')} |`;
+        return [line(normalized[0]), line(delimiter), ...normalized.slice(1).map(line)].join('\n');
+      };
+      const blockMarkdown = (block) => {
+        switch (block.tagName) {
+        case 'P': return inlineMarkdown(block);
+        case 'H1': case 'H2': case 'H3': case 'H4': case 'H5': case 'H6':
+          return `${'#'.repeat(Number(block.tagName.slice(1)))} ${inlineMarkdown(block).trim()}`;
+        case 'BLOCKQUOTE': {
+          const content = Array.from(block.children).map(blockMarkdown).join('\n\n');
+          return content.split('\n').map((line) => `> ${line}`).join('\n');
+        }
+        case 'UL': case 'OL':
+          return Array.from(block.children)
+            .filter((child) => child.tagName === 'LI')
+            .map((item, index) => listItemMarkdown(item, block.tagName === 'OL', index))
+            .join('\n');
+        case 'TABLE': return tableMarkdown(block, '');
+        default: return null;
+        }
+      };
+      const trailingLineEndings = (source) => {
+        let index = source.length;
+        while (index > 0 && (source[index - 1] === '\n' || source[index - 1] === '\r')) index -= 1;
+        return source.slice(index);
+      };
+      const finishEditing = (block, cancel = false) => {
+        if (!(block instanceof Element) || block.dataset.inflowEditing !== 'true') return;
+        const originalHex = block.dataset.inflowSourceHex;
+        const original = hexToText(originalHex);
+        const start = Number(block.dataset.inflowSourceStart);
+        const end = Number(block.dataset.inflowSourceEnd);
+        const sourceEditor = block.querySelector(':scope > textarea.inflow-source-block-editor');
+        let replacement = sourceEditor ? sourceEditor.value : blockMarkdown(block);
+        if (cancel || original === null || replacement === null) {
+          block.innerHTML = block.__inflowOriginalHTML;
+          block.removeAttribute('contenteditable');
+          block.removeAttribute('data-inflow-editing');
+          return;
+        }
+        replacement += trailingLineEndings(original);
+        block.removeAttribute('contenteditable');
+        block.removeAttribute('data-inflow-editing');
+        if (replacement === original) return;
+        if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && start <= end) {
+          handler.postMessage({
+            type: 'markdownEdit', sourceStart: start, sourceEnd: end,
+            originalHex, replacementHex: textToHex(replacement)
+          });
+        }
+      };
+      const beginEditing = (block, event) => {
+        if (!(block instanceof Element) || block.dataset.inflowEditing === 'true') return;
+        const original = hexToText(block.dataset.inflowSourceHex);
+        if (original === null) return;
+        block.__inflowOriginalHTML = block.innerHTML;
+        block.dataset.inflowEditing = 'true';
+        const requiresSource = ['PRE', 'FIGURE', 'DL'].includes(block.tagName);
+        if (requiresSource) {
+          const textarea = document.createElement('textarea');
+          textarea.className = 'inflow-source-block-editor';
+          textarea.value = original;
+          textarea.setAttribute('aria-label', 'Markdown 块源码');
+          block.replaceChildren(textarea);
+          textarea.focus();
+          textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+        } else {
+          block.contentEditable = 'true';
+          block.focus({ preventScroll: true });
+          const position = document.caretPositionFromPoint?.(event.clientX, event.clientY);
+          if (position) {
+            const range = document.createRange();
+            range.setStart(position.offsetNode, position.offset);
+            range.collapse(true);
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+          }
         }
       };
 
@@ -512,11 +727,13 @@ struct MarkdownPreviewView: NSViewRepresentable {
         if (!heading) {
           return;
         }
+        if (isEditable()) return;
         event.preventDefault();
         activate(heading);
       });
       document.addEventListener('keydown', (event) => {
-        if ((event.key === 'Enter' || event.key === ' ')
+        if (!isEditable()
+            && (event.key === 'Enter' || event.key === ' ')
             && event.target instanceof Element
             && event.target.matches(selector)) {
           event.preventDefault();
@@ -526,16 +743,30 @@ struct MarkdownPreviewView: NSViewRepresentable {
 
       document.addEventListener('dblclick', (event) => {
         const target = event.target instanceof Element ? event.target : null;
-        if (!target || target.closest('a, button, input')) {
+        if (!isEditable() || !target || target.closest('a, button, input')) {
           return;
         }
-        event.preventDefault();
         const located = target.closest(selector);
-        const value = Number(located?.dataset.inflowSourceStart);
-        if (Number.isSafeInteger(value) && value >= 0) {
-          handler.postMessage({ type: 'edit', sourceUTF8Offset: value });
-        } else {
-          handler.postMessage({ type: 'edit' });
+        if (!located || typeof located.dataset.inflowSourceHex !== 'string') return;
+        event.preventDefault();
+        beginEditing(located, event);
+      });
+      document.addEventListener('focusout', (event) => {
+        const block = event.target instanceof Element ? event.target.closest(selector) : null;
+        if (!block || block.dataset.inflowEditing !== 'true') return;
+        setTimeout(() => {
+          if (!block.contains(document.activeElement)) finishEditing(block);
+        }, 0);
+      });
+      document.addEventListener('keydown', (event) => {
+        const block = event.target instanceof Element ? event.target.closest(selector) : null;
+        if (!block || block.dataset.inflowEditing !== 'true') return;
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          finishEditing(block, true);
+        } else if (event.key === 'Enter' && event.metaKey) {
+          event.preventDefault();
+          finishEditing(block);
         }
       });
 

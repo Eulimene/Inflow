@@ -263,7 +263,10 @@ enum LocalImageResolver {
                     )
                 }
                 let label = alternative.isEmpty ? remoteURL.lastPathComponent : alternative
-                return "<img class=\"inflow-remote-image\" src=\"\(escapeAttribute(remoteURL.absoluteString))\" alt=\"\(escapeAttribute(label))\" loading=\"lazy\" referrerpolicy=\"no-referrer\">"
+                let editMetadata = sanitizesMetadata
+                    ? ""
+                    : " data-inflow-markdown-target-hex=\"\(hex(target))\""
+                return "<img class=\"inflow-remote-image\" src=\"\(escapeAttribute(remoteURL.absoluteString))\" alt=\"\(escapeAttribute(label))\"\(editMetadata) loading=\"lazy\" referrerpolicy=\"no-referrer\">"
             }
             guard scheme == "file", absolute.isFileURL else {
                 return warning(
@@ -419,7 +422,10 @@ enum LocalImageResolver {
         }
 
         let label = alternative.isEmpty ? url.deletingPathExtension().lastPathComponent : alternative
-        return "<img class=\"inflow-local-image\" src=\"data:\(deliveryImage.mimeType);base64,\(deliveryImage.data.base64EncodedString())\" alt=\"\(escapeAttribute(label))\">"
+        let editMetadata = sanitizesMetadata
+            ? ""
+            : " data-inflow-markdown-target-hex=\"\(hex(target))\""
+        return "<img class=\"inflow-local-image\" src=\"data:\(deliveryImage.mimeType);base64,\(deliveryImage.data.base64EncodedString())\" alt=\"\(escapeAttribute(label))\"\(editMetadata)>"
     }
 
     private enum WarningKind {

@@ -48,8 +48,9 @@
 ### 2.2 单一正文与三种视图
 
 - MarkdownDocument.text 是 SwiftUI 文档模型中的正文事实；MarkdownSourceEditorSession 持有一个持久 NSTextView。
-- 有状态 Rust `EditorEngine` 已在 Debug 默认开启影子模式：NSTextView 完成一次非组合输入后，以 UTF-8 grapheme 边界的 `ReplaceText(base_revision, range, inserted)` 镜像到 Engine，并用快照执行逐字节对账。Release 默认关闭；保存、格式和撤销目前仍以 Swift/AppKit 为权威。
-- Engine 的 `RefreshDerived(revision)` 已由一次 `DocumentIr` 解析同时产生分析、语法范围、引用、稳定块 ID 的 `RenderIr` 和安全 HTML，并缓存到对应 revision；本阶段只建立核心合同，Swift 主预览热路径尚未切换，不能据此声称双解析器已经删除。
+- 有状态 Rust `EditorEngine` 已作为默认派生服务：NSTextView 完成一次非组合输入后，以 UTF-8 grapheme 边界的 `ReplaceText(base_revision, range, inserted)` 镜像到 Engine，并用快照执行逐字节对账；可用 `INFLOW_EDITOR_ENGINE_SHADOW=0` 失败关闭到旧派生路径。保存、格式和撤销目前仍以 Swift/AppKit 为权威。
+- Engine 的 `RefreshDerived(revision)` 由一次 `DocumentIr` 解析同时产生分析、语法范围、引用、稳定块 ID 的 `RenderIr` 和安全 HTML，并缓存到对应 revision；Swift 文档派生热路径直接消费这一响应，失败才回退旧散点调用。旧 `RenderedMarkdownPlanner` 尚未删除，因此不能据此声称双解析器已经完全清除。
+- 可编辑 WKWebView 只保留在显式环境开关 `INFLOW_EDITABLE_WEB_PREVIEW=1` 后作为实验；默认“即时编辑”仍是持久 NSTextView，不把 DOM 转换结果写成主编辑路径。
 - 源码编辑、实时预览分栏左侧与即时编辑复用同一个 MarkdownSourceEditor 和 MarkdownSourceEditorSession；分栏右侧使用当前内存正文生成的只读 WebKit 结果，即时编辑在原始字符串上应用 Rust 解析范围对应的 TextKit 展示属性。
 - 文本修改由 NSTextView 发布回同一个绑定，撤销与重做继续使用同一个 UndoManager。展示属性更新不登记正文 undo。
 - EditorViewMode 的历史内部 case 名 preview 现在对应用户可见的“即时编辑”。
@@ -123,7 +124,7 @@
 
 判断当前能力时，以已批准的个人首版范围、实际安装的菜单和主流程、以及 UAT-PERSONAL-01 至 10 为准，而不是以某个源文件或测试名称是否存在为准。
 
-自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 397 个 XCTest method：291 个 `current-direct`、13 个依赖真实 `NSApplication` 菜单或生命周期的 `current-host`、88 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
+自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 398 个 XCTest method：292 个 `current-direct`、13 个依赖真实 `NSApplication` 菜单或生命周期的 `current-host`、88 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
 
 ## 4. 人工 UAT 状态
 

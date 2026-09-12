@@ -2,6 +2,12 @@ import AppKit
 import CoreGraphics
 import SwiftUI
 
+enum EditableWebInstantEditorFeature {
+    static var isEnabled: Bool {
+        ProcessInfo.processInfo.environment["INFLOW_EDITABLE_WEB_PREVIEW"] == "1"
+    }
+}
+
 enum EditorWorkspacePane: Equatable {
     case projectSidebar
     case editor
@@ -1705,8 +1711,13 @@ struct MarkdownEditorView: View {
                     .frame(minWidth: 320)
             }
         case .preview:
-            renderedEditor
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if EditableWebInstantEditorFeature.isEnabled {
+                instantEditor
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                renderedEditor
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 
@@ -1722,6 +1733,13 @@ struct MarkdownEditorView: View {
             onDropImage: dropImage
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var instantEditor: some View {
+        previewSurface(
+            isEditable: canEditDocument,
+            onMarkdownEditCommitted: commitInstantMarkdownEdit
+        )
     }
 
     private var renderedEditor: some View {
@@ -1755,7 +1773,9 @@ struct MarkdownEditorView: View {
     }
 
     private func previewSurface(
-        onEditRequested: @escaping (Int?) -> Void = { _ in }
+        isEditable: Bool = false,
+        onEditRequested: @escaping (Int?) -> Void = { _ in },
+        onMarkdownEditCommitted: @escaping (PreviewMarkdownEdit) -> Void = { _ in }
     ) -> some View {
         VStack(spacing: 0) {
             if previewFailureMessage != nil {
@@ -1767,12 +1787,14 @@ struct MarkdownEditorView: View {
                 MarkdownPreviewView(
                     html: previewHTML,
                     baseURL: fileURL?.deletingLastPathComponent(),
+                    isEditable: isEditable,
                     scrollRequest: preferences.scrollSyncEnabled && !previewScrollPausedByUser
                         ? previewScrollRequest
                         : nil,
                     onHeadingActivated: activatePreviewHeading,
                     onLinkActivated: activatePreviewLink,
                     onEditRequested: onEditRequested,
+                    onMarkdownEditCommitted: onMarkdownEditCommitted,
                     onPreviewIssueAction: activatePreviewIssue,
                     onImageIssueAction: activatePreviewImageIssue,
                     onManualScroll: {
@@ -2386,6 +2408,33 @@ struct MarkdownEditorView: View {
         findSession.cancelSearch()
         fileSafetySession.stopMonitoring()
         recoveryCoordinator?.close(recoveryRecordID)
+    }
+
+    private func commitInstantMarkdownEdit(_ edit: PreviewMarkdownEdit) {
+        guard canEditDocument else { return }
+        let source = document.text
+        guard edit.sourceUTF8Range.lowerBound >= 0,
+              edit.sourceUTF8Range.upperBound <= source.utf8.count,
+              let lowerUTF8 = source.utf8.index(
+                  source.utf8.startIndex,
+                  offsetBy: edit.sourceUTF8Range.lowerBound,
+                  limitedBy: source.utf8.endIndex
+              ),
+              let upperUTF8 = source.utf8.index(
+                  source.utf8.startIndex,
+                  offsetBy: edit.sourceUTF8Range.upperBound,
+                  limitedBy: source.utf8.endIndex
+              ),
+              let lower = String.Index(lowerUTF8, within: source),
+              let upper = String.Index(upperUTF8, within: source),
+              String(source[lower..<upper]) == edit.originalSource
+        else {
+            return
+        }
+
+        var updated = source
+        updated.replaceSubrange(lower..<upper, with: edit.replacement)
+        document.text = updated
     }
 
     private func activatePreviewHeading(sourceUTF8Offset: Int) {
@@ -4029,8 +4078,14 @@ struct MarkdownEditorView: View {
             }
             guard !Task.isCancelled else { return }
 
+            let coreContent = await sourceEditorSession.deriveContent(
+                for: markdown,
+                configuration: configuration
+            )
+            guard !Task.isCancelled else { return }
             guard let content = await contentDeriver.derive(
                 markdown: markdown,
+                coreContent: coreContent,
                 documentDirectory: authorizedDocumentDirectory,
                 projectRoot: authorizedProjectRoot,
                 expectedProjectRootIdentity: projectRootIdentity,
@@ -4167,6 +4222,7 @@ private enum DocumentAnalysisOutcome: Sendable {
 private actor DocumentContentDeriver {
     func derive(
         markdown: String,
+        coreContent: EditorEngineDerivedContent?,
         documentDirectory: URL?,
         projectRoot: URL?,
         expectedProjectRootIdentity: FolderProjectDirectoryIdentity?,
@@ -4176,6 +4232,43 @@ private actor DocumentContentDeriver {
         syntaxHighlightingEnabled: Bool
     ) -> DerivedDocumentContent? {
         guard !Task.isCancelled else { return nil }
+        if let coreContent,
+           UTF8Text.isExactlyEqual(coreContent.sourceSnapshot, markdown)
+        {
+            let headings = headingNavigationEnabled ? coreContent.analysis.headings : []
+            let previewDocument = if EditableWebInstantEditorFeature.isEnabled {
+                MarkdownRenderer.editablePreviewDocument(
+                    for: markdown,
+                    documentDirectory: documentDirectory,
+                    projectRoot: projectRoot,
+                    expectedProjectRootIdentity: expectedProjectRootIdentity,
+                    requiresProjectBoundary: requiresProjectBoundary,
+                    configuration: configuration,
+                    navigationHeadings: headings
+                )
+            } else {
+                MarkdownRenderer.previewDocument(
+                    coreFragment: coreContent.htmlFragment,
+                    references: coreContent.references,
+                    documentDirectory: documentDirectory,
+                    projectRoot: projectRoot,
+                    expectedProjectRootIdentity: expectedProjectRootIdentity,
+                    requiresProjectBoundary: requiresProjectBoundary,
+                    configuration: configuration,
+                    navigationHeadings: headings
+                )
+            }
+            return DerivedDocumentContent(
+                sourceSnapshot: markdown,
+                html: previewDocument.html,
+                previewFailureMessage: previewDocument.failureMessage,
+                analysis: .success(coreContent.analysis),
+                syntaxHighlighting: syntaxHighlightingEnabled
+                    ? coreContent.syntaxHighlighting
+                    : []
+            )
+        }
+
         let analysis: DocumentAnalysisOutcome
         do {
             analysis = .success(try MarkdownAnalyzer.analyze(markdown))

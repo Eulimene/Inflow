@@ -32,13 +32,44 @@ enum MarkdownRenderer {
         for markdown: String,
         configuration: PreviewAppearanceConfiguration = .default
     ) throws -> String {
+        try coreHTMLFragment(
+            for: markdown,
+            configuration: configuration,
+            includesSourceMetadata: false
+        )
+    }
+
+    static func editorHTMLFragment(
+        for markdown: String,
+        configuration: PreviewAppearanceConfiguration = .default
+    ) throws -> String {
+        try coreHTMLFragment(
+            for: markdown,
+            configuration: configuration,
+            includesSourceMetadata: true
+        )
+    }
+
+    private static func coreHTMLFragment(
+        for markdown: String,
+        configuration: PreviewAppearanceConfiguration,
+        includesSourceMetadata: Bool
+    ) throws -> String {
         let utf8 = Data(markdown.utf8)
         let result: InflowEncodeResult = utf8.withUnsafeBytes { buffer in
-            inflow_markdown_render_html_with_options(
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count),
-                configuration.coreRenderOptions
-            )
+            if includesSourceMetadata {
+                inflow_markdown_render_editor_html_with_options(
+                    buffer.bindMemory(to: UInt8.self).baseAddress,
+                    UInt(buffer.count),
+                    configuration.coreRenderOptions
+                )
+            } else {
+                inflow_markdown_render_html_with_options(
+                    buffer.bindMemory(to: UInt8.self).baseAddress,
+                    UInt(buffer.count),
+                    configuration.coreRenderOptions
+                )
+            }
         }
         guard result.status == INFLOW_STATUS_OK else {
             if result.status == INFLOW_STATUS_INVALID_UTF8 {
@@ -79,6 +110,19 @@ enum MarkdownRenderer {
         ).html
     }
 
+    static func editableHTMLDocument(
+        for markdown: String,
+        configuration: PreviewAppearanceConfiguration = .default
+    ) -> String {
+        previewDocument(
+            for: markdown,
+            documentDirectory: nil,
+            configuration: configuration,
+            navigationHeadings: [],
+            fragmentRenderer: editorHTMLFragment
+        ).html
+    }
+
     static func previewDocument(
         for markdown: String,
         documentDirectory: URL? = nil,
@@ -100,6 +144,27 @@ enum MarkdownRenderer {
         )
     }
 
+    static func editablePreviewDocument(
+        for markdown: String,
+        documentDirectory: URL?,
+        projectRoot: URL?,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity?,
+        requiresProjectBoundary: Bool,
+        configuration: PreviewAppearanceConfiguration,
+        navigationHeadings: [DocumentHeading]
+    ) -> MarkdownPreviewDocument {
+        previewDocument(
+            for: markdown,
+            documentDirectory: documentDirectory,
+            projectRoot: projectRoot,
+            expectedProjectRootIdentity: expectedProjectRootIdentity,
+            requiresProjectBoundary: requiresProjectBoundary,
+            configuration: configuration,
+            navigationHeadings: navigationHeadings,
+            fragmentRenderer: editorHTMLFragment
+        )
+    }
+
     static func previewDocument(
         for markdown: String,
         documentDirectory: URL?,
@@ -111,33 +176,17 @@ enum MarkdownRenderer {
         fragmentRenderer: (String, PreviewAppearanceConfiguration) throws -> String
     ) -> MarkdownPreviewDocument {
         do {
-            let headingFragment = PreviewNavigationMarkup.annotateHeadings(
-                in: try fragmentRenderer(markdown, configuration),
-                headings: navigationHeadings
-            )
+            let fragment = try fragmentRenderer(markdown, configuration)
             let references = try MarkdownReferenceScanner.references(in: markdown)
-            let linkTargets = references
-                .filter { $0.kind == .link }
-                .map(\.target)
-            let fragment = PreviewNavigationMarkup.annotateLinks(
-                in: headingFragment,
-                targets: linkTargets
-            )
-            return MarkdownPreviewDocument(
-                html: document(
-                    containing: LocalImageResolver.resolveSlots(
-                        in: fragment,
-                        documentDirectory: documentDirectory,
-                        imageReferences: references.filter { $0.kind == .image },
-                        projectRoot: projectRoot,
-                        expectedProjectRootIdentity: expectedProjectRootIdentity,
-                        requiresProjectBoundary: requiresProjectBoundary
-                    ),
-                    configuration: configuration
-                ),
-                failureMessage: nil,
-                hasRelativeResources: RelativeResourceDirectoryPolicy
-                    .hasRelativeResources(in: references)
+            return previewDocument(
+                coreFragment: fragment,
+                references: references,
+                documentDirectory: documentDirectory,
+                projectRoot: projectRoot,
+                expectedProjectRootIdentity: expectedProjectRootIdentity,
+                requiresProjectBoundary: requiresProjectBoundary,
+                configuration: configuration,
+                navigationHeadings: navigationHeadings
             )
         } catch {
             let message = (error as? LocalizedError)?.errorDescription
@@ -148,6 +197,44 @@ enum MarkdownRenderer {
                 hasRelativeResources: false
             )
         }
+    }
+
+    static func previewDocument(
+        coreFragment: String,
+        references: [MarkdownReference],
+        documentDirectory: URL?,
+        projectRoot: URL?,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity?,
+        requiresProjectBoundary: Bool,
+        configuration: PreviewAppearanceConfiguration,
+        navigationHeadings: [DocumentHeading]
+    ) -> MarkdownPreviewDocument {
+        let headingFragment = PreviewNavigationMarkup.annotateHeadings(
+            in: coreFragment,
+            headings: navigationHeadings
+        )
+        let linkTargets = references.filter { $0.kind == .link }.map(\.target)
+        let fragment = PreviewNavigationMarkup.annotateLinks(
+            in: headingFragment,
+            targets: linkTargets
+        )
+        return MarkdownPreviewDocument(
+            html: document(
+                containing: LocalImageResolver.resolveSlots(
+                    in: fragment,
+                    documentDirectory: documentDirectory,
+                    imageReferences: references.filter { $0.kind == .image },
+                    projectRoot: projectRoot,
+                    expectedProjectRootIdentity: expectedProjectRootIdentity,
+                    requiresProjectBoundary: requiresProjectBoundary
+                ),
+                configuration: configuration
+            ),
+            failureMessage: nil,
+            hasRelativeResources: RelativeResourceDirectoryPolicy.hasRelativeResources(
+                in: references
+            )
+        )
     }
 
     static func document(
@@ -205,6 +292,11 @@ enum MarkdownRenderer {
             .mermaid-error-actions { display: flex; gap: 8px; margin-top: 10px; }
             .mermaid-error-actions button { font: inherit; color: inherit; border: 1px solid currentColor; border-radius: 6px; background: transparent; padding: 5px 9px; cursor: pointer; }
             .task-list-item { list-style: none; } input[type="checkbox"] { margin: 0 .45em 0 -1.35em; }
+            body[data-inflow-editable="true"] [data-inflow-source-start] { transition: outline-color 120ms ease, background-color 120ms ease; }
+            body[data-inflow-editable="true"] [data-inflow-source-start]:hover { outline: 2px solid color-mix(in srgb, #0969da 28%, transparent); outline-offset: 4px; cursor: text; }
+            body[data-inflow-editable="true"] [data-inflow-editing="true"] { outline: 2px solid #0969da; outline-offset: 5px; }
+            [contenteditable="true"] { caret-color: currentColor; }
+            .inflow-source-block-editor { box-sizing: border-box; display: block; width: 100%; min-height: 8em; resize: vertical; border: 0; outline: 0; margin: 0; padding: 14px; color: inherit; background: #f6f8fa; font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 4; }
             .preview-error { margin-top: 30vh; text-align: center; color: #9a6700; }
             @media (prefers-color-scheme: dark) {
               body { color: #e6edf3; background: #0d1117; }
@@ -224,6 +316,7 @@ enum MarkdownRenderer {
               .math-error { color: #d29922; border-color: #9e6a03; }
               .mermaid-error { color: #d29922; border-color: #9e6a03; }
               .image-warning { color: #d29922; border-color: #9e6a03; }
+              .inflow-source-block-editor { background: #161b22; }
             }
           </style>
           \(PreviewAppearanceCSS.styleElement(for: configuration))
@@ -256,7 +349,7 @@ enum PreviewNavigationMarkup {
         headings: [DocumentHeading]
     ) -> String {
         guard !headings.isEmpty,
-              let headingPattern = try? NSRegularExpression(pattern: #"<h([1-6])>"#)
+              let headingPattern = try? NSRegularExpression(pattern: #"<h([1-6])([^>]*)>"#)
         else {
             return fragment
         }
@@ -265,7 +358,7 @@ enum PreviewNavigationMarkup {
         guard matches.count == headings.count else { return fragment }
 
         for (match, heading) in zip(matches, headings) {
-            guard match.numberOfRanges == 2,
+            guard match.numberOfRanges == 3,
                   let levelRange = Range(match.range(at: 1), in: fragment),
                   Int(fragment[levelRange]) == heading.level
             else {
@@ -276,9 +369,13 @@ enum PreviewNavigationMarkup {
         let identifiers = HeadingIdentifier.identifiers(for: headings)
         let result = NSMutableString(string: fragment)
         for ((match, heading), identifier) in zip(zip(matches, headings), identifiers).reversed() {
+            let attributes = (fragment as NSString).substring(with: match.range(at: 2))
+            let sourceAttribute = attributes.contains("data-inflow-source-start=")
+                ? ""
+                : " data-inflow-source-start=\"\(heading.sourceUTF8Range.lowerBound)\""
             result.replaceCharacters(
                 in: match.range,
-                with: "<h\(heading.level) id=\"\(escapeHTMLAttribute(identifier))\" data-inflow-source-start=\"\(heading.sourceUTF8Range.lowerBound)\" tabindex=\"0\" title=\"在源码中定位\">"
+                with: "<h\(heading.level) id=\"\(escapeHTMLAttribute(identifier))\"\(sourceAttribute) tabindex=\"0\" title=\"在源码中定位\"\(attributes)>"
             )
         }
         return result as String

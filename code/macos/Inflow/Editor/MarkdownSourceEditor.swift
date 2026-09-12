@@ -427,6 +427,17 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         refreshWritingModePresentation()
     }
 
+    func deriveContent(
+        for source: String,
+        configuration: PreviewAppearanceConfiguration
+    ) async -> EditorEngineDerivedContent? {
+        await engineShadow.derive(
+            text: source,
+            selectionUTF16: textView.selectedRange(),
+            configuration: configuration
+        )
+    }
+
     func setPresentation(
         _ presentation: MarkdownEditorPresentation,
         source: String,
