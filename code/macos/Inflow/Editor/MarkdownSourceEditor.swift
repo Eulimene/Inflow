@@ -270,10 +270,13 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private(set) var sourceAppearance = SourceEditorAppearance.default
     private var hasAppliedSourceAppearance = false
     private var syntaxHighlightingEnabled = false
+    private var syntaxHighlightingSource = ""
     private var syntaxHighlightingSourceUTF8 = Data()
     private var syntaxHighlightingSpans: [MarkdownSyntaxSpan] = []
     private var syntaxApplicationGeneration = 0
     private var syntaxApplicationTask: Task<Void, Never>?
+    private var syntaxApplicationIsComplete = true
+    private(set) var lastSyntaxDirtyUTF16Ranges: [NSRange] = []
     private var presentation = MarkdownEditorPresentation.source
     private var renderedPlan: RenderedMarkdownPlan?
     private var engineRenderedPlan: RenderedMarkdownPlan?
@@ -1540,19 +1543,82 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         source: String,
         enabled: Bool
     ) -> Bool {
+        let previousSource = syntaxHighlightingSource
+        let previousSpans = syntaxHighlightingSpans
+        let previousApplicationWasComplete = syntaxApplicationIsComplete
         syntaxHighlightingEnabled = enabled
+        syntaxHighlightingSource = source
         syntaxHighlightingSourceUTF8 = Data(source.utf8)
         syntaxHighlightingSpans = enabled ? spans : []
         guard UTF8Text.isExactlyEqual(textView.string, source) else { return false }
         if presentation == .source {
-            applySourceAppearance(sourceAppearance, force: true)
+            applySourceSyntaxDifference(
+                from: previousSource,
+                spans: previousSpans,
+                previousApplicationWasComplete: previousApplicationWasComplete
+            )
         } else {
             applyRenderedPresentation(source: source, force: true)
         }
         return true
     }
 
-    private func scheduleCachedSyntaxHighlighting(baseFont: NSFont) {
+    private func applySourceSyntaxDifference(
+        from previousSource: String,
+        spans previousSpans: [MarkdownSyntaxSpan],
+        previousApplicationWasComplete: Bool
+    ) {
+        guard let storage = textView.textStorage else { return }
+        let font = NSFont.monospacedSystemFont(
+            ofSize: CGFloat(sourceAppearance.fontSize),
+            weight: .regular
+        )
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineHeightMultiple = CGFloat(sourceAppearance.lineHeight)
+        let fullRange = NSRange(location: 0, length: storage.length)
+        let dirtyRanges = previousApplicationWasComplete
+            ? Self.syntaxDirtyRanges(
+                previousSource: previousSource,
+                previousSpans: previousSpans,
+                source: syntaxHighlightingSource,
+                spans: syntaxHighlightingSpans
+            )
+            : (fullRange.length > 0 ? [fullRange] : [])
+        lastSyntaxDirtyUTF16Ranges = dirtyRanges
+        guard !dirtyRanges.isEmpty else { return }
+
+        let undoManager = textView.undoManager
+        let restoreUndoRegistration = undoManager?.isUndoRegistrationEnabled == true
+        if restoreUndoRegistration { undoManager?.disableUndoRegistration() }
+        defer {
+            if restoreUndoRegistration { undoManager?.enableUndoRegistration() }
+        }
+
+        storage.beginEditing()
+        let baseAttributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.textColor,
+            .backgroundColor: NSColor.clear,
+            .paragraphStyle: paragraphStyle,
+            .underlineStyle: 0,
+            .strikethroughStyle: 0,
+            .obliqueness: 0,
+        ]
+        for range in dirtyRanges where NSMaxRange(range) <= storage.length {
+            storage.addAttributes(baseAttributes, range: range)
+        }
+        storage.endEditing()
+        scheduleCachedSyntaxHighlighting(
+            baseFont: font,
+            limitedTo: dirtyRanges == [fullRange] ? nil : dirtyRanges
+        )
+        refreshWritingModePresentation()
+    }
+
+    private func scheduleCachedSyntaxHighlighting(
+        baseFont: NSFont,
+        limitedTo dirtyRanges: [NSRange]? = nil
+    ) {
         syntaxApplicationTask?.cancel()
         syntaxApplicationGeneration &+= 1
         let generation = syntaxApplicationGeneration
@@ -1560,11 +1626,18 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
               syntaxHighlightingEnabled,
               syntaxHighlightingSourceUTF8 == Data(textView.string.utf8)
         else {
+            syntaxApplicationIsComplete = true
             return
         }
 
         let boldFont = NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
-        let sortedSpans = syntaxHighlightingSpans
+        let sortedSpans = syntaxHighlightingSpans.filter { span in
+            guard let dirtyRanges else { return true }
+            return dirtyRanges.contains {
+                NSIntersectionRange($0, span.utf16Range).length > 0
+            }
+        }
+        syntaxApplicationIsComplete = false
         syntaxApplicationTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for batchStart in stride(from: 0, to: sortedSpans.count, by: 512) {
@@ -1590,12 +1663,144 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 textStorage.endEditing()
                 await Task.yield()
             }
+            guard !Task.isCancelled,
+                  generation == self.syntaxApplicationGeneration
+            else { return }
+            self.syntaxApplicationIsComplete = true
+            self.syntaxApplicationTask = nil
         }
     }
 
     private func invalidateSyntaxApplication() {
+        if syntaxApplicationTask != nil {
+            syntaxApplicationIsComplete = false
+        }
         syntaxApplicationTask?.cancel()
+        syntaxApplicationTask = nil
         syntaxApplicationGeneration &+= 1
+    }
+
+    private struct SyntaxSpanKey: Hashable {
+        let kind: UInt8
+        let start: Int
+        let end: Int
+    }
+
+    private static func syntaxDirtyRanges(
+        previousSource: String,
+        previousSpans: [MarkdownSyntaxSpan],
+        source: String,
+        spans: [MarkdownSyntaxSpan]
+    ) -> [NSRange] {
+        if previousSource.isEmpty, previousSpans.isEmpty {
+            let fullRange = NSRange(location: 0, length: (source as NSString).length)
+            return fullRange.length > 0 ? [fullRange] : []
+        }
+        guard let edit = EditorEngineTextDiff.replacement(from: previousSource, to: source) else {
+            let previousByKey = Dictionary(previousSpans.map {
+                (SyntaxSpanKey(
+                    kind: $0.kind.rawValue,
+                    start: $0.utf8Range.lowerBound,
+                    end: $0.utf8Range.upperBound
+                ), $0.utf16Range)
+            }, uniquingKeysWith: { first, _ in first })
+            let newByKey = Dictionary(spans.map {
+                (SyntaxSpanKey(
+                    kind: $0.kind.rawValue,
+                    start: $0.utf8Range.lowerBound,
+                    end: $0.utf8Range.upperBound
+                ), $0.utf16Range)
+            }, uniquingKeysWith: { first, _ in first })
+            let removed = previousByKey.compactMap { key, range in
+                newByKey[key] == nil ? range : nil
+            }
+            let added = newByKey.compactMap { key, range in
+                previousByKey[key] == nil ? range : nil
+            }
+            return coalescedRanges(removed + added)
+        }
+
+        let insertedLength = edit.inserted.utf8.count
+        let removedLength = edit.end - edit.start
+        let delta = insertedLength - removedLength
+        var mappedPrevious: [SyntaxSpanKey: Range<Int>] = [:]
+        var dirtyUTF8: [Range<Int>] = []
+
+        for span in previousSpans {
+            let old = span.utf8Range
+            let mapped: Range<Int>
+            if old.upperBound <= edit.start {
+                mapped = old
+            } else if old.lowerBound >= edit.end {
+                mapped = (old.lowerBound + delta)..<(old.upperBound + delta)
+            } else {
+                let start = min(old.lowerBound, edit.start)
+                let trailing = max(0, old.upperBound - edit.end)
+                mapped = start..<(edit.start + insertedLength + trailing)
+                if !mapped.isEmpty { dirtyUTF8.append(mapped) }
+            }
+            if !mapped.isEmpty {
+                mappedPrevious[
+                    SyntaxSpanKey(
+                        kind: span.kind.rawValue,
+                        start: mapped.lowerBound,
+                        end: mapped.upperBound
+                    )
+                ] = mapped
+            }
+        }
+
+        let newKeys = Set(spans.map {
+            SyntaxSpanKey(
+                kind: $0.kind.rawValue,
+                start: $0.utf8Range.lowerBound,
+                end: $0.utf8Range.upperBound
+            )
+        })
+        for (key, range) in mappedPrevious where !newKeys.contains(key) {
+            dirtyUTF8.append(range)
+        }
+        for span in spans {
+            let key = SyntaxSpanKey(
+                kind: span.kind.rawValue,
+                start: span.utf8Range.lowerBound,
+                end: span.utf8Range.upperBound
+            )
+            if mappedPrevious[key] == nil {
+                dirtyUTF8.append(span.utf8Range)
+            }
+        }
+        if insertedLength > 0 {
+            dirtyUTF8.append(edit.start..<(edit.start + insertedLength))
+        }
+
+        let validUTF8 = dirtyUTF8.filter {
+            !$0.isEmpty && $0.lowerBound >= 0 && $0.upperBound <= source.utf8.count
+        }
+        guard let utf16 = MarkdownSyntaxRange.utf16Ranges(for: validUTF8, in: source) else {
+            let fullRange = NSRange(location: 0, length: (source as NSString).length)
+            return fullRange.length > 0 ? [fullRange] : []
+        }
+        return coalescedRanges(utf16)
+    }
+
+    private static func coalescedRanges(_ ranges: [NSRange]) -> [NSRange] {
+        let sorted = ranges.filter { $0.length > 0 }.sorted {
+            ($0.location, $0.length) < ($1.location, $1.length)
+        }
+        var result: [NSRange] = []
+        for range in sorted {
+            guard let last = result.last else {
+                result.append(range)
+                continue
+            }
+            if range.location <= NSMaxRange(last) {
+                result[result.count - 1] = NSUnionRange(last, range)
+            } else {
+                result.append(range)
+            }
+        }
+        return result
     }
 
     private func syntaxAttributes(

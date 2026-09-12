@@ -82,6 +82,28 @@ final class MarkdownHighlighterTests: XCTestCase {
         XCTAssertTrue(UTF8Text.isExactlyEqual(session.textView.string, editedSource))
         XCTAssertEqual(session.textView.undoManager?.canUndo, canUndo)
         XCTAssertEqual(publishedTextChanges, 0)
+
+        let incrementalSession = MarkdownSourceEditorSession()
+        let incrementalSource = "# Heading\n\nplain **bold** tail"
+        incrementalSession.textView.string = incrementalSource
+        XCTAssertTrue(incrementalSession.applySyntaxHighlighting(
+            try MarkdownHighlighter.spans(in: incrementalSource),
+            source: incrementalSource,
+            enabled: true
+        ))
+        await waitForSyntaxApplication()
+
+        let appendedSource = incrementalSource + "!"
+        incrementalSession.textView.string = appendedSource
+        XCTAssertTrue(incrementalSession.applySyntaxHighlighting(
+            try MarkdownHighlighter.spans(in: appendedSource),
+            source: appendedSource,
+            enabled: true
+        ))
+        XCTAssertEqual(
+            incrementalSession.lastSyntaxDirtyUTF16Ranges,
+            [NSRange(location: (incrementalSource as NSString).length, length: 1)]
+        )
     }
 
     @MainActor
