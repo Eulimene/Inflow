@@ -341,11 +341,12 @@ private actor EditorEngineTransport {
         selectionUTF16: NSRange
     ) -> EditorEngineDocumentSnapshot? {
         do {
-            handle = nil
-            projection = ""
-            revision = 0
             let selection = try Self.byteSelection(selectionUTF16, in: text)
-            try create(text: text, selection: selection)
+            if handle == nil {
+                try create(text: text, selection: selection)
+            } else {
+                try openDocument(text: text, selection: selection)
+            }
             return snapshot(expectedText: text)
         } catch {
             logger.error(
@@ -708,6 +709,37 @@ private actor EditorEngineTransport {
         revision = snapshot.revision
     }
 
+    private func openDocument(text: String, selection: EditorEngineSelection) throws {
+        let requestID = UUID().uuidString
+        let envelope = EditorEngineOpenDocumentEnvelope(
+            schemaVersion: Self.schemaVersion,
+            requestID: requestID,
+            command: EditorEngineOpenDocumentCommand(
+                type: "open_document",
+                baseRevision: revision,
+                text: text,
+                selection: selection
+            )
+        )
+        let response: EditorEngineDispatchResponse = try dispatch(envelope)
+        guard response.schemaVersion == Self.schemaVersion,
+              response.requestID == requestID,
+              response.patch.baseRevision == revision,
+              response.patch.revision == revision + 1,
+              response.patch.mode == mode,
+              !response.patch.canUndo,
+              !response.patch.canRedo,
+              !response.patch.dirty
+        else { throw EditorEngineBridgeError.invalidResponse }
+        let mutation = try response.patch.validatedMutation(source: projection)
+        guard mutation.resultingSource.utf8.elementsEqual(text.utf8) else {
+            throw EditorEngineBridgeError.invalidResponse
+        }
+        revision = mutation.revision
+        projection = mutation.resultingSource
+        try compareSnapshot(to: text)
+    }
+
     private func dispatch<T: Encodable, Response: Decodable>(_ command: T) throws -> Response {
         guard let handle else { throw EditorEngineBridgeError.invalidHandle }
         let encoded = try JSONEncoder().encode(command)
@@ -729,7 +761,8 @@ private actor EditorEngineTransport {
         let snapshot = try readSnapshot()
         guard snapshot.schemaVersion == Self.schemaVersion,
               snapshot.revision == revision,
-              snapshot.text.utf8.elementsEqual(swiftText.utf8)
+              snapshot.text.utf8.elementsEqual(swiftText.utf8),
+              snapshot.mode == mode
         else {
             throw EditorEngineBridgeError.mismatch(revision: snapshot.revision)
         }
@@ -824,6 +857,32 @@ private struct EditorEngineSetModeCommand: Encodable {
     let type: String
     let revision: UInt64
     let mode: EditorEngineMode
+}
+
+private struct EditorEngineOpenDocumentEnvelope: Encodable {
+    let schemaVersion: UInt32
+    let requestID: String
+    let command: EditorEngineOpenDocumentCommand
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case requestID = "request_id"
+        case command
+    }
+}
+
+private struct EditorEngineOpenDocumentCommand: Encodable {
+    let type: String
+    let baseRevision: UInt64
+    let text: String
+    let selection: EditorEngineSelection
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case baseRevision = "base_revision"
+        case text
+        case selection
+    }
 }
 
 private struct EditorEngineCommandEnvelope: Encodable {

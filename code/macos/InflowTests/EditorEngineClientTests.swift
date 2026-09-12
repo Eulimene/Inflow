@@ -257,7 +257,9 @@ final class EditorEngineClientTests: XCTestCase {
             matching: "reloaded",
             selectionUTF16: NSRange(location: 0, length: 0)
         )
-        XCTAssertEqual(reset?.revision, 0)
+        XCTAssertEqual(reset?.revision, redone.revision + 1)
+        XCTAssertEqual(reset?.text, "reloaded")
+        XCTAssertEqual(reset?.dirty, false)
         XCTAssertFalse(reset?.canUndo == true)
         XCTAssertFalse(reset?.canRedo == true)
     }

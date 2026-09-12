@@ -111,6 +111,11 @@ pub enum EditorCommand {
         revision: Revision,
         mode: EditorMode,
     },
+    OpenDocument {
+        base_revision: Revision,
+        text: String,
+        selection: Selection,
+    },
 }
 
 const fn default_true() -> bool {
@@ -349,6 +354,11 @@ impl EditorEngine {
             EditorCommand::SaveCompleted { save_id } => self.save_completed(&save_id)?,
             EditorCommand::SaveAborted { save_id } => self.save_aborted(&save_id)?,
             EditorCommand::SetMode { revision, mode } => self.set_mode(revision, mode)?,
+            EditorCommand::OpenDocument {
+                base_revision,
+                text,
+                selection,
+            } => self.open_document(base_revision, text, selection)?,
         };
 
         Ok(DispatchResponse {
@@ -582,6 +592,53 @@ impl EditorEngine {
         }
         self.mode = mode;
         Ok(self.empty_patch(revision))
+    }
+
+    fn open_document(
+        &mut self,
+        base_revision: Revision,
+        text: String,
+        selection: Selection,
+    ) -> Result<StatePatch, EngineError> {
+        if base_revision != self.revision {
+            return Err(EngineError::RevisionConflict);
+        }
+        validate_selection(&text, &selection)?;
+        let revision = self
+            .revision
+            .checked_add(1)
+            .ok_or(EngineError::RevisionOverflow)?;
+        let replaced_end = self.text.len();
+        let saved_content_hash = content_hash(&text);
+        self.text = text;
+        self.selection = selection.clone();
+        self.revision = revision;
+        self.derived = None;
+        self.undo.clear();
+        self.redo.clear();
+        self.saved_content_hash = saved_content_hash;
+        self.prepared_saves.clear();
+        Ok(StatePatch {
+            base_revision,
+            revision,
+            mode: self.mode,
+            text: Some(TextPatch {
+                range: ByteRange {
+                    start: 0,
+                    end: replaced_end,
+                },
+                inserted: self.text.clone(),
+            }),
+            selection: Some(selection),
+            derived: None,
+            search: None,
+            format_capabilities: None,
+            save_preparation: None,
+            content_hash: self.saved_content_hash.clone(),
+            can_undo: false,
+            can_redo: false,
+            dirty: false,
+        })
     }
 
     fn format(
@@ -1276,6 +1333,57 @@ mod tests {
             engine
                 .dispatch(replace(0, 5..5, "!", Selection { start: 6, end: 6 }))
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn open_document_atomically_replaces_text_and_resets_session_state() {
+        let mut engine = engine("draft");
+        engine
+            .dispatch(replace(0, 5..5, "!", Selection { start: 6, end: 6 }))
+            .expect("edit should create history and dirty state");
+        engine
+            .dispatch(command(
+                "prepare-old-save",
+                EditorCommand::PrepareSave {
+                    revision: 1,
+                    save_id: "old-save".to_owned(),
+                },
+            ))
+            .expect("old save should prepare");
+
+        let opened = engine
+            .dispatch(command(
+                "open-document",
+                EditorCommand::OpenDocument {
+                    base_revision: 1,
+                    text: "# 新文档".to_owned(),
+                    selection: Selection { start: 2, end: 2 },
+                },
+            ))
+            .expect("current reload should succeed");
+
+        assert_eq!(opened.patch.base_revision, 1);
+        assert_eq!(opened.patch.revision, 2);
+        assert_eq!(
+            opened.patch.text.unwrap().range,
+            ByteRange { start: 0, end: 6 }
+        );
+        let snapshot = engine.snapshot();
+        assert_eq!(snapshot.text, "# 新文档");
+        assert_eq!(snapshot.selection, Selection { start: 2, end: 2 });
+        assert!(!snapshot.can_undo);
+        assert!(!snapshot.can_redo);
+        assert!(!snapshot.dirty);
+        assert!(snapshot.derived.is_none());
+        assert_eq!(
+            engine.dispatch(command(
+                "complete-old-save",
+                EditorCommand::SaveCompleted {
+                    save_id: "old-save".to_owned(),
+                },
+            )),
+            Err(EngineError::UnknownSave)
         );
     }
 }
