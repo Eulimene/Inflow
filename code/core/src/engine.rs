@@ -325,7 +325,20 @@ impl EditorEngine {
                 inserted,
                 selection_after,
                 group_id,
-            } => self.replace_text(base_revision, range, inserted, selection_after, group_id)?,
+            } => {
+                let selection_before = Selection {
+                    start: range.start,
+                    end: range.end,
+                };
+                self.replace_text(
+                    base_revision,
+                    range,
+                    inserted,
+                    selection_before,
+                    selection_after,
+                    group_id,
+                )?
+            }
             EditorCommand::RefreshDerived {
                 revision,
                 math_enabled,
@@ -388,6 +401,7 @@ impl EditorEngine {
         base_revision: Revision,
         range: ByteRange,
         inserted: String,
+        selection_before: Selection,
         selection_after: Selection,
         group_id: Option<String>,
     ) -> Result<StatePatch, EngineError> {
@@ -397,7 +411,6 @@ impl EditorEngine {
         self.ensure_editable()?;
         validate_range(&self.text, &range)?;
 
-        let selection_before = self.selection.clone();
         let deleted = self.text[range.as_range()].to_owned();
         let forward = TextPatch { range, inserted };
         let inverse = TextPatch {
@@ -666,13 +679,14 @@ impl EditorEngine {
             FormatError::InvalidSelection => EngineError::InvalidSelection,
             FormatError::AmbiguousSelection => EngineError::AmbiguousFormat,
         })?;
-        self.apply_format_edit(base_revision, edit)
+        self.apply_format_edit(base_revision, edit, selection.clone())
     }
 
     fn apply_format_edit(
         &mut self,
         base_revision: Revision,
         edit: MarkdownEdit,
+        selection_before: Selection,
     ) -> Result<StatePatch, EngineError> {
         self.replace_text(
             base_revision,
@@ -681,6 +695,7 @@ impl EditorEngine {
                 end: edit.replace_range.end,
             },
             edit.replacement,
+            selection_before,
             Selection {
                 start: edit.selection_range.start,
                 end: edit.selection_range.end,
@@ -1280,7 +1295,7 @@ mod tests {
             .dispatch(command("undo", EditorCommand::Undo { base_revision: 1 }))
             .expect("undo should apply");
         assert_eq!(engine.snapshot().text, "hello");
-        assert_eq!(engine.snapshot().selection, Selection { start: 0, end: 0 });
+        assert_eq!(engine.snapshot().selection, Selection { start: 0, end: 5 });
         assert_eq!(undone.patch.revision, 2);
         assert!(!undone.patch.can_undo);
         assert!(undone.patch.can_redo);

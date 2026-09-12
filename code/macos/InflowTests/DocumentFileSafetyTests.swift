@@ -601,11 +601,21 @@ final class DocumentFileSafetyTests: XCTestCase {
 
         let editor = MarkdownSourceEditorSession()
         editor.textView.string = "local edit\n"
-        editor.textView.insertText("more", replacementRange: NSRange(location: 0, length: 0))
-        XCTAssertTrue(editor.textView.undoManager?.canUndo == true)
-        editor.resetAfterExternalReload(result.decoded.text)
-        XCTAssertEqual(editor.textView.string, "external 🌍\n")
+        let formatted = await editor.applyEngineFormat(
+            .bold,
+            expectedText: editor.textView.string,
+            selectedUTF16Range: NSRange(location: 0, length: 5),
+            actionName: "粗体格式"
+        )
+        XCTAssertTrue(formatted)
+        XCTAssertTrue(editor.textView.engineCanUndo)
         XCTAssertFalse(editor.textView.undoManager?.canUndo == true)
+        editor.resetAfterExternalReload(result.decoded.text)
+        for _ in 0..<20 where editor.textView.engineCanUndo {
+            await Task.yield()
+        }
+        XCTAssertEqual(editor.textView.string, "external 🌍\n")
+        XCTAssertFalse(editor.textView.engineCanUndo)
         session.stopMonitoring()
     }
 

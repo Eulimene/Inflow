@@ -130,7 +130,7 @@ final class MarkdownAnalyzerTests: XCTestCase {
     }
 
     @MainActor
-    func testSourceEditorSessionRetainsViewSelectionAndUndoManager() throws {
+    func testSourceEditorSessionRetainsViewSelectionAndUndoManager() async throws {
         let session = MarkdownSourceEditorSession()
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 500, height: 300),
@@ -142,11 +142,16 @@ final class MarkdownAnalyzerTests: XCTestCase {
         let textView = session.textView
         textView.string = "Title"
         textView.setSelectedRange(NSRange(location: 5, length: 0))
+        _ = await session.authoritativeSnapshot()
         textView.insertText("!", replacementRange: textView.selectedRange())
 
         XCTAssertEqual(textView.string, "Title!")
         XCTAssertIdentical(session.textView, textView)
-        XCTAssertTrue(try XCTUnwrap(textView.undoManager).canUndo)
+        for _ in 0..<20 where !textView.engineCanUndo {
+            await Task.yield()
+        }
+        XCTAssertTrue(textView.engineCanUndo)
+        XCTAssertFalse(try XCTUnwrap(textView.undoManager).canUndo)
 
         let replacementContainer = NSView(frame: window.contentView?.bounds ?? .zero)
         window.contentView = replacementContainer
@@ -155,15 +160,18 @@ final class MarkdownAnalyzerTests: XCTestCase {
 
         XCTAssertIdentical(session.textView, textView)
         XCTAssertEqual(textView.selectedRange().location, 6)
-        XCTAssertTrue(try XCTUnwrap(textView.undoManager).canUndo)
+        XCTAssertTrue(textView.engineCanUndo)
 
-        textView.undoManager?.undo()
+        textView.undo(nil)
+        for _ in 0..<20 where textView.string != "Title" {
+            await Task.yield()
+        }
         XCTAssertEqual(textView.string, "Title")
         XCTAssertEqual(textView.selectedRange().location, 5)
     }
 
     @MainActor
-    func testSwiftUIBranchSwitchesPreserveSourceEditorUndoAndSelection() throws {
+    func testSwiftUIBranchSwitchesPreserveSourceEditorUndoAndSelection() async throws {
         let model = SourceEditorHarnessModel(text: "Body")
         let session = MarkdownSourceEditorSession()
         let window = makeHarnessWindow(model: model, session: session)
@@ -174,6 +182,9 @@ final class MarkdownAnalyzerTests: XCTestCase {
         textView.setSelectedRange(NSRange(location: 4, length: 0))
         textView.insertText("!", replacementRange: textView.selectedRange())
         renderPendingUI()
+        for _ in 0..<20 where !textView.engineCanUndo {
+            await Task.yield()
+        }
         XCTAssertEqual(model.text, "Body!")
 
         model.showsOutline = false
@@ -188,15 +199,20 @@ final class MarkdownAnalyzerTests: XCTestCase {
 
         XCTAssertIdentical(session.textView, textView)
         XCTAssertEqual(textView.selectedRange().location, 5)
-        XCTAssertTrue(try XCTUnwrap(textView.undoManager).canUndo)
+        XCTAssertTrue(textView.engineCanUndo)
+        XCTAssertFalse(try XCTUnwrap(textView.undoManager).canUndo)
 
-        textView.undoManager?.undo()
-        renderPendingUI()
+        textView.undo(nil)
+        for _ in 0..<20 where model.text != "Body" {
+            await Task.yield()
+        }
         XCTAssertEqual(model.text, "Body")
         XCTAssertEqual(textView.selectedRange().location, 4)
 
-        textView.undoManager?.redo()
-        renderPendingUI()
+        textView.redo(nil)
+        for _ in 0..<20 where model.text != "Body!" {
+            await Task.yield()
+        }
         XCTAssertEqual(model.text, "Body!")
         XCTAssertEqual(textView.selectedRange().location, 5)
     }

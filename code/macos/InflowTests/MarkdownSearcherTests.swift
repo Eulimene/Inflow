@@ -604,7 +604,7 @@ final class MarkdownSearcherTests: XCTestCase {
     }
 
     @MainActor
-    func testReplaceAllIsOneUndoUnitAndDoesNotRecursivelyReplace() throws {
+    func testReplaceAllIsOneUndoUnitAndDoesNotRecursivelyReplace() async throws {
         let source = "Alpha 中文 alpha\nALPHA"
         let matches = try MarkdownSearcher.matches(
             in: source,
@@ -631,9 +631,13 @@ final class MarkdownSearcherTests: XCTestCase {
             )
         )
         renderPendingUI()
+        for _ in 0..<20 where !session.textView.engineCanUndo {
+            await Task.yield()
+        }
         XCTAssertEqual(model.text, "beta alpha 中文 beta alpha\nbeta alpha")
         XCTAssertEqual(model.textUpdateCount, 1)
-        XCTAssertEqual(session.textView.undoManager?.undoActionName, "全部替换")
+        XCTAssertTrue(session.textView.engineCanUndo)
+        XCTAssertFalse(session.textView.undoManager?.canUndo == true)
 
         window.makeKeyAndOrderFront(nil)
         XCTAssertTrue(session.focusEditor())
@@ -644,7 +648,9 @@ final class MarkdownSearcherTests: XCTestCase {
                 with: nil
             ) == true
         )
-        renderPendingUI()
+        for _ in 0..<20 where model.text != source {
+            await Task.yield()
+        }
         XCTAssertEqual(model.text, source)
         XCTAssertEqual(findField.stringValue, "alpha")
 
@@ -654,7 +660,9 @@ final class MarkdownSearcherTests: XCTestCase {
                 with: nil
             ) == true
         )
-        renderPendingUI()
+        for _ in 0..<20 where model.text != "beta alpha 中文 beta alpha\nbeta alpha" {
+            await Task.yield()
+        }
         XCTAssertEqual(model.text, "beta alpha 中文 beta alpha\nbeta alpha")
     }
 

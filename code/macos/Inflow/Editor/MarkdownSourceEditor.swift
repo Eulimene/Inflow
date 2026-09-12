@@ -39,6 +39,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var formatInspectionGeneration = 0
     private var formatInspectionTask: Task<Void, Never>?
     private var isApplyingEngineMutation = false
+    private var pendingOptimisticText: String?
     private var focusModeEnabled = false
     private var typewriterModeEnabled = false
 
@@ -113,14 +114,19 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                   !self.isApplyingEngineMutation,
                   UTF8Text.isExactlyEqual(self.textView.string, snapshot.text)
             else { return }
+            self.pendingOptimisticText = nil
             self.updateBoundText?(snapshot.text)
         }
         textView.compositionDidCommitHandler = { [weak self] text, selection in
             guard let self, self.engineClient.isEnabled else { return }
+            self.pendingOptimisticText = text
             self.engineClient.submit(text: text, selectionUTF16: selection)
         }
         textView.textDidChangeHandler = { [weak self] text in
             if let self, !self.isApplyingEngineMutation, !self.textView.hasMarkedText() {
+                if self.engineClient.isEnabled {
+                    self.pendingOptimisticText = text
+                }
                 self.engineClient.submit(
                     text: text,
                     selectionUTF16: self.textView.selectedRange(),
@@ -333,6 +339,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.setSelectedRange(finalSelection.revealRange)
         updateSelectedRange(finalSelection.revealRange)
         textView.scrollRangeToVisible(finalSelection.revealRange)
+        pendingOptimisticText = nil
         updateBoundText?(mutation.resultingSource)
         return true
     }
@@ -1676,6 +1683,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         engineClient.submit(text: text, selectionUTF16: selection)
     }
 
+    fileprivate func preservesOptimisticText(over boundText: String) -> Bool {
+        guard engineClient.isEnabled, let pendingOptimisticText else { return false }
+        return UTF8Text.isExactlyEqual(textView.string, pendingOptimisticText)
+            && !UTF8Text.isExactlyEqual(boundText, pendingOptimisticText)
+    }
+
     func requestRestoration(_ state: MarkdownRestorationState) {
         pendingRestorationState = state
         applyPendingRestorationIfPossible()
@@ -1683,6 +1696,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
 
     func resetAfterExternalReload(_ text: String) {
         invalidateSyntaxApplication()
+        pendingOptimisticText = nil
         let previousSelection = textView.selectedRange()
         textView.string = text
         let utf16Length = (text as NSString).length
@@ -3420,7 +3434,11 @@ struct MarkdownSourceEditor: NSViewRepresentable {
                 self.applyPendingSelection(to: textView)
             }
 
-            let textChanged = !UTF8Text.isExactlyEqual(textView.string, parent.text)
+            let preservesOptimisticText = parent.session.preservesOptimisticText(
+                over: parent.text
+            )
+            let textChanged = !preservesOptimisticText
+                && !UTF8Text.isExactlyEqual(textView.string, parent.text)
             if textChanged {
                 let selection = textView.selectedRange()
                 textView.string = parent.text
@@ -3429,14 +3447,15 @@ struct MarkdownSourceEditor: NSViewRepresentable {
                 let length = min(selection.length, utf16Length - location)
                 textView.setSelectedRange(NSRange(location: location, length: length))
             }
+            let displayedText = textView.string
             parent.session.synchronizeEngine(
-                text: parent.text,
+                text: displayedText,
                 selection: textView.selectedRange()
             )
             parent.session.applySourceAppearance(parent.appearance, force: textChanged)
             parent.session.setPresentation(
                 parent.presentation,
-                source: parent.text,
+                source: displayedText,
                 onLinkClick: parent.onLinkClick,
                 resourceContext: parent.renderedResourceContext,
                 linkActivation: parent.linkActivation

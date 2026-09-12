@@ -208,7 +208,9 @@ final class MarkdownCodecTests: XCTestCase {
         )
 
         sourceEditor.insertText("# 立即开始\n", replacementRange: sourceEditor.selectedRange())
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        for _ in 0..<20 where model.document.text != "# 立即开始\n" {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+        }
         XCTAssertEqual(model.document.text, "# 立即开始\n")
         XCTAssertEqual(
             try model.document.encodedFileData(),
