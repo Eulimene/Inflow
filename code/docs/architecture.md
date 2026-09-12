@@ -36,6 +36,8 @@ Rust 核心负责不依赖平台的纯值逻辑，并正在通过版本化 Engin
 `ReplaceText`、格式 Command、Memento undo/redo、快照和 `RefreshDerived`。每次 `RefreshDerived` 只创建一个 owned
 `DocumentIr`，分析、语法范围、引用、`RenderIr` 与安全 HTML 都消费该事件流；派生缓存严格绑定
 revision，正文修改后立即失效。macOS 已用该单次请求作为分析、高亮、引用和预览的默认派生热路径；
+预览链接目标在 Rust 生成对应 `<a>` 事件时直接写入十六进制 data attribute，默认热路径不再由
+Swift 把 HTML anchor 与引用列表做正则配对；旧配对器只服务关闭 Engine 的回退渲染。
 当前菜单格式与图片、链接、表格等插入操作也只发送 selection 与 operation，由 Engine 生成
 revision-bound patch 后回写 NSTextView，不再由 View 调用一次性 formatter 规划。普通输入先由
 NSTextView 乐观显示，再串行提交 Engine 并逐字节对账。默认编辑会话关闭 AppKit 正文 undo

@@ -40,7 +40,20 @@ pub fn html_fragment_from_document(
     document: &DocumentIr,
     configuration: RenderConfiguration,
 ) -> String {
-    let events = safe_events(document, configuration, false);
+    let events = safe_events(document, configuration, false, false);
+    let mut output = String::with_capacity(document.source().len());
+    html::push_html(&mut output, events.into_iter());
+    output
+}
+
+/// Renders the in-app preview fragment while attaching parsed link targets at
+/// the same event boundary that creates each anchor. Platform hosts therefore
+/// never have to correlate rendered `<a>` tags with a second reference scan.
+pub fn html_fragment_for_preview_from_document(
+    document: &DocumentIr,
+    configuration: RenderConfiguration,
+) -> String {
+    let events = safe_events(document, configuration, false, true);
     let mut output = String::with_capacity(document.source().len());
     html::push_html(&mut output, events.into_iter());
     output
@@ -244,16 +257,18 @@ pub(crate) fn html_fragment_for_delivery(
     configuration: RenderConfiguration,
 ) -> String {
     let document = DocumentIr::parse(markdown, options_with_configuration(configuration));
-    let events = safe_events(&document, configuration, true);
+    let events = safe_events(&document, configuration, true, false);
     let mut output = String::with_capacity(document.source().len());
     html::push_html(&mut output, events.into_iter());
     output
 }
 
+#[allow(clippy::too_many_lines)] // One ordered state machine keeps nested Markdown event handling auditable.
 fn safe_events(
     document: &DocumentIr,
     configuration: RenderConfiguration,
     neutralize_delivery_links: bool,
+    annotate_preview_links: bool,
 ) -> Vec<Event<'static>> {
     let mut parser = document
         .events()
@@ -273,6 +288,10 @@ fn safe_events(
         } else if neutralized_link_depth > 0 && matches!(event, Event::End(TagEnd::Link)) {
             neutralized_link_depth -= 1;
             events.push(Event::InlineHtml("</span>".into()));
+        } else if annotate_preview_links && let Some(link) = preview_link_start(&event) {
+            events.push(link);
+        } else if annotate_preview_links && matches!(event, Event::End(TagEnd::Link)) {
+            events.push(Event::InlineHtml("</a>".into()));
         } else if let Event::Start(Tag::Image { dest_url, .. }) = &event {
             let destination = dest_url.to_string();
             let mut alternative = String::new();
@@ -355,6 +374,41 @@ fn safe_events(
         }
     }
     events
+}
+
+fn preview_link_start(event: &Event<'_>) -> Option<Event<'static>> {
+    let Event::Start(Tag::Link { dest_url, .. }) = event else {
+        return None;
+    };
+    Some(Event::InlineHtml(
+        format!(
+            "<a href=\"{}\" data-inflow-link-target-hex=\"{}\">",
+            preview_href(dest_url),
+            hex(dest_url.as_bytes())
+        )
+        .into(),
+    ))
+}
+
+fn preview_href(destination: &str) -> String {
+    let mut escaped = String::with_capacity(destination.len());
+    for character in destination.chars() {
+        match character {
+            ' ' => escaped.push_str("%20"),
+            '&' => escaped.push_str("&amp;"),
+            '\"' => escaped.push_str("&quot;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            character if character.is_control() => {
+                let mut bytes = [0_u8; 4];
+                for byte in character.encode_utf8(&mut bytes).bytes() {
+                    write!(escaped, "%{byte:02X}").expect("writing to a String cannot fail");
+                }
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped
 }
 
 fn render_math(
@@ -615,6 +669,21 @@ mod tests {
         assert!(html.contains("data-inflow-alt=\"e5b081e99da2\""));
         assert!(!html.contains("<img"));
         assert!(!html.contains("src=\"https://"));
+    }
+
+    #[test]
+    fn preview_links_carry_targets_directly_from_parser_events() {
+        let markdown = "[space](<https://example.com/a b>) [资料](资料/说明.md)";
+        let document = DocumentIr::parse(markdown, options());
+        let html =
+            html_fragment_for_preview_from_document(&document, RenderConfiguration::default());
+
+        assert!(html.contains("href=\"https://example.com/a%20b\""));
+        assert!(html.contains(
+            "data-inflow-link-target-hex=\"68747470733a2f2f6578616d706c652e636f6d2f612062\""
+        ));
+        assert!(html.contains("data-inflow-link-target-hex=\"e8b584e696992fe8afb4e6988e2e6d64\""));
+        assert_eq!(html.matches("data-inflow-link-target-hex").count(), 2);
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crate::format::{self, FormatError, InlineFormat, ListFormat, MarkdownEdit};
 use crate::highlight::{HighlightSpan, spans_from_document};
 use crate::markdown_ir::{DocumentIr, dialect_options};
 use crate::reference::{MarkdownReference, references_from_document};
-use crate::render::{RenderConfiguration, html_fragment_from_document};
+use crate::render::{RenderConfiguration, html_fragment_for_preview_from_document};
 use crate::render_ir::RenderIr;
 
 pub const ENGINE_SCHEMA_VERSION: u32 = 1;
@@ -344,7 +344,7 @@ impl EditorEngine {
                 highlights: spans_from_document(&document),
                 references: references_from_document(&document),
                 render: RenderIr::from_document(&document),
-                html_fragment: html_fragment_from_document(&document, configuration),
+                html_fragment: html_fragment_for_preview_from_document(&document, configuration),
                 math_enabled,
                 mermaid_enabled,
             };

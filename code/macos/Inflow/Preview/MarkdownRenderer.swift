@@ -207,17 +207,23 @@ enum MarkdownRenderer {
         expectedProjectRootIdentity: FolderProjectDirectoryIdentity?,
         requiresProjectBoundary: Bool,
         configuration: PreviewAppearanceConfiguration,
-        navigationHeadings: [DocumentHeading]
+        navigationHeadings: [DocumentHeading],
+        coreContainsLinkMetadata: Bool = false
     ) -> MarkdownPreviewDocument {
         let headingFragment = PreviewNavigationMarkup.annotateHeadings(
             in: coreFragment,
             headings: navigationHeadings
         )
-        let linkTargets = references.filter { $0.kind == .link }.map(\.target)
-        let fragment = PreviewNavigationMarkup.annotateLinks(
-            in: headingFragment,
-            targets: linkTargets
-        )
+        let fragment: String
+        if coreContainsLinkMetadata {
+            fragment = headingFragment
+        } else {
+            let linkTargets = references.filter { $0.kind == .link }.map(\.target)
+            fragment = PreviewNavigationMarkup.annotateLinks(
+                in: headingFragment,
+                targets: linkTargets
+            )
+        }
         return MarkdownPreviewDocument(
             html: document(
                 containing: LocalImageResolver.resolveSlots(

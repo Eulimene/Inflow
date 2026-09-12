@@ -4206,7 +4206,8 @@ private actor DocumentContentDeriver {
                     expectedProjectRootIdentity: expectedProjectRootIdentity,
                     requiresProjectBoundary: requiresProjectBoundary,
                     configuration: configuration,
-                    navigationHeadings: headings
+                    navigationHeadings: headings,
+                    coreContainsLinkMetadata: true
                 )
             }
             return DerivedDocumentContent(
