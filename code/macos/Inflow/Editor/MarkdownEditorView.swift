@@ -1041,6 +1041,7 @@ struct MarkdownEditorView: View {
                     typewriterModeEnabled: false
                 )
             }
+            synchronizeEngineMode()
             if let recoveryCoordinator {
                 Task {
                     await recoveryCoordinator.loadIfNeeded()
@@ -1189,6 +1190,7 @@ struct MarkdownEditorView: View {
         }
         .onChange(of: canEditDocument) { _, _ in
             applyWritingModes()
+            synchronizeEngineMode()
         }
         .onChange(of: isWorkspaceSurfaceActive) { _, isActive in
             guard isActive else { return }
@@ -1936,6 +1938,13 @@ struct MarkdownEditorView: View {
                 await Task.yield()
                 _ = sourceEditorSession.focusEditor()
             }
+        }
+    }
+
+    private func synchronizeEngineMode() {
+        let mode: EditorEngineMode = canEditDocument ? .editable : .readOnly
+        Task { @MainActor in
+            _ = await editorStore.setMode(mode)
         }
     }
 

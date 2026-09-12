@@ -653,7 +653,8 @@ const fn engine_error_status(error: EngineError) -> i32 {
         | EngineError::NothingToUndo
         | EngineError::NothingToRedo
         | EngineError::EmptySaveId
-        | EngineError::UnknownSave => STATUS_INVALID_ARGUMENT,
+        | EngineError::UnknownSave
+        | EngineError::ReadOnly => STATUS_INVALID_ARGUMENT,
         EngineError::RevisionOverflow => STATUS_PANIC,
     }
 }
@@ -694,6 +695,10 @@ const fn engine_error_details(error: EngineError) -> (&'static str, &'static str
         EngineError::UnknownSave => (
             "unknown_save",
             "The save identifier does not name a prepared save.",
+        ),
+        EngineError::ReadOnly => (
+            "read_only",
+            "The document mode does not permit text mutations.",
         ),
         EngineError::RevisionOverflow => (
             "revision_overflow",

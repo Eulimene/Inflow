@@ -641,6 +641,19 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         await engineClient.saveAborted(preparation)
     }
 
+    func setEngineMode(_ mode: EditorEngineMode) async -> Bool {
+        if textView.hasMarkedText() {
+            textView.unmarkText()
+            await Task.yield()
+        }
+        guard !textView.hasMarkedText() else { return false }
+        return await engineClient.setMode(
+            mode,
+            text: textView.string,
+            selectionUTF16: textView.selectedRange()
+        )
+    }
+
     func setPresentation(
         _ presentation: MarkdownEditorPresentation,
         source: String,

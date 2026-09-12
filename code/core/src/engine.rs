@@ -47,6 +47,8 @@ pub struct EngineCreateRequest {
     pub document_id: String,
     pub text: String,
     pub selection: Selection,
+    #[serde(default)]
+    pub mode: EditorMode,
 }
 
 #[derive(Debug, Deserialize)]
@@ -105,6 +107,10 @@ pub enum EditorCommand {
     SaveAborted {
         save_id: String,
     },
+    SetMode {
+        revision: Revision,
+        mode: EditorMode,
+    },
 }
 
 const fn default_true() -> bool {
@@ -149,6 +155,14 @@ pub enum ListStyle {
     Task,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EditorMode {
+    #[default]
+    Editable,
+    ReadOnly,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct EngineSnapshot {
     pub schema_version: u32,
@@ -156,6 +170,7 @@ pub struct EngineSnapshot {
     pub revision: Revision,
     pub text: String,
     pub selection: Selection,
+    pub mode: EditorMode,
     pub content_hash: String,
     pub derived: Option<DerivedState>,
     pub can_undo: bool,
@@ -167,6 +182,7 @@ pub struct EngineSnapshot {
 pub struct StatePatch {
     pub base_revision: Revision,
     pub revision: Revision,
+    pub mode: EditorMode,
     pub text: Option<TextPatch>,
     pub selection: Option<Selection>,
     pub derived: Option<DerivedState>,
@@ -238,6 +254,7 @@ pub enum EngineError {
     NothingToRedo,
     EmptySaveId,
     UnknownSave,
+    ReadOnly,
     RevisionOverflow,
 }
 
@@ -255,6 +272,7 @@ pub struct EditorEngine {
     revision: Revision,
     text: String,
     selection: Selection,
+    mode: EditorMode,
     derived: Option<DerivedState>,
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
@@ -278,6 +296,7 @@ impl EditorEngine {
             revision: 0,
             text: request.text,
             selection: request.selection,
+            mode: request.mode,
             derived: None,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -329,6 +348,7 @@ impl EditorEngine {
             }
             EditorCommand::SaveCompleted { save_id } => self.save_completed(&save_id)?,
             EditorCommand::SaveAborted { save_id } => self.save_aborted(&save_id)?,
+            EditorCommand::SetMode { revision, mode } => self.set_mode(revision, mode)?,
         };
 
         Ok(DispatchResponse {
@@ -345,6 +365,7 @@ impl EditorEngine {
             revision: self.revision,
             text: self.text.clone(),
             selection: self.selection.clone(),
+            mode: self.mode,
             content_hash: content_hash(&self.text),
             derived: self.derived.clone(),
             can_undo: !self.undo.is_empty(),
@@ -364,6 +385,7 @@ impl EditorEngine {
         if base_revision != self.revision {
             return Err(EngineError::RevisionConflict);
         }
+        self.ensure_editable()?;
         validate_range(&self.text, &range)?;
 
         let selection_before = self.selection.clone();
@@ -428,6 +450,7 @@ impl EditorEngine {
         Ok(StatePatch {
             base_revision: revision,
             revision,
+            mode: self.mode,
             text: None,
             selection: None,
             derived: Some(derived),
@@ -460,6 +483,7 @@ impl EditorEngine {
         Ok(StatePatch {
             base_revision: revision,
             revision,
+            mode: self.mode,
             text: None,
             selection: None,
             derived: None,
@@ -486,6 +510,7 @@ impl EditorEngine {
         Ok(StatePatch {
             base_revision: revision,
             revision,
+            mode: self.mode,
             text: None,
             selection: None,
             derived: None,
@@ -545,6 +570,18 @@ impl EditorEngine {
             .remove(save_id)
             .ok_or(EngineError::UnknownSave)?;
         Ok(self.empty_patch(self.revision))
+    }
+
+    fn set_mode(
+        &mut self,
+        revision: Revision,
+        mode: EditorMode,
+    ) -> Result<StatePatch, EngineError> {
+        if revision != self.revision {
+            return Err(EngineError::RevisionConflict);
+        }
+        self.mode = mode;
+        Ok(self.empty_patch(revision))
     }
 
     fn format(
@@ -616,6 +653,7 @@ impl EditorEngine {
         if base_revision != self.revision {
             return Err(EngineError::RevisionConflict);
         }
+        self.ensure_editable()?;
         let entry = self.undo.pop().ok_or(EngineError::NothingToUndo)?;
         let patch = self.apply_patch(
             base_revision,
@@ -630,6 +668,7 @@ impl EditorEngine {
         if base_revision != self.revision {
             return Err(EngineError::RevisionConflict);
         }
+        self.ensure_editable()?;
         let entry = self.redo.pop().ok_or(EngineError::NothingToRedo)?;
         let patch = self.apply_patch(
             base_revision,
@@ -661,6 +700,7 @@ impl EditorEngine {
         Ok(StatePatch {
             base_revision,
             revision,
+            mode: self.mode,
             text: Some(text),
             selection: Some(selection_after),
             derived: None,
@@ -678,6 +718,7 @@ impl EditorEngine {
         StatePatch {
             base_revision,
             revision: self.revision,
+            mode: self.mode,
             text: None,
             selection: None,
             derived: None,
@@ -693,6 +734,14 @@ impl EditorEngine {
 
     fn is_dirty(&self) -> bool {
         content_hash(&self.text) != self.saved_content_hash
+    }
+
+    fn ensure_editable(&self) -> Result<(), EngineError> {
+        if self.mode == EditorMode::ReadOnly {
+            Err(EngineError::ReadOnly)
+        } else {
+            Ok(())
+        }
     }
 
     fn with_history_state(&self, mut patch: StatePatch) -> StatePatch {
@@ -761,6 +810,7 @@ mod tests {
             document_id: "document-1".to_owned(),
             text: text.to_owned(),
             selection: Selection { start: 0, end: 0 },
+            mode: EditorMode::Editable,
         })
         .expect("test engine should be valid")
     }
@@ -860,6 +910,7 @@ mod tests {
             document_id: "document-1".to_owned(),
             text: String::new(),
             selection: Selection { start: 0, end: 0 },
+            mode: EditorMode::Editable,
         });
         assert!(matches!(unsupported, Err(EngineError::UnsupportedSchema)));
 
@@ -868,6 +919,7 @@ mod tests {
             document_id: String::new(),
             text: String::new(),
             selection: Selection { start: 0, end: 0 },
+            mode: EditorMode::Editable,
         });
         assert!(matches!(missing_id, Err(EngineError::EmptyDocumentId)));
     }
@@ -1178,5 +1230,52 @@ mod tests {
             .expect("derived");
         assert!(enabled.html_fragment.contains("<math"));
         assert!(enabled.html_fragment.contains("mermaid-diagram"));
+    }
+
+    #[test]
+    fn mode_is_revision_bound_and_blocks_mutations_without_blocking_reads() {
+        let mut engine = engine("draft");
+        let read_only = engine
+            .dispatch(command(
+                "read-only",
+                EditorCommand::SetMode {
+                    revision: 0,
+                    mode: EditorMode::ReadOnly,
+                },
+            ))
+            .expect("current mode change should succeed");
+
+        assert_eq!(read_only.patch.mode, EditorMode::ReadOnly);
+        assert_eq!(engine.snapshot().mode, EditorMode::ReadOnly);
+        assert_eq!(
+            engine.dispatch(replace(0, 5..5, "!", Selection { start: 6, end: 6 })),
+            Err(EngineError::ReadOnly)
+        );
+        assert!(engine.dispatch(refresh(0)).is_ok());
+        assert_eq!(
+            engine.dispatch(command(
+                "stale-editable",
+                EditorCommand::SetMode {
+                    revision: 1,
+                    mode: EditorMode::Editable,
+                },
+            )),
+            Err(EngineError::RevisionConflict)
+        );
+
+        engine
+            .dispatch(command(
+                "editable",
+                EditorCommand::SetMode {
+                    revision: 0,
+                    mode: EditorMode::Editable,
+                },
+            ))
+            .expect("current mode change should succeed");
+        assert!(
+            engine
+                .dispatch(replace(0, 5..5, "!", Selection { start: 6, end: 6 }))
+                .is_ok()
+        );
     }
 }

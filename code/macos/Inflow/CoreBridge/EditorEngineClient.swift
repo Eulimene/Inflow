@@ -11,7 +11,8 @@ extension EditorEngineDerivedContent {
             schemaVersion: 1,
             documentID: UUID().uuidString,
             text: source,
-            selection: EditorEngineSelection(start: 0, end: 0)
+            selection: EditorEngineSelection(start: 0, end: 0),
+            mode: .editable
         )
         guard let data = try? JSONEncoder().encode(request) else { return nil }
         let created: InflowEngineCreateResult = data.withUnsafeBytes { bytes in
@@ -202,6 +203,17 @@ final class EditorEngineClient {
         _ = await client?.finishSave(saveID: preparation.saveID, completed: false)
     }
 
+    func setMode(
+        _ mode: EditorEngineMode,
+        text: String,
+        selectionUTF16: NSRange
+    ) async -> Bool {
+        submit(text: text, selectionUTF16: selectionUTF16)
+        await pending?.value
+        guard !Task.isCancelled else { return false }
+        return await client?.setMode(mode, expectedText: text) ?? false
+    }
+
     func reset(text: String, selectionUTF16: NSRange) {
         guard let client else { return }
         lastSubmittedText = text
@@ -265,6 +277,7 @@ private actor EditorEngineTransport {
     private var handle: EditorEngineHandle?
     private var projection = ""
     private var revision: UInt64 = 0
+    private var mode: EditorEngineMode = .editable
 
     func synchronize(to swiftText: String, selectionUTF16: NSRange) {
         do {
@@ -564,6 +577,39 @@ private actor EditorEngineTransport {
         }
     }
 
+    func setMode(_ requestedMode: EditorEngineMode, expectedText: String) -> Bool {
+        do {
+            guard projection.utf8.elementsEqual(expectedText.utf8) else {
+                throw EditorEngineBridgeError.mismatch(revision: revision)
+            }
+            let requestID = UUID().uuidString
+            let envelope = EditorEngineSetModeEnvelope(
+                schemaVersion: Self.schemaVersion,
+                requestID: requestID,
+                command: EditorEngineSetModeCommand(
+                    type: "set_mode",
+                    revision: revision,
+                    mode: requestedMode
+                )
+            )
+            let response: EditorEngineDispatchResponse = try dispatch(envelope)
+            guard response.schemaVersion == Self.schemaVersion,
+                  response.requestID == requestID,
+                  response.patch.baseRevision == revision,
+                  response.patch.revision == revision,
+                  response.patch.mode == requestedMode,
+                  response.patch.text == nil
+            else { throw EditorEngineBridgeError.invalidResponse }
+            mode = requestedMode
+            return true
+        } catch {
+            logger.error(
+                "Engine mode change failed; revision=\(self.revision, privacy: .public) mode=\(requestedMode.rawValue, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
     func historyMutation(
         direction: EditorEngineHistoryDirection,
         expectedText: String
@@ -613,6 +659,7 @@ private actor EditorEngineTransport {
                 revision: snapshot.revision,
                 text: snapshot.text,
                 selectionUTF8Range: selection,
+                mode: snapshot.mode,
                 contentHash: snapshot.contentHash,
                 canUndo: snapshot.canUndo,
                 canRedo: snapshot.canRedo,
@@ -631,7 +678,8 @@ private actor EditorEngineTransport {
             schemaVersion: Self.schemaVersion,
             documentID: UUID().uuidString,
             text: text,
-            selection: selection
+            selection: selection,
+            mode: mode
         )
         let encoded = try JSONEncoder().encode(request)
         let result: InflowEngineCreateResult = encoded.withUnsafeBytes { buffer in
@@ -649,7 +697,8 @@ private actor EditorEngineTransport {
         guard snapshot.schemaVersion == Self.schemaVersion,
               snapshot.revision == 0,
               snapshot.text == text,
-              snapshot.selection == selection
+              snapshot.selection == selection,
+              snapshot.mode == mode
         else {
             inflow_engine_free(pointer)
             throw EditorEngineBridgeError.mismatch(revision: snapshot.revision)
@@ -748,13 +797,33 @@ private struct EditorEngineCreateRequest: Encodable {
     let documentID: String
     let text: String
     let selection: EditorEngineSelection
+    let mode: EditorEngineMode
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
         case documentID = "document_id"
         case text
         case selection
+        case mode
     }
+}
+
+private struct EditorEngineSetModeEnvelope: Encodable {
+    let schemaVersion: UInt32
+    let requestID: String
+    let command: EditorEngineSetModeCommand
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case requestID = "request_id"
+        case command
+    }
+}
+
+private struct EditorEngineSetModeCommand: Encodable {
+    let type: String
+    let revision: UInt64
+    let mode: EditorEngineMode
 }
 
 private struct EditorEngineCommandEnvelope: Encodable {
@@ -1006,6 +1075,7 @@ private struct EditorEngineSnapshot: Decodable {
     let revision: UInt64
     let text: String
     let selection: EditorEngineSelection
+    let mode: EditorEngineMode
     let contentHash: String
     let canUndo: Bool
     let canRedo: Bool
@@ -1017,6 +1087,7 @@ private struct EditorEngineSnapshot: Decodable {
         case revision
         case text
         case selection
+        case mode
         case contentHash = "content_hash"
         case canUndo = "can_undo"
         case canRedo = "can_redo"
@@ -1039,6 +1110,7 @@ private struct EditorEngineDispatchResponse: Decodable {
 private struct EditorEngineStatePatch: Decodable {
     let baseRevision: UInt64
     let revision: UInt64
+    let mode: EditorEngineMode
     let text: EditorEngineTextPatch?
     let selection: EditorEngineSelection?
     let derived: EditorEngineDerivedState?
@@ -1052,6 +1124,7 @@ private struct EditorEngineStatePatch: Decodable {
     enum CodingKeys: String, CodingKey {
         case baseRevision = "base_revision"
         case revision
+        case mode
         case text
         case selection
         case derived

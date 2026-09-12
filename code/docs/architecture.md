@@ -46,7 +46,7 @@ Rust 同时把 RenderIR 的稳定 `block_id` 与 UTF-8 source range 写到顶层
 revision-bound patch 后回写 NSTextView，不再由 View 调用一次性 formatter 规划。普通输入先由
 NSTextView 乐观显示，再串行提交 Engine 并逐字节对账。默认编辑会话关闭 AppKit 正文 undo
 registration，Command-Z 与 Shift-Command-Z 由第一响应者异步路由为 Engine `Undo/Redo`，返回 patch
-时禁止再次登记撤销。查找请求同样携带 revision 并在该 Engine 的当前正文上执行，过期结果不能发布。格式可用性是不修改正文和历史的 `InspectFormat(revision, selection)` 命令；NSTextView 会话异步缓存结果，并在正文或选区改变时先失效。普通编辑只有在 Engine 返回匹配快照后才发布到 Swift 文档投影。保存、另存和覆盖确认在提交 marked text 并排空命令队列后发送 `PrepareSave`，Engine 保留该 revision 的 hash 直到 macOS Repository 完成磁盘验证并回传 `SaveCompleted` 或 `SaveAborted`。dirty 由当前 hash 与最后成功保存 hash 比较，因此保存期间的新编辑不会被错误清除。导出只冻结 Engine snapshot，不发送保存 receipt。
+时禁止再次登记撤销。查找请求同样携带 revision 并在该 Engine 的当前正文上执行，过期结果不能发布。格式可用性是不修改正文和历史的 `InspectFormat(revision, selection)` 命令；NSTextView 会话异步缓存结果，并在正文或选区改变时先失效。`SetMode(revision, editable/read_only)` 不改变正文 revision；read-only 在 Rust 命令边界拒绝 Replace/Format/Undo/Redo，而查找、派生和保存快照仍可执行。Store 串行模式更新，防止快速解锁/锁定产生过期模式。普通编辑只有在 Engine 返回匹配快照后才发布到 Swift 文档投影。保存、另存和覆盖确认在提交 marked text 并排空命令队列后发送 `PrepareSave`，Engine 保留该 revision 的 hash 直到 macOS Repository 完成磁盘验证并回传 `SaveCompleted` 或 `SaveAborted`。dirty 由当前 hash 与最后成功保存 hash 比较，因此保存期间的新编辑不会被错误清除。导出只冻结 Engine snapshot，不发送保存 receipt。
 WindowAwareTextView 在第一次 `setMarkedText` 时保存组合前正文与选区，组合期间不发布正文命令；
 `unmarkText` 或最终 `insertText` 清除 marked range 后只提交一次最终差异，因此一次候选词确认对应一个 Rust history entry。
 

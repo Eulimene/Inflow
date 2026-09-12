@@ -43,6 +43,13 @@ final class EditorEngineClientTests: XCTestCase {
         XCTAssertEqual(store.state.previewSourceSnapshot, "")
         XCTAssertEqual(store.state.analysisState, .ready(.empty))
         XCTAssertTrue(store.state.references.isEmpty)
+
+        let becameReadOnly = await store.setMode(.readOnly)
+        XCTAssertTrue(becameReadOnly)
+        XCTAssertEqual(store.state.engineMode, .readOnly)
+        let becameEditable = await store.setMode(.editable)
+        XCTAssertTrue(becameEditable)
+        XCTAssertEqual(store.state.engineMode, .editable)
     }
 
     @MainActor

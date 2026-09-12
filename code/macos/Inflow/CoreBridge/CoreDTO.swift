@@ -42,10 +42,16 @@ struct EditorEngineDocumentSnapshot: Equatable, Sendable {
     let revision: UInt64
     let text: String
     let selectionUTF8Range: Range<Int>
+    let mode: EditorEngineMode
     let contentHash: String
     let canUndo: Bool
     let canRedo: Bool
     let dirty: Bool
+}
+
+enum EditorEngineMode: String, Codable, Equatable, Sendable {
+    case editable
+    case readOnly = "read_only"
 }
 
 struct EditorEngineSavePreparation: Equatable, Sendable {

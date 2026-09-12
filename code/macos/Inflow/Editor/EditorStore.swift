@@ -6,13 +6,15 @@ struct EditorViewState: Equatable {
     var previewFailureMessage: String?
     var analysisState: DocumentAnalysisState
     var references: [MarkdownReference]
+    var engineMode: EditorEngineMode
 
     static let initial = Self(
         previewHTML: MarkdownRenderer.htmlDocument(for: ""),
         previewSourceSnapshot: "",
         previewFailureMessage: nil,
         analysisState: .updating(previous: .empty),
-        references: []
+        references: [],
+        engineMode: .editable
     )
 }
 
@@ -41,6 +43,8 @@ final class EditorStore: ObservableObject {
     private let contentDeriver = DocumentContentDeriver()
     private var derivedContentGeneration = 0
     private var derivedContentTask: Task<Void, Never>?
+    private var requestedMode: EditorEngineMode
+    private var modeSynchronizationTask: Task<Bool, Never>?
 
     init(
         sourceEditorSession: MarkdownSourceEditorSession,
@@ -48,10 +52,12 @@ final class EditorStore: ObservableObject {
     ) {
         self.sourceEditorSession = sourceEditorSession
         state = initialState
+        requestedMode = initialState.engineMode
     }
 
     deinit {
         derivedContentTask?.cancel()
+        modeSynchronizationTask?.cancel()
     }
 
     var usesEngineAuthority: Bool {
@@ -138,6 +144,22 @@ final class EditorStore: ObservableObject {
         await sourceEditorSession.abortPersistenceSave(preparation)
     }
 
+    @discardableResult
+    func setMode(_ mode: EditorEngineMode) async -> Bool {
+        requestedMode = mode
+        let previous = modeSynchronizationTask
+        let task = Task { @MainActor [sourceEditorSession] in
+            _ = await previous?.value
+            guard !Task.isCancelled else { return false }
+            return await sourceEditorSession.setEngineMode(mode)
+        }
+        modeSynchronizationTask = task
+        guard await task.value else { return false }
+        guard requestedMode == mode else { return false }
+        state.engineMode = mode
+        return true
+    }
+
     func send(_ intent: EditorIntent) {
         switch intent {
         case let .refreshDerived(request):
@@ -187,7 +209,8 @@ final class EditorStore: ObservableObject {
                 previewSourceSnapshot: content.sourceSnapshot,
                 previewFailureMessage: content.previewFailureMessage,
                 analysisState: .ready(content.analysis),
-                references: content.references
+                references: content.references,
+                engineMode: state.engineMode
             )
             _ = sourceEditorSession.applySyntaxHighlighting(
                 content.syntaxHighlighting,
@@ -205,7 +228,8 @@ final class EditorStore: ObservableObject {
             previewSourceSnapshot: "",
             previewFailureMessage: nil,
             analysisState: .ready(.empty),
-            references: []
+            references: [],
+            engineMode: state.engineMode
         )
         _ = sourceEditorSession.applySyntaxHighlighting(
             [],
