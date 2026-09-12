@@ -24,6 +24,31 @@ final class EditorEngineClientTests: XCTestCase {
             "data-inflow-link-target-hex=\"6e6f74652e6d64\""
         ))
         XCTAssertTrue(derived.renderBlocks.contains { $0.visibleText.contains("正文 加粗 链接") })
+        XCTAssertTrue(derived.nativeRenderPlan.contentStyles.contains { $0.kind == .strong })
+        XCTAssertEqual(derived.nativeRenderPlan.links.map(\.target), ["note.md"])
+    }
+
+    @MainActor
+    func testSourceSessionAppliesTheRevisionBoundNativeRenderPlan() async throws {
+        let source = "# 标题 **加粗**"
+        let session = MarkdownSourceEditorSession()
+        session.textView.isEditable = true
+        session.textView.string = source
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+
+        let content = await session.deriveContent(for: source, configuration: .default)
+
+        XCTAssertNotNil(content)
+        let location = (source as NSString).range(of: "加粗").location
+        let font = try XCTUnwrap(
+            session.textView.textStorage?.attribute(
+                .font,
+                at: location,
+                effectiveRange: nil
+            ) as? NSFont
+        )
+        XCTAssertTrue(NSFontManager.shared.traits(of: font).contains(.boldFontMask))
+        XCTAssertTrue(content?.nativeRenderPlan.exactlyMatches(source) == true)
     }
 
     @MainActor

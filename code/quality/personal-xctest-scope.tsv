@@ -102,6 +102,7 @@ EditorEngineClientTests/testDiffReturnsOneUTF8ReplacementForUnicodeText	current-
 EditorEngineClientTests/testEngineHistoryOwnsUndoAndRedoPatches	current-direct	engine undo and redo must return revisioned inverse and forward patches from one authoritative history
 EditorEngineClientTests/testFormatAndSnapshotUseTheSameRevisionedEngine	current-direct	format command and authoritative snapshot must share one revisioned engine handle
 EditorEngineClientTests/testSourceSessionAppliesEngineFormatAndPublishesAuthoritativeSnapshot	current-direct	current format commands must apply the engine patch and preserve one authoritative snapshot
+EditorEngineClientTests/testSourceSessionAppliesTheRevisionBoundNativeRenderPlan	current-direct	the persistent NSTextView must consume the native plan returned by its existing revisioned engine
 EditorEngineClientTests/testSourceSessionRoutesUndoAndRedoToEngineHistory	current-direct	first responder undo and redo must consume Engine history patches instead of AppKit text history
 EditorEngineClientTests/testUnifiedDerivationReturnsOneRevisionBoundResult	current-direct	one engine refresh must return revision-bound analysis highlighting references render IR and HTML
 EditorViewModeCommandsTests/testAppMenuExposesOneCommandForEachViewShortcut	current-host	requires live NSApplication menu or lifecycle host

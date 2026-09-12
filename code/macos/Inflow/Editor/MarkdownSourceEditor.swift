@@ -275,6 +275,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var syntaxApplicationTask: Task<Void, Never>?
     private var presentation = MarkdownEditorPresentation.source
     private var renderedPlan: RenderedMarkdownPlan?
+    private var engineRenderedPlan: RenderedMarkdownPlan?
     private var renderedEditingRange: NSRange?
     private var renderedAppliedAppearance: SourceEditorAppearance?
     private var renderedLinkHandler: ((String) -> Void)?
@@ -461,11 +462,20 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         for source: String,
         configuration: PreviewAppearanceConfiguration
     ) async -> EditorEngineDerivedContent? {
-        await engineClient.derive(
+        guard let content = await engineClient.derive(
             text: source,
             selectionUTF16: textView.selectedRange(),
             configuration: configuration
-        )
+        ) else { return nil }
+        guard content.nativeRenderPlan.exactlyMatches(source) else { return nil }
+        engineRenderedPlan = content.nativeRenderPlan
+        if presentation == .rendered,
+           UTF8Text.isExactlyEqual(textView.string, source),
+           !textView.hasMarkedText()
+        {
+            applyRenderedPresentation(source: source, force: true)
+        }
+        return content
     }
 
     @discardableResult
@@ -715,7 +725,15 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
 
         invalidateSyntaxApplication()
-        let plan = RenderedMarkdownEditor.plan(for: source)
+        let plan: RenderedMarkdownPlan
+        if engineClient.isEnabled {
+            guard let engineRenderedPlan,
+                  engineRenderedPlan.exactlyMatches(source)
+            else { return }
+            plan = engineRenderedPlan
+        } else {
+            plan = RenderedMarkdownEditor.plan(for: source)
+        }
         renderedPlan = plan
         let editingRange: NSRange? = if textView.isEditable,
                                        textView.window?.firstResponder === textView

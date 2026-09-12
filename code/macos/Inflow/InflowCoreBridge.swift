@@ -12,12 +12,16 @@ enum InflowCoreBridge {
         static let unifiedDerivation = Self(rawValue: UInt64(INFLOW_CAPABILITY_UNIFIED_DERIVATION))
         static let engineHistory = Self(rawValue: UInt64(INFLOW_CAPABILITY_ENGINE_HISTORY))
         static let renderIR = Self(rawValue: UInt64(INFLOW_CAPABILITY_RENDER_IR))
+        static let nativeRenderPlan = Self(
+            rawValue: UInt64(INFLOW_CAPABILITY_NATIVE_RENDER_PLAN)
+        )
 
         static let editorRequired: Self = [
             .editorEngine,
             .unifiedDerivation,
             .engineHistory,
             .renderIR,
+            .nativeRenderPlan,
         ]
     }
 

@@ -9,6 +9,59 @@ struct EditorEngineDerivedContent: Sendable {
     let syntaxHighlighting: [MarkdownSyntaxSpan]
     let references: [MarkdownReference]
     let renderBlocks: [EditorEngineRenderBlock]
+    let nativeRenderPlan: RenderedMarkdownPlan
+
+    static func deriveSynchronously(
+        source: String,
+        configuration: PreviewAppearanceConfiguration = .default
+    ) -> Self? {
+        guard InflowCoreBridge.isCompatible else { return nil }
+        let request = EditorEngineCreateRequest(
+            schemaVersion: 1,
+            documentID: UUID().uuidString,
+            text: source,
+            selection: EditorEngineSelection(start: 0, end: 0)
+        )
+        guard let data = try? JSONEncoder().encode(request) else { return nil }
+        let created: InflowEngineCreateResult = data.withUnsafeBytes { bytes in
+            inflow_engine_create(
+                bytes.bindMemory(to: UInt8.self).baseAddress,
+                UInt(bytes.count)
+            )
+        }
+        guard created.status == INFLOW_STATUS_OK, let handle = created.engine else {
+            _ = try? InflowCoreBridge.copyAndFree(created.payload)
+            return nil
+        }
+        defer { inflow_engine_free(handle) }
+        _ = try? InflowCoreBridge.copyAndFree(created.payload)
+        let requestID = UUID().uuidString
+        let envelope = EditorEngineRefreshEnvelope(
+            schemaVersion: 1,
+            requestID: requestID,
+            command: EditorEngineRefreshCommand(
+                type: "refresh_derived",
+                revision: 0,
+                mathEnabled: configuration.mathRenderingEnabled,
+                mermaidEnabled: configuration.mermaidRenderingEnabled
+            )
+        )
+        guard let encoded = try? JSONEncoder().encode(envelope) else { return nil }
+        let result: InflowBytesResult = encoded.withUnsafeBytes { bytes in
+            inflow_engine_dispatch(
+                handle,
+                bytes.bindMemory(to: UInt8.self).baseAddress,
+                UInt(bytes.count)
+            )
+        }
+        guard let payload = try? InflowCoreBridge.copyAndFree(result.bytes),
+              result.status == INFLOW_STATUS_OK,
+              let response = try? JSONDecoder().decode(EditorEngineDispatchResponse.self, from: payload),
+              response.requestID == requestID,
+              let derived = response.patch.derived
+        else { return nil }
+        return try? derived.validated(source: source)
+    }
 
 }
 
@@ -867,6 +920,7 @@ private struct EditorEngineDerivedState: Decodable {
     let highlights: [EditorEngineHighlight]
     let references: [EditorEngineReference]
     let render: EditorEngineRender
+    let nativeRender: EditorEngineRawNativeRenderPlan
     let htmlFragment: String
     let mathEnabled: Bool
     let mermaidEnabled: Bool
@@ -877,6 +931,7 @@ private struct EditorEngineDerivedState: Decodable {
         case highlights
         case references
         case render
+        case nativeRender = "native_render"
         case htmlFragment = "html_fragment"
         case mathEnabled = "math_enabled"
         case mermaidEnabled = "mermaid_enabled"
@@ -927,6 +982,7 @@ private struct EditorEngineDerivedState: Decodable {
                 visibleText: block.visibleText
             )
         }
+        let nativeRenderPlan = try nativeRender.validated(source: source)
 
         return EditorEngineDerivedContent(
             revision: revision,
@@ -940,7 +996,8 @@ private struct EditorEngineDerivedState: Decodable {
             ),
             syntaxHighlighting: syntax,
             references: validatedReferences,
-            renderBlocks: blocks
+            renderBlocks: blocks,
+            nativeRenderPlan: nativeRenderPlan
         )
     }
 }
@@ -1012,6 +1069,283 @@ private struct EditorEngineRawRenderBlock: Decodable {
         case depth
         case parentID = "parent_id"
         case visibleText = "visible_text"
+    }
+}
+
+private struct EditorEngineRawNativeRenderPlan: Decodable {
+    let markers: [Marker]
+    let contentStyles: [ContentStyle]
+    let localSourceBlocks: [LocalBlock]
+    let links: [Link]
+    let images: [Image]
+    let tables: [Table]
+    let mermaidDiagrams: [Diagram]
+
+    struct Marker: Decodable {
+        let kind: String
+        let sourceRange: EditorEngineByteRange
+        let headingLevel: Int?
+        enum CodingKeys: String, CodingKey {
+            case kind
+            case sourceRange = "source_range"
+            case headingLevel = "heading_level"
+        }
+    }
+
+    struct ContentStyle: Decodable {
+        let kind: String
+        let sourceRange: EditorEngineByteRange
+        let headingLevel: Int?
+        let isChecked: Bool?
+        let alternating: Bool?
+        enum CodingKeys: String, CodingKey {
+            case kind
+            case sourceRange = "source_range"
+            case headingLevel = "heading_level"
+            case isChecked = "is_checked"
+            case alternating
+        }
+    }
+
+    struct LocalBlock: Decodable {
+        let sourceRange: EditorEngineByteRange
+        let reasons: [String]
+        enum CodingKeys: String, CodingKey {
+            case sourceRange = "source_range"
+            case reasons
+        }
+    }
+
+    struct Link: Decodable {
+        let sourceRange: EditorEngineByteRange
+        let textRange: EditorEngineByteRange
+        let targetRange: EditorEngineByteRange
+        let target: String
+        enum CodingKeys: String, CodingKey {
+            case sourceRange = "source_range"
+            case textRange = "text_range"
+            case targetRange = "target_range"
+            case target
+        }
+    }
+
+    struct Image: Decodable {
+        let sourceRange: EditorEngineByteRange
+        let alternativeRange: EditorEngineByteRange
+        let targetRange: EditorEngineByteRange
+        let alternative: String
+        let target: String
+        enum CodingKeys: String, CodingKey {
+            case sourceRange = "source_range"
+            case alternativeRange = "alternative_range"
+            case targetRange = "target_range"
+            case alternative
+            case target
+        }
+    }
+
+    struct Table: Decodable {
+        let sourceRange: EditorEngineByteRange
+        let alignments: [String]
+        let rows: [[Cell]]
+        enum CodingKeys: String, CodingKey {
+            case sourceRange = "source_range"
+            case alignments
+            case rows
+        }
+    }
+
+    struct Cell: Decodable {
+        let sourceRange: EditorEngineByteRange
+        let markdown: String
+        let text: String
+        let links: [CellLink]
+        enum CodingKeys: String, CodingKey {
+            case sourceRange = "source_range"
+            case markdown
+            case text
+            case links
+        }
+    }
+
+    struct CellLink: Decodable {
+        let visibleSourceRange: EditorEngineByteRange
+        let target: String
+        enum CodingKeys: String, CodingKey {
+            case visibleSourceRange = "visible_source_range"
+            case target
+        }
+    }
+
+    struct Diagram: Decodable {
+        let sourceRange: EditorEngineByteRange
+        let svg: String
+        enum CodingKeys: String, CodingKey {
+            case sourceRange = "source_range"
+            case svg
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case markers
+        case contentStyles = "content_styles"
+        case localSourceBlocks = "local_source_blocks"
+        case links
+        case images
+        case tables
+        case mermaidDiagrams = "mermaid_diagrams"
+    }
+
+    func validated(source: String) throws -> RenderedMarkdownPlan {
+        func mapped(_ raw: EditorEngineByteRange, permitsEmpty: Bool = false) throws
+            -> RenderedMarkdownSourceRange
+        {
+            guard let utf8 = raw.validated(in: source, permitsEmpty: permitsEmpty),
+                  let target = MarkdownSourceRange.navigationTarget(
+                      forUTF8Range: utf8,
+                      in: source
+                  )
+            else { throw EditorEngineBridgeError.invalidResponse }
+            return RenderedMarkdownSourceRange(
+                utf8Range: utf8,
+                utf16Range: target.revealRange
+            )
+        }
+
+        let mappedMarkers = try markers.map { item in
+            let kind: RenderedMarkdownMarkerKind = switch item.kind {
+            case "heading": .heading(level: try requiredLevel(item.headingLevel))
+            case "emphasis": .emphasis
+            case "strong": .strong
+            case "strikethrough": .strikethrough
+            case "inline_code": .inlineCode
+            case "block_quote": .blockQuote
+            case "unordered_list": .unorderedList
+            case "ordered_list": .orderedList
+            case "task_list": .taskList
+            case "table_boundary": .tableBoundary
+            case "table_separator": .tableSeparator
+            case "table_delimiter_row": .tableDelimiterRow
+            case "reference_definition": .referenceDefinition
+            case "link_delimiter": .linkDelimiter
+            case "link_destination": .linkDestination
+            default: throw EditorEngineBridgeError.invalidResponse
+            }
+            return RenderedMarkdownMarker(kind: kind, sourceRange: try mapped(item.sourceRange))
+        }
+        let mappedStyles = try contentStyles.map { item in
+            let kind: RenderedMarkdownContentStyleKind = switch item.kind {
+            case "paragraph": .paragraph
+            case "heading": .heading(level: try requiredLevel(item.headingLevel))
+            case "emphasis": .emphasis
+            case "strong": .strong
+            case "strikethrough": .strikethrough
+            case "inline_code": .inlineCode
+            case "block_quote": .blockQuote
+            case "unordered_list_item": .unorderedListItem
+            case "ordered_list_item": .orderedListItem
+            case "task_list_item": .taskListItem(isChecked: item.isChecked ?? false)
+            case "table_header": .tableHeader
+            case "table_body": .tableBody(alternating: item.alternating ?? false)
+            case "link": .link
+            default: throw EditorEngineBridgeError.invalidResponse
+            }
+            return RenderedMarkdownContentStyle(kind: kind, sourceRange: try mapped(item.sourceRange))
+        }
+        let mappedLocals = try localSourceBlocks.map { item in
+            let reasons = try item.reasons.map { reason -> RenderedMarkdownLocalSourceReason in
+                switch reason {
+                case "mermaid": .mermaid
+                case "fenced_code": .fencedCode
+                case "raw_html": .rawHTML
+                case "unsupported_syntax": .unsupportedSyntax
+                case "complex_or_ambiguous": .complexOrAmbiguous
+                default: throw EditorEngineBridgeError.invalidResponse
+                }
+            }
+            return RenderedMarkdownLocalSourceBlock(
+                sourceRange: try mapped(item.sourceRange),
+                reasons: reasons
+            )
+        }
+        let mappedLinks = try links.map { item in
+            RenderedMarkdownLink(
+                sourceRange: try mapped(item.sourceRange),
+                textRange: try mapped(item.textRange),
+                targetRange: try mapped(item.targetRange, permitsEmpty: true),
+                target: item.target
+            )
+        }
+        let mappedImages = try images.map { item in
+            RenderedMarkdownImage(
+                sourceRange: try mapped(item.sourceRange),
+                alternativeRange: try mapped(item.alternativeRange, permitsEmpty: true),
+                targetRange: try mapped(item.targetRange, permitsEmpty: true),
+                alternative: item.alternative,
+                target: item.target
+            )
+        }
+        let mappedTables = try tables.map { table in
+            RenderedMarkdownTable(
+                sourceRange: try mapped(table.sourceRange),
+                alignments: try table.alignments.map { value in
+                    switch value {
+                    case "leading": .leading
+                    case "center": .center
+                    case "trailing": .trailing
+                    default: throw EditorEngineBridgeError.invalidResponse
+                    }
+                },
+                rows: try table.rows.map { row in
+                    try row.map { cell in
+                        let cellRange = try mapped(cell.sourceRange, permitsEmpty: true)
+                        return RenderedMarkdownTableCell(
+                            sourceRange: cellRange,
+                            markdown: cell.markdown,
+                            text: cell.text,
+                            links: try cell.links.map { link in
+                                let visible = try mapped(link.visibleSourceRange)
+                                let visibleText = (source as NSString).substring(
+                                    with: visible.utf16Range
+                                )
+                                let localRange = (cell.text as NSString).range(of: visibleText)
+                                guard localRange.location != NSNotFound else {
+                                    throw EditorEngineBridgeError.invalidResponse
+                                }
+                                return RenderedMarkdownTableCellLink(
+                                    visibleRange: localRange,
+                                    target: link.target
+                                )
+                            }
+                        )
+                    }
+                }
+            )
+        }
+        let mappedDiagrams = try mermaidDiagrams.map { item in
+            RenderedMarkdownMermaidDiagram(
+                sourceRange: try mapped(item.sourceRange),
+                svg: item.svg
+            )
+        }
+        return RenderedMarkdownPlan(
+            sourceSnapshot: source,
+            sourceUTF8: Data(source.utf8),
+            markers: mappedMarkers,
+            contentStyles: mappedStyles,
+            localSourceBlocks: mappedLocals,
+            links: mappedLinks,
+            images: mappedImages,
+            tables: mappedTables,
+            mermaidDiagrams: mappedDiagrams
+        )
+    }
+
+    private func requiredLevel(_ level: Int?) throws -> Int {
+        guard let level, (1...6).contains(level) else {
+            throw EditorEngineBridgeError.invalidResponse
+        }
+        return level
     }
 }
 

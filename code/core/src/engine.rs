@@ -9,6 +9,7 @@ use crate::analysis::{DocumentAnalysis, analyze_document};
 use crate::format::{self, FormatError, InlineFormat, ListFormat, MarkdownEdit};
 use crate::highlight::{HighlightSpan, spans_from_document};
 use crate::markdown_ir::{DocumentIr, dialect_options};
+use crate::native_render::NativeRenderPlan;
 use crate::reference::{MarkdownReference, references_from_document};
 use crate::render::{RenderConfiguration, html_fragment_for_preview_from_document};
 use crate::render_ir::RenderIr;
@@ -165,6 +166,7 @@ pub struct DerivedState {
     pub highlights: Vec<HighlightSpan>,
     pub references: Vec<MarkdownReference>,
     pub render: RenderIr,
+    pub native_render: NativeRenderPlan,
     pub html_fragment: String,
     pub math_enabled: bool,
     pub mermaid_enabled: bool,
@@ -338,12 +340,15 @@ impl EditorEngine {
                 math_enabled,
                 mermaid_enabled,
             };
+            let render = RenderIr::from_document(&document);
+            let native_render = NativeRenderPlan::from_document(&document, &render);
             let derived = DerivedState {
                 revision,
                 analysis: analyze_document(&document),
                 highlights: spans_from_document(&document),
                 references: references_from_document(&document),
-                render: RenderIr::from_document(&document),
+                render,
+                native_render,
                 html_fragment: html_fragment_for_preview_from_document(&document, configuration),
                 math_enabled,
                 mermaid_enabled,
