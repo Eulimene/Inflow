@@ -785,16 +785,22 @@ private actor EditorEngineTransport {
                   response.requestID == requestID,
                   response.patch.baseRevision == revision,
                   response.patch.revision == revision,
-                  let raw = response.patch.savePreparation,
-                  raw.saveID == saveID,
-                  raw.revision == revision,
-                  raw.text.utf8.elementsEqual(expectedText.utf8)
+                  response.patch.effects.count == 1,
+                  let raw = response.patch.effects.first,
+                  raw.type == "write_document",
+                  let rawSaveID = raw.saveID,
+                  let rawRevision = raw.revision,
+                  let rawText = raw.text,
+                  let rawContentHash = raw.contentHash,
+                  rawSaveID == saveID,
+                  rawRevision == revision,
+                  rawText.utf8.elementsEqual(expectedText.utf8)
             else { throw EditorEngineBridgeError.invalidResponse }
             return EditorEngineSavePreparation(
-                saveID: raw.saveID,
-                revision: raw.revision,
-                text: raw.text,
-                contentHash: raw.contentHash
+                saveID: rawSaveID,
+                revision: rawRevision,
+                text: rawText,
+                contentHash: rawContentHash
             )
         } catch {
             logger.error(
@@ -1445,7 +1451,7 @@ private struct EditorEngineStatePatch: Decodable {
     let derived: EditorEngineDerivedState?
     let search: EditorEngineRawSearchResult?
     let formatCapabilities: EditorEngineRawFormatCapabilities?
-    let savePreparation: EditorEngineRawSavePreparation?
+    let effects: [EditorEngineRawHostEffect]
     let canUndo: Bool
     let canRedo: Bool
     let dirty: Bool
@@ -1459,7 +1465,7 @@ private struct EditorEngineStatePatch: Decodable {
         case derived
         case search
         case formatCapabilities = "format_capabilities"
-        case savePreparation = "save_preparation"
+        case effects
         case canUndo = "can_undo"
         case canRedo = "can_redo"
         case dirty
@@ -1494,13 +1500,15 @@ private struct EditorEngineStatePatch: Decodable {
     }
 }
 
-private struct EditorEngineRawSavePreparation: Decodable {
-    let saveID: String
-    let revision: UInt64
-    let text: String
-    let contentHash: String
+private struct EditorEngineRawHostEffect: Decodable {
+    let type: String
+    let saveID: String?
+    let revision: UInt64?
+    let text: String?
+    let contentHash: String?
 
     enum CodingKeys: String, CodingKey {
+        case type
         case saveID = "save_id"
         case revision
         case text

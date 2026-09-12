@@ -196,7 +196,7 @@ pub struct StatePatch {
     pub derived: Option<DerivedState>,
     pub search: Option<SearchResult>,
     pub format_capabilities: Option<FormatCapabilities>,
-    pub save_preparation: Option<SavePreparation>,
+    pub effects: Vec<HostEffect>,
     pub content_hash: String,
     pub can_undo: bool,
     pub can_redo: bool,
@@ -216,11 +216,14 @@ pub struct FormatCapabilities {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct SavePreparation {
-    pub save_id: String,
-    pub revision: Revision,
-    pub text: String,
-    pub content_hash: String,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum HostEffect {
+    WriteDocument {
+        save_id: String,
+        revision: Revision,
+        text: String,
+        content_hash: String,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -466,7 +469,7 @@ impl EditorEngine {
             derived: Some(derived),
             search: None,
             format_capabilities: None,
-            save_preparation: None,
+            effects: Vec::new(),
             content_hash: content_hash(&self.text),
             can_undo: self.history.can_undo(),
             can_redo: self.history.can_redo(),
@@ -499,7 +502,7 @@ impl EditorEngine {
             derived: None,
             search: Some(SearchResult { revision, matches }),
             format_capabilities: None,
-            save_preparation: None,
+            effects: Vec::new(),
             content_hash: content_hash(&self.text),
             can_undo: self.history.can_undo(),
             can_redo: self.history.can_redo(),
@@ -529,7 +532,7 @@ impl EditorEngine {
                 revision,
                 can_clear,
             }),
-            save_preparation: None,
+            effects: Vec::new(),
             content_hash: content_hash(&self.text),
             can_undo: self.history.can_undo(),
             can_redo: self.history.can_redo(),
@@ -551,7 +554,7 @@ impl EditorEngine {
         let hash = content_hash(&self.text);
         self.prepared_saves.insert(save_id.clone(), hash.clone());
         let mut patch = self.empty_patch(revision);
-        patch.save_preparation = Some(SavePreparation {
+        patch.effects.push(HostEffect::WriteDocument {
             save_id,
             revision,
             text: self.text.clone(),
@@ -632,7 +635,7 @@ impl EditorEngine {
             derived: None,
             search: None,
             format_capabilities: None,
-            save_preparation: None,
+            effects: Vec::new(),
             content_hash: self.saved_content_hash.clone(),
             can_undo: false,
             can_redo: false,
@@ -764,7 +767,7 @@ impl EditorEngine {
             derived: None,
             search: None,
             format_capabilities: None,
-            save_preparation: None,
+            effects: Vec::new(),
             content_hash: content_hash(&self.text),
             can_undo: self.history.can_undo(),
             can_redo: self.history.can_redo(),
@@ -782,7 +785,7 @@ impl EditorEngine {
             derived: None,
             search: None,
             format_capabilities: None,
-            save_preparation: None,
+            effects: Vec::new(),
             content_hash: content_hash(&self.text),
             can_undo: self.history.can_undo(),
             can_redo: self.history.can_redo(),
@@ -1200,9 +1203,20 @@ mod tests {
                 },
             ))
             .expect("current revision should freeze");
-        let preparation = prepared.patch.save_preparation.expect("save preparation");
-        assert_eq!(preparation.revision, 1);
-        assert_eq!(preparation.text, "draft one");
+        let [
+            HostEffect::WriteDocument {
+                save_id,
+                revision,
+                text,
+                ..
+            },
+        ] = prepared.patch.effects.as_slice()
+        else {
+            panic!("save preparation must emit exactly one document write");
+        };
+        assert_eq!(save_id, "save-1");
+        assert_eq!(*revision, 1);
+        assert_eq!(text, "draft one");
         assert!(prepared.patch.dirty);
 
         engine
@@ -1228,7 +1242,10 @@ mod tests {
                 },
             ))
             .expect("latest revision should freeze");
-        assert_eq!(latest.patch.save_preparation.unwrap().revision, 2);
+        assert!(matches!(
+            latest.patch.effects.as_slice(),
+            [HostEffect::WriteDocument { revision: 2, .. }]
+        ));
         let completed = engine
             .dispatch(command(
                 "complete-latest",
