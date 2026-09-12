@@ -1,5 +1,6 @@
 //! Stateful editor authority introduced behind the macOS shadow-mode bridge.
 
+use std::collections::HashMap;
 use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
@@ -94,6 +95,16 @@ pub enum EditorCommand {
         revision: Revision,
         selection: Selection,
     },
+    PrepareSave {
+        revision: Revision,
+        save_id: String,
+    },
+    SaveCompleted {
+        save_id: String,
+    },
+    SaveAborted {
+        save_id: String,
+    },
 }
 
 const fn default_true() -> bool {
@@ -149,6 +160,7 @@ pub struct EngineSnapshot {
     pub derived: Option<DerivedState>,
     pub can_undo: bool,
     pub can_redo: bool,
+    pub dirty: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -160,9 +172,11 @@ pub struct StatePatch {
     pub derived: Option<DerivedState>,
     pub search: Option<SearchResult>,
     pub format_capabilities: Option<FormatCapabilities>,
+    pub save_preparation: Option<SavePreparation>,
     pub content_hash: String,
     pub can_undo: bool,
     pub can_redo: bool,
+    pub dirty: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -175,6 +189,14 @@ pub struct SearchResult {
 pub struct FormatCapabilities {
     pub revision: Revision,
     pub can_clear: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SavePreparation {
+    pub save_id: String,
+    pub revision: Revision,
+    pub text: String,
+    pub content_hash: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -214,6 +236,8 @@ pub enum EngineError {
     AmbiguousFormat,
     NothingToUndo,
     NothingToRedo,
+    EmptySaveId,
+    UnknownSave,
     RevisionOverflow,
 }
 
@@ -234,6 +258,8 @@ pub struct EditorEngine {
     derived: Option<DerivedState>,
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
+    saved_content_hash: String,
+    prepared_saves: HashMap<String, String>,
 }
 
 impl EditorEngine {
@@ -246,6 +272,7 @@ impl EditorEngine {
         }
         validate_selection(&request.text, &request.selection)?;
 
+        let saved_content_hash = content_hash(&request.text);
         Ok(Self {
             document_id: request.document_id,
             revision: 0,
@@ -254,6 +281,8 @@ impl EditorEngine {
             derived: None,
             undo: Vec::new(),
             redo: Vec::new(),
+            saved_content_hash,
+            prepared_saves: HashMap::new(),
         })
     }
 
@@ -295,6 +324,11 @@ impl EditorEngine {
                 revision,
                 selection,
             } => self.inspect_format(revision, &selection)?,
+            EditorCommand::PrepareSave { revision, save_id } => {
+                self.prepare_save(revision, save_id)?
+            }
+            EditorCommand::SaveCompleted { save_id } => self.save_completed(&save_id)?,
+            EditorCommand::SaveAborted { save_id } => self.save_aborted(&save_id)?,
         };
 
         Ok(DispatchResponse {
@@ -315,6 +349,7 @@ impl EditorEngine {
             derived: self.derived.clone(),
             can_undo: !self.undo.is_empty(),
             can_redo: !self.redo.is_empty(),
+            dirty: self.is_dirty(),
         }
     }
 
@@ -398,9 +433,11 @@ impl EditorEngine {
             derived: Some(derived),
             search: None,
             format_capabilities: None,
+            save_preparation: None,
             content_hash: content_hash(&self.text),
             can_undo: !self.undo.is_empty(),
             can_redo: !self.redo.is_empty(),
+            dirty: self.is_dirty(),
         })
     }
 
@@ -428,9 +465,11 @@ impl EditorEngine {
             derived: None,
             search: Some(SearchResult { revision, matches }),
             format_capabilities: None,
+            save_preparation: None,
             content_hash: content_hash(&self.text),
             can_undo: !self.undo.is_empty(),
             can_redo: !self.redo.is_empty(),
+            dirty: self.is_dirty(),
         })
     }
 
@@ -455,10 +494,57 @@ impl EditorEngine {
                 revision,
                 can_clear,
             }),
+            save_preparation: None,
             content_hash: content_hash(&self.text),
             can_undo: !self.undo.is_empty(),
             can_redo: !self.redo.is_empty(),
+            dirty: self.is_dirty(),
         })
+    }
+
+    fn prepare_save(
+        &mut self,
+        revision: Revision,
+        save_id: String,
+    ) -> Result<StatePatch, EngineError> {
+        if revision != self.revision {
+            return Err(EngineError::RevisionConflict);
+        }
+        if save_id.is_empty() {
+            return Err(EngineError::EmptySaveId);
+        }
+        let hash = content_hash(&self.text);
+        self.prepared_saves.insert(save_id.clone(), hash.clone());
+        let mut patch = self.empty_patch(revision);
+        patch.save_preparation = Some(SavePreparation {
+            save_id,
+            revision,
+            text: self.text.clone(),
+            content_hash: hash,
+        });
+        Ok(patch)
+    }
+
+    fn save_completed(&mut self, save_id: &str) -> Result<StatePatch, EngineError> {
+        if save_id.is_empty() {
+            return Err(EngineError::EmptySaveId);
+        }
+        let saved_hash = self
+            .prepared_saves
+            .remove(save_id)
+            .ok_or(EngineError::UnknownSave)?;
+        self.saved_content_hash = saved_hash;
+        Ok(self.empty_patch(self.revision))
+    }
+
+    fn save_aborted(&mut self, save_id: &str) -> Result<StatePatch, EngineError> {
+        if save_id.is_empty() {
+            return Err(EngineError::EmptySaveId);
+        }
+        self.prepared_saves
+            .remove(save_id)
+            .ok_or(EngineError::UnknownSave)?;
+        Ok(self.empty_patch(self.revision))
     }
 
     fn format(
@@ -580,10 +666,33 @@ impl EditorEngine {
             derived: None,
             search: None,
             format_capabilities: None,
+            save_preparation: None,
             content_hash: content_hash(&self.text),
             can_undo: !self.undo.is_empty(),
             can_redo: !self.redo.is_empty(),
+            dirty: self.is_dirty(),
         })
+    }
+
+    fn empty_patch(&self, base_revision: Revision) -> StatePatch {
+        StatePatch {
+            base_revision,
+            revision: self.revision,
+            text: None,
+            selection: None,
+            derived: None,
+            search: None,
+            format_capabilities: None,
+            save_preparation: None,
+            content_hash: content_hash(&self.text),
+            can_undo: !self.undo.is_empty(),
+            can_redo: !self.redo.is_empty(),
+            dirty: self.is_dirty(),
+        }
+    }
+
+    fn is_dirty(&self) -> bool {
+        content_hash(&self.text) != self.saved_content_hash
     }
 
     fn with_history_state(&self, mut patch: StatePatch) -> StatePatch {
@@ -884,6 +993,101 @@ mod tests {
             ))
             .expect("plain selection should still produce capabilities");
         assert!(!plain.patch.format_capabilities.unwrap().can_clear);
+    }
+
+    #[test]
+    fn save_receipts_track_the_exact_prepared_content_without_hiding_later_edits() {
+        let mut engine = engine("draft");
+        assert!(!engine.snapshot().dirty);
+        engine
+            .dispatch(replace(0, 5..5, " one", Selection { start: 9, end: 9 }))
+            .expect("edit should make the document dirty");
+        assert!(engine.snapshot().dirty);
+
+        let prepared = engine
+            .dispatch(command(
+                "prepare-save",
+                EditorCommand::PrepareSave {
+                    revision: 1,
+                    save_id: "save-1".to_owned(),
+                },
+            ))
+            .expect("current revision should freeze");
+        let preparation = prepared.patch.save_preparation.expect("save preparation");
+        assert_eq!(preparation.revision, 1);
+        assert_eq!(preparation.text, "draft one");
+        assert!(prepared.patch.dirty);
+
+        engine
+            .dispatch(replace(1, 9..9, " two", Selection { start: 13, end: 13 }))
+            .expect("editing may continue while the host writes");
+        let completed = engine
+            .dispatch(command(
+                "save-completed",
+                EditorCommand::SaveCompleted {
+                    save_id: "save-1".to_owned(),
+                },
+            ))
+            .expect("the exact frozen save should complete");
+        assert!(completed.patch.dirty);
+        assert_eq!(engine.snapshot().text, "draft one two");
+
+        let latest = engine
+            .dispatch(command(
+                "prepare-latest",
+                EditorCommand::PrepareSave {
+                    revision: 2,
+                    save_id: "save-2".to_owned(),
+                },
+            ))
+            .expect("latest revision should freeze");
+        assert_eq!(latest.patch.save_preparation.unwrap().revision, 2);
+        let completed = engine
+            .dispatch(command(
+                "complete-latest",
+                EditorCommand::SaveCompleted {
+                    save_id: "save-2".to_owned(),
+                },
+            ))
+            .expect("latest save should mark the document clean");
+        assert!(!completed.patch.dirty);
+        assert!(!engine.snapshot().dirty);
+        assert_eq!(
+            engine.dispatch(command(
+                "repeat-completion",
+                EditorCommand::SaveCompleted {
+                    save_id: "save-2".to_owned(),
+                },
+            )),
+            Err(EngineError::UnknownSave)
+        );
+    }
+
+    #[test]
+    fn aborted_save_does_not_change_dirty_state() {
+        let mut engine = engine("draft");
+        engine
+            .dispatch(replace(0, 5..5, "!", Selection { start: 6, end: 6 }))
+            .expect("edit should succeed");
+        engine
+            .dispatch(command(
+                "prepare-save",
+                EditorCommand::PrepareSave {
+                    revision: 1,
+                    save_id: "save-1".to_owned(),
+                },
+            ))
+            .expect("save should prepare");
+        let aborted = engine
+            .dispatch(command(
+                "abort-save",
+                EditorCommand::SaveAborted {
+                    save_id: "save-1".to_owned(),
+                },
+            ))
+            .expect("prepared save should abort");
+        assert!(aborted.patch.dirty);
+        assert!(engine.snapshot().dirty);
     }
 
     #[test]

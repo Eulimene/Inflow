@@ -621,6 +621,26 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         return await authoritativeSnapshot()
     }
 
+    func preparePersistenceSave() async -> EditorEngineSavePreparation? {
+        if textView.hasMarkedText() {
+            textView.unmarkText()
+            await Task.yield()
+        }
+        guard !textView.hasMarkedText() else { return nil }
+        return await engineClient.prepareSave(
+            text: textView.string,
+            selectionUTF16: textView.selectedRange()
+        )
+    }
+
+    func completePersistenceSave(_ preparation: EditorEngineSavePreparation) async -> Bool {
+        await engineClient.saveCompleted(preparation)
+    }
+
+    func abortPersistenceSave(_ preparation: EditorEngineSavePreparation) async {
+        await engineClient.saveAborted(preparation)
+    }
+
     func setPresentation(
         _ presentation: MarkdownEditorPresentation,
         source: String,

@@ -19,6 +19,9 @@ enum InflowCoreBridge {
         static let formatInspection = Self(
             rawValue: UInt64(INFLOW_CAPABILITY_FORMAT_INSPECTION)
         )
+        static let enginePersistence = Self(
+            rawValue: UInt64(INFLOW_CAPABILITY_ENGINE_PERSISTENCE)
+        )
 
         static let editorRequired: Self = [
             .editorEngine,
@@ -28,6 +31,7 @@ enum InflowCoreBridge {
             .nativeRenderPlan,
             .engineSearch,
             .formatInspection,
+            .enginePersistence,
         ]
     }
 

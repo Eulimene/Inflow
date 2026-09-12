@@ -121,6 +121,7 @@ final class EditorEngineClientTests: XCTestCase {
         XCTAssertEqual(snapshot.text, mutation.resultingSource)
         XCTAssertEqual(snapshot.selectionUTF8Range, mutation.selectionUTF8Range)
         XCTAssertTrue(snapshot.canUndo)
+        XCTAssertTrue(snapshot.dirty)
 
         let formattedSelection = NSRange(
             location: 0,
@@ -136,6 +137,22 @@ final class EditorEngineClientTests: XCTestCase {
         )
         XCTAssertTrue(canClearFormattedSelection)
         XCTAssertFalse(canClearPlainSelection)
+
+        let preparedSave = await queue.prepareSave(
+            text: mutation.resultingSource,
+            selectionUTF16: NSRange(location: 8, length: 2)
+        )
+        let savePreparation = try XCTUnwrap(preparedSave)
+        XCTAssertEqual(savePreparation.revision, mutation.revision)
+        XCTAssertEqual(savePreparation.text, mutation.resultingSource)
+        XCTAssertEqual(savePreparation.contentHash, snapshot.contentHash)
+        let saveCompleted = await queue.saveCompleted(savePreparation)
+        XCTAssertTrue(saveCompleted)
+        let saved = await queue.authoritativeSnapshot(
+            matching: mutation.resultingSource,
+            selectionUTF16: NSRange(location: 8, length: 2)
+        )
+        XCTAssertFalse(saved?.dirty == true)
     }
 
     @MainActor

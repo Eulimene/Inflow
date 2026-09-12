@@ -651,7 +651,9 @@ const fn engine_error_status(error: EngineError) -> i32 {
         | EngineError::InvalidRange
         | EngineError::InvalidSelection
         | EngineError::NothingToUndo
-        | EngineError::NothingToRedo => STATUS_INVALID_ARGUMENT,
+        | EngineError::NothingToRedo
+        | EngineError::EmptySaveId
+        | EngineError::UnknownSave => STATUS_INVALID_ARGUMENT,
         EngineError::RevisionOverflow => STATUS_PANIC,
     }
 }
@@ -688,6 +690,11 @@ const fn engine_error_details(error: EngineError) -> (&'static str, &'static str
         ),
         EngineError::NothingToUndo => ("nothing_to_undo", "The undo history is empty."),
         EngineError::NothingToRedo => ("nothing_to_redo", "The redo history is empty."),
+        EngineError::EmptySaveId => ("empty_save_id", "The save identifier is empty."),
+        EngineError::UnknownSave => (
+            "unknown_save",
+            "The save identifier does not name a prepared save.",
+        ),
         EngineError::RevisionOverflow => (
             "revision_overflow",
             "The document revision cannot be incremented.",

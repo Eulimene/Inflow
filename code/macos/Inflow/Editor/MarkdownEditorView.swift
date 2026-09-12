@@ -2072,6 +2072,24 @@ struct MarkdownEditorView: View {
         return snapshot.text
     }
 
+    private func prepareAuthoritativeSaveForPersistence() async throws
+        -> EditorEngineSavePreparation
+    {
+        guard sourceEditorSession.usesEngineAuthority,
+              let preparation = await sourceEditorSession.preparePersistenceSave(),
+              UTF8Text.isExactlyEqual(
+                  preparation.text,
+                  sourceEditorSession.textView.string
+              )
+        else {
+            throw EditorPersistenceError.unavailableAuthoritativeSnapshot
+        }
+        if !UTF8Text.isExactlyEqual(document.text, preparation.text) {
+            document.text = preparation.text
+        }
+        return preparation
+    }
+
     private func saveCurrentDocument() {
         guard !isSavingDocument, !isRelocatingDocument, relocationRequest == nil else { return }
         guard let fileURL else {
@@ -2096,8 +2114,9 @@ struct MarkdownEditorView: View {
         isSavingDocument = true
         Task { @MainActor in
             defer { isSavingDocument = false }
+            var engineSave: EditorEngineSavePreparation?
             do {
-                _ = try await freezeAuthoritativeTextForPersistence()
+                engineSave = try await prepareAuthoritativeSaveForPersistence()
                 let envelope = try fileSafetySession.prepareSave(
                     document: document,
                     sourceURL: fileURL,
@@ -2111,6 +2130,12 @@ struct MarkdownEditorView: View {
                     to: fileURL
                 )
                 try await fileSafetySession.commitSave(envelope)
+                guard let completedSave = engineSave,
+                      await sourceEditorSession.completePersistenceSave(completedSave)
+                else {
+                    throw EditorPersistenceError.unavailableAuthoritativeSnapshot
+                }
+                engineSave = nil
                 NativeDocumentLoadedFileRegistry.refreshAfterVerifiedWrite(
                     nativeDocument,
                     targetURL: envelope.targetURL,
@@ -2121,6 +2146,9 @@ struct MarkdownEditorView: View {
                 await recoveryCoordinator?.flush(recoveryRecordID)
                 documentSaveFailureMessage = nil
             } catch {
+                if let engineSave {
+                    await sourceEditorSession.abortPersistenceSave(engineSave)
+                }
                 LocalFailureLogController.shared.record(.saving, code: .saveFailed)
                 documentSaveFailureMessage = error.localizedDescription
             }
@@ -2140,8 +2168,9 @@ struct MarkdownEditorView: View {
         }
         isSavingDocument = true
         defer { isSavingDocument = false }
+        var engineSave: EditorEngineSavePreparation?
         do {
-            _ = try await freezeAuthoritativeTextForPersistence()
+            engineSave = try await prepareAuthoritativeSaveForPersistence()
             let envelope = try await fileSafetySession.prepareConfirmedOverwrite(
                 document: document,
                 snapshot: snapshot
@@ -2152,6 +2181,12 @@ struct MarkdownEditorView: View {
                 to: snapshot.url
             )
             try await fileSafetySession.commitSave(envelope)
+            guard let completedSave = engineSave,
+                  await sourceEditorSession.completePersistenceSave(completedSave)
+            else {
+                throw EditorPersistenceError.unavailableAuthoritativeSnapshot
+            }
+            engineSave = nil
             NativeDocumentLoadedFileRegistry.refreshAfterVerifiedWrite(
                 nativeDocument,
                 targetURL: envelope.targetURL,
@@ -2162,6 +2197,9 @@ struct MarkdownEditorView: View {
             await recoveryCoordinator?.flush(recoveryRecordID)
             documentSaveFailureMessage = nil
         } catch {
+            if let engineSave {
+                await sourceEditorSession.abortPersistenceSave(engineSave)
+            }
             LocalFailureLogController.shared.record(.saving, code: .saveFailed)
             throw error
         }
@@ -2272,8 +2310,13 @@ struct MarkdownEditorView: View {
             if accessed { request.plan.targetURL.stopAccessingSecurityScopedResource() }
         }
 
+        var engineSave: EditorEngineSavePreparation?
         do {
-            _ = try await freezeAuthoritativeTextForPersistence()
+            if request.operation == .saveAs {
+                engineSave = try await prepareAuthoritativeSaveForPersistence()
+            } else {
+                _ = try await freezeAuthoritativeTextForPersistence()
+            }
             let currentData = try document.encodedFileData()
             try DocumentRelocationAnalyzer.verify(
                 request.plan,
@@ -2323,6 +2366,12 @@ struct MarkdownEditorView: View {
             )
             try await fileSafetySession.commitSave(envelope)
             if request.operation == .saveAs {
+                guard let completedSave = engineSave,
+                      await sourceEditorSession.completePersistenceSave(completedSave)
+                else {
+                    throw EditorPersistenceError.unavailableAuthoritativeSnapshot
+                }
+                engineSave = nil
                 NativeDocumentLoadedFileRegistry.refreshAfterVerifiedWrite(
                     nativeDocument,
                     targetURL: envelope.targetURL,
@@ -2356,6 +2405,9 @@ struct MarkdownEditorView: View {
                 }
             }
         } catch {
+            if let engineSave {
+                await sourceEditorSession.abortPersistenceSave(engineSave)
+            }
             deferredImageInsertionQueue.cancel()
             relocationRequest = nil
             relocationNativeDocument = nil

@@ -99,6 +99,14 @@ struct EditorEngineDocumentSnapshot: Equatable, Sendable {
     let contentHash: String
     let canUndo: Bool
     let canRedo: Bool
+    let dirty: Bool
+}
+
+struct EditorEngineSavePreparation: Equatable, Sendable {
+    let saveID: String
+    let revision: UInt64
+    let text: String
+    let contentHash: String
 }
 
 enum EditorEngineFormatOperation: Equatable, Sendable {
@@ -286,6 +294,28 @@ final class EditorEngineClient {
         await pending?.value
         guard !Task.isCancelled else { return nil }
         return await client?.snapshot(expectedText: text)
+    }
+
+    func prepareSave(
+        text: String,
+        selectionUTF16: NSRange
+    ) async -> EditorEngineSavePreparation? {
+        submit(text: text, selectionUTF16: selectionUTF16)
+        await pending?.value
+        guard !Task.isCancelled else { return nil }
+        return await client?.prepareSave(expectedText: text)
+    }
+
+    func saveCompleted(_ preparation: EditorEngineSavePreparation) async -> Bool {
+        await pending?.value
+        guard !Task.isCancelled else { return false }
+        return await client?.finishSave(saveID: preparation.saveID, completed: true) ?? false
+    }
+
+    func saveAborted(_ preparation: EditorEngineSavePreparation) async {
+        await pending?.value
+        guard !Task.isCancelled else { return }
+        _ = await client?.finishSave(saveID: preparation.saveID, completed: false)
     }
 
     func reset(text: String, selectionUTF16: NSRange) {
@@ -584,6 +614,72 @@ private actor EditorEngineTransport {
         }
     }
 
+    func prepareSave(expectedText: String) -> EditorEngineSavePreparation? {
+        do {
+            guard projection.utf8.elementsEqual(expectedText.utf8) else {
+                throw EditorEngineBridgeError.mismatch(revision: revision)
+            }
+            let saveID = UUID().uuidString
+            let requestID = UUID().uuidString
+            let envelope = EditorEnginePrepareSaveEnvelope(
+                schemaVersion: Self.schemaVersion,
+                requestID: requestID,
+                command: EditorEnginePrepareSaveCommand(
+                    type: "prepare_save",
+                    revision: revision,
+                    saveID: saveID
+                )
+            )
+            let response: EditorEngineDispatchResponse = try dispatch(envelope)
+            guard response.schemaVersion == Self.schemaVersion,
+                  response.requestID == requestID,
+                  response.patch.baseRevision == revision,
+                  response.patch.revision == revision,
+                  let raw = response.patch.savePreparation,
+                  raw.saveID == saveID,
+                  raw.revision == revision,
+                  raw.text.utf8.elementsEqual(expectedText.utf8)
+            else { throw EditorEngineBridgeError.invalidResponse }
+            return EditorEngineSavePreparation(
+                saveID: raw.saveID,
+                revision: raw.revision,
+                text: raw.text,
+                contentHash: raw.contentHash
+            )
+        } catch {
+            logger.error(
+                "Engine save preparation failed; revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    func finishSave(saveID: String, completed: Bool) -> Bool {
+        do {
+            let requestID = UUID().uuidString
+            let envelope = EditorEngineFinishSaveEnvelope(
+                schemaVersion: Self.schemaVersion,
+                requestID: requestID,
+                command: EditorEngineFinishSaveCommand(
+                    type: completed ? "save_completed" : "save_aborted",
+                    saveID: saveID
+                )
+            )
+            let response: EditorEngineDispatchResponse = try dispatch(envelope)
+            guard response.schemaVersion == Self.schemaVersion,
+                  response.requestID == requestID,
+                  response.patch.revision == revision,
+                  response.patch.text == nil
+            else { throw EditorEngineBridgeError.invalidResponse }
+            return true
+        } catch {
+            logger.error(
+                "Engine save completion failed; revision=\(self.revision, privacy: .public) completed=\(completed, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return false
+        }
+    }
+
     func historyMutation(
         direction: EditorEngineHistoryDirection,
         expectedText: String
@@ -635,7 +731,8 @@ private actor EditorEngineTransport {
                 selectionUTF8Range: selection,
                 contentHash: snapshot.contentHash,
                 canUndo: snapshot.canUndo,
-                canRedo: snapshot.canRedo
+                canRedo: snapshot.canRedo,
+                dirty: snapshot.dirty
             )
         } catch {
             logger.error(
@@ -836,6 +933,30 @@ private struct EditorEngineInspectFormatEnvelope: Encodable {
     }
 }
 
+private struct EditorEnginePrepareSaveEnvelope: Encodable {
+    let schemaVersion: UInt32
+    let requestID: String
+    let command: EditorEnginePrepareSaveCommand
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case requestID = "request_id"
+        case command
+    }
+}
+
+private struct EditorEngineFinishSaveEnvelope: Encodable {
+    let schemaVersion: UInt32
+    let requestID: String
+    let command: EditorEngineFinishSaveCommand
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case requestID = "request_id"
+        case command
+    }
+}
+
 private struct EditorEngineHistoryEnvelope: Encodable {
     let schemaVersion: UInt32
     let requestID: String
@@ -876,6 +997,28 @@ private struct EditorEngineInspectFormatCommand: Encodable {
     let type: String
     let revision: UInt64
     let selection: EditorEngineSelection
+}
+
+private struct EditorEnginePrepareSaveCommand: Encodable {
+    let type: String
+    let revision: UInt64
+    let saveID: String
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case revision
+        case saveID = "save_id"
+    }
+}
+
+private struct EditorEngineFinishSaveCommand: Encodable {
+    let type: String
+    let saveID: String
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case saveID = "save_id"
+    }
 }
 
 private struct EditorEngineFormatCommand: Encodable {
@@ -982,6 +1125,7 @@ private struct EditorEngineSnapshot: Decodable {
     let contentHash: String
     let canUndo: Bool
     let canRedo: Bool
+    let dirty: Bool
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
@@ -992,6 +1136,7 @@ private struct EditorEngineSnapshot: Decodable {
         case contentHash = "content_hash"
         case canUndo = "can_undo"
         case canRedo = "can_redo"
+        case dirty
     }
 }
 
@@ -1015,8 +1160,10 @@ private struct EditorEngineStatePatch: Decodable {
     let derived: EditorEngineDerivedState?
     let search: EditorEngineRawSearchResult?
     let formatCapabilities: EditorEngineRawFormatCapabilities?
+    let savePreparation: EditorEngineRawSavePreparation?
     let canUndo: Bool
     let canRedo: Bool
+    let dirty: Bool
 
     enum CodingKeys: String, CodingKey {
         case baseRevision = "base_revision"
@@ -1026,8 +1173,10 @@ private struct EditorEngineStatePatch: Decodable {
         case derived
         case search
         case formatCapabilities = "format_capabilities"
+        case savePreparation = "save_preparation"
         case canUndo = "can_undo"
         case canRedo = "can_redo"
+        case dirty
     }
 
 
@@ -1056,6 +1205,20 @@ private struct EditorEngineStatePatch: Decodable {
             canUndo: canUndo,
             canRedo: canRedo
         )
+    }
+}
+
+private struct EditorEngineRawSavePreparation: Decodable {
+    let saveID: String
+    let revision: UInt64
+    let text: String
+    let contentHash: String
+
+    enum CodingKeys: String, CodingKey {
+        case saveID = "save_id"
+        case revision
+        case text
+        case contentHash = "content_hash"
     }
 }
 
