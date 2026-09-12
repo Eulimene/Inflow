@@ -34,6 +34,14 @@ struct Diagram {
     edges: Vec<Edge>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct NodeLayout {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum MermaidError {
     UnsupportedType,
@@ -266,24 +274,60 @@ fn require_content(diagram: Diagram) -> Result<Diagram, MermaidError> {
 }
 
 fn render(diagram: &Diagram, source: &str) -> Result<String, MermaidError> {
-    let node_width = 150usize;
     let node_height = 52usize;
     let spacing = 70usize;
-    let (width, height) = match diagram.direction {
-        Direction::Horizontal => (60 + diagram.nodes.len() * (node_width + spacing), 190usize),
-        Direction::Vertical => (430usize, 50 + diagram.nodes.len() * (node_height + spacing)),
-    };
-    let positions: Vec<(usize, usize)> = (0..diagram.nodes.len())
-        .map(|index| match diagram.direction {
-            Direction::Horizontal => (40 + index * (node_width + spacing), 65),
-            Direction::Vertical => (140, 30 + index * (node_height + spacing)),
-        })
+    let node_widths: Vec<usize> = diagram
+        .nodes
+        .iter()
+        .map(|node| node_width_for_label(&node.label))
         .collect();
+    let (width, height, positions) = match diagram.direction {
+        Direction::Horizontal => {
+            let width = 80
+                + node_widths.iter().sum::<usize>()
+                + spacing * diagram.nodes.len().saturating_sub(1);
+            let height = 190;
+            let mut x = 40;
+            let positions: Vec<NodeLayout> = node_widths
+                .iter()
+                .map(|node_width| {
+                    let layout = NodeLayout {
+                        x,
+                        y: (height - node_height) / 2,
+                        width: *node_width,
+                        height: node_height,
+                    };
+                    x += node_width + spacing;
+                    layout
+                })
+                .collect();
+            (width, height, positions)
+        }
+        Direction::Vertical => {
+            let maximum_node_width = node_widths.iter().copied().max().unwrap_or(96);
+            let width = 430.max(maximum_node_width + 160);
+            let height = 60
+                + diagram.nodes.len() * node_height
+                + spacing * diagram.nodes.len().saturating_sub(1);
+            let positions: Vec<NodeLayout> = node_widths
+                .iter()
+                .enumerate()
+                .map(|(index, node_width)| NodeLayout {
+                    x: (width - node_width) / 2,
+                    y: 30 + index * (node_height + spacing),
+                    width: *node_width,
+                    height: node_height,
+                })
+                .collect();
+            (width, height, positions)
+        }
+    };
     let mut output = format!(
         "<figure class=\"mermaid-diagram\" aria-label=\"{}\"><svg xmlns=\"http://www.w3.org/2000/svg\" role=\"img\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" aria-label=\"{}\"><defs><marker id=\"inflow-arrow\" markerWidth=\"10\" markerHeight=\"10\" refX=\"9\" refY=\"3\" orient=\"auto\"><path d=\"M0,0 L0,6 L9,3 z\" fill=\"currentColor\"/></marker></defs>",
         diagram.kind,
         escape(source)
     );
+    let mut edge_labels = Vec::new();
     for (edge_index, edge) in diagram.edges.iter().enumerate() {
         let from_index = diagram
             .nodes
@@ -295,13 +339,10 @@ fn render(diagram: &Diagram, source: &str) -> Result<String, MermaidError> {
             .iter()
             .position(|node| node.id == edge.to)
             .ok_or(MermaidError::InvalidSyntax)?;
-        let (from_x, from_y) = positions[from_index];
-        let (to_x, to_y) = positions[to_index];
         let (path, label_x, label_y, routed) = edge_path(
             diagram.direction,
-            (from_x, from_y),
-            (to_x, to_y),
-            (node_width, node_height),
+            positions[from_index],
+            positions[to_index],
             (width, height),
             from_index,
             to_index,
@@ -318,19 +359,29 @@ fn render(diagram: &Diagram, source: &str) -> Result<String, MermaidError> {
             "<path class=\"edge{route_class}\" d=\"{path}\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"{dash} marker-end=\"url(#inflow-arrow)\"/>"
         );
         if !edge.label.is_empty() {
-            let _ = write!(
-                output,
-                "<text x=\"{label_x}\" y=\"{label_y}\" text-anchor=\"middle\" class=\"edge-label\">{}</text>",
-                escape(&edge.label)
-            );
+            edge_labels.push((edge.label.as_str(), label_x, label_y));
         }
     }
-    for (node, (x, y)) in diagram.nodes.iter().zip(positions) {
+    for (label, label_x, label_y) in edge_labels {
+        let label_width = text_width(label) + 16;
+        let label_x_origin = label_x.saturating_sub(label_width / 2);
+        let label_y_origin = label_y.saturating_sub(11);
         let _ = write!(
             output,
-            "<g class=\"node\"><rect x=\"{x}\" y=\"{y}\" width=\"{node_width}\" height=\"{node_height}\" rx=\"9\"/><text x=\"{}\" y=\"{}\" text-anchor=\"middle\" dominant-baseline=\"middle\">{}</text></g>",
-            x + node_width / 2,
-            y + node_height / 2,
+            "<rect x=\"{label_x_origin}\" y=\"{label_y_origin}\" width=\"{label_width}\" height=\"22\" rx=\"4\" class=\"edge-label-background\"/><text x=\"{label_x}\" y=\"{label_y}\" text-anchor=\"middle\" dominant-baseline=\"middle\" class=\"edge-label\">{}</text>",
+            escape(label)
+        );
+    }
+    for (node, layout) in diagram.nodes.iter().zip(positions) {
+        let _ = write!(
+            output,
+            "<g class=\"node\"><rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"9\"/><text x=\"{}\" y=\"{}\" text-anchor=\"middle\" dominant-baseline=\"middle\">{}</text></g>",
+            layout.x,
+            layout.y,
+            layout.width,
+            layout.height,
+            layout.x + layout.width / 2,
+            layout.y + layout.height / 2,
             escape(&node.label)
         );
     }
@@ -338,41 +389,49 @@ fn render(diagram: &Diagram, source: &str) -> Result<String, MermaidError> {
     Ok(output)
 }
 
+fn node_width_for_label(label: &str) -> usize {
+    (text_width(label) + 32).max(96)
+}
+
+fn text_width(text: &str) -> usize {
+    text.chars()
+        .map(|character| if character.is_ascii() { 8 } else { 14 })
+        .sum()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn edge_path(
     direction: Direction,
-    from: (usize, usize),
-    to: (usize, usize),
-    node_size: (usize, usize),
+    from: NodeLayout,
+    to: NodeLayout,
     canvas_size: (usize, usize),
     from_index: usize,
     to_index: usize,
     edge_index: usize,
 ) -> (String, usize, usize, bool) {
-    let (node_width, node_height) = node_size;
     let is_adjacent_forward = to_index == from_index + 1;
     match direction {
         Direction::Horizontal if is_adjacent_forward => {
-            let start = (from.0 + node_width, from.1 + node_height / 2);
-            let end = (to.0, to.1 + node_height / 2);
+            let start = (from.x + from.width, from.y + from.height / 2);
+            let end = (to.x, to.y + to.height / 2);
             (
                 format!("M {} {} L {} {}", start.0, start.1, end.0, end.1),
                 usize::midpoint(start.0, end.0),
-                usize::midpoint(start.1, end.1).saturating_sub(7),
+                usize::midpoint(start.1, end.1),
                 false,
             )
         }
         Direction::Horizontal => {
-            let forward = to_index > from_index;
+            let forward = to.x > from.x;
             let start = if forward {
-                (from.0 + node_width, from.1 + node_height / 2)
+                (from.x + from.width, from.y + from.height / 2)
             } else {
-                (from.0, from.1 + node_height / 2)
+                (from.x, from.y + from.height / 2)
             };
             let end = if forward {
-                (to.0, to.1 + node_height / 2)
+                (to.x, to.y + to.height / 2)
             } else {
-                (to.0 + node_width, to.1 + node_height / 2)
+                (to.x + to.width, to.y + to.height / 2)
             };
             let lane_offset = [0, 14][(edge_index / 2) % 2];
             let lane = if edge_index.is_multiple_of(2) {
@@ -396,31 +455,31 @@ fn edge_path(
                     start.0, start.1, end.1, end.0
                 ),
                 usize::midpoint(exit, entrance),
-                lane.saturating_sub(7),
+                lane,
                 true,
             )
         }
         Direction::Vertical if is_adjacent_forward => {
-            let start = (from.0 + node_width / 2, from.1 + node_height);
-            let end = (to.0 + node_width / 2, to.1);
+            let start = (from.x + from.width / 2, from.y + from.height);
+            let end = (to.x + to.width / 2, to.y);
             (
                 format!("M {} {} L {} {}", start.0, start.1, end.0, end.1),
                 usize::midpoint(start.0, end.0),
-                usize::midpoint(start.1, end.1).saturating_sub(7),
+                usize::midpoint(start.1, end.1),
                 false,
             )
         }
         Direction::Vertical => {
-            let forward = to_index > from_index;
+            let forward = to.y > from.y;
             let start = if forward {
-                (from.0 + node_width / 2, from.1 + node_height)
+                (from.x + from.width / 2, from.y + from.height)
             } else {
-                (from.0 + node_width / 2, from.1)
+                (from.x + from.width / 2, from.y)
             };
             let end = if forward {
-                (to.0 + node_width / 2, to.1)
+                (to.x + to.width / 2, to.y)
             } else {
-                (to.0 + node_width / 2, to.1 + node_height)
+                (to.x + to.width / 2, to.y + to.height)
             };
             let lane_offset = [0, 18][(edge_index / 2) % 2];
             let lane = if edge_index.is_multiple_of(2) {
@@ -444,7 +503,7 @@ fn edge_path(
                     start.0, start.1, end.0, end.1
                 ),
                 lane,
-                usize::midpoint(exit, entrance).saturating_sub(7),
+                usize::midpoint(exit, entrance),
                 true,
             )
         }
@@ -541,6 +600,14 @@ mod tests {
 
         assert!(output.contains("stroke-dasharray=\"6 5\""));
         assert_eq!(output.matches("class=\"edge-label\"").count(), 3);
+        assert_eq!(output.matches("class=\"edge-label-background\"").count(), 3);
+        assert!(
+            output.rfind("marker-end").expect("last edge")
+                < output
+                    .find("class=\"edge-label-background\"")
+                    .expect("first label background"),
+            "edge labels must paint after every connector"
+        );
         assert!(output.contains(">贯穿</text>"));
         assert!(output.contains(">服务</text>"));
         assert!(!output.contains("mermaid-error"));
@@ -550,11 +617,29 @@ mod tests {
     fn routes_non_adjacent_edges_around_intermediate_nodes() {
         let output = svg("flowchart LR\nA --> B\nB --> C\nA -->|跳过| C").expect("supported graph");
 
-        assert!(output.contains("width=\"720\" height=\"190\""));
+        assert!(output.contains("width=\"508\" height=\"190\""));
         assert!(output.contains("class=\"edge edge-routed\""));
         assert!(output.contains(" H "));
         assert!(output.contains(" V "));
         assert!(output.contains(">跳过</text>"));
+    }
+
+    #[test]
+    fn sizes_nodes_from_labels_and_keeps_edges_outside_node_interiors() {
+        let label = "接手文件 → 形成内容 → 理解结构 → 验证结果";
+        let output =
+            svg(&format!("flowchart LR\nA[开始] --> B[{label}]")).expect("supported graph");
+        let expected_width = node_width_for_label(label);
+
+        assert!(expected_width > 150);
+        assert!(output.contains(&format!("width=\"{expected_width}\" height=\"52\"")));
+        assert!(output.contains("d=\"M 136 95 L 206 95\""));
+        let edge_position = output.find("class=\"edge\"").expect("edge");
+        let node_position = output.find("class=\"node\"").expect("node");
+        assert!(
+            edge_position < node_position,
+            "opaque nodes must paint above edges"
+        );
     }
 
     #[test]

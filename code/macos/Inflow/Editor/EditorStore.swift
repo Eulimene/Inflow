@@ -46,7 +46,9 @@ final class EditorStore: ObservableObject {
 
     init(
         sourceEditorSession: MarkdownSourceEditorSession,
-        renderedPreviewSession: MarkdownSourceEditorSession = MarkdownSourceEditorSession(),
+        renderedPreviewSession: MarkdownSourceEditorSession = MarkdownSourceEditorSession(
+            role: .renderedProjection
+        ),
         initialState: EditorViewState = .initial
     ) {
         self.sourceEditorSession = sourceEditorSession

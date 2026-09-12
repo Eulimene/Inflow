@@ -410,7 +410,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertNil(activatedTarget)
 
         let diagram = try XCTUnwrap(plan.mermaidDiagrams.first)
-        XCTAssertEqual(diagram.intrinsicWidth, 500)
+        XCTAssertEqual(diagram.intrinsicWidth, 342)
         XCTAssertEqual(diagram.intrinsicHeight, 190)
         XCTAssertNotNil(
             session.textView.renderedImage(
@@ -422,7 +422,8 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                 atUTF16Location: diagram.sourceRange.utf16Range.location
             )
         )
-        XCTAssertGreaterThan(diagramSize.width, CGFloat(diagram.intrinsicWidth))
+        XCTAssertEqual(diagramSize.width, CGFloat(diagram.intrinsicWidth), accuracy: 0.001)
+        XCTAssertEqual(diagramSize.height, CGFloat(diagram.intrinsicHeight), accuracy: 0.001)
         XCTAssertEqual(
             diagramSize.width / diagramSize.height,
             CGFloat(diagram.intrinsicWidth) / CGFloat(diagram.intrinsicHeight),
@@ -431,12 +432,20 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertEqual(session.textView.string, source)
         XCTAssertFalse(session.textView.undoManager?.canUndo == true)
 
-        let readOnlySession = MarkdownSourceEditorSession()
+        let readOnlySession = MarkdownSourceEditorSession(role: .renderedProjection)
         readOnlySession.scrollView.frame = session.scrollView.frame
-        readOnlySession.textView.string = source
         readOnlySession.textView.isEditable = false
+        readOnlySession.setPresentation(.rendered, source: "", onLinkClick: nil)
+        XCTAssertEqual(readOnlySession.textView.string, "")
         readOnlySession.installSharedRenderedPlan(content.nativeRenderPlan, source: source)
-        readOnlySession.setPresentation(.rendered, source: source, onLinkClick: nil)
+        XCTAssertEqual(readOnlySession.textView.string, source)
+        let initialProjectionPassCount = readOnlySession.renderedPresentationPassCount
+        readOnlySession.installSharedRenderedPlan(content.nativeRenderPlan, source: source)
+        XCTAssertEqual(
+            readOnlySession.renderedPresentationPassCount,
+            initialProjectionPassCount,
+            "repeated open/file notifications must not rebuild an unchanged rendered snapshot"
+        )
         let readOnlyTable = try XCTUnwrap(
             readOnlySession.textView.renderedTable(
                 atUTF16Location: table.sourceRange.utf16Range.location
@@ -1138,6 +1147,13 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         _ = await session.deriveContent(for: source, configuration: .default)
         session.textView.undoManager?.removeAllActions()
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let initialPassCount = session.renderedPresentationPassCount
+        _ = await session.deriveContent(for: source, configuration: .default)
+        XCTAssertEqual(
+            session.renderedPresentationPassCount,
+            initialPassCount,
+            "duplicate open notifications must not flash the editable rendered surface"
+        )
 
         let titleLocation = try XCTUnwrap((source as NSString).range(of: "Title").nonEmptyLocation)
         let initialFont = try XCTUnwrap(
@@ -1238,7 +1254,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         """
         let plan = RenderedMarkdownEditor.plan(for: source)
         let diagram = try XCTUnwrap(plan.mermaidDiagrams.first)
-        XCTAssertEqual(diagram.intrinsicWidth, 1_380)
+        XCTAssertEqual(diagram.intrinsicWidth, 1_006)
         XCTAssertEqual(diagram.intrinsicHeight, 190)
 
         let session = MarkdownSourceEditorSession()
@@ -1266,6 +1282,38 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         let wide = try XCTUnwrap(session.textView.renderedImageSize(atUTF16Location: location))
         XCTAssertGreaterThan(wide.width, narrow.width)
         XCTAssertLessThanOrEqual(wide.width, session.scrollView.contentSize.width)
+    }
+
+    @MainActor
+    func testSmallMermaidUsesIntrinsicSizeWithoutCreatingViewportWhitespace() async throws {
+        let source = "```mermaid\nflowchart LR\nA[开始] --> B[结束]\n```\n\n正文"
+        let session = MarkdownSourceEditorSession()
+        session.scrollView.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
+        session.scrollView.layoutSubtreeIfNeeded()
+        session.textView.string = source
+        let derivedContent = await session.deriveContent(
+            for: source,
+            configuration: .default
+        )
+        let content = try XCTUnwrap(derivedContent)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let diagram = try XCTUnwrap(content.nativeRenderPlan.mermaidDiagrams.first)
+        let size = try XCTUnwrap(
+            session.textView.renderedImageSize(
+                atUTF16Location: diagram.sourceRange.utf16Range.location
+            )
+        )
+
+        XCTAssertEqual(size.width, CGFloat(diagram.intrinsicWidth), accuracy: 0.001)
+        XCTAssertEqual(size.height, CGFloat(diagram.intrinsicHeight), accuracy: 0.001)
+        let paragraph = try XCTUnwrap(
+            session.textView.textStorage?.attribute(
+                .paragraphStyle,
+                at: diagram.sourceRange.utf16Range.location,
+                effectiveRange: nil
+            ) as? NSParagraphStyle
+        )
+        XCTAssertLessThanOrEqual(paragraph.minimumLineHeight, size.height + 10.001)
     }
 
     @MainActor

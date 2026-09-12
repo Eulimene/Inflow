@@ -48,7 +48,7 @@ struct MarkdownEditorView: View {
         self.tearsDownWhenRemovedFromWorkspace = tearsDownWhenRemovedFromWorkspace
         self.isWorkspaceSurfaceActive = isWorkspaceSurfaceActive
         let sourceEditorSession = sourceEditorSessionOverride ?? MarkdownSourceEditorSession()
-        let renderedPreviewSession = MarkdownSourceEditorSession()
+        let renderedPreviewSession = MarkdownSourceEditorSession(role: .renderedProjection)
         _sourceEditorSession = StateObject(wrappedValue: sourceEditorSession)
         _renderedPreviewSession = StateObject(wrappedValue: renderedPreviewSession)
         _editorStore = StateObject(

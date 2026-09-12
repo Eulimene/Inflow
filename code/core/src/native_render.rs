@@ -1103,7 +1103,7 @@ mod tests {
         );
         assert_eq!(plan.tables[0].rows[1][0].text, "x");
         assert_eq!(plan.mermaid_diagrams.len(), 1);
-        assert_eq!(plan.mermaid_diagrams[0].intrinsic_width, 500);
+        assert_eq!(plan.mermaid_diagrams[0].intrinsic_width, 342);
         assert_eq!(plan.mermaid_diagrams[0].intrinsic_height, 190);
         assert!(
             plan.local_source_blocks

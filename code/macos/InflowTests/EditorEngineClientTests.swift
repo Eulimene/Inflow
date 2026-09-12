@@ -5,7 +5,7 @@ final class EditorEngineClientTests: XCTestCase {
     @MainActor
     func testEditorStorePublishesOnlyTheLatestDerivedIntent() async throws {
         let session = MarkdownSourceEditorSession()
-        let previewSession = MarkdownSourceEditorSession()
+        let previewSession = MarkdownSourceEditorSession(role: .renderedProjection)
         session.textView.string = "# Old"
         previewSession.textView.string = "# Old"
         previewSession.textView.isEditable = false

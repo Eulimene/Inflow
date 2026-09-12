@@ -1,6 +1,11 @@
 import AppKit
 import SwiftUI
 
+enum MarkdownSourceEditorSessionRole: Equatable {
+    case document
+    case renderedProjection
+}
+
 @MainActor
 final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     let scrollView: NSScrollView
@@ -44,8 +49,15 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var pendingOptimisticText: String?
     private var focusModeEnabled = false
     private var typewriterModeEnabled = false
+    private let role: MarkdownSourceEditorSessionRole
+    private(set) var renderedPresentationPassCount = 0
 
-    override init() {
+    override convenience init() {
+        self.init(role: .document)
+    }
+
+    init(role: MarkdownSourceEditorSessionRole) {
+        self.role = role
         engineClient = EditorEngineClient()
         let scrollView = NSScrollView()
         scrollView.borderType = .noBorder
@@ -96,7 +108,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         self.textView = textView
         self.lineNumberRuler = lineNumberRuler
         super.init()
-        textView.usesEngineHistory = true
+        textView.usesEngineHistory = role == .document
         textView.allowsUndo = false
         textView.undoManager?.disableUndoRegistration()
         textView.engineUndoHandler = { [weak self] in
@@ -113,12 +125,13 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             self?.applyAuthoritativeSnapshot(snapshot)
         }
         textView.compositionDidCommitHandler = { [weak self] text, selection in
-            guard let self else { return }
+            guard let self, self.role == .document else { return }
             self.pendingOptimisticText = text
             self.engineClient.submit(text: text, selectionUTF16: selection)
         }
         textView.textDidChangeHandler = { [weak self] text in
-            if let self, !self.isApplyingEngineMutation, !self.textView.hasMarkedText() {
+            guard let self, self.role == .document else { return }
+            if !self.isApplyingEngineMutation, !self.textView.hasMarkedText() {
                 self.pendingOptimisticText = text
                 self.engineClient.submit(
                     text: text,
@@ -126,13 +139,13 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                     groupID: self.textView.consumeEngineEditGroupID()
                 )
             } else {
-                _ = self?.textView.consumeEngineEditGroupID()
+                _ = self.textView.consumeEngineEditGroupID()
             }
-            self?.invalidateSyntaxApplication()
-            self?.scheduleFormatInspection()
-            self?.lineNumberRuler.updateText(text)
-            self?.refreshWritingModePresentation()
-            self?.scheduleRenderedPresentation(for: text)
+            self.invalidateSyntaxApplication()
+            self.scheduleFormatInspection()
+            self.lineNumberRuler.updateText(text)
+            self.refreshWritingModePresentation()
+            self.scheduleRenderedPresentation(for: text)
         }
         textView.focusDidChangeHandler = { [weak self] in
             self?.scheduleRenderedInteractionPresentation()
@@ -220,12 +233,14 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             configuration: configuration
         ) else { return nil }
         guard content.nativeRenderPlan.exactlyMatches(source) else { return nil }
+        let planChanged = engineRenderedPlan != content.nativeRenderPlan
         engineRenderedPlan = content.nativeRenderPlan
         if presentation == .rendered,
            UTF8Text.isExactlyEqual(textView.string, source),
-           !textView.hasMarkedText()
+           !textView.hasMarkedText(),
+           planChanged || !renderedPresentationIsCurrent(source: source)
         {
-            applyRenderedPresentation(source: source, force: true)
+            applyRenderedPresentation(source: source, force: planChanged)
         }
         return content
     }
@@ -240,13 +255,33 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         _ plan: RenderedMarkdownPlan?,
         source: String
     ) {
-        guard plan?.exactlyMatches(source) != false else { return }
+        guard let plan else {
+            engineRenderedPlan = nil
+            return
+        }
+        guard plan.exactlyMatches(source) else { return }
+        let planChanged = engineRenderedPlan != plan
         engineRenderedPlan = plan
+        if role == .renderedProjection,
+           !UTF8Text.isExactlyEqual(textView.string, source)
+        {
+            let selection = textView.selectedRange()
+            isApplyingEngineMutation = true
+            textView.string = source
+            isApplyingEngineMutation = false
+            let utf16Length = (source as NSString).length
+            textView.setSelectedRange(
+                NSRange(location: min(selection.location, utf16Length), length: 0)
+            )
+            invalidateSyntaxApplication()
+            lineNumberRuler.updateText(source)
+        }
         guard presentation == .rendered,
               UTF8Text.isExactlyEqual(textView.string, source),
               !textView.hasMarkedText()
         else { return }
-        applyRenderedPresentation(source: source, force: true)
+        guard planChanged || !renderedPresentationIsCurrent(source: source) else { return }
+        applyRenderedPresentation(source: source, force: planChanged)
     }
 
     @discardableResult
@@ -840,7 +875,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 image,
                 alternative: "Mermaid 图表",
                 sourceRange: diagram.sourceRange.utf16Range,
-                fillsAvailableWidth: true,
+                fillsAvailableWidth: false,
                 storage: storage
             )
         }
@@ -850,6 +885,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.renderedCollapsedSourceRanges = collapsedRanges
         renderedAppliedAppearance = sourceAppearance
         renderedAppliedTheme = renderedTheme
+        renderedPresentationPassCount &+= 1
         textView.setSelectedRange(selection)
         syncRenderedTypingAttributes()
         refreshWritingModePresentation()
@@ -1197,8 +1233,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             with: """
             <defs><style>
             .node rect { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
+            .edge-label-background { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1; }
             text { fill: #24292f; font: 14px -apple-system, BlinkMacSystemFont, sans-serif; }
-            line, marker path { color: #57606a; }
+            .edge, marker path { color: #57606a; }
             </style>
             """
         )
@@ -1861,8 +1898,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     fileprivate func synchronizeEngine(text: String, selection: NSRange) {
-        guard !textView.hasMarkedText() else { return }
+        guard role == .document, !textView.hasMarkedText() else { return }
         engineClient.submit(text: text, selectionUTF16: selection)
+    }
+
+    fileprivate var isRenderedProjection: Bool {
+        role == .renderedProjection
     }
 
     fileprivate func preservesOptimisticText(over boundText: String) -> Bool {
@@ -3804,9 +3845,13 @@ struct MarkdownSourceEditor: NSViewRepresentable {
         func update(parent: MarkdownSourceEditor, textView: WindowAwareTextView) {
             self.parent = parent
             let textBinding = parent.$text
-            parent.session.updateBoundText = { updatedText in
-                if !UTF8Text.isExactlyEqual(textBinding.wrappedValue, updatedText) {
-                    textBinding.wrappedValue = updatedText
+            if parent.session.isRenderedProjection {
+                parent.session.updateBoundText = nil
+            } else {
+                parent.session.updateBoundText = { updatedText in
+                    if !UTF8Text.isExactlyEqual(textBinding.wrappedValue, updatedText) {
+                        textBinding.wrappedValue = updatedText
+                    }
                 }
             }
             textView.delegate = self
@@ -3823,10 +3868,10 @@ struct MarkdownSourceEditor: NSViewRepresentable {
                 self.applyPendingSelection(to: textView)
             }
 
-            let preservesOptimisticText = parent.session.preservesOptimisticText(
-                over: parent.text
-            )
-            let textChanged = !preservesOptimisticText
+            let preservesOptimisticText = !parent.session.isRenderedProjection
+                && parent.session.preservesOptimisticText(over: parent.text)
+            let textChanged = !parent.session.isRenderedProjection
+                && !preservesOptimisticText
                 && !UTF8Text.isExactlyEqual(textView.string, parent.text)
             if textChanged {
                 let selection = textView.selectedRange()

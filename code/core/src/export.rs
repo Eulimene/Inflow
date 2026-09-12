@@ -163,6 +163,7 @@ const DOCUMENT_PREFIX: &str = r#"<!doctype html>
     .mermaid-diagram { margin: 1.4em 0; overflow-x: auto; }
     .mermaid-diagram svg { min-width: 420px; width: 100%; height: auto; color: currentColor; }
     .mermaid-diagram .node rect { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
+    .mermaid-diagram .edge-label-background { fill: #fff; stroke: #d0d7de; stroke-width: 1; }
     .mermaid-diagram text { fill: currentColor; font: 14px -apple-system, BlinkMacSystemFont, sans-serif; }
     .mermaid-error { border: 1px solid #d4a72c; border-radius: 8px; padding: 12px 14px; color: #9a6700; }
     .task-list-item { list-style: none; } input[type="checkbox"] { margin: 0 .45em 0 -1.35em; }
@@ -181,6 +182,7 @@ const DOCUMENT_PREFIX: &str = r#"<!doctype html>
       .tok-tag { color: #7ee787; }
       hr { background: #30363d; }
       .mermaid-diagram .node rect { fill: #161b22; stroke: #8b949e; }
+      .mermaid-diagram .edge-label-background { fill: #0d1117; stroke: #30363d; }
       .math-error { color: #d29922; border-color: #9e6a03; }
       .mermaid-error { color: #d29922; border-color: #9e6a03; }
     }
