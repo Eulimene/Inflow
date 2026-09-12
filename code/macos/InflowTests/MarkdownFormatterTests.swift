@@ -3,21 +3,13 @@ import XCTest
 @testable import Inflow
 
 final class MarkdownFormatterTests: XCTestCase {
-    func testFormatABILayoutAndCommandValuesMatchRustContract() {
-        XCTAssertEqual(MemoryLayout<InflowMarkdownEditResult>.size, 56)
-        XCTAssertEqual(MemoryLayout<InflowMarkdownEditResult>.alignment, 8)
-        XCTAssertEqual(MarkdownInlineFormat.bold.coreValue, UInt8(INFLOW_INLINE_FORMAT_BOLD))
-        XCTAssertEqual(MarkdownInlineFormat.italic.coreValue, UInt8(INFLOW_INLINE_FORMAT_ITALIC))
-        XCTAssertEqual(
-            MarkdownInlineFormat.strikethrough.coreValue,
-            UInt8(INFLOW_INLINE_FORMAT_STRIKETHROUGH)
-        )
-        XCTAssertEqual(MarkdownListFormat.ordered.coreValue, UInt8(INFLOW_LIST_FORMAT_ORDERED))
-        XCTAssertEqual(
-            MarkdownListFormat.unordered.coreValue,
-            UInt8(INFLOW_LIST_FORMAT_UNORDERED)
-        )
-        XCTAssertEqual(MarkdownListFormat.task.coreValue, UInt8(INFLOW_LIST_FORMAT_TASK))
+    func testFormatCommandValuesRemainStable() {
+        XCTAssertEqual(MarkdownInlineFormat.bold.rawValue, 1)
+        XCTAssertEqual(MarkdownInlineFormat.italic.rawValue, 2)
+        XCTAssertEqual(MarkdownInlineFormat.strikethrough.rawValue, 3)
+        XCTAssertEqual(MarkdownListFormat.ordered.rawValue, 2)
+        XCTAssertEqual(MarkdownListFormat.unordered.rawValue, 1)
+        XCTAssertEqual(MarkdownListFormat.task.rawValue, 3)
     }
 
     func testPlansUnicodeBoldUsingUTF16SelectionAndUTF8CoreRanges() throws {

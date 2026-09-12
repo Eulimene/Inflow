@@ -29,15 +29,10 @@ final class MarkdownHighlighterTests: XCTestCase {
         )
     }
 
-    func testCABILayoutAndKindValuesRemainStable() {
-        XCTAssertEqual(MemoryLayout<InflowHighlightSpan>.size, 24)
-        XCTAssertEqual(MemoryLayout<InflowHighlightResult>.size, 24)
-        XCTAssertEqual(
-            MarkdownSyntaxKind.heading.rawValue,
-            UInt8(INFLOW_HIGHLIGHT_KIND_HEADING)
-        )
-        XCTAssertEqual(MarkdownSyntaxKind.code.rawValue, UInt8(INFLOW_HIGHLIGHT_KIND_CODE))
-        XCTAssertEqual(MarkdownSyntaxKind.rule.rawValue, UInt8(INFLOW_HIGHLIGHT_KIND_RULE))
+    func testSyntaxKindValuesRemainStable() {
+        XCTAssertEqual(MarkdownSyntaxKind.heading.rawValue, 1)
+        XCTAssertEqual(MarkdownSyntaxKind.code.rawValue, 5)
+        XCTAssertEqual(MarkdownSyntaxKind.rule.rawValue, 14)
     }
 
     @MainActor

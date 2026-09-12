@@ -269,11 +269,13 @@ final class MarkdownSearcherTests: XCTestCase {
         XCTAssertEqual(session.currentMatch?.utf8Range, 12..<17)
     }
 
-    func testSearchABILayoutMatchesRustContractOnArm64() {
-        XCTAssertEqual(MemoryLayout<InflowSearchMatch>.size, 16)
-        XCTAssertEqual(MemoryLayout<InflowSearchMatch>.alignment, 8)
-        XCTAssertEqual(MemoryLayout<InflowOwnedSearchMatches>.size, 16)
-        XCTAssertEqual(MemoryLayout<InflowSearchResult>.size, 24)
+    func testSearchResultUsesRevisionSafeSwiftValues() throws {
+        let result = try MarkdownSearcher.searchResult(
+            in: "alpha α alpha",
+            query: "alpha",
+            caseSensitive: true
+        )
+        XCTAssertEqual(result.matches.map(\.utf8Range), [0..<5, 9..<14])
     }
 
     func testRenderedEditingViewKeepsFindInTheCurrentEditableMode() {

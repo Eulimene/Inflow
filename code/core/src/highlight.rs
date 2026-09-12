@@ -5,7 +5,9 @@ use std::ops::Range;
 use pulldown_cmark::{Event, Tag};
 use serde::Serialize;
 
-use crate::markdown_ir::{DocumentIr, dialect_options};
+use crate::markdown_ir::DocumentIr;
+#[cfg(test)]
+use crate::markdown_ir::dialect_options;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -33,6 +35,7 @@ pub struct HighlightSpan {
     pub source_range: Range<usize>,
 }
 
+#[cfg(test)]
 pub fn spans(source: &str) -> Vec<HighlightSpan> {
     let document = DocumentIr::parse(source, dialect_options(true));
     spans_from_document(&document)

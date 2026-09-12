@@ -61,37 +61,15 @@ enum MarkdownCodecError: Error, Equatable, LocalizedError {
 
 enum MarkdownCodec {
     static func decode(_ data: Data) throws -> DecodedMarkdown {
-        let result: InflowDocumentOpenResult = data.withUnsafeBytes { buffer in
-            inflow_document_open(
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count)
-            )
-        }
-        guard result.status == INFLOW_STATUS_OK else {
-            throw error(for: result.status)
-        }
-
-        let decodedData: Data
         do {
-            decodedData = try InflowCoreBridge.copyAndFree(result.utf8)
+            return try EditorEngineDocumentCodec.decodeSynchronously(data)
+        } catch EditorEngineDocumentCodecError.invalidUTF8 {
+            throw MarkdownCodecError.invalidUTF8
+        } catch EditorEngineDocumentCodecError.mixedLineEndings {
+            throw MarkdownCodecError.mixedLineEndings
         } catch {
             throw MarkdownCodecError.coreFailure
         }
-        guard let text = String(data: decodedData, encoding: .utf8) else {
-            throw MarkdownCodecError.coreFailure
-        }
-        guard let lineEnding = MarkdownLineEnding(rawValue: result.line_ending) else {
-            throw MarkdownCodecError.coreFailure
-        }
-
-        return DecodedMarkdown(
-            text: text,
-            properties: MarkdownFileProperties(
-                hasUTF8BOM: result.has_utf8_bom != 0,
-                lineEnding: lineEnding,
-                requiresLineEndingChoice: result.requires_line_ending_choice != 0
-            )
-        )
     }
 
     static func encode(
@@ -101,36 +79,13 @@ enum MarkdownCodec {
         guard !properties.requiresLineEndingChoice else {
             throw MarkdownCodecError.mixedLineEndings
         }
-        let utf8 = Data(text.utf8)
-        let result: InflowEncodeResult = utf8.withUnsafeBytes { buffer in
-            inflow_document_encode(
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count),
-                properties.hasUTF8BOM ? 1 : 0,
-                properties.lineEnding.rawValue
-            )
-        }
-        guard result.status == INFLOW_STATUS_OK else {
-            throw error(for: result.status)
-        }
-
         do {
-            return try InflowCoreBridge.copyAndFree(result.bytes)
+            return try EditorEngineDocumentCodec.encodeSynchronously(
+                text,
+                properties: properties
+            )
         } catch {
             throw MarkdownCodecError.coreFailure
-        }
-    }
-
-    private static func error(for status: InflowStatus) -> MarkdownCodecError {
-        switch status {
-        case INFLOW_STATUS_INVALID_ARGUMENT:
-            .invalidArgument
-        case INFLOW_STATUS_INVALID_UTF8:
-            .invalidUTF8
-        case INFLOW_STATUS_MIXED_LINE_ENDINGS:
-            .mixedLineEndings
-        default:
-            .coreFailure
         }
     }
 }

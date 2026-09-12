@@ -332,17 +332,9 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertTrue(highContrast.contains(".tok-comment { text-decoration: underline dotted; }"))
     }
 
-    func testRenderOptionValuesMatchRustContract() {
-        XCTAssertEqual(UInt32(INFLOW_RENDER_OPTION_MATH), UInt32(1 << 0))
-        XCTAssertEqual(UInt32(INFLOW_RENDER_OPTION_MERMAID), UInt32(1 << 1))
-        XCTAssertEqual(
-            UInt32(INFLOW_RENDER_OPTIONS_DEFAULT),
-            UInt32(INFLOW_RENDER_OPTION_MATH | INFLOW_RENDER_OPTION_MERMAID)
-        )
-        XCTAssertEqual(
-            PreviewAppearanceConfiguration.default.coreRenderOptions,
-            UInt32(INFLOW_RENDER_OPTIONS_DEFAULT)
-        )
+    func testPresentationOptionsUseNamedEngineFields() {
+        XCTAssertTrue(PreviewAppearanceConfiguration.default.mathRenderingEnabled)
+        XCTAssertTrue(PreviewAppearanceConfiguration.default.mermaidRenderingEnabled)
     }
 
     func testVersionedDialectCorpusExecutesVerifiedCasesAndKeepsOpenGapsVisible() throws {

@@ -98,14 +98,9 @@ final class HTMLExporterTests: XCTestCase {
         }
     }
 
-    func testHTMLExportABILayoutMatchesRustContractOnArm64() {
-        XCTAssertEqual(MemoryLayout<InflowHTMLExportResult>.size, 32)
-        XCTAssertEqual(MemoryLayout<InflowHTMLExportResult>.alignment, 8)
-        XCTAssertEqual(UInt64(INFLOW_HTML_EXPORT_ISSUE_IMAGE), HTMLExportIssue.image.rawValue)
-        XCTAssertEqual(
-            UInt64(INFLOW_HTML_EXPORT_ISSUE_UNSAFE_LINK),
-            HTMLExportIssue.unsafeLink.rawValue
-        )
+    func testHTMLExportIssueValuesRemainStable() {
+        XCTAssertEqual(HTMLExportIssue.image.rawValue, 1)
+        XCTAssertEqual(HTMLExportIssue.unsafeLink.rawValue, 16)
     }
 
     func testExportUsesImmutableUTF8SnapshotAndStrictDocumentPolicy() throws {

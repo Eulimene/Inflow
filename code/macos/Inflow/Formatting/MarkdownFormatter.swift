@@ -21,13 +21,6 @@ enum MarkdownInlineFormat: UInt8, CaseIterable, Sendable {
         }
     }
 
-    var coreValue: UInt8 {
-        switch self {
-        case .bold: UInt8(INFLOW_INLINE_FORMAT_BOLD)
-        case .italic: UInt8(INFLOW_INLINE_FORMAT_ITALIC)
-        case .strikethrough: UInt8(INFLOW_INLINE_FORMAT_STRIKETHROUGH)
-        }
-    }
 }
 
 enum MarkdownHeadingLevel: UInt8, CaseIterable, Identifiable, Sendable {
@@ -67,13 +60,6 @@ enum MarkdownListFormat: UInt8, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var coreValue: UInt8 {
-        switch self {
-        case .ordered: UInt8(INFLOW_LIST_FORMAT_ORDERED)
-        case .unordered: UInt8(INFLOW_LIST_FORMAT_UNORDERED)
-        case .task: UInt8(INFLOW_LIST_FORMAT_TASK)
-        }
-    }
 }
 
 enum MarkdownFormatCommand: Equatable, Sendable {

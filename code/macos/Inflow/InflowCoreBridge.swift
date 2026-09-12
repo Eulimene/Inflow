@@ -23,6 +23,8 @@ enum InflowCoreBridge {
             rawValue: UInt64(INFLOW_CAPABILITY_ENGINE_PERSISTENCE)
         )
         static let engineMode = Self(rawValue: UInt64(INFLOW_CAPABILITY_ENGINE_MODE))
+        static let hostEffects = Self(rawValue: UInt64(INFLOW_CAPABILITY_HOST_EFFECTS))
+        static let documentCodec = Self(rawValue: UInt64(INFLOW_CAPABILITY_DOCUMENT_CODEC))
 
         static let editorRequired: Self = [
             .editorEngine,
@@ -34,6 +36,8 @@ enum InflowCoreBridge {
             .formatInspection,
             .enginePersistence,
             .engineMode,
+            .hostEffects,
+            .documentCodec,
         ]
     }
 
@@ -54,7 +58,7 @@ enum InflowCoreBridge {
     }
 
     static var isCompatible: Bool {
-        abiMajor == 2 && capabilities.isSuperset(of: .editorRequired)
+        abiMajor == 3 && capabilities.isSuperset(of: .editorRequired)
     }
 
     static func copyAndFree(_ bytes: InflowOwnedBytes) throws -> Data {

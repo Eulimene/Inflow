@@ -37,7 +37,7 @@ Inflow 是一款本地优先的 Markdown 写作工作台。当前代码只为产
 - 源码编辑、实时预览分栏和即时编辑都绑定同一 Markdown 文本与同一保存路径；源码与分栏左侧复用同一个持久 NSTextView 会话。
 - 即时编辑直接复用持久 NSTextView 与 Rust Core 的解析范围：普通文字、标题、行内代码、引用和列表在渲染态直接编辑。隐藏的 Markdown 标记保留所在文字的真实字号和行高，插入光标由可见字符的排版属性决定；只有围栏代码、Mermaid 等必须暴露结构的块才在光标进入时局部显示源码。
 - 光标移到另一块或编辑器失去焦点后，旧块立即恢复渲染；不再需要右上角“编辑源码/完成编辑”按钮，也不创建富文本副本。正文修改统一进入 Rust Engine 的撤销与重做历史。
-- 图片以不改写原文的布局覆盖呈现，加载前显示占位；表格保持带表头、对齐和网格线的原生渲染，宽度随编辑区自适应，单元格可直接编辑，右键菜单提供行列增删与列对齐；表格外的输入会复用既有表格视图。引用隐藏 `>` 并显示引用条。受支持的 Mermaid 通过专用 C ABI 由离线 Rust Core 直接生成 SVG，不再从 HTML 中截取；编辑 Mermaid 块时图表覆盖层会先卸载。围栏代码非编辑时隐藏围栏并呈现代码内容，光标进入时切换为局部源码。
+- 图片以不改写原文的布局覆盖呈现，加载前显示占位；表格保持带表头、对齐和网格线的原生渲染，宽度随编辑区自适应，单元格可直接编辑，右键菜单提供行列增删与列对齐；表格外的输入会复用既有表格视图。引用隐藏 `>` 并显示引用条。受支持的 Mermaid 由同一次 Rust Engine 派生为预览和原生计划生成 SVG，无专用 C ABI；编辑 Mermaid 块时图表覆盖层会先卸载。围栏代码非编辑时隐藏围栏并呈现代码内容，光标进入时切换为局部源码。
 - 输入法存在 marked text 时保留现有展示；链接默认单击导航，也可在“设置 > 预览”中改为只允许从右键菜单打开。文本和表格链接在鼠标悬停时都显示 Hover 背景。
 - 当前格式菜单只暴露粗体、斜体、行内代码、H1–H6、引用和无序/有序/任务列表；链接与固定表格模板位于插入菜单。
 
@@ -115,7 +115,7 @@ Rust 核心的独立检查：
     cargo clippy --manifest-path core/Cargo.toml --locked --all-targets -- -D warnings
     cargo test --manifest-path core/Cargo.toml --locked
 
-C ABI 声明由固定版本 `cbindgen 0.29.4` 通过 `cargo xtask bindings` 生成到 `core/include/generated/inflow_core.h`；`core/include/inflow_core.h` 只是稳定的引入外壳。生成结果必须提交，且上述检查和仓库级门禁会在绑定过期时失败。
+ABI 3 只暴露 Engine create/dispatch/snapshot/free 和 owned-bytes free，其余能力统一经 schema-versioned Command/StatePatch 传输。C 声明由固定版本 `cbindgen 0.29.4` 通过 `cargo xtask bindings` 生成到 `core/include/generated/inflow_core.h`；`core/include/inflow_core.h` 只是稳定的引入外壳。生成结果必须提交，且上述检查和仓库级门禁会在绑定过期时失败。
 需要独立分发核心时，`cargo xtask xcframework` 会用锁定工具链分别构建 arm64 与 x86_64 Release 静态库、合并为 universal binary，并连同生成 header 输出到 `build/InflowCore.xcframework`。
 
 个人首版的仓库级本地自动检查使用：

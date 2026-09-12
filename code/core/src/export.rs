@@ -5,14 +5,8 @@ use pulldown_cmark::{Event, Tag};
 use crate::markdown_ir::{DocumentIr, dialect_options};
 use crate::render;
 
-#[allow(dead_code)] // Reserved by the stable v1 C ABI for older core binaries.
-pub const ISSUE_IMAGE: u64 = 1 << 0;
-#[allow(dead_code)] // Reserved by the stable v1 C ABI for older core binaries.
-pub const ISSUE_FORMULA: u64 = 1 << 1;
-#[allow(dead_code)] // Reserved by the stable v1 C ABI for older core binaries.
-pub const ISSUE_MERMAID: u64 = 1 << 2;
-pub const ISSUE_LOCAL_LINK: u64 = 1 << 3;
-pub const ISSUE_UNSAFE_LINK: u64 = 1 << 4;
+pub(crate) const ISSUE_LOCAL_LINK: u64 = 1 << 3;
+pub(crate) const ISSUE_UNSAFE_LINK: u64 = 1 << 4;
 
 pub const MAX_HTML_BYTES: usize = 100 * 1024 * 1024;
 
@@ -40,6 +34,7 @@ pub fn html_document_with_configuration(
     html_document_with_limit(markdown, configuration, MAX_HTML_BYTES)
 }
 
+#[cfg(test)]
 pub fn prepare_html_document_with_configuration(
     markdown: &str,
     configuration: render::RenderConfiguration,

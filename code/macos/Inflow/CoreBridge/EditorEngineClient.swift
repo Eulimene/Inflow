@@ -130,6 +130,97 @@ extension EditorEngineHTMLExportPreparation {
     }
 }
 
+enum EditorEngineDocumentCodec {
+    static func decodeSynchronously(_ data: Data) throws -> DecodedMarkdown {
+        do {
+            return try withTemporaryEditorEngine(source: "") { handle in
+                let requestID = UUID().uuidString
+                let envelope = EditorEngineOpenBytesEnvelope(
+                    schemaVersion: 1,
+                    requestID: requestID,
+                    command: EditorEngineOpenBytesCommand(
+                        type: "open_bytes",
+                        baseRevision: 0,
+                        bytes: Array(data)
+                    )
+                )
+                let response = try dispatchTemporaryEditorEngine(envelope, to: handle)
+                guard response.requestID == requestID,
+                      response.patch.baseRevision == 0,
+                      response.patch.revision == 1,
+                      response.patch.effects.count == 1,
+                      let effect = response.patch.effects.first,
+                      effect.type == "document_opened",
+                      effect.revision == 1,
+                      let hasUTF8BOM = effect.hasUTF8BOM,
+                      let rawLineEnding = effect.lineEnding,
+                      let requiresChoice = effect.requiresLineEndingChoice
+                else { throw EditorEngineDocumentCodecError.coreFailure }
+                let mutation = try response.patch.validatedMutation(source: "")
+                let lineEnding: MarkdownLineEnding
+                switch rawLineEnding {
+                case "lf": lineEnding = .lf
+                case "crlf": lineEnding = .crlf
+                default: throw EditorEngineDocumentCodecError.coreFailure
+                }
+                return DecodedMarkdown(
+                    text: mutation.resultingSource,
+                    properties: MarkdownFileProperties(
+                        hasUTF8BOM: hasUTF8BOM,
+                        lineEnding: lineEnding,
+                        requiresLineEndingChoice: requiresChoice
+                    )
+                )
+            }
+        } catch EditorEngineBridgeError.core(_, let code, _) where code == "invalid_utf8" {
+            throw EditorEngineDocumentCodecError.invalidUTF8
+        } catch EditorEngineBridgeError.core(_, let code, _)
+            where code == "mixed_line_endings" {
+            throw EditorEngineDocumentCodecError.mixedLineEndings
+        } catch let error as EditorEngineDocumentCodecError {
+            throw error
+        } catch {
+            throw EditorEngineDocumentCodecError.coreFailure
+        }
+    }
+
+    static func encodeSynchronously(
+        _ source: String,
+        properties: MarkdownFileProperties
+    ) throws -> Data {
+        do {
+            return try withTemporaryEditorEngine(source: source) { handle in
+                let requestID = UUID().uuidString
+                let envelope = EditorEngineEncodeDocumentEnvelope(
+                    schemaVersion: 1,
+                    requestID: requestID,
+                    command: EditorEngineEncodeDocumentCommand(
+                        type: "encode_document",
+                        revision: 0,
+                        hasUTF8BOM: properties.hasUTF8BOM,
+                        lineEnding: properties.lineEnding == .lf ? "lf" : "crlf"
+                    )
+                )
+                let response = try dispatchTemporaryEditorEngine(envelope, to: handle)
+                guard response.requestID == requestID,
+                      response.patch.baseRevision == 0,
+                      response.patch.revision == 0,
+                      response.patch.effects.count == 1,
+                      let effect = response.patch.effects.first,
+                      effect.type == "document_encoded",
+                      effect.revision == 0,
+                      let bytes = effect.bytes
+                else { throw EditorEngineDocumentCodecError.coreFailure }
+                return Data(bytes)
+            }
+        } catch let error as EditorEngineDocumentCodecError {
+            throw error
+        } catch {
+            throw EditorEngineDocumentCodecError.coreFailure
+        }
+    }
+}
+
 extension DocumentSearchResult {
     static func searchSynchronously(
         source: String,
@@ -1198,6 +1289,56 @@ private struct EditorEngineOpenDocumentCommand: Encodable {
     }
 }
 
+private struct EditorEngineOpenBytesEnvelope: Encodable {
+    let schemaVersion: UInt32
+    let requestID: String
+    let command: EditorEngineOpenBytesCommand
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case requestID = "request_id"
+        case command
+    }
+}
+
+private struct EditorEngineOpenBytesCommand: Encodable {
+    let type: String
+    let baseRevision: UInt64
+    let bytes: [UInt8]
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case baseRevision = "base_revision"
+        case bytes
+    }
+}
+
+private struct EditorEngineEncodeDocumentEnvelope: Encodable {
+    let schemaVersion: UInt32
+    let requestID: String
+    let command: EditorEngineEncodeDocumentCommand
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case requestID = "request_id"
+        case command
+    }
+}
+
+private struct EditorEngineEncodeDocumentCommand: Encodable {
+    let type: String
+    let revision: UInt64
+    let hasUTF8BOM: Bool
+    let lineEnding: String
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case revision
+        case hasUTF8BOM = "has_utf8_bom"
+        case lineEnding = "line_ending"
+    }
+}
+
 private struct EditorEngineCommandEnvelope: Encodable {
     let schemaVersion: UInt32
     let requestID: String
@@ -1575,6 +1716,10 @@ private struct EditorEngineRawHostEffect: Decodable {
     let contentHash: String?
     let html: String?
     let warnings: UInt64?
+    let hasUTF8BOM: Bool?
+    let lineEnding: String?
+    let requiresLineEndingChoice: Bool?
+    let bytes: [UInt8]?
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -1584,6 +1729,10 @@ private struct EditorEngineRawHostEffect: Decodable {
         case contentHash = "content_hash"
         case html
         case warnings
+        case hasUTF8BOM = "has_utf8_bom"
+        case lineEnding = "line_ending"
+        case requiresLineEndingChoice = "requires_line_ending_choice"
+        case bytes
     }
 }
 

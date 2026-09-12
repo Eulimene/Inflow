@@ -207,16 +207,6 @@ struct PreviewAppearanceConfiguration: Equatable, Sendable {
         self.mermaidRenderingEnabled = mermaidRenderingEnabled
     }
 
-    var coreRenderOptions: UInt32 {
-        var options = UInt32(0)
-        if mathRenderingEnabled {
-            options |= UInt32(INFLOW_RENDER_OPTION_MATH)
-        }
-        if mermaidRenderingEnabled {
-            options |= UInt32(INFLOW_RENDER_OPTION_MERMAID)
-        }
-        return options
-    }
 }
 
 @MainActor

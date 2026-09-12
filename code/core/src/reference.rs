@@ -5,7 +5,9 @@ use std::ops::Range;
 use pulldown_cmark::{Event, Tag};
 use serde::Serialize;
 
-use crate::markdown_ir::{DocumentIr, dialect_options};
+use crate::markdown_ir::DocumentIr;
+#[cfg(test)]
+use crate::markdown_ir::dialect_options;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -22,6 +24,7 @@ pub struct MarkdownReference {
     pub source_range: Range<usize>,
 }
 
+#[cfg(test)]
 pub fn references(markdown: &str) -> Vec<MarkdownReference> {
     let document = DocumentIr::parse(markdown, dialect_options(true));
     references_from_document(&document)

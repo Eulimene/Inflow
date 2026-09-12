@@ -6,9 +6,10 @@ import XCTest
 @testable import Inflow
 
 final class MarkdownCodecTests: XCTestCase {
-    func testDocumentOpenABILayoutMatchesRustContractOnArm64() {
-        XCTAssertEqual(MemoryLayout<InflowDocumentOpenResult>.size, 32)
-        XCTAssertEqual(MemoryLayout<InflowDocumentOpenResult>.alignment, 8)
+    func testEngineABILayoutMatchesRustContractOnArm64() {
+        XCTAssertEqual(MemoryLayout<InflowEngineCreateResult>.size, 32)
+        XCTAssertEqual(MemoryLayout<InflowEngineCreateResult>.alignment, 8)
+        XCTAssertEqual(MemoryLayout<InflowBytesResult>.size, 24)
     }
 
     func testNewDocumentUsesUTF8WithoutBOMAndLF() throws {

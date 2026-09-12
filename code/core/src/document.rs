@@ -8,6 +8,7 @@ pub enum LineEnding {
     CrLf,
 }
 
+#[cfg(test)]
 #[derive(Debug, Eq, PartialEq)]
 pub struct DecodedDocument {
     pub text: String,
@@ -29,6 +30,7 @@ pub enum DecodeError {
     MixedLineEndings,
 }
 
+#[cfg(test)]
 pub fn decode(bytes: &[u8]) -> Result<DecodedDocument, DecodeError> {
     let (content, has_utf8_bom) = bytes
         .strip_prefix(UTF8_BOM)

@@ -3,15 +3,12 @@ import XCTest
 @testable import Inflow
 
 final class DocumentRelocationTests: XCTestCase {
-    func testReferenceABILayoutAndUnicodeExtractionMatchRustContract() throws {
-        XCTAssertEqual(InflowCoreBridge.abiVersion, 2)
-        XCTAssertEqual(InflowCoreBridge.abiMajor, 2)
-        XCTAssertGreaterThanOrEqual(InflowCoreBridge.abiMinor, 1)
+    func testEngineABIAndUnicodeExtractionMatchRustContract() throws {
+        XCTAssertEqual(InflowCoreBridge.abiVersion, 3)
+        XCTAssertEqual(InflowCoreBridge.abiMajor, 3)
+        XCTAssertGreaterThanOrEqual(InflowCoreBridge.abiMinor, 0)
         XCTAssertTrue(InflowCoreBridge.capabilities.isSuperset(of: .editorRequired))
         XCTAssertTrue(InflowCoreBridge.isCompatible)
-        XCTAssertEqual(MemoryLayout<InflowReference>.size, 40)
-        XCTAssertEqual(MemoryLayout<InflowReference>.alignment, 8)
-        XCTAssertEqual(MemoryLayout<InflowReferenceResult>.size, 40)
 
         let markdown = "[文档][note] ![图](assets/图片%201.png) `![忽略](bad.png)`\n\n[note]: ../资料/说明.md#标题"
         let references = try MarkdownReferenceScanner.references(in: markdown)

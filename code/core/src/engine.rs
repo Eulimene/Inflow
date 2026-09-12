@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::analysis::DocumentAnalysis;
+use crate::document::{self, DecodeError, LineEnding};
 use crate::export::ExportError;
 use crate::format::{self, FormatError, InlineFormat, ListFormat, MarkdownEdit};
 use crate::highlight::HighlightSpan;
@@ -127,6 +128,32 @@ pub enum EditorCommand {
         text: String,
         selection: Selection,
     },
+    OpenBytes {
+        base_revision: Revision,
+        bytes: Vec<u8>,
+    },
+    EncodeDocument {
+        revision: Revision,
+        has_utf8_bom: bool,
+        line_ending: DocumentLineEnding,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentLineEnding {
+    Lf,
+    #[serde(rename = "crlf")]
+    CrLf,
+}
+
+impl From<DocumentLineEnding> for LineEnding {
+    fn from(value: DocumentLineEnding) -> Self {
+        match value {
+            DocumentLineEnding::Lf => Self::Lf,
+            DocumentLineEnding::CrLf => Self::CrLf,
+        }
+    }
 }
 
 const fn default_true() -> bool {
@@ -237,6 +264,16 @@ pub enum HostEffect {
         html: String,
         warnings: u64,
     },
+    DocumentOpened {
+        revision: Revision,
+        has_utf8_bom: bool,
+        line_ending: DocumentLineEnding,
+        requires_line_ending_choice: bool,
+    },
+    DocumentEncoded {
+        revision: Revision,
+        bytes: Vec<u8>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -280,6 +317,8 @@ pub enum EngineError {
     EmptySaveId,
     UnknownSave,
     ReadOnly,
+    InvalidUtf8,
+    MixedLineEndings,
     OutputTooLarge,
     RevisionOverflow,
 }
@@ -397,6 +436,15 @@ impl EditorEngine {
                 text,
                 selection,
             } => self.open_document(base_revision, text, selection)?,
+            EditorCommand::OpenBytes {
+                base_revision,
+                bytes,
+            } => self.open_bytes(base_revision, &bytes)?,
+            EditorCommand::EncodeDocument {
+                revision,
+                has_utf8_bom,
+                line_ending,
+            } => self.encode_document(revision, has_utf8_bom, line_ending)?,
         };
 
         Ok(DispatchResponse {
@@ -579,6 +627,50 @@ impl EditorEngine {
             revision,
             text: self.text.clone(),
             content_hash: hash,
+        });
+        Ok(patch)
+    }
+
+    fn open_bytes(
+        &mut self,
+        base_revision: Revision,
+        bytes: &[u8],
+    ) -> Result<StatePatch, EngineError> {
+        if base_revision != self.revision {
+            return Err(EngineError::RevisionConflict);
+        }
+        let opened = document::decode_for_open(bytes).map_err(|error| match error {
+            DecodeError::InvalidUtf8 => EngineError::InvalidUtf8,
+            DecodeError::MixedLineEndings => EngineError::MixedLineEndings,
+        })?;
+        let line_ending = match opened.line_ending {
+            LineEnding::Lf => DocumentLineEnding::Lf,
+            LineEnding::CrLf => DocumentLineEnding::CrLf,
+        };
+        let mut patch =
+            self.open_document(base_revision, opened.text, Selection { start: 0, end: 0 })?;
+        patch.effects.push(HostEffect::DocumentOpened {
+            revision: patch.revision,
+            has_utf8_bom: opened.has_utf8_bom,
+            line_ending,
+            requires_line_ending_choice: opened.requires_line_ending_choice,
+        });
+        Ok(patch)
+    }
+
+    fn encode_document(
+        &self,
+        revision: Revision,
+        has_utf8_bom: bool,
+        line_ending: DocumentLineEnding,
+    ) -> Result<StatePatch, EngineError> {
+        if revision != self.revision {
+            return Err(EngineError::RevisionConflict);
+        }
+        let mut patch = self.empty_patch(revision);
+        patch.effects.push(HostEffect::DocumentEncoded {
+            revision,
+            bytes: document::encode(&self.text, has_utf8_bom, line_ending.into()),
         });
         Ok(patch)
     }
@@ -1694,6 +1786,60 @@ mod tests {
                 },
             )),
             Err(EngineError::UnknownSave)
+        );
+    }
+
+    #[test]
+    fn document_bytes_open_and_encode_through_revision_bound_effects() {
+        let mut engine = engine("");
+        let opened = engine
+            .dispatch(command(
+                "open-bytes",
+                EditorCommand::OpenBytes {
+                    base_revision: 0,
+                    bytes: b"\xef\xbb\xbfone\r\ntwo\n".to_vec(),
+                },
+            ))
+            .expect("valid UTF-8 bytes should open");
+        assert_eq!(opened.patch.revision, 1);
+        assert_eq!(engine.snapshot().text, "one\ntwo\n");
+        assert!(!engine.snapshot().dirty);
+        assert!(matches!(
+            opened.patch.effects.as_slice(),
+            [HostEffect::DocumentOpened {
+                revision: 1,
+                has_utf8_bom: true,
+                line_ending: DocumentLineEnding::Lf,
+                requires_line_ending_choice: true,
+            }]
+        ));
+
+        let encoded = engine
+            .dispatch(command(
+                "encode",
+                EditorCommand::EncodeDocument {
+                    revision: 1,
+                    has_utf8_bom: true,
+                    line_ending: DocumentLineEnding::CrLf,
+                },
+            ))
+            .expect("the current revision should encode");
+        assert!(matches!(
+            encoded.patch.effects.as_slice(),
+            [HostEffect::DocumentEncoded { revision: 1, bytes }]
+                if bytes == b"\xef\xbb\xbfone\r\ntwo\r\n"
+        ));
+        assert_eq!(engine.snapshot().revision, 1);
+
+        assert_eq!(
+            engine.dispatch(command(
+                "invalid-utf8",
+                EditorCommand::OpenBytes {
+                    base_revision: 1,
+                    bytes: vec![0xff],
+                },
+            )),
+            Err(EngineError::InvalidUtf8)
         );
     }
 }

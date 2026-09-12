@@ -72,6 +72,12 @@ enum EditorEngineHTMLExportPreparationError: Error, Sendable {
     case coreFailure
 }
 
+enum EditorEngineDocumentCodecError: Error, Sendable {
+    case invalidUTF8
+    case mixedLineEndings
+    case coreFailure
+}
+
 enum EditorEngineFormatOperation: Equatable, Sendable {
     case bold
     case italic

@@ -122,11 +122,10 @@ final class MarkdownAnalyzerTests: XCTestCase {
         XCTAssertTrue(DocumentAnalysisState.ready(previous).allowsNavigation)
     }
 
-    func testAnalysisABILayoutMatchesRustContractOnArm64() {
-        XCTAssertEqual(MemoryLayout<InflowHeading>.size, 40)
-        XCTAssertEqual(MemoryLayout<InflowHeading>.stride, 40)
-        XCTAssertEqual(MemoryLayout<InflowOwnedHeadings>.size, 16)
-        XCTAssertEqual(MemoryLayout<InflowAnalysisResult>.size, 64)
+    func testAnalysisUsesUnifiedEngineValueTypes() throws {
+        let analysis = try MarkdownAnalyzer.analyze("# 标题\n\n正文")
+        XCTAssertEqual(analysis.headings.map(\.title), ["标题"])
+        XCTAssertGreaterThan(analysis.characterCountIncludingSpaces, 0)
     }
 
     @MainActor

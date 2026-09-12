@@ -23,8 +23,8 @@ mod render_ir;
 mod search;
 
 /// Current compatibility coordinates for the C ABI exposed to platform clients.
-pub const ABI_MAJOR: u32 = 2;
-pub const ABI_MINOR: u32 = 6;
+pub const ABI_MAJOR: u32 = 3;
+pub const ABI_MINOR: u32 = 0;
 
 /// Capability bits let clients require additive contracts without rejecting a
 /// compatible library merely because its minor version is newer.
@@ -37,6 +37,8 @@ pub const CAPABILITY_ENGINE_SEARCH: u64 = 1 << 5;
 pub const CAPABILITY_FORMAT_INSPECTION: u64 = 1 << 6;
 pub const CAPABILITY_ENGINE_PERSISTENCE: u64 = 1 << 7;
 pub const CAPABILITY_ENGINE_MODE: u64 = 1 << 8;
+pub const CAPABILITY_HOST_EFFECTS: u64 = 1 << 9;
+pub const CAPABILITY_DOCUMENT_CODEC: u64 = 1 << 10;
 pub const ABI_CAPABILITIES: u64 = CAPABILITY_EDITOR_ENGINE
     | CAPABILITY_UNIFIED_DERIVATION
     | CAPABILITY_ENGINE_HISTORY
@@ -45,7 +47,9 @@ pub const ABI_CAPABILITIES: u64 = CAPABILITY_EDITOR_ENGINE
     | CAPABILITY_ENGINE_SEARCH
     | CAPABILITY_FORMAT_INSPECTION
     | CAPABILITY_ENGINE_PERSISTENCE
-    | CAPABILITY_ENGINE_MODE;
+    | CAPABILITY_ENGINE_MODE
+    | CAPABILITY_HOST_EFFECTS
+    | CAPABILITY_DOCUMENT_CODEC;
 
 /// Returns the version of the C ABI implemented by this library.
 #[unsafe(no_mangle)]
@@ -90,5 +94,7 @@ mod tests {
         assert_ne!(ABI_CAPABILITIES & CAPABILITY_FORMAT_INSPECTION, 0);
         assert_ne!(ABI_CAPABILITIES & CAPABILITY_ENGINE_PERSISTENCE, 0);
         assert_ne!(ABI_CAPABILITIES & CAPABILITY_ENGINE_MODE, 0);
+        assert_ne!(ABI_CAPABILITIES & CAPABILITY_HOST_EFFECTS, 0);
+        assert_ne!(ABI_CAPABILITIES & CAPABILITY_DOCUMENT_CODEC, 0);
     }
 }
