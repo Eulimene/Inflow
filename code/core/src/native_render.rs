@@ -148,6 +148,8 @@ pub struct NativeTable {
 pub struct NativeMermaidDiagram {
     pub source_range: Range<usize>,
     pub svg: String,
+    pub intrinsic_width: usize,
+    pub intrinsic_height: usize,
 }
 
 #[derive(Clone)]
@@ -281,10 +283,14 @@ impl NativeRenderPlan {
                             source.get(complete.clone()).unwrap_or_default(),
                         ) {
                             Ok(figure) => {
-                                if let Some(svg) = extract_svg(&figure) {
+                                if let Some((svg, intrinsic_width, intrinsic_height)) =
+                                    extract_svg(&figure)
+                                {
                                     diagrams.push(NativeMermaidDiagram {
                                         source_range: complete,
                                         svg,
+                                        intrinsic_width,
+                                        intrinsic_height,
                                     });
                                 }
                             }
@@ -990,10 +996,24 @@ fn contains(outer: &Range<usize>, inner: &Range<usize>) -> bool {
 fn is_mermaid(kind: &CodeBlockKind<'_>) -> bool {
     matches!(kind, CodeBlockKind::Fenced(info) if info.split_ascii_whitespace().next().is_some_and(|value| value.eq_ignore_ascii_case("mermaid")))
 }
-fn extract_svg(figure: &str) -> Option<String> {
+fn extract_svg(figure: &str) -> Option<(String, usize, usize)> {
     let start = figure.find("<svg")?;
     let end = start + figure[start..].find("</svg>")? + 6;
-    Some(figure[start..end].to_owned())
+    let svg = &figure[start..end];
+    let view_box = attribute(svg, "viewBox")?;
+    let mut values = view_box.split_ascii_whitespace();
+    let _x = values.next()?.parse::<usize>().ok()?;
+    let _y = values.next()?.parse::<usize>().ok()?;
+    let width = values.next()?.parse::<usize>().ok()?;
+    let height = values.next()?.parse::<usize>().ok()?;
+    Some((svg.to_owned(), width, height))
+}
+
+fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let prefix = format!("{name}=\"");
+    let start = tag.find(&prefix)? + prefix.len();
+    let end = start + tag[start..].find('"')?;
+    Some(&tag[start..end])
 }
 fn level_number(level: HeadingLevel) -> u8 {
     match level {
@@ -1083,6 +1103,8 @@ mod tests {
         );
         assert_eq!(plan.tables[0].rows[1][0].text, "x");
         assert_eq!(plan.mermaid_diagrams.len(), 1);
+        assert_eq!(plan.mermaid_diagrams[0].intrinsic_width, 500);
+        assert_eq!(plan.mermaid_diagrams[0].intrinsic_height, 190);
         assert!(
             plan.local_source_blocks
                 .iter()

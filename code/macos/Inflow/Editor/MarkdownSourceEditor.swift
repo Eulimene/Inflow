@@ -457,9 +457,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             textView.renderedInlineCodeRanges = []
             textView.renderedReplacementMarkers = []
             textView.renderedRuleRanges = []
+            textView.renderedCollapsedSourceRanges = []
+            textView.renderedAnchorSourceRanges = []
             textView.setAccessibilityLabel("Markdown 源码编辑器")
             applySourceAppearance(sourceAppearance, force: changed)
         case .rendered:
+            configureLineWrapping(true)
             textView.setAccessibilityLabel("Markdown 即时编辑器")
             textView.linkClickHandler = { [weak self] location in
                 guard let self,
@@ -580,7 +583,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.renderedQuoteRanges = plan.contentStyles.compactMap { style in
             guard style.kind == .blockQuote else { return nil }
             guard !rangesOverlap(style.sourceRange.utf16Range, editingRange) else { return nil }
-            return style.sourceRange.utf16Range
+            return (source as NSString).paragraphRange(for: style.sourceRange.utf16Range)
         }
         textView.renderedInlineCodeRanges = plan.contentStyles.compactMap { style in
             guard style.kind == .inlineCode else { return nil }
@@ -600,6 +603,34 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             marker.kind == .rule && !rangesOverlap(marker.sourceRange.utf16Range, editingRange)
                 ? marker.sourceRange.utf16Range
                 : nil
+        }
+        let anchoredRanges = plan.markers.compactMap { marker -> NSRange? in
+            guard marker.replacementText != nil || marker.kind == .rule,
+                  !rangesOverlap(marker.sourceRange.utf16Range, editingRange)
+            else { return nil }
+            return marker.sourceRange.utf16Range
+        } + plan.images.compactMap { image in
+            rangesOverlap(image.sourceRange.utf16Range, editingRange)
+                ? nil : image.sourceRange.utf16Range
+        } + plan.tables.compactMap { table in
+            rangesOverlap(table.sourceRange.utf16Range, editingRange)
+                ? nil : table.sourceRange.utf16Range
+        } + plan.mermaidDiagrams.compactMap { diagram in
+            rangesOverlap(diagram.sourceRange.utf16Range, editingRange)
+                ? nil : diagram.sourceRange.utf16Range
+        }
+        var collapsedRanges = plan.markers.compactMap { marker -> NSRange? in
+            guard !marker.kind.remainsVisibleWhenInactive,
+                  !rangesOverlap(marker.sourceRange.utf16Range, editingRange)
+            else { return nil }
+            return marker.sourceRange.utf16Range
+        } + anchoredRanges
+        collapsedRanges += plan.localSourceBlocks.flatMap { block -> [NSRange] in
+            guard block.reasons.contains(.fencedCode),
+                  !rangesOverlap(block.sourceRange.utf16Range, editingRange),
+                  let parts = fencedCodeParts(in: block.sourceRange.utf16Range, source: source)
+            else { return [] }
+            return [parts.opening, parts.closing].filter { $0.length > 0 }
         }
         let baseParagraph = NSMutableParagraphStyle()
         baseParagraph.lineHeightMultiple = CGFloat(sourceAppearance.lineHeight)
@@ -738,7 +769,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                     range: range
                 )
             } else {
-                hideRenderedMarker(range, storage: storage, fallbackFont: baseFont)
+                hideRenderedMarker(range, storage: storage)
             }
         }
         for image in plan.images {
@@ -751,6 +782,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 nil,
                 alternative: image.alternative,
                 sourceRange: image.sourceRange.utf16Range,
+                fillsAvailableWidth: false,
                 storage: storage
             )
         }
@@ -759,7 +791,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             let size = textView.setRenderedTable(
                 table,
                 baseFont: baseFont,
-                maximumWidth: max(240, scrollView.contentSize.width - 32),
+                maximumWidth: max(160, scrollView.contentSize.width - 32),
                 linkActivation: renderedLinkActivation,
                 onLinkClick: { [weak self] target in
                     self?.renderedLinkHandler?(target)
@@ -776,16 +808,19 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
         for diagram in plan.mermaidDiagrams {
             guard !rangesOverlap(diagram.sourceRange.utf16Range, editingRange) else { continue }
-            guard let image = renderedMermaidImage(from: diagram.svg) else { continue }
+            guard let image = renderedMermaidImage(from: diagram) else { continue }
             applyRenderedImage(
                 image,
                 alternative: "Mermaid 图表",
                 sourceRange: diagram.sourceRange.utf16Range,
+                fillsAvailableWidth: true,
                 storage: storage
             )
         }
         textView.endRenderedOverlayUpdate()
         storage.endEditing()
+        textView.renderedAnchorSourceRanges = anchoredRanges
+        textView.renderedCollapsedSourceRanges = collapsedRanges
         renderedAppliedAppearance = sourceAppearance
         textView.setSelectedRange(selection)
         syncRenderedTypingAttributes()
@@ -864,6 +899,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             image,
             alternative: alternative,
             sourceRange: sourceRange,
+            fillsAvailableWidth: false,
             storage: storage
         )
         storage.endEditing()
@@ -875,6 +911,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         _ image: NSImage?,
         alternative: String,
         sourceRange: NSRange,
+        fillsAvailableWidth: Bool,
         storage: NSTextStorage
     ) {
         guard sourceRange.length > 0, NSMaxRange(sourceRange) <= storage.length else { return }
@@ -891,16 +928,20 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             range: sourceRange
         )
 
-        let displayedImage = scaledRenderedImage(
-            image ?? NSImage(
+        let displayedImage = image ?? NSImage(
                 systemSymbolName: "photo",
                 accessibilityDescription: alternative.isEmpty ? "图片" : alternative
             ) ?? NSImage(size: NSSize(width: 28, height: 28))
-        )
         displayedImage.accessibilityDescription = alternative.isEmpty ? "图片" : alternative
+        let renderedSize = textView.setRenderedImage(
+            displayedImage,
+            alternative: alternative,
+            sourceRange: sourceRange,
+            fillsAvailableWidth: fillsAvailableWidth
+        )
         storage.addAttribute(
             .kern,
-            value: displayedImage.size.width,
+            value: renderedSize.width,
             range: NSRange(location: sourceRange.location, length: 1)
         )
         let paragraphStyle = (
@@ -912,17 +953,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
         paragraphStyle.minimumLineHeight = max(
             paragraphStyle.minimumLineHeight,
-            displayedImage.size.height + 10
+            renderedSize.height + 10
         )
         storage.addAttribute(
             .paragraphStyle,
             value: paragraphStyle,
             range: NSRange(location: sourceRange.location, length: 1)
-        )
-        textView.setRenderedImage(
-            displayedImage,
-            alternative: alternative,
-            sourceRange: sourceRange
         )
     }
 
@@ -1029,40 +1065,26 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
 
     private func hideRenderedMarker(
         _ range: NSRange,
-        storage: NSTextStorage,
-        fallbackFont: NSFont
+        storage: NSTextStorage
     ) {
         guard range.length > 0, NSMaxRange(range) <= storage.length else { return }
-        let neighbor = RenderedMarkdownCaretStyleResolver.nearestVisibleLocation(
-            to: range,
-            textLength: storage.length,
-            hiddenRanges: renderedPlan?.markers.map(\.sourceRange.utf16Range) ?? []
-        )
-        let font = neighbor.flatMap {
-            storage.attribute(.font, at: $0, effectiveRange: nil) as? NSFont
-        } ?? fallbackFont
+        let collapsedFont = NSFont.systemFont(ofSize: 0.1)
         storage.addAttributes(
             [
-                .font: font,
+                .font: collapsedFont,
                 .foregroundColor: NSColor.clear,
                 .backgroundColor: NSColor.clear,
                 .underlineStyle: 0,
                 .strikethroughStyle: 0,
                 .obliqueness: 0,
                 .baselineOffset: 0,
+                // Keep the Markdown source byte-for-byte intact while making each marker's
+                // layout advance effectively zero. Using the marker's visible font here made
+                // inline-code backticks and heading markers distort both wrapping and carets.
+                .kern: -collapsedFont.pointSize,
             ],
             range: range
         )
-        let source = storage.string as NSString
-        for location in range.location..<NSMaxRange(range) {
-            let character = source.substring(with: NSRange(location: location, length: 1))
-            let advance = (character as NSString).size(withAttributes: [.font: font]).width
-            storage.addAttribute(
-                .kern,
-                value: -advance,
-                range: NSRange(location: location, length: 1)
-            )
-        }
     }
 
     private func applyRenderedReplacement(
@@ -1141,8 +1163,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.undoManager?.setActionName("编辑表格")
     }
 
-    private func renderedMermaidImage(from sourceSVG: String) -> NSImage? {
-        let styledSVG = sourceSVG.replacingOccurrences(
+    private func renderedMermaidImage(from diagram: RenderedMarkdownMermaidDiagram) -> NSImage? {
+        let styledSVG = diagram.svg.replacingOccurrences(
             of: "<defs>",
             with: """
             <defs><style>
@@ -1153,21 +1175,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             """
         )
         guard let image = NSImage(data: Data(styledSVG.utf8)), image.isValid else { return nil }
+        image.size = NSSize(width: diagram.intrinsicWidth, height: diagram.intrinsicHeight)
         image.accessibilityDescription = "Mermaid 图表"
         return image
-    }
-
-    private func scaledRenderedImage(_ source: NSImage) -> NSImage {
-        let sourceSize = source.size
-        guard sourceSize.width > 0, sourceSize.height > 0 else { return source }
-        let availableWidth = max(240, min(720, scrollView.contentSize.width - 32))
-        let scale = min(1, availableWidth / sourceSize.width, 480 / sourceSize.height)
-        guard scale < 1, let copy = source.copy() as? NSImage else { return source }
-        copy.size = NSSize(
-            width: max(1, sourceSize.width * scale),
-            height: max(1, sourceSize.height * scale)
-        )
-        return copy
     }
 
     private func applyRenderedAttributes(
@@ -1245,11 +1255,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             paragraphStyle.headIndent += 16
             paragraphStyle.paragraphSpacingBefore = max(paragraphStyle.paragraphSpacingBefore, 3)
             paragraphStyle.paragraphSpacing = max(paragraphStyle.paragraphSpacing, 3)
-            storage.addAttributes(
-                [
-                    .foregroundColor: NSColor.secondaryLabelColor,
-                    .paragraphStyle: paragraphStyle,
-                ],
+            let paragraphRange = storage.mutableString.paragraphRange(for: range)
+            storage.addAttribute(.paragraphStyle, value: paragraphStyle, range: paragraphRange)
+            storage.addAttribute(
+                .foregroundColor,
+                value: NSColor.secondaryLabelColor,
                 range: range
             )
         case .tableHeader:
@@ -1273,7 +1283,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             storage.addAttributes(
                 [
                     .foregroundColor: NSColor.linkColor,
-                    .underlineStyle: NSUnderlineStyle.single.rawValue,
+                    .underlineStyle: 0,
                 ],
                 range: range
             )
@@ -2140,32 +2150,18 @@ enum RenderedMarkdownCaretStyleResolver {
         )
     }
 
-    static func nearestVisibleLocation(
-        to range: NSRange,
-        textLength: Int,
-        hiddenRanges: [NSRange]
-    ) -> Int? {
-        guard textLength > 0 else { return nil }
-        if NSMaxRange(range) < textLength,
-           !isHidden(NSMaxRange(range), in: hiddenRanges)
-        {
-            return NSMaxRange(range)
-        }
-        var location = range.location - 1
-        while location >= 0 {
-            if !isHidden(location, in: hiddenRanges) { return location }
-            location -= 1
-        }
-        return nil
-    }
-
-    static func adjustedInsertionRect(_ rect: NSRect, font: NSFont?) -> NSRect {
+    static func adjustedInsertionRect(
+        _ rect: NSRect,
+        font: NSFont?,
+        baselineY: CGFloat? = nil
+    ) -> NSRect {
         guard let font else { return rect }
         let fontHeight = ceil(font.ascender - font.descender + font.leading)
         let height = min(rect.height, max(1, fontHeight))
+        let originY = baselineY.map { $0 - font.ascender } ?? (rect.midY - height / 2)
         return NSRect(
             x: rect.origin.x,
-            y: rect.midY - height / 2,
+            y: originY,
             width: max(1, rect.width),
             height: height
         )
@@ -2208,9 +2204,23 @@ final class WindowAwareTextView: NSTextView {
         let selection: NSRange
     }
 
-    private struct RenderedImageViewState {
+    private final class RenderedImageViewState {
         let sourceRange: NSRange
         let imageView: RenderedMarkdownImageView
+        var renderedSize: NSSize
+        let fillsAvailableWidth: Bool
+
+        init(
+            sourceRange: NSRange,
+            imageView: RenderedMarkdownImageView,
+            renderedSize: NSSize,
+            fillsAvailableWidth: Bool
+        ) {
+            self.sourceRange = sourceRange
+            self.imageView = imageView
+            self.renderedSize = renderedSize
+            self.fillsAvailableWidth = fillsAvailableWidth
+        }
     }
 
     private struct RenderedTableViewState {
@@ -2242,7 +2252,7 @@ final class WindowAwareTextView: NSTextView {
         didSet {
             guard oldValue != clickableLinkRanges else { return }
             if let hoveredLinkRange, !clickableLinkRanges.contains(hoveredLinkRange) {
-                self.hoveredLinkRange = nil
+                setHoveredLinkRange(nil)
             }
             window?.invalidateCursorRects(for: self)
             needsDisplay = true
@@ -2268,6 +2278,8 @@ final class WindowAwareTextView: NSTextView {
             if oldValue != renderedRuleRanges { needsDisplay = true }
         }
     }
+    var renderedAnchorSourceRanges: [NSRange] = []
+    var renderedCollapsedSourceRanges: [NSRange] = []
     var renderedReplacementBaseFont = NSFont.systemFont(ofSize: 15)
     private var renderedImageViews: [Int: RenderedImageViewState] = [:]
     private var renderedTableViews: [Int: RenderedTableViewState] = [:]
@@ -2291,14 +2303,51 @@ final class WindowAwareTextView: NSTextView {
         color: NSColor,
         turnedOn flag: Bool
     ) {
+        let font = renderedCaretFont() ?? typingAttributes[.font] as? NSFont
         super.drawInsertionPoint(
             in: RenderedMarkdownCaretStyleResolver.adjustedInsertionRect(
                 rect,
-                font: typingAttributes[.font] as? NSFont
+                font: font,
+                baselineY: renderedCaretBaselineY()
             ),
             color: color,
             turnedOn: flag
         )
+    }
+
+    func isRenderedCharacterSuppressed(at location: Int) -> Bool {
+        guard renderedCollapsedSourceRanges.contains(where: { NSLocationInRange(location, $0) })
+        else { return false }
+        return !renderedAnchorSourceRanges.contains(where: {
+            $0.length > 0 && $0.location == location
+        })
+    }
+
+    private func renderedCaretFont() -> NSFont? {
+        guard let storage = textStorage, storage.length > 0 else { return nil }
+        let location = RenderedMarkdownCaretStyleResolver.visibleAttributeLocation(
+            forInsertionLocation: selectedRange().location,
+            text: storage.string,
+            hiddenRanges: renderedCollapsedSourceRanges
+        ) ?? min(selectedRange().location, storage.length - 1)
+        return storage.attribute(.font, at: location, effectiveRange: nil) as? NSFont
+    }
+
+    private func renderedCaretBaselineY() -> CGFloat? {
+        guard let layoutManager, !string.isEmpty else { return nil }
+        let location = RenderedMarkdownCaretStyleResolver.visibleAttributeLocation(
+            forInsertionLocation: selectedRange().location,
+            text: string,
+            hiddenRanges: renderedCollapsedSourceRanges
+        ) ?? min(selectedRange().location, string.utf16.count - 1)
+        let glyph = layoutManager.glyphIndexForCharacter(at: location)
+        guard glyph < layoutManager.numberOfGlyphs else { return nil }
+        let line = layoutManager.lineFragmentRect(
+            forGlyphAt: glyph,
+            effectiveRange: nil,
+            withoutAdditionalLayout: true
+        )
+        return textContainerOrigin.y + line.minY + layoutManager.location(forGlyphAt: glyph).y
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -2351,7 +2400,20 @@ final class WindowAwareTextView: NSTextView {
 
     private func setHoveredLinkRange(_ range: NSRange?) {
         guard hoveredLinkRange != range else { return }
+        if let hoveredLinkRange {
+            layoutManager?.removeTemporaryAttribute(
+                .underlineStyle,
+                forCharacterRange: hoveredLinkRange
+            )
+        }
         hoveredLinkRange = range
+        if let range {
+            layoutManager?.addTemporaryAttribute(
+                .underlineStyle,
+                value: NSUnderlineStyle.single.rawValue,
+                forCharacterRange: range
+            )
+        }
         needsDisplay = true
     }
 
@@ -2392,16 +2454,33 @@ final class WindowAwareTextView: NSTextView {
         scheduleRenderedImageLayout()
     }
 
+    @discardableResult
     func setRenderedImage(
         _ image: NSImage,
         alternative: String,
-        sourceRange: NSRange
-    ) {
+        sourceRange: NSRange,
+        fillsAvailableWidth: Bool
+    ) -> NSSize {
         let key = sourceRange.location
         retainedRenderedOverlayKeys?.insert(key)
+        let viewportWidth = enclosingScrollView?.contentSize.width ?? bounds.width
+        let availableWidth = max(
+            160,
+            viewportWidth - textContainerInset.width * 2
+                - (textContainer?.lineFragmentPadding ?? 0) * 2
+        )
+        let renderedSize = Self.fittedRenderedImageSize(
+            image.size,
+            availableWidth: availableWidth,
+            fillsAvailableWidth: fillsAvailableWidth
+        )
         let imageView: RenderedMarkdownImageView
-        if let existing = renderedImageViews[key], existing.sourceRange == sourceRange {
+        if let existing = renderedImageViews[key],
+           existing.sourceRange == sourceRange,
+           existing.fillsAvailableWidth == fillsAvailableWidth
+        {
             imageView = existing.imageView
+            existing.renderedSize = renderedSize
         } else {
             renderedImageViews[key]?.imageView.removeFromSuperview()
             imageView = RenderedMarkdownImageView()
@@ -2409,16 +2488,44 @@ final class WindowAwareTextView: NSTextView {
             addSubview(imageView)
             renderedImageViews[key] = RenderedImageViewState(
                 sourceRange: sourceRange,
-                imageView: imageView
+                imageView: imageView,
+                renderedSize: renderedSize,
+                fillsAvailableWidth: fillsAvailableWidth
             )
         }
         imageView.image = image
+        imageView.setFrameSize(renderedSize)
         imageView.setAccessibilityLabel(alternative.isEmpty ? "图片" : alternative)
         scheduleRenderedImageLayout()
+        return renderedSize
     }
 
     func renderedImage(atUTF16Location location: Int) -> NSImage? {
         renderedImageViews[location]?.imageView.image
+    }
+
+    func renderedImageSize(atUTF16Location location: Int) -> NSSize? {
+        renderedImageViews[location]?.renderedSize
+    }
+
+    private static func fittedRenderedImageSize(
+        _ intrinsicSize: NSSize,
+        availableWidth: CGFloat,
+        fillsAvailableWidth: Bool
+    ) -> NSSize {
+        guard intrinsicSize.width > 0, intrinsicSize.height > 0 else {
+            return NSSize(width: 1, height: 1)
+        }
+        let widthLimit = max(1, min(760, availableWidth))
+        let widthScale = widthLimit / intrinsicSize.width
+        let heightScale = 480 / intrinsicSize.height
+        let scale = fillsAvailableWidth
+            ? min(widthScale, heightScale)
+            : min(1, widthScale, heightScale)
+        return NSSize(
+            width: max(1, intrinsicSize.width * scale),
+            height: max(1, intrinsicSize.height * scale)
+        )
     }
 
     @discardableResult
@@ -2495,21 +2602,51 @@ final class WindowAwareTextView: NSTextView {
         guard let layoutManager, let textContainer, !isUpdatingRenderedOverlayLayout else { return }
         isUpdatingRenderedOverlayLayout = true
         defer { isUpdatingRenderedOverlayLayout = false }
+        let viewportWidth = enclosingScrollView?.contentSize.width ?? bounds.width
         let availableWidth = max(
-            240,
-            bounds.width - textContainerInset.width * 2 - textContainer.lineFragmentPadding * 2
+            160,
+            viewportWidth - textContainerInset.width * 2 - textContainer.lineFragmentPadding * 2
         )
         if let storage = textStorage {
+            let resizedImages = renderedImageViews.values.compactMap { state -> (NSRange, NSSize)? in
+                guard let image = state.imageView.image else { return nil }
+                let size = Self.fittedRenderedImageSize(
+                    image.size,
+                    availableWidth: availableWidth,
+                    fillsAvailableWidth: state.fillsAvailableWidth
+                )
+                guard size != state.renderedSize else { return nil }
+                state.renderedSize = size
+                return (state.sourceRange, size)
+            }
             let resizedTables = renderedTableViews.values.compactMap { state -> (NSRange, NSSize)? in
                 state.tableView.updateMaximumWidth(availableWidth)
                     ? (state.sourceRange, state.tableView.renderedSize)
                     : nil
             }
-            if !resizedTables.isEmpty {
+            if !resizedImages.isEmpty || !resizedTables.isEmpty {
                 let undoManager = undoManager
                 let restoresUndo = undoManager?.isUndoRegistrationEnabled == true
                 if restoresUndo { undoManager?.disableUndoRegistration() }
                 storage.beginEditing()
+                for (range, size) in resizedImages
+                where range.length > 0 && NSMaxRange(range) <= storage.length {
+                    storage.addAttribute(
+                        .kern,
+                        value: size.width,
+                        range: NSRange(location: range.location, length: 1)
+                    )
+                    let paragraph = (
+                        storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
+                            as? NSParagraphStyle
+                    )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+                    paragraph.minimumLineHeight = size.height + 10
+                    storage.addAttribute(
+                        .paragraphStyle,
+                        value: paragraph,
+                        range: NSRange(location: range.location, length: 1)
+                    )
+                }
                 for (range, size) in resizedTables
                 where range.length > 0 && NSMaxRange(range) <= storage.length {
                     let paragraph = (
@@ -2537,7 +2674,7 @@ final class WindowAwareTextView: NSTextView {
                 at: state.sourceRange.location
             )
             guard glyphIndex < layoutManager.numberOfGlyphs,
-                  let image = state.imageView.image
+                  state.imageView.image != nil
             else {
                 state.imageView.isHidden = true
                 continue
@@ -2554,8 +2691,8 @@ final class WindowAwareTextView: NSTextView {
             state.imageView.frame = NSRect(
                 x: textContainerOrigin.x + glyphRect.minX,
                 y: textContainerOrigin.y + lineRect.minY + 5,
-                width: image.size.width,
-                height: image.size.height
+                width: state.renderedSize.width,
+                height: state.renderedSize.height
             )
             state.imageView.isHidden = false
         }
@@ -3132,7 +3269,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
                         [
                             .link: link.target,
                             .foregroundColor: NSColor.linkColor,
-                            .underlineStyle: NSUnderlineStyle.single.rawValue,
+                            .underlineStyle: 0,
                         ],
                         range: link.visibleRange
                     )
@@ -3502,7 +3639,20 @@ final class RenderedMarkdownTableCellTextView: NSTextView {
 
     private func setHoveredLinkRange(_ range: NSRange?) {
         guard hoveredLinkRange != range else { return }
+        if let hoveredLinkRange {
+            layoutManager?.removeTemporaryAttribute(
+                .underlineStyle,
+                forCharacterRange: hoveredLinkRange
+            )
+        }
         hoveredLinkRange = range
+        if let range {
+            layoutManager?.addTemporaryAttribute(
+                .underlineStyle,
+                value: NSUnderlineStyle.single.rawValue,
+                forCharacterRange: range
+            )
+        }
         needsDisplay = true
     }
 }

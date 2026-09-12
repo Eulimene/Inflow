@@ -2051,9 +2051,13 @@ private struct EditorEngineRawNativeRenderPlan: Decodable {
     struct Diagram: Decodable {
         let sourceRange: EditorEngineByteRange
         let svg: String
+        let intrinsicWidth: Int
+        let intrinsicHeight: Int
         enum CodingKeys: String, CodingKey {
             case sourceRange = "source_range"
             case svg
+            case intrinsicWidth = "intrinsic_width"
+            case intrinsicHeight = "intrinsic_height"
         }
     }
 
@@ -2204,9 +2208,14 @@ private struct EditorEngineRawNativeRenderPlan: Decodable {
             )
         }
         let mappedDiagrams = try mermaidDiagrams.map { item in
-            RenderedMarkdownMermaidDiagram(
+            guard item.intrinsicWidth > 0, item.intrinsicHeight > 0 else {
+                throw EditorEngineBridgeError.invalidResponse
+            }
+            return RenderedMarkdownMermaidDiagram(
                 sourceRange: try mapped(item.sourceRange),
-                svg: item.svg
+                svg: item.svg,
+                intrinsicWidth: item.intrinsicWidth,
+                intrinsicHeight: item.intrinsicHeight
             )
         }
         return RenderedMarkdownPlan(

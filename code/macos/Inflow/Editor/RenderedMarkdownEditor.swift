@@ -164,16 +164,22 @@ struct AdaptiveRenderedMarkdownTableLayoutStrategy: RenderedMarkdownTableLayoutS
             }
         }
 
-        let target = max(minimumColumnWidth * CGFloat(columnCount), availableWidth)
+        let target = max(1, availableWidth)
         let preferredTotal = widths.reduce(0, +)
         guard preferredTotal > 0 else { return widths }
         if preferredTotal < target {
             let extra = (target - preferredTotal) / CGFloat(columnCount)
-            return widths.map { floor($0 + extra) }
+            return widths.map { $0 + extra }
         }
         if preferredTotal > target {
-            let scale = target / preferredTotal
-            return widths.map { max(minimumColumnWidth, floor($0 * scale)) }
+            let fittedMinimum = min(minimumColumnWidth, target / CGFloat(columnCount))
+            let flexible = widths.map { max(0, $0 - fittedMinimum) }
+            let flexibleTotal = flexible.reduce(0, +)
+            let remaining = max(0, target - fittedMinimum * CGFloat(columnCount))
+            guard flexibleTotal > 0 else {
+                return Array(repeating: target / CGFloat(columnCount), count: columnCount)
+            }
+            return flexible.map { fittedMinimum + remaining * ($0 / flexibleTotal) }
         }
         return widths
     }
@@ -267,11 +273,13 @@ struct RenderedMarkdownMermaidDiagram: Equatable, Sendable {
     let sourceRange: RenderedMarkdownSourceRange
     /// A parser-generated, script-free SVG. The Markdown source remains the editor's model.
     let svg: String
+    let intrinsicWidth: Int
+    let intrinsicHeight: Int
 }
 
 /// A display-only interpretation of one exact Markdown byte snapshot.
 ///
-/// The plan never contains replacement text or a second rendered body. Attribute and local
+/// The plan contains semantic replacements, but never a second editable body. Attribute and
 /// source ranges always address the original `sourceSnapshot` directly.
 struct RenderedMarkdownPlan: Equatable, Sendable {
     let sourceSnapshot: String
