@@ -36,8 +36,8 @@ Rust 核心负责不依赖平台的纯值逻辑，并正在通过版本化 Engin
 `ReplaceText`、格式 Command、Memento undo/redo、快照和 `RefreshDerived`。每次 `RefreshDerived` 只创建一个 owned
 `DocumentIr`，分析、语法范围、引用、`RenderIr` 与安全 HTML 都消费该事件流；派生缓存严格绑定
 revision，正文修改后立即失效。macOS 已用该单次请求作为分析、高亮、引用和预览的默认派生热路径；
-当前菜单格式操作也只发送 selection 与 operation，由 Engine 生成 revision-bound patch 后回写
-NSTextView，不再由 View 调用一次性 formatter 规划。普通输入修改仍以影子方式逐字节对账。
+当前菜单格式与图片、链接、表格等插入操作也只发送 selection 与 operation，由 Engine 生成
+revision-bound patch 后回写 NSTextView，不再由 View 调用一次性 formatter 规划。普通输入修改仍以影子方式逐字节对账。
 保存和撤销尚未切换权威，因此此时不能把 Rust Engine
 描述为已经完成正文接管。
 

@@ -48,7 +48,7 @@
 ### 2.2 单一正文与三种视图
 
 - MarkdownDocument.text 是 SwiftUI 文档模型中的正文事实；MarkdownSourceEditorSession 持有一个持久 NSTextView。
-- 有状态 Rust `EditorEngine` 已作为默认派生服务：NSTextView 完成一次非组合输入后，以 UTF-8 grapheme 边界的 `ReplaceText(base_revision, range, inserted)` 镜像到 Engine，并用快照执行逐字节对账；可用 `INFLOW_EDITOR_ENGINE_SHADOW=0` 失败关闭到旧派生路径。当前菜单格式命令已发送 selection 与 operation，由 Engine 生成并执行 revision-bound patch 后回写 NSTextView；保存和撤销目前仍以 Swift/AppKit 为权威。
+- 有状态 Rust `EditorEngine` 已作为默认派生服务：NSTextView 完成一次非组合输入后，以 UTF-8 grapheme 边界的 `ReplaceText(base_revision, range, inserted)` 镜像到 Engine，并用快照执行逐字节对账；可用 `INFLOW_EDITOR_ENGINE_SHADOW=0` 失败关闭到旧派生路径。当前菜单格式与图片、链接、表格等插入命令均发送 selection 与 operation，由 Engine 生成并执行 revision-bound patch 后回写 NSTextView；保存和撤销目前仍以 Swift/AppKit 为权威。
 - Rust/Swift 边界通过 ABI major、minor 与 capability bits 协商；宿主要求 Engine、统一派生、Engine 历史和 Render IR 能力，不再精确比较单一整数。Xcode 构建脚本按目标架构生成 arm64、x86_64 或 universal 静态库，并允许依赖分析在输入未变化时跳过 Rust 重建。
 - Engine 的 `RefreshDerived(revision)` 由一次 `DocumentIr` 解析同时产生分析、语法范围、引用、稳定块 ID 的 `RenderIr` 和安全 HTML，并缓存到对应 revision；Swift 文档派生热路径直接消费这一响应，失败才回退旧散点调用。旧 `RenderedMarkdownPlanner` 尚未删除，因此不能据此声称双解析器已经完全清除。
 - 可编辑 WKWebView 只保留在显式环境开关 `INFLOW_EDITABLE_WEB_PREVIEW=1` 后作为实验；默认“即时编辑”仍是持久 NSTextView，不把 DOM 转换结果写成主编辑路径。

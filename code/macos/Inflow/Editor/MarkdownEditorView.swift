@@ -3083,20 +3083,15 @@ struct MarkdownEditorView: View {
                     expectedDestination: destinationSnapshot
                 )
                 do {
-                    let plan = try MarkdownFormatter.imagePlan(
-                        source: sourceSnapshot,
-                        selectedUTF16Range: selectedRange,
-                        destination: asset.relativeMarkdownPath,
-                        defaultAlternative: alternative.isEmpty ? "图片描述" : alternative
-                    )
                     revealSourceSurface()
-                    guard sourceEditorSession.applyMarkdownImage(
-                        plan,
-                        asset: asset,
+                    guard await sourceEditorSession.applyEngineFormat(
+                        .image(
+                            destination: asset.relativeMarkdownPath,
+                            defaultAlternative: alternative.isEmpty ? "图片描述" : alternative
+                        ),
+                        expectedText: sourceSnapshot,
+                        selectedUTF16Range: selectedRange,
                         actionName: "插入图片",
-                        onResourceError: { message in
-                            markdownFormatErrorMessage = message
-                        }
                     ) else {
                         try await Task.detached { try asset.rollback() }.value
                         markdownFormatErrorMessage = "正文、选区或输入法状态已变化，已回滚复制的图片。"
@@ -3138,17 +3133,16 @@ struct MarkdownEditorView: View {
                 return
             }
         }
-        let plan = try MarkdownFormatter.imagePlan(
-            source: sourceSnapshot,
-            selectedUTF16Range: selectedRange,
-            destination: reference.markdownDestination,
-            defaultAlternative: defaultAlternative.isEmpty
-                ? "图片描述"
-                : defaultAlternative
-        )
         revealSourceSurface()
-        guard sourceEditorSession.applyMarkdownFormat(
-            plan,
+        guard await sourceEditorSession.applyEngineFormat(
+            .image(
+                destination: reference.markdownDestination,
+                defaultAlternative: defaultAlternative.isEmpty
+                    ? "图片描述"
+                    : defaultAlternative
+            ),
+            expectedText: sourceSnapshot,
+            selectedUTF16Range: selectedRange,
             actionName: "插入图片"
         ) else {
             markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未引用图片。"
@@ -3229,20 +3223,15 @@ struct MarkdownEditorView: View {
                 )
                 do {
                     let alternative = asset.destinationURL.deletingPathExtension().lastPathComponent
-                    let plan = try MarkdownFormatter.imagePlan(
-                        source: sourceSnapshot,
-                        selectedUTF16Range: selectedRange,
-                        destination: asset.relativeMarkdownPath,
-                        defaultAlternative: alternative
-                    )
                     revealSourceSurface()
-                    guard sourceEditorSession.applyMarkdownImage(
-                        plan,
-                        asset: asset,
+                    guard await sourceEditorSession.applyEngineFormat(
+                        .image(
+                            destination: asset.relativeMarkdownPath,
+                            defaultAlternative: alternative
+                        ),
+                        expectedText: sourceSnapshot,
+                        selectedUTF16Range: selectedRange,
                         actionName: "粘贴图片",
-                        onResourceError: { message in
-                            markdownFormatErrorMessage = message
-                        }
                     ) else {
                         try await Task.detached { try asset.rollback() }.value
                         markdownFormatErrorMessage = "正文、选区或输入法状态已变化，已回滚粘贴的图片。"
@@ -3262,113 +3251,23 @@ struct MarkdownEditorView: View {
     }
 
     private func insertDiagram() {
-        guard canEditDocument else { return }
-        do {
-            let plan = try MarkdownFormatter.mermaidPlan(
-                source: document.text,
-                selectedUTF16Range: sourceEditorSession.textView.selectedRange()
-            )
-            revealSourceSurface()
-            guard sourceEditorSession.applyMarkdownFormat(plan, actionName: "插入图表") else {
-                markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未插入图表。"
-                return
-            }
-            Task { @MainActor in
-                await Task.yield()
-                _ = sourceEditorSession.focusEditor()
-            }
-        } catch {
-            markdownFormatErrorMessage = (error as? LocalizedError)?.errorDescription
-                ?? MarkdownFormatError.coreFailure.localizedDescription
-        }
+        applyEngineInsertion(.mermaid, actionName: "插入图表", noun: "图表")
     }
 
     private func insertFormula() {
-        guard canEditDocument else { return }
-        do {
-            let plan = try MarkdownFormatter.mathPlan(
-                source: document.text,
-                selectedUTF16Range: sourceEditorSession.textView.selectedRange()
-            )
-            revealSourceSurface()
-            guard sourceEditorSession.applyMarkdownFormat(plan, actionName: "插入公式") else {
-                markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未插入公式。"
-                return
-            }
-            Task { @MainActor in
-                await Task.yield()
-                _ = sourceEditorSession.focusEditor()
-            }
-        } catch {
-            markdownFormatErrorMessage = (error as? LocalizedError)?.errorDescription
-                ?? MarkdownFormatError.coreFailure.localizedDescription
-        }
+        applyEngineInsertion(.math, actionName: "插入公式", noun: "公式")
     }
 
     private func insertFootnote() {
-        guard canEditDocument else { return }
-        do {
-            let plan = try MarkdownFormatter.footnotePlan(
-                source: document.text,
-                selectedUTF16Range: sourceEditorSession.textView.selectedRange()
-            )
-            revealSourceSurface()
-            guard sourceEditorSession.applyMarkdownFormat(plan, actionName: "插入脚注") else {
-                markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未插入脚注。"
-                return
-            }
-            Task { @MainActor in
-                await Task.yield()
-                _ = sourceEditorSession.focusEditor()
-            }
-        } catch {
-            markdownFormatErrorMessage = (error as? LocalizedError)?.errorDescription
-                ?? MarkdownFormatError.coreFailure.localizedDescription
-        }
+        applyEngineInsertion(.footnote, actionName: "插入脚注", noun: "脚注")
     }
 
     private func insertHorizontalRule() {
-        guard canEditDocument else { return }
-        do {
-            let plan = try MarkdownFormatter.horizontalRulePlan(
-                source: document.text,
-                selectedUTF16Range: sourceEditorSession.textView.selectedRange()
-            )
-            revealSourceSurface()
-            guard sourceEditorSession.applyMarkdownFormat(plan, actionName: "插入分隔线") else {
-                markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未插入分隔线。"
-                return
-            }
-            Task { @MainActor in
-                await Task.yield()
-                _ = sourceEditorSession.focusEditor()
-            }
-        } catch {
-            markdownFormatErrorMessage = (error as? LocalizedError)?.errorDescription
-                ?? MarkdownFormatError.coreFailure.localizedDescription
-        }
+        applyEngineInsertion(.horizontalRule, actionName: "插入分隔线", noun: "分隔线")
     }
 
     private func insertTable() {
-        guard canEditDocument else { return }
-        do {
-            let plan = try MarkdownFormatter.tablePlan(
-                source: document.text,
-                selectedUTF16Range: sourceEditorSession.textView.selectedRange()
-            )
-            revealSourceSurface()
-            guard sourceEditorSession.applyMarkdownFormat(plan, actionName: "插入表格") else {
-                markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未插入表格。"
-                return
-            }
-            Task { @MainActor in
-                await Task.yield()
-                _ = sourceEditorSession.focusEditor()
-            }
-        } catch {
-            markdownFormatErrorMessage = (error as? LocalizedError)?.errorDescription
-                ?? MarkdownFormatError.coreFailure.localizedDescription
-        }
+        applyEngineInsertion(.table, actionName: "插入表格", noun: "表格")
     }
 
     private func presentLinkInsertion() {
@@ -3384,27 +3283,45 @@ struct MarkdownEditorView: View {
         destination: String
     ) {
         guard linkInsertionRequest?.id == request.id else { return }
-        do {
-            let plan = try MarkdownFormatter.linkPlan(
-                source: request.sourceSnapshot,
+        revealSourceSurface()
+        Task { @MainActor in
+            guard await sourceEditorSession.applyEngineFormat(
+                .link(destination: destination),
+                expectedText: request.sourceSnapshot,
                 selectedUTF16Range: request.selectedUTF16Range,
-                destination: destination
-            )
-            revealSourceSurface()
-            guard sourceEditorSession.applyMarkdownFormat(plan, actionName: "插入链接") else {
+                actionName: "插入链接"
+            ) else {
                 linkInsertionRequest = nil
                 markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未插入链接。"
                 return
             }
             linkInsertionRequest = nil
-            Task { @MainActor in
-                await Task.yield()
-                _ = sourceEditorSession.focusEditor()
+            await Task.yield()
+            _ = sourceEditorSession.focusEditor()
+        }
+    }
+
+    private func applyEngineInsertion(
+        _ operation: EditorEngineFormatOperation,
+        actionName: String,
+        noun: String
+    ) {
+        guard canEditDocument else { return }
+        let source = document.text
+        let selection = sourceEditorSession.textView.selectedRange()
+        revealSourceSurface()
+        Task { @MainActor in
+            guard await sourceEditorSession.applyEngineFormat(
+                operation,
+                expectedText: source,
+                selectedUTF16Range: selection,
+                actionName: actionName
+            ) else {
+                markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未插入\(noun)。"
+                return
             }
-        } catch {
-            linkInsertionRequest = nil
-            markdownFormatErrorMessage = (error as? LocalizedError)?.errorDescription
-                ?? MarkdownFormatError.coreFailure.localizedDescription
+            await Task.yield()
+            _ = sourceEditorSession.focusEditor()
         }
     }
 
