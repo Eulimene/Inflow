@@ -18,7 +18,7 @@
 - 当前界面不暴露未进入个人首版范围的能力。
 
 macOS 14 是当前工程构建目标。构建边界支持按 Xcode 的架构集合生成 arm64、x86_64
-或 universal Rust 静态库，但尚未形成两类真实设备的公开支持承诺。
+或 universal Rust 静态库；`cargo xtask xcframework` 另可生成带生成 header 的双架构 Release XCFramework，但尚未形成两类真实设备的公开支持承诺。
 
 ## 2. 分层与责任
 

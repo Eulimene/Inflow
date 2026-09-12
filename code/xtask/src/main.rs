@@ -1,11 +1,14 @@
 use std::env;
 use std::error::Error;
+use std::ffi::OsString;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const GENERATED_HEADER: &str = "core/include/generated/inflow_core.h";
+const XCFRAMEWORK_OUTPUT: &str = "build/InflowCore.xcframework";
+const XCFRAMEWORK_TARGET: &str = "build/xcframework-target";
 
 fn main() -> Result<(), Box<dyn Error>> {
     let command = env::args().nth(1).unwrap_or_else(|| "help".to_owned());
@@ -16,13 +19,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     match command.as_str() {
         "bindings" => write_bindings(root),
         "verify-bindings" => verify_bindings(root),
-        "test" => test_core(root),
+        "test" => test_all(root),
+        "xcframework" => build_xcframework(root),
         "verify" => {
             verify_bindings(root)?;
-            test_core(root)
+            test_all(root)
         }
         _ => {
-            eprintln!("usage: cargo xtask <bindings|verify-bindings|test|verify>");
+            eprintln!("usage: cargo xtask <bindings|verify-bindings|test|xcframework|verify>");
             Ok(())
         }
     }
@@ -101,18 +105,124 @@ fn test_core(root: &Path) -> Result<(), Box<dyn Error>> {
     )
 }
 
-fn run<const N: usize>(
-    root: &Path,
-    label: &str,
-    arguments: [&str; N],
-) -> Result<(), Box<dyn Error>> {
-    let status = Command::new("cargo")
-        .args(arguments)
-        .current_dir(root)
-        .status()?;
+fn test_all(root: &Path) -> Result<(), Box<dyn Error>> {
+    run(
+        root,
+        "cargo fmt (xtask)",
+        [
+            "fmt",
+            "--manifest-path",
+            "xtask/Cargo.toml",
+            "--",
+            "--check",
+        ],
+    )?;
+    run(
+        root,
+        "cargo clippy (xtask)",
+        [
+            "clippy",
+            "--manifest-path",
+            "xtask/Cargo.toml",
+            "--locked",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ],
+    )?;
+    test_core(root)
+}
+
+fn build_xcframework(root: &Path) -> Result<(), Box<dyn Error>> {
+    verify_bindings(root)?;
+
+    let target_dir = root.join(XCFRAMEWORK_TARGET);
+    let staging_dir = root.join("build/xcframework-staging");
+    let output = root.join(XCFRAMEWORK_OUTPUT);
+    let manifest = root.join("core/Cargo.toml");
+
+    for target in ["aarch64-apple-darwin", "x86_64-apple-darwin"] {
+        let mut command = cargo_command();
+        command
+            .args([
+                "build",
+                "--manifest-path",
+                manifest
+                    .to_str()
+                    .ok_or_else(|| io::Error::other("non-UTF-8 core manifest path"))?,
+                "--locked",
+                "--release",
+                "--target",
+                target,
+            ])
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .env("MACOSX_DEPLOYMENT_TARGET", "14.0")
+            .current_dir(root);
+        run_command(&mut command, &format!("cargo build for {target}"))?;
+    }
+
+    if staging_dir.exists() {
+        fs::remove_dir_all(&staging_dir)?;
+    }
+    fs::create_dir_all(&staging_dir)?;
+    let universal_library = staging_dir.join("libinflow_core.a");
+    let arm_library = release_library(&target_dir, "aarch64-apple-darwin");
+    let intel_library = release_library(&target_dir, "x86_64-apple-darwin");
+    let mut lipo = Command::new("xcrun");
+    lipo.args(["lipo", "-create"])
+        .arg(&arm_library)
+        .arg(&intel_library)
+        .arg("-output")
+        .arg(&universal_library)
+        .current_dir(root);
+    run_command(&mut lipo, "create universal static library")?;
+
+    if output.exists() {
+        fs::remove_dir_all(&output)?;
+    }
+    let mut create = Command::new("xcodebuild");
+    create
+        .arg("-create-xcframework")
+        .arg("-library")
+        .arg(&universal_library)
+        .arg("-headers")
+        .arg(root.join("core/include"))
+        .arg("-output")
+        .arg(&output)
+        .current_dir(root);
+    run_command(&mut create, "create XCFramework")?;
+
+    println!("created {}", output.display());
+    Ok(())
+}
+
+fn release_library(target_dir: &Path, target: &str) -> PathBuf {
+    target_dir.join(target).join("release/libinflow_core.a")
+}
+
+fn run_command(command: &mut Command, label: &str) -> Result<(), Box<dyn Error>> {
+    let status = command.status()?;
     if status.success() {
         Ok(())
     } else {
         Err(io::Error::other(format!("{label} failed with {status}")).into())
     }
+}
+
+fn run<const N: usize>(
+    root: &Path,
+    label: &str,
+    arguments: [&str; N],
+) -> Result<(), Box<dyn Error>> {
+    let status = cargo_command().args(arguments).current_dir(root).status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!("{label} failed with {status}")).into())
+    }
+}
+
+fn cargo_command() -> Command {
+    Command::new(env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")))
 }

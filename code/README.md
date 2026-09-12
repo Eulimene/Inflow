@@ -109,12 +109,14 @@ Inflow 是一款本地优先的 Markdown 写作工作台。当前代码只为产
 
 Rust 核心的独立检查：
 
+    cargo xtask verify
     cargo xtask verify-bindings
     cargo fmt --manifest-path core/Cargo.toml --check
     cargo clippy --manifest-path core/Cargo.toml --locked --all-targets -- -D warnings
     cargo test --manifest-path core/Cargo.toml --locked
 
 C ABI 声明由固定版本 `cbindgen 0.29.4` 通过 `cargo xtask bindings` 生成到 `core/include/generated/inflow_core.h`；`core/include/inflow_core.h` 只是稳定的引入外壳。生成结果必须提交，且上述检查和仓库级门禁会在绑定过期时失败。
+需要独立分发核心时，`cargo xtask xcframework` 会用锁定工具链分别构建 arm64 与 x86_64 Release 静态库、合并为 universal binary，并连同生成 header 输出到 `build/InflowCore.xcframework`。
 
 个人首版的仓库级本地自动检查使用：
 
