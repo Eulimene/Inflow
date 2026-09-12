@@ -45,7 +45,7 @@ Rust 同时把 RenderIR 的稳定 `block_id` 与 UTF-8 source range 写到顶层
 revision-bound patch 后回写 NSTextView，不再由 View 调用一次性 formatter 规划。普通输入先由
 NSTextView 乐观显示，再串行提交 Engine 并逐字节对账。默认编辑会话关闭 AppKit 正文 undo
 registration，Command-Z 与 Shift-Command-Z 由第一响应者异步路由为 Engine `Undo/Redo`，返回 patch
-时禁止再次登记撤销。普通编辑只有在 Engine 返回匹配快照后才发布到 Swift 文档投影；保存、另存、
+时禁止再次登记撤销。查找请求同样携带 revision 并在该 Engine 的当前正文上执行，过期结果不能发布。普通编辑只有在 Engine 返回匹配快照后才发布到 Swift 文档投影；保存、另存、
 覆盖确认与导出开始前会提交 marked text、排空命令队列并冻结同一 revision 的 Engine snapshot。
 WindowAwareTextView 在第一次 `setMarkedText` 时保存组合前正文与选区，组合期间不发布正文命令；
 `unmarkText` 或最终 `insertText` 清除 marked range 后只提交一次最终差异，因此一次候选词确认对应一个 Rust history entry。

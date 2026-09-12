@@ -15,6 +15,7 @@ enum InflowCoreBridge {
         static let nativeRenderPlan = Self(
             rawValue: UInt64(INFLOW_CAPABILITY_NATIVE_RENDER_PLAN)
         )
+        static let engineSearch = Self(rawValue: UInt64(INFLOW_CAPABILITY_ENGINE_SEARCH))
 
         static let editorRequired: Self = [
             .editorEngine,
@@ -22,6 +23,7 @@ enum InflowCoreBridge {
             .engineHistory,
             .renderIR,
             .nativeRenderPlan,
+            .engineSearch,
         ]
     }
 

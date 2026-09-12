@@ -589,6 +589,24 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         )
     }
 
+    func search(
+        source: String,
+        query: String,
+        caseSensitive: Bool
+    ) async -> DocumentSearchOutcome? {
+        guard !textView.hasMarkedText(), !Task.isCancelled else { return nil }
+        guard let result = await engineClient.search(
+            text: source,
+            selectionUTF16: textView.selectedRange(),
+            query: query,
+            caseSensitive: caseSensitive
+        ) else {
+            return .failure(MarkdownSearchError.coreFailure.localizedDescription)
+        }
+        guard !Task.isCancelled else { return nil }
+        return .success(result)
+    }
+
     var usesEngineAuthority: Bool { engineClient.isEnabled }
 
     func persistenceSnapshot() async -> EditorEngineDocumentSnapshot? {

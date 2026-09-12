@@ -233,6 +233,22 @@ final class EditorEngineClient {
         return mutation
     }
 
+    func search(
+        text: String,
+        selectionUTF16: NSRange,
+        query: String,
+        caseSensitive: Bool
+    ) async -> DocumentSearchResult? {
+        submit(text: text, selectionUTF16: selectionUTF16)
+        await pending?.value
+        guard !Task.isCancelled else { return nil }
+        return await client?.search(
+            expectedText: text,
+            query: query,
+            caseSensitive: caseSensitive
+        )
+    }
+
     func undo(text: String, selectionUTF16: NSRange) async -> EditorEngineMutation? {
         await historyMutation(
             direction: .undo,
@@ -482,6 +498,43 @@ private actor EditorEngineTransport {
         }
     }
 
+    func search(
+        expectedText: String,
+        query: String,
+        caseSensitive: Bool
+    ) -> DocumentSearchResult? {
+        do {
+            guard projection.utf8.elementsEqual(expectedText.utf8) else {
+                throw EditorEngineBridgeError.mismatch(revision: revision)
+            }
+            let requestID = UUID().uuidString
+            let envelope = EditorEngineSearchEnvelope(
+                schemaVersion: Self.schemaVersion,
+                requestID: requestID,
+                command: EditorEngineSearchCommand(
+                    type: "search",
+                    revision: revision,
+                    query: query,
+                    caseSensitive: caseSensitive
+                )
+            )
+            let response: EditorEngineDispatchResponse = try dispatch(envelope)
+            guard response.schemaVersion == Self.schemaVersion,
+                  response.requestID == requestID,
+                  response.patch.baseRevision == revision,
+                  response.patch.revision == revision,
+                  let search = response.patch.search,
+                  search.revision == revision
+            else { throw EditorEngineBridgeError.invalidResponse }
+            return try search.validated(source: expectedText)
+        } catch {
+            logger.error(
+                "Engine search failed; revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
     func historyMutation(
         direction: EditorEngineHistoryDirection,
         expectedText: String
@@ -710,6 +763,18 @@ private struct EditorEngineFormatEnvelope: Encodable {
     }
 }
 
+private struct EditorEngineSearchEnvelope: Encodable {
+    let schemaVersion: UInt32
+    let requestID: String
+    let command: EditorEngineSearchCommand
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case requestID = "request_id"
+        case command
+    }
+}
+
 private struct EditorEngineHistoryEnvelope: Encodable {
     let schemaVersion: UInt32
     let requestID: String
@@ -729,6 +794,20 @@ private struct EditorEngineHistoryCommand: Encodable {
     enum CodingKeys: String, CodingKey {
         case type
         case baseRevision = "base_revision"
+    }
+}
+
+private struct EditorEngineSearchCommand: Encodable {
+    let type: String
+    let revision: UInt64
+    let query: String
+    let caseSensitive: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case revision
+        case query
+        case caseSensitive = "case_sensitive"
     }
 }
 
@@ -867,6 +946,7 @@ private struct EditorEngineStatePatch: Decodable {
     let text: EditorEngineTextPatch?
     let selection: EditorEngineSelection?
     let derived: EditorEngineDerivedState?
+    let search: EditorEngineRawSearchResult?
     let canUndo: Bool
     let canRedo: Bool
 
@@ -876,6 +956,7 @@ private struct EditorEngineStatePatch: Decodable {
         case text
         case selection
         case derived
+        case search
         case canUndo = "can_undo"
         case canRedo = "can_redo"
     }
@@ -905,6 +986,35 @@ private struct EditorEngineStatePatch: Decodable {
             selectionUTF8Range: selectionRange,
             canUndo: canUndo,
             canRedo: canRedo
+        )
+    }
+}
+
+private struct EditorEngineRawSearchResult: Decodable {
+    let revision: UInt64
+    let matches: [EditorEngineByteRange]
+
+    func validated(source: String) throws -> DocumentSearchResult {
+        let sourceUTF8 = Data(source.utf8)
+        var validatedMatches: [DocumentSearchMatch] = []
+        validatedMatches.reserveCapacity(matches.count)
+        var matchedTextCounts: [Data: Int] = [:]
+        var previousEnd = 0
+
+        for match in matches {
+            guard let range = match.validated(in: source, permitsEmpty: false),
+                  range.lowerBound >= previousEnd
+            else { throw EditorEngineBridgeError.invalidResponse }
+            let matchedUTF8 = sourceUTF8.subdata(in: range)
+            validatedMatches.append(
+                DocumentSearchMatch(utf8Range: range, matchedUTF8: matchedUTF8)
+            )
+            matchedTextCounts[matchedUTF8, default: 0] += 1
+            previousEnd = range.upperBound
+        }
+        return DocumentSearchResult(
+            matches: validatedMatches,
+            matchedTextCounts: matchedTextCounts
         )
     }
 }

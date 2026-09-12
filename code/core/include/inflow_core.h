@@ -249,6 +249,7 @@ static const uint64_t INFLOW_CAPABILITY_UNIFIED_DERIVATION = UINT64_C(1) << 1;
 static const uint64_t INFLOW_CAPABILITY_ENGINE_HISTORY = UINT64_C(1) << 2;
 static const uint64_t INFLOW_CAPABILITY_RENDER_IR = UINT64_C(1) << 3;
 static const uint64_t INFLOW_CAPABILITY_NATIVE_RENDER_PLAN = UINT64_C(1) << 4;
+static const uint64_t INFLOW_CAPABILITY_ENGINE_SEARCH = UINT64_C(1) << 5;
 uint64_t inflow_core_capabilities(void);
 
 /// Creates a stateful editor engine from a schema-versioned JSON request.

@@ -13,6 +13,7 @@ use crate::native_render::NativeRenderPlan;
 use crate::reference::{MarkdownReference, references_from_document};
 use crate::render::{RenderConfiguration, html_fragment_for_preview_from_document};
 use crate::render_ir::RenderIr;
+use crate::search::find_literal;
 
 pub const ENGINE_SCHEMA_VERSION: u32 = 1;
 
@@ -84,6 +85,11 @@ pub enum EditorCommand {
     Redo {
         base_revision: Revision,
     },
+    Search {
+        revision: Revision,
+        query: String,
+        case_sensitive: bool,
+    },
 }
 
 const fn default_true() -> bool {
@@ -148,9 +154,16 @@ pub struct StatePatch {
     pub text: Option<TextPatch>,
     pub selection: Option<Selection>,
     pub derived: Option<DerivedState>,
+    pub search: Option<SearchResult>,
     pub content_hash: String,
     pub can_undo: bool,
     pub can_redo: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SearchResult {
+    pub revision: Revision,
+    pub matches: Vec<ByteRange>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -262,6 +275,11 @@ impl EditorEngine {
             } => self.format(base_revision, &selection, operation)?,
             EditorCommand::Undo { base_revision } => self.undo(base_revision)?,
             EditorCommand::Redo { base_revision } => self.redo(base_revision)?,
+            EditorCommand::Search {
+                revision,
+                query,
+                case_sensitive,
+            } => self.search(revision, &query, case_sensitive)?,
         };
 
         Ok(DispatchResponse {
@@ -363,6 +381,36 @@ impl EditorEngine {
             text: None,
             selection: None,
             derived: Some(derived),
+            search: None,
+            content_hash: content_hash(&self.text),
+            can_undo: !self.undo.is_empty(),
+            can_redo: !self.redo.is_empty(),
+        })
+    }
+
+    fn search(
+        &self,
+        revision: Revision,
+        query: &str,
+        case_sensitive: bool,
+    ) -> Result<StatePatch, EngineError> {
+        if revision != self.revision {
+            return Err(EngineError::RevisionConflict);
+        }
+        let matches = find_literal(&self.text, query, case_sensitive)
+            .into_iter()
+            .map(|found| ByteRange {
+                start: found.source_range.start,
+                end: found.source_range.end,
+            })
+            .collect();
+        Ok(StatePatch {
+            base_revision: revision,
+            revision,
+            text: None,
+            selection: None,
+            derived: None,
+            search: Some(SearchResult { revision, matches }),
             content_hash: content_hash(&self.text),
             can_undo: !self.undo.is_empty(),
             can_redo: !self.redo.is_empty(),
@@ -486,6 +534,7 @@ impl EditorEngine {
             text: Some(text),
             selection: Some(selection_after),
             derived: None,
+            search: None,
             content_hash: content_hash(&self.text),
             can_undo: !self.undo.is_empty(),
             can_redo: !self.redo.is_empty(),
@@ -714,6 +763,48 @@ mod tests {
             Err(EngineError::RevisionConflict)
         );
         assert!(engine.dispatch(refresh(1)).is_ok());
+    }
+
+    #[test]
+    fn search_is_revision_bound_and_returns_grapheme_safe_ranges() {
+        let mut engine = engine("Straße STRASSE e\u{301}");
+        let response = engine
+            .dispatch(command(
+                "search",
+                EditorCommand::Search {
+                    revision: 0,
+                    query: "strasse".to_owned(),
+                    case_sensitive: false,
+                },
+            ))
+            .expect("current revision should be searchable");
+        let result = response.patch.search.expect("search result");
+
+        assert_eq!(result.revision, 0);
+        assert_eq!(
+            result.matches,
+            vec![
+                ByteRange { start: 0, end: 7 },
+                ByteRange { start: 8, end: 15 },
+            ]
+        );
+        assert!(response.patch.text.is_none());
+        assert!(response.patch.derived.is_none());
+
+        engine
+            .dispatch(replace(0, 15..15, "!", Selection { start: 16, end: 16 }))
+            .expect("edit should succeed");
+        assert_eq!(
+            engine.dispatch(command(
+                "stale-search",
+                EditorCommand::Search {
+                    revision: 0,
+                    query: "STRASSE".to_owned(),
+                    case_sensitive: true,
+                },
+            )),
+            Err(EngineError::RevisionConflict)
+        );
     }
 
     #[test]

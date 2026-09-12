@@ -83,6 +83,42 @@ final class EditorEngineClientTests: XCTestCase {
     }
 
     @MainActor
+    func testSearchUsesTheSameRevisionedEngineAndPreservesMatchedBytes() async throws {
+        let queue = EditorEngineClient(isEnabled: true)
+        let source = "Straße STRASSE straße"
+
+        let result = await queue.search(
+            text: source,
+            selectionUTF16: NSRange(location: 0, length: 0),
+            query: "strasse",
+            caseSensitive: false
+        )
+
+        let search = try XCTUnwrap(result)
+        XCTAssertEqual(search.matches.map(\.utf8Range), [0..<7, 8..<15, 16..<23])
+        XCTAssertEqual(search.matches.map(\.matchedUTF8), [
+            Data("Straße".utf8),
+            Data("STRASSE".utf8),
+            Data("straße".utf8),
+        ])
+        XCTAssertEqual(search.matchedTextCounts[Data("Straße".utf8)], 1)
+        XCTAssertEqual(search.matchedTextCounts[Data("STRASSE".utf8)], 1)
+        XCTAssertEqual(search.matchedTextCounts[Data("straße".utf8)], 1)
+
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        let outcome = await session.search(
+            source: source,
+            query: "STRASSE",
+            caseSensitive: true
+        )
+        guard case let .success(sessionResult) = outcome else {
+            return XCTFail("source editor search should use its engine")
+        }
+        XCTAssertEqual(sessionResult.matches.map(\.utf8Range), [8..<15])
+    }
+
+    @MainActor
     func testSourceSessionAppliesEngineFormatAndPublishesAuthoritativeSnapshot() async throws {
         let session = MarkdownSourceEditorSession()
         session.textView.isEditable = true

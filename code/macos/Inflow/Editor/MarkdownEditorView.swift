@@ -697,7 +697,6 @@ struct MarkdownEditorView: View {
     @State private var replaceAllPlan: ReplaceAllPlan?
     @State private var findSearchGeneration = 0
     @State private var findSearchTask: Task<Void, Never>?
-    @State private var findSearchWorker = DocumentSearchWorker()
     @State private var pendingReplacementRange: Range<Int>?
     @State private var pendingFindNavigation: [Int] = []
     @State private var isExportingHTML = false
@@ -3860,7 +3859,6 @@ struct MarkdownEditorView: View {
         let generation = findSearchGeneration
         let query = findSession.query
         let caseSensitive = findSession.isCaseSensitive
-        let worker = findSearchWorker
         findSession.beginSearch()
 
         findSearchTask = Task { @MainActor in
@@ -3869,7 +3867,7 @@ struct MarkdownEditorView: View {
             }
             guard !Task.isCancelled else { return }
 
-            guard let outcome = await worker.search(
+            guard let outcome = await sourceEditorSession.search(
                 source: source,
                 query: query,
                 caseSensitive: caseSensitive
