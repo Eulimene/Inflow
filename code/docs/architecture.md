@@ -42,6 +42,8 @@ NSTextView 乐观显示，再串行提交 Engine 并逐字节对账。默认编�
 registration，Command-Z 与 Shift-Command-Z 由第一响应者异步路由为 Engine `Undo/Redo`，返回 patch
 时禁止再次登记撤销。普通编辑只有在 Engine 返回匹配快照后才发布到 Swift 文档投影；保存、另存、
 覆盖确认与导出开始前会提交 marked text、排空命令队列并冻结同一 revision 的 Engine snapshot。
+WindowAwareTextView 在第一次 `setMarkedText` 时保存组合前正文与选区，组合期间不发布正文命令；
+`unmarkText` 或最终 `insertText` 清除 marked range 后只提交一次最终差异，因此一次候选词确认对应一个 Rust history entry。
 
 C ABI 用 `major/minor/capabilities` 协商兼容性：major 表示不兼容布局或所有权变化，minor
 表示可加性演进，宿主只要求自身使用的 capability bits，不再因为链接到更新 minor 版本而拒绝启动。

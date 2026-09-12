@@ -172,6 +172,29 @@ final class EditorEngineShadowTests: XCTestCase {
         }
         XCTAssertEqual(session.textView.string, "alpha")
         XCTAssertTrue(session.textView.engineCanRedo)
+
+        let imeSession = MarkdownSourceEditorSession()
+        var imeProjection = ""
+        imeSession.updateBoundText = { imeProjection = $0 }
+        imeSession.textView.isEditable = true
+        imeSession.textView.string = "A"
+        imeSession.textView.setSelectedRange(NSRange(location: 1, length: 0))
+        _ = await imeSession.persistenceSnapshot()
+        XCTAssertEqual(imeProjection, "A")
+
+        imeSession.textView.setMarkedText(
+            "拼",
+            selectedRange: NSRange(location: 1, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        XCTAssertTrue(imeSession.textView.hasMarkedText())
+        XCTAssertEqual(imeProjection, "A")
+        imeSession.textView.unmarkText()
+        let imeSnapshot = await imeSession.persistenceSnapshot()
+        XCTAssertEqual(imeSnapshot?.text, "A拼")
+        XCTAssertEqual(imeSnapshot?.revision, 1)
+        XCTAssertEqual(imeProjection, "A拼")
+        XCTAssertTrue(imeSnapshot?.canUndo == true)
     }
 
     func testDiffReturnsOneUTF8ReplacementForUnicodeText() {

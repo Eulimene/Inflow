@@ -362,6 +362,10 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             else { return }
             self.updateBoundText?(snapshot.text)
         }
+        textView.compositionDidCommitHandler = { [weak self] text, selection in
+            guard let self, self.engineShadow.isEnabled else { return }
+            self.engineShadow.submit(text: text, selectionUTF16: selection)
+        }
         textView.textDidChangeHandler = { [weak self] text in
             if let self, !self.isApplyingEngineMutation, !self.textView.hasMarkedText() {
                 self.engineShadow.submit(
@@ -2048,6 +2052,11 @@ enum RenderedMarkdownCaretStyleResolver {
 
 @MainActor
 final class WindowAwareTextView: NSTextView {
+    private struct CompositionBaseline {
+        let text: String
+        let selection: NSRange
+    }
+
     private struct RenderedImageViewState {
         let sourceRange: NSRange
         let imageView: RenderedMarkdownImageView
@@ -2067,6 +2076,7 @@ final class WindowAwareTextView: NSTextView {
     var didAttachToWindow: (() -> Void)?
     var focusDidChangeHandler: (() -> Void)?
     var textDidChangeHandler: ((String) -> Void)?
+    var compositionDidCommitHandler: ((String, NSRange) -> Void)?
     var pasteImageHandler: ((ClipboardImagePayload) -> Void)?
     var dropImageHandler: ((URL) -> Void)?
     var linkClickHandler: ((Int) -> Bool)?
@@ -2482,6 +2492,46 @@ final class WindowAwareTextView: NSTextView {
     override func didChangeText() {
         super.didChangeText()
         textDidChangeHandler?(string)
+    }
+
+    override func setMarkedText(
+        _ string: Any,
+        selectedRange: NSRange,
+        replacementRange: NSRange
+    ) {
+        if compositionBaseline == nil {
+            compositionBaseline = CompositionBaseline(
+                text: self.string,
+                selection: self.selectedRange()
+            )
+        }
+        super.setMarkedText(
+            string,
+            selectedRange: selectedRange,
+            replacementRange: replacementRange
+        )
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        finishCompositionIfNeeded()
+    }
+
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        let wasComposing = compositionBaseline != nil || hasMarkedText()
+        super.insertText(insertString, replacementRange: replacementRange)
+        if wasComposing, !hasMarkedText() {
+            finishCompositionIfNeeded()
+        }
+    }
+
+    private var compositionBaseline: CompositionBaseline?
+
+    private func finishCompositionIfNeeded() {
+        guard let baseline = compositionBaseline else { return }
+        compositionBaseline = nil
+        guard !UTF8Text.isExactlyEqual(baseline.text, string) else { return }
+        compositionDidCommitHandler?(string, selectedRange())
     }
 
     @discardableResult
