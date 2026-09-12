@@ -61,7 +61,7 @@ C ABI 用 `major/minor/capabilities` 协商兼容性：major 表示不兼容布�
 
 SwiftUI 与 AppKit 负责：
 
-- `MarkdownEditorView` 只向 `EditorStore` 发送文档派生意图并消费 `EditorViewState`；Store 统一持有 generation、取消，并原子发布预览、分析和引用；
+- `MarkdownEditorView` 通过 `EditorStore` 调度文档派生、格式、查找、替换和持久化命令并消费 `EditorViewState`；Store 统一持有 generation、取消，并原子发布预览、分析和引用；
 - 原生文档窗口、新建、打开、手动保存、另存和关闭确认；
 - 没有外部目标时由应用委托显式创建并聚焦未命名文档，普通启动或 Finder 双击 App 不弹文件选择器；带外部目标时复用统一打开路由且不残留多余空白窗口；
 - 普通文件夹项目、目录树、沙箱授权与项目根边界；

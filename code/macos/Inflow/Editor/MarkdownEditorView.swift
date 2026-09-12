@@ -2061,9 +2061,9 @@ struct MarkdownEditorView: View {
 
     @discardableResult
     private func freezeAuthoritativeTextForPersistence() async throws -> String {
-        guard sourceEditorSession.usesEngineAuthority else { return document.text }
-        guard let snapshot = await sourceEditorSession.persistenceSnapshot(),
-              UTF8Text.isExactlyEqual(snapshot.text, sourceEditorSession.textView.string)
+        guard editorStore.usesEngineAuthority else { return document.text }
+        guard let snapshot = await editorStore.persistenceSnapshot(),
+              UTF8Text.isExactlyEqual(snapshot.text, editorStore.textProjection)
         else {
             throw EditorPersistenceError.unavailableAuthoritativeSnapshot
         }
@@ -2076,11 +2076,11 @@ struct MarkdownEditorView: View {
     private func prepareAuthoritativeSaveForPersistence() async throws
         -> EditorEngineSavePreparation
     {
-        guard sourceEditorSession.usesEngineAuthority,
-              let preparation = await sourceEditorSession.preparePersistenceSave(),
+        guard editorStore.usesEngineAuthority,
+              let preparation = await editorStore.preparePersistenceSave(),
               UTF8Text.isExactlyEqual(
                   preparation.text,
-                  sourceEditorSession.textView.string
+                  editorStore.textProjection
               )
         else {
             throw EditorPersistenceError.unavailableAuthoritativeSnapshot
@@ -2132,7 +2132,7 @@ struct MarkdownEditorView: View {
                 )
                 try await fileSafetySession.commitSave(envelope)
                 guard let completedSave = engineSave,
-                      await sourceEditorSession.completePersistenceSave(completedSave)
+                      await editorStore.completePersistenceSave(completedSave)
                 else {
                     throw EditorPersistenceError.unavailableAuthoritativeSnapshot
                 }
@@ -2148,7 +2148,7 @@ struct MarkdownEditorView: View {
                 documentSaveFailureMessage = nil
             } catch {
                 if let engineSave {
-                    await sourceEditorSession.abortPersistenceSave(engineSave)
+                    await editorStore.abortPersistenceSave(engineSave)
                 }
                 LocalFailureLogController.shared.record(.saving, code: .saveFailed)
                 documentSaveFailureMessage = error.localizedDescription
@@ -2183,7 +2183,7 @@ struct MarkdownEditorView: View {
             )
             try await fileSafetySession.commitSave(envelope)
             guard let completedSave = engineSave,
-                  await sourceEditorSession.completePersistenceSave(completedSave)
+                  await editorStore.completePersistenceSave(completedSave)
             else {
                 throw EditorPersistenceError.unavailableAuthoritativeSnapshot
             }
@@ -2199,7 +2199,7 @@ struct MarkdownEditorView: View {
             documentSaveFailureMessage = nil
         } catch {
             if let engineSave {
-                await sourceEditorSession.abortPersistenceSave(engineSave)
+                await editorStore.abortPersistenceSave(engineSave)
             }
             LocalFailureLogController.shared.record(.saving, code: .saveFailed)
             throw error
@@ -2285,7 +2285,7 @@ struct MarkdownEditorView: View {
                 let relocationReferences: [MarkdownReference]
                 if UTF8Text.isExactlyEqual(previewSourceSnapshot, document.text) {
                     relocationReferences = derivedReferences
-                } else if let content = await sourceEditorSession.deriveContent(
+                } else if let content = await editorStore.deriveContent(
                     for: document.text,
                     configuration: preferences.previewConfiguration
                 ), UTF8Text.isExactlyEqual(content.sourceSnapshot, document.text) {
@@ -2380,7 +2380,7 @@ struct MarkdownEditorView: View {
             try await fileSafetySession.commitSave(envelope)
             if request.operation == .saveAs {
                 guard let completedSave = engineSave,
-                      await sourceEditorSession.completePersistenceSave(completedSave)
+                      await editorStore.completePersistenceSave(completedSave)
                 else {
                     throw EditorPersistenceError.unavailableAuthoritativeSnapshot
                 }
@@ -2419,7 +2419,7 @@ struct MarkdownEditorView: View {
             }
         } catch {
             if let engineSave {
-                await sourceEditorSession.abortPersistenceSave(engineSave)
+                await editorStore.abortPersistenceSave(engineSave)
             }
             deferredImageInsertionQueue.cancel()
             relocationRequest = nil
@@ -3114,7 +3114,7 @@ struct MarkdownEditorView: View {
                 )
                 do {
                     revealSourceSurface()
-                    guard await sourceEditorSession.applyEngineFormat(
+                    guard await editorStore.applyFormat(
                         .image(
                             destination: asset.relativeMarkdownPath,
                             defaultAlternative: alternative.isEmpty ? "图片描述" : alternative
@@ -3164,7 +3164,7 @@ struct MarkdownEditorView: View {
             }
         }
         revealSourceSurface()
-        guard await sourceEditorSession.applyEngineFormat(
+        guard await editorStore.applyFormat(
             .image(
                 destination: reference.markdownDestination,
                 defaultAlternative: defaultAlternative.isEmpty
@@ -3254,7 +3254,7 @@ struct MarkdownEditorView: View {
                 do {
                     let alternative = asset.destinationURL.deletingPathExtension().lastPathComponent
                     revealSourceSurface()
-                    guard await sourceEditorSession.applyEngineFormat(
+                    guard await editorStore.applyFormat(
                         .image(
                             destination: asset.relativeMarkdownPath,
                             defaultAlternative: alternative
@@ -3315,7 +3315,7 @@ struct MarkdownEditorView: View {
         guard linkInsertionRequest?.id == request.id else { return }
         revealSourceSurface()
         Task { @MainActor in
-            guard await sourceEditorSession.applyEngineFormat(
+            guard await editorStore.applyFormat(
                 .link(destination: destination),
                 expectedText: request.sourceSnapshot,
                 selectedUTF16Range: request.selectedUTF16Range,
@@ -3341,7 +3341,7 @@ struct MarkdownEditorView: View {
         let selection = sourceEditorSession.textView.selectedRange()
         revealSourceSurface()
         Task { @MainActor in
-            guard await sourceEditorSession.applyEngineFormat(
+            guard await editorStore.applyFormat(
                 operation,
                 expectedText: source,
                 selectedUTF16Range: selection,
@@ -3361,7 +3361,7 @@ struct MarkdownEditorView: View {
         let selection = sourceEditorSession.textView.selectedRange()
         revealSourceSurface()
         Task { @MainActor in
-            guard await sourceEditorSession.applyEngineFormat(
+            guard await editorStore.applyFormat(
                 command.engineOperation,
                 expectedText: source,
                 selectedUTF16Range: selection,
@@ -3838,7 +3838,7 @@ struct MarkdownEditorView: View {
             return
         }
         pendingReplacementRange = match.utf8Range.lowerBound..<replacementEnd
-        let replaced = sourceEditorSession.replaceCurrent(
+        let replaced = editorStore.replaceCurrent(
             utf8Range: match.utf8Range,
             with: findSession.replacement,
             expectedText: document.text
@@ -3892,7 +3892,7 @@ struct MarkdownEditorView: View {
             return
         }
 
-        let replaced = sourceEditorSession.replaceAll(
+        let replaced = editorStore.replaceAll(
             utf8Ranges: plan.matches.map(\.utf8Range),
             with: plan.replacement,
             expectedText: plan.source
@@ -3939,7 +3939,7 @@ struct MarkdownEditorView: View {
             }
             guard !Task.isCancelled else { return }
 
-            guard let outcome = await sourceEditorSession.search(
+            guard let outcome = await editorStore.search(
                 source: source,
                 query: query,
                 caseSensitive: caseSensitive

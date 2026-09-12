@@ -54,6 +54,90 @@ final class EditorStore: ObservableObject {
         derivedContentTask?.cancel()
     }
 
+    var usesEngineAuthority: Bool {
+        sourceEditorSession.usesEngineAuthority
+    }
+
+    var textProjection: String {
+        sourceEditorSession.textView.string
+    }
+
+    func deriveContent(
+        for markdown: String,
+        configuration: PreviewAppearanceConfiguration
+    ) async -> EditorEngineDerivedContent? {
+        await sourceEditorSession.deriveContent(
+            for: markdown,
+            configuration: configuration
+        )
+    }
+
+    func applyFormat(
+        _ operation: EditorEngineFormatOperation,
+        expectedText: String,
+        selectedUTF16Range: NSRange,
+        actionName: String
+    ) async -> Bool {
+        await sourceEditorSession.applyEngineFormat(
+            operation,
+            expectedText: expectedText,
+            selectedUTF16Range: selectedUTF16Range,
+            actionName: actionName
+        )
+    }
+
+    func replaceCurrent(
+        utf8Range: Range<Int>,
+        with replacement: String,
+        expectedText: String
+    ) -> Bool {
+        sourceEditorSession.replaceCurrent(
+            utf8Range: utf8Range,
+            with: replacement,
+            expectedText: expectedText
+        )
+    }
+
+    func replaceAll(
+        utf8Ranges: [Range<Int>],
+        with replacement: String,
+        expectedText: String
+    ) -> Bool {
+        sourceEditorSession.replaceAll(
+            utf8Ranges: utf8Ranges,
+            with: replacement,
+            expectedText: expectedText
+        )
+    }
+
+    func search(
+        source: String,
+        query: String,
+        caseSensitive: Bool
+    ) async -> DocumentSearchOutcome? {
+        await sourceEditorSession.search(
+            source: source,
+            query: query,
+            caseSensitive: caseSensitive
+        )
+    }
+
+    func persistenceSnapshot() async -> EditorEngineDocumentSnapshot? {
+        await sourceEditorSession.persistenceSnapshot()
+    }
+
+    func preparePersistenceSave() async -> EditorEngineSavePreparation? {
+        await sourceEditorSession.preparePersistenceSave()
+    }
+
+    func completePersistenceSave(_ preparation: EditorEngineSavePreparation) async -> Bool {
+        await sourceEditorSession.completePersistenceSave(preparation)
+    }
+
+    func abortPersistenceSave(_ preparation: EditorEngineSavePreparation) async {
+        await sourceEditorSession.abortPersistenceSave(preparation)
+    }
+
     func send(_ intent: EditorIntent) {
         switch intent {
         case let .refreshDerived(request):
