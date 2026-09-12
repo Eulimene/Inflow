@@ -77,6 +77,7 @@
 		C10000000000000000000001 /* EditorEngineClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000001 /* EditorEngineClient.swift */; };
 		C10000000000000000000002 /* EditorEngineClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000002 /* EditorEngineClientTests.swift */; };
 		C10000000000000000000003 /* EditorStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000003 /* EditorStore.swift */; };
+		C10000000000000000000004 /* CoreDTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000004 /* CoreDTO.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -167,6 +168,7 @@
 		C20000000000000000000001 /* EditorEngineClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreBridge/EditorEngineClient.swift; sourceTree = "<group>"; };
 		C20000000000000000000002 /* EditorEngineClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorEngineClientTests.swift; sourceTree = "<group>"; };
 		C20000000000000000000003 /* EditorStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/EditorStore.swift; sourceTree = "<group>"; };
+		C20000000000000000000004 /* CoreDTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreBridge/CoreDTO.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -245,6 +247,7 @@
 				A20000000000000000000016 /* DocumentFindCommands.swift */,
 				A20000000000000000000003 /* InflowCoreBridge.swift */,
 				C20000000000000000000001 /* EditorEngineClient.swift */,
+				C20000000000000000000004 /* CoreDTO.swift */,
 				C20000000000000000000003 /* EditorStore.swift */,
 				A20000000000000000000004 /* Inflow-Bridging-Header.h */,
 				A20000000000000000000008 /* Info.plist */,
@@ -447,6 +450,7 @@
 				A1000000000000000000003C /* PersistentSplitView.swift in Sources */,
 				A10000000000000000000003 /* InflowCoreBridge.swift in Sources */,
 				C10000000000000000000001 /* EditorEngineClient.swift in Sources */,
+				C10000000000000000000004 /* CoreDTO.swift in Sources */,
 				C10000000000000000000003 /* EditorStore.swift in Sources */,
 				A10000000000000000000004 /* MarkdownDocument.swift in Sources */,
 				A10000000000000000000005 /* MarkdownCodec.swift in Sources */,

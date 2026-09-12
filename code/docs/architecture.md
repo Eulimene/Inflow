@@ -54,6 +54,7 @@ C ABI 用 `major/minor/capabilities` 协商兼容性：major 表示不兼容布�
 表示可加性演进，宿主只要求自身使用的 capability bits，不再因为链接到更新 minor 版本而拒绝启动。
 旧 `inflow_core_abi_version` 保留为 major 的兼容别名。Rust build phase 声明源码输入和静态库输出，
 未变化时允许 Xcode 跳过；脚本按 `ARCHS` 分别构建 Rust target，多架构时用 `lipo` 合并。稳定入口 header 只引入 `core/include/generated/inflow_core.h`，后者由固定版本 cbindgen 和 `core/cbindgen.toml` 生成；`cargo xtask verify-bindings` 逐字节拒绝过期绑定，手写 Swift/Rust ABI 声明不再是可接受路径。
+Swift 边界中可在 Store/View 传递的稳定领域 DTO 集中在 `CoreBridge/CoreDTO.swift`；`EditorEngineClient.swift` 仅保留 actor 串行化、FFI envelope 与结果校验，不再同时定义上层命令模型。
 
 核心可能保留比个人首版更宽的解析或导出实现。产品能力必须由 macOS 当前入口与 UAT 再收窄，不能直接从核心函数存在性推导。
 
