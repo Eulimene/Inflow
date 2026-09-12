@@ -103,6 +103,7 @@ EditorEngineClientTests/testDiffReturnsOneUTF8ReplacementForUnicodeText	current-
 EditorEngineClientTests/testEditorStorePublishesOnlyTheLatestDerivedIntent	current-direct	editor MVI store must cancel stale derivation and publish only the newest revision projection
 EditorEngineClientTests/testEngineHistoryOwnsUndoAndRedoPatches	current-direct	engine undo and redo must return revisioned inverse and forward patches from one authoritative history
 EditorEngineClientTests/testFormatAndSnapshotUseTheSameRevisionedEngine	current-direct	format command and authoritative snapshot must share one revisioned engine handle
+EditorEngineClientTests/testRejectedOptimisticEditReconcilesFromEngineWithoutReplacingAuthority	current-direct	rejected optimistic edits must reconcile from the existing Rust snapshot without replacing Engine authority
 EditorEngineClientTests/testSearchUsesTheSameRevisionedEngineAndPreservesMatchedBytes	current-direct	find must return revision-bound ranges and exact matched bytes from the authoritative engine
 EditorEngineClientTests/testSourceSessionAppliesEngineFormatAndPublishesAuthoritativeSnapshot	current-direct	current format commands must apply the engine patch and preserve one authoritative snapshot
 EditorEngineClientTests/testSourceSessionAppliesTheRevisionBoundNativeRenderPlan	current-direct	the persistent NSTextView must consume the native plan returned by its existing revisioned engine

@@ -243,15 +243,15 @@ final class EditorEngineClient {
         pending = Task {
             await previous?.value
             guard !Task.isCancelled else { return }
-            await client.synchronize(
+            guard let snapshot = await client.synchronize(
                 to: text,
                 selectionUTF16: selectionUTF16,
                 groupID: groupID
-            )
+            ) else { return }
             guard !Task.isCancelled,
-                  lastSubmittedText?.utf8.elementsEqual(text.utf8) == true,
-                  let snapshot = await client.snapshot(expectedText: text)
+                  lastSubmittedText?.utf8.elementsEqual(text.utf8) == true
             else { return }
+            lastSubmittedText = snapshot.text
             onHistoryStateChange?(snapshot.canUndo, snapshot.canRedo)
             onAuthoritativeSnapshot?(snapshot)
         }
@@ -474,19 +474,19 @@ private actor EditorEngineTransport {
         to swiftText: String,
         selectionUTF16: NSRange,
         groupID: String?
-    ) {
+    ) -> EditorEngineDocumentSnapshot? {
         do {
             let selection = try Self.byteSelection(selectionUTF16, in: swiftText)
             guard handle != nil else {
                 try create(text: swiftText, selection: selection)
-                return
+                return try authoritativeSnapshot()
             }
             guard let edit = EditorEngineTextDiff.replacement(
                 from: projection,
                 to: swiftText
             ) else {
                 try compareSnapshot(to: swiftText)
-                return
+                return try authoritativeSnapshot()
             }
 
             let requestID = UUID().uuidString
@@ -515,20 +515,18 @@ private actor EditorEngineTransport {
             revision = response.patch.revision
             projection = swiftText
             try compareSnapshot(to: swiftText)
+            return try authoritativeSnapshot()
         } catch {
             logger.error(
                 "Engine synchronization failed; command=replace_text revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
-            handle = nil
-            projection = ""
-            revision = 0
             do {
-                let selection = try Self.byteSelection(selectionUTF16, in: swiftText)
-                try create(text: swiftText, selection: selection)
+                return try authoritativeSnapshot()
             } catch {
                 logger.error(
-                    "Engine resync failed; command=create revision=0 error=\(String(describing: error), privacy: .public)"
+                    "Engine snapshot recovery failed; revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
                 )
+                return nil
             }
         }
     }
@@ -906,20 +904,11 @@ private actor EditorEngineTransport {
             guard projection.utf8.elementsEqual(expectedText.utf8) else {
                 throw EditorEngineBridgeError.mismatch(revision: revision)
             }
-            let snapshot = try readSnapshot()
-            guard snapshot.text.utf8.elementsEqual(expectedText.utf8),
-                  let selection = snapshot.selection.validated(in: snapshot.text, permitsEmpty: true)
-            else { throw EditorEngineBridgeError.invalidResponse }
-            return EditorEngineDocumentSnapshot(
-                revision: snapshot.revision,
-                text: snapshot.text,
-                selectionUTF8Range: selection,
-                mode: snapshot.mode,
-                contentHash: snapshot.contentHash,
-                canUndo: snapshot.canUndo,
-                canRedo: snapshot.canRedo,
-                dirty: snapshot.dirty
-            )
+            let snapshot = try authoritativeSnapshot()
+            guard snapshot.text.utf8.elementsEqual(expectedText.utf8) else {
+                throw EditorEngineBridgeError.mismatch(revision: snapshot.revision)
+            }
+            return snapshot
         } catch {
             logger.error(
                 "Engine snapshot failed; revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
@@ -1020,6 +1009,29 @@ private actor EditorEngineTransport {
         else {
             throw EditorEngineBridgeError.mismatch(revision: snapshot.revision)
         }
+    }
+
+    private func authoritativeSnapshot() throws -> EditorEngineDocumentSnapshot {
+        let snapshot = try readSnapshot()
+        guard snapshot.schemaVersion == Self.schemaVersion,
+              let selection = snapshot.selection.validated(
+                  in: snapshot.text,
+                  permitsEmpty: true
+              )
+        else { throw EditorEngineBridgeError.invalidResponse }
+        revision = snapshot.revision
+        projection = snapshot.text
+        mode = snapshot.mode
+        return EditorEngineDocumentSnapshot(
+            revision: snapshot.revision,
+            text: snapshot.text,
+            selectionUTF8Range: selection,
+            mode: snapshot.mode,
+            contentHash: snapshot.contentHash,
+            canUndo: snapshot.canUndo,
+            canRedo: snapshot.canRedo,
+            dirty: snapshot.dirty
+        )
     }
 
     private func readSnapshot() throws -> EditorEngineSnapshot {

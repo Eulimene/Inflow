@@ -108,12 +108,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             textView?.engineCanRedo = canRedo
         }
         engineClient.onAuthoritativeSnapshot = { [weak self] snapshot in
-            guard let self,
-                  !self.isApplyingEngineMutation,
-                  UTF8Text.isExactlyEqual(self.textView.string, snapshot.text)
-            else { return }
-            self.pendingOptimisticText = nil
-            self.updateBoundText?(snapshot.text)
+            self?.applyAuthoritativeSnapshot(snapshot)
         }
         textView.compositionDidCommitHandler = { [weak self] text, selection in
             guard let self else { return }
@@ -335,6 +330,35 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         pendingOptimisticText = nil
         updateBoundText?(mutation.resultingSource)
         return true
+    }
+
+    private func applyAuthoritativeSnapshot(_ snapshot: EditorEngineDocumentSnapshot) {
+        guard !isApplyingEngineMutation,
+              !textView.hasMarkedText(),
+              let selection = MarkdownSourceRange.navigationTarget(
+                  forUTF8Range: snapshot.selectionUTF8Range,
+                  in: snapshot.text
+              )
+        else { return }
+
+        if !UTF8Text.isExactlyEqual(textView.string, snapshot.text) {
+            let undoManager = textView.undoManager
+            let restoresUndo = undoManager?.isUndoRegistrationEnabled == true
+            if restoresUndo { undoManager?.disableUndoRegistration() }
+            isApplyingEngineMutation = true
+            textView.string = snapshot.text
+            textView.setSelectedRange(selection.revealRange)
+            isApplyingEngineMutation = false
+            if restoresUndo { undoManager?.enableUndoRegistration() }
+
+            invalidateSyntaxApplication()
+            updateSelectedRange(selection.revealRange)
+            lineNumberRuler.updateText(snapshot.text)
+            refreshWritingModePresentation()
+            scheduleRenderedPresentation(for: snapshot.text)
+        }
+        pendingOptimisticText = nil
+        updateBoundText?(snapshot.text)
     }
 
     func authoritativeSnapshot() async -> EditorEngineDocumentSnapshot? {

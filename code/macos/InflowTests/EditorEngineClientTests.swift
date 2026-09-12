@@ -346,6 +346,35 @@ final class EditorEngineClientTests: XCTestCase {
     }
 
     @MainActor
+    func testRejectedOptimisticEditReconcilesFromEngineWithoutReplacingAuthority() async throws {
+        let session = MarkdownSourceEditorSession()
+        var publishedText = ""
+        session.updateBoundText = { publishedText = $0 }
+        session.textView.isEditable = true
+        session.textView.string = "authoritative"
+        session.textView.setSelectedRange(NSRange(location: 13, length: 0))
+        let initial = await session.persistenceSnapshot()
+        XCTAssertEqual(initial?.revision, 0)
+        let becameReadOnly = await session.setEngineMode(.readOnly)
+        XCTAssertTrue(becameReadOnly)
+
+        session.textView.insertText(" drift", replacementRange: session.textView.selectedRange())
+        XCTAssertEqual(session.textView.string, "authoritative drift")
+
+        for _ in 0..<100 where session.textView.string != "authoritative" {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(session.textView.string, "authoritative")
+        XCTAssertEqual(publishedText, "authoritative")
+
+        let recovered = await session.authoritativeSnapshot()
+        XCTAssertEqual(recovered?.revision, 0)
+        XCTAssertEqual(recovered?.text, "authoritative")
+        XCTAssertFalse(recovered?.canUndo == true)
+        XCTAssertEqual(recovered?.mode, .readOnly)
+    }
+
+    @MainActor
     func testAdjacentTypingUsesOneEngineUndoGroupAndNewlineBreaksIt() async throws {
         let session = MarkdownSourceEditorSession()
         session.textView.isEditable = true
