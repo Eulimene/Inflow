@@ -39,6 +39,29 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(preferences.existingImagePlacement, .copyToAssets)
             XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
             XCTAssertEqual(
+                preferences.previewConfiguration.contentWidth,
+                MarkdownRenderMetrics.readingWidth
+            )
+            XCTAssertEqual(
+                preferences.previewConfiguration.nativeRenderedAppearance(
+                    spellingEnabled: true
+                ).fontSize,
+                MarkdownRenderMetrics.bodyFontSize
+            )
+            XCTAssertGreaterThan(
+                MarkdownRenderMetrics.heading(level: 1).scale,
+                MarkdownRenderMetrics.heading(level: 2).scale
+            )
+            XCTAssertTrue(
+                MarkdownRenderPalette.light.cssVariables.contains(
+                    "--md-table-stripe: \(MarkdownRenderPalette.light.tableStripe);"
+                )
+            )
+            XCTAssertNotEqual(
+                MarkdownRenderPalette.light.inlineCode,
+                MarkdownRenderPalette.dark.inlineCode
+            )
+            XCTAssertEqual(
                 defaults.string(forKey: "preferences.workspace.viewMode"),
                 WorkspaceViewModePreference.automatic.rawValue
             )

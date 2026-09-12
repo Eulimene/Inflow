@@ -132,37 +132,73 @@ enum MarkdownRenderer {
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline'; font-src 'none'; media-src 'none'; connect-src 'none'; object-src 'none'; frame-src 'none'">
           <style>
-            :root { color-scheme: light dark; font: 17px/1.65 -apple-system, BlinkMacSystemFont, sans-serif; }
-            body { box-sizing: border-box; max-width: 760px; margin: 0 auto; padding: 32px 36px 72px; color: #24292f; background: #ffffff; overflow-wrap: break-word; }
-            h1, h2, h3, h4, h5, h6 { line-height: 1.28; margin: 1.45em 0 .55em; }
+            :root {
+              color-scheme: light dark;
+              font: \(MarkdownRenderMetrics.bodyFontSize)px/\(MarkdownRenderMetrics.bodyLineHeight) -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif;
+              \(MarkdownRenderPalette.light.cssVariables)
+            }
+            *, *::before, *::after { box-sizing: border-box; }
+            html { min-height: 100%; background: var(--md-canvas); }
+            body {
+              max-width: \(MarkdownRenderMetrics.readingWidth)px;
+              min-height: 100vh;
+              margin: 0 auto;
+              padding: 32px 36px 72px;
+              color: var(--md-text);
+              background: var(--md-canvas);
+              overflow-wrap: break-word;
+              -webkit-font-smoothing: antialiased;
+              text-rendering: optimizeLegibility;
+            }
+            body > :first-child { margin-top: 0 !important; }
+            body > :last-child { margin-bottom: 0 !important; }
+            p { margin: .72em 0; }
+            strong { color: var(--md-heading); font-weight: 650; }
+            h1, h2, h3, h4, h5, h6 {
+              color: var(--md-heading);
+              line-height: 1.28;
+              letter-spacing: -.012em;
+            }
             h1[data-inflow-source-start], h2[data-inflow-source-start], h3[data-inflow-source-start], h4[data-inflow-source-start], h5[data-inflow-source-start], h6[data-inflow-source-start] { cursor: pointer; }
-            h1, h2 { border-bottom: 1px solid #d8dee4; padding-bottom: .28em; }
-            h1 { font-size: 2em; } h2 { font-size: 1.5em; } h3 { font-size: 1.25em; }
-            a { color: #0969da; text-decoration: none; cursor: pointer; } a:hover { text-decoration: underline; background: transparent; }
-            blockquote { margin: .75em 0; padding: 0 1em; color: #57606a; border-left: 4px solid #d0d7de; line-height: inherit; }
+            h1, h2 { border-bottom: 1px solid var(--md-border); padding-bottom: .24em; }
+            h1 { font-size: \(MarkdownRenderMetrics.heading(level: 1).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 1).spacingBefore)em 0 \(MarkdownRenderMetrics.heading(level: 1).spacingAfter)em; }
+            h2 { font-size: \(MarkdownRenderMetrics.heading(level: 2).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 2).spacingBefore)em 0 \(MarkdownRenderMetrics.heading(level: 2).spacingAfter)em; }
+            h3 { font-size: \(MarkdownRenderMetrics.heading(level: 3).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 3).spacingBefore)em 0 \(MarkdownRenderMetrics.heading(level: 3).spacingAfter)em; }
+            h4 { font-size: \(MarkdownRenderMetrics.heading(level: 4).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 4).spacingBefore)em 0 \(MarkdownRenderMetrics.heading(level: 4).spacingAfter)em; }
+            h5 { font-size: \(MarkdownRenderMetrics.heading(level: 5).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 5).spacingBefore)em 0 \(MarkdownRenderMetrics.heading(level: 5).spacingAfter)em; }
+            h6 { font-size: \(MarkdownRenderMetrics.heading(level: 6).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 6).spacingBefore)em 0 \(MarkdownRenderMetrics.heading(level: 6).spacingAfter)em; color: var(--md-secondary); }
+            a { color: var(--md-accent); text-decoration: none; text-underline-offset: .16em; cursor: pointer; }
+            a:hover { text-decoration: underline; background: transparent; }
+            a:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--md-accent); outline-offset: 3px; }
+            blockquote { margin: .85em 0; padding: .08em 0 .08em 1em; color: var(--md-secondary); border-left: 4px solid var(--md-quote-bar); line-height: inherit; }
             blockquote > :first-child { margin-top: 0; } blockquote > :last-child { margin-bottom: 0; }
-            code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88em; line-height: inherit; background: #afb8c133; border-radius: 3px; padding: 0; }
-            pre { overflow: auto; padding: 16px; background: #f6f8fa; border-radius: 8px; }
+            ul, ol { margin: .65em 0; padding-left: 1.7em; }
+            li { margin: .18em 0; padding-left: .1em; }
+            li > p { margin: .35em 0; }
+            code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace; font-size: \(MarkdownRenderMetrics.inlineCodeScale)em; line-height: inherit; background: var(--md-inline-code); border-radius: 4px; padding: 0; }
+            pre { margin: 1em 0; overflow: auto; padding: 15px 16px; color: var(--md-text); background: var(--md-surface); border: 1px solid var(--md-border); border-radius: \(MarkdownRenderMetrics.blockCornerRadius)px; line-height: \(MarkdownRenderMetrics.codeBlockLineHeight); }
             pre code { padding: 0; background: transparent; }
-            .tok-keyword { color: #cf222e; font-weight: 600; }
-            .tok-type { color: #8250df; }
-            .tok-string { color: #0a3069; }
-            .tok-number, .tok-literal { color: #0550ae; }
-            .tok-comment { color: #57606a; font-style: italic; }
-            .tok-tag { color: #116329; }
-            table { width: 100%; border-collapse: collapse; display: block; overflow-x: auto; }
-            th, td { border: 1px solid #d0d7de; padding: 7px 12px; }
-            thead { background: #0969da24; } th { font-weight: 600; }
-            tbody tr:nth-child(even) { background: #0969da0b; }
-            img { max-width: 100%; height: auto; }
-            .image-warning { display: flex; flex-direction: column; gap: .2em; margin: 1em 0; padding: 12px 14px; border: 1px solid #d4a72c; border-radius: 8px; color: #9a6700; }
+            .tok-keyword { color: var(--md-keyword); font-weight: 600; }
+            .tok-type { color: var(--md-type); }
+            .tok-string { color: var(--md-string); }
+            .tok-number, .tok-literal { color: var(--md-number); }
+            .tok-comment { color: var(--md-comment); font-style: italic; }
+            .tok-tag { color: var(--md-tag); }
+            table { width: 100%; margin: 1em 0; border: 1px solid var(--md-border); border-collapse: separate; border-spacing: 0; border-radius: \(MarkdownRenderMetrics.blockCornerRadius)px; display: block; overflow-x: auto; }
+            th, td { min-width: 7em; padding: \(MarkdownRenderMetrics.tableCellVerticalPadding)px \(MarkdownRenderMetrics.tableCellHorizontalPadding)px; border-right: 1px solid var(--md-border); border-bottom: 1px solid var(--md-border); text-align: left; vertical-align: top; }
+            tr > :last-child { border-right: 0; }
+            tbody tr:last-child > td { border-bottom: 0; }
+            thead { background: var(--md-surface-strong); } th { color: var(--md-heading); font-weight: 650; }
+            tbody tr:nth-child(even) { background: var(--md-table-stripe); }
+            img { display: block; max-width: 100%; height: auto; margin: 1.15em auto; border-radius: 4px; }
+            .image-warning { display: flex; flex-direction: column; gap: .2em; margin: 1em 0; padding: 12px 14px; border: 1px solid var(--md-warning); border-radius: \(MarkdownRenderMetrics.blockCornerRadius)px; color: var(--md-warning); }
             .image-warning span { font-size: .9em; }
             .image-warning-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
             .image-warning-actions button { font: inherit; color: inherit; border: 1px solid currentColor; border-radius: 6px; background: transparent; padding: 5px 9px; cursor: pointer; }
-            hr { height: 1px; border: 0; background: #d8dee4; margin: 2em 0; }
+            hr { height: 1px; border: 0; background: var(--md-border); margin: 2em 0; }
             math { font-family: STIX Two Math, STIXGeneral, serif; }
             math[display="block"] { display: block; max-width: 100%; overflow-x: auto; margin: 1.2em 0; text-align: center; }
-            .math-error { border: 1px solid #d4a72c; border-radius: 8px; padding: 12px 14px; color: #9a6700; }
+            .math-error { border: 1px solid var(--md-warning); border-radius: \(MarkdownRenderMetrics.blockCornerRadius)px; padding: 12px 14px; color: var(--md-warning); }
             .math-error-inline { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: .35em; margin: 0 .15em; }
             .math-error pre { margin: 10px 0 0; }
             .math-error-inline code { max-width: 100%; overflow-wrap: anywhere; }
@@ -171,34 +207,18 @@ enum MarkdownRenderer {
             .math-error-actions button { font: inherit; color: inherit; border: 1px solid currentColor; border-radius: 6px; background: transparent; padding: 5px 9px; cursor: pointer; }
             .mermaid-diagram { margin: 1.4em 0; overflow-x: auto; }
             .mermaid-diagram svg { min-width: 420px; width: 100%; height: auto; color: currentColor; }
-            .mermaid-diagram .node rect { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
+            .mermaid-diagram .node rect { fill: var(--md-surface); stroke: var(--md-border); stroke-width: 1.5; }
             .mermaid-diagram text { fill: currentColor; font: 14px -apple-system, BlinkMacSystemFont, sans-serif; }
-            .mermaid-error { border: 1px solid #d4a72c; border-radius: 8px; padding: 12px 14px; color: #9a6700; }
+            .mermaid-error { border: 1px solid var(--md-warning); border-radius: \(MarkdownRenderMetrics.blockCornerRadius)px; padding: 12px 14px; color: var(--md-warning); }
             .mermaid-error-actions { display: flex; gap: 8px; margin-top: 10px; }
             .mermaid-error-actions button { font: inherit; color: inherit; border: 1px solid currentColor; border-radius: 6px; background: transparent; padding: 5px 9px; cursor: pointer; }
-            .task-list-item { list-style: none; } input[type="checkbox"] { margin: 0 .45em 0 -1.35em; }
-            .preview-error { margin-top: 30vh; text-align: center; color: #9a6700; }
+            .task-list-item { list-style: none; } input[type="checkbox"] { margin: 0 .45em 0 -1.35em; accent-color: var(--md-accent); }
+            .preview-error { margin-top: 30vh; text-align: center; color: var(--md-warning); }
+            ::selection { color: var(--md-heading); background: color-mix(in srgb, var(--md-accent) 22%, transparent); }
             @media (prefers-color-scheme: dark) {
-              body { color: #e6edf3; background: #0d1117; }
-              h1, h2, th, td { border-color: #30363d; }
-              a { color: #58a6ff; }
-              blockquote { color: #8b949e; border-color: #3b434b; }
-              pre { background: #161b22; }
-              thead { background: #58a6ff24; }
-              tbody tr:nth-child(even) { background: #58a6ff12; }
-              code { background: #6e768166; }
-              .tok-keyword { color: #ff7b72; }
-              .tok-type { color: #d2a8ff; }
-              .tok-string { color: #a5d6ff; }
-              .tok-number, .tok-literal { color: #79c0ff; }
-              .tok-comment { color: #8b949e; }
-              .tok-tag { color: #7ee787; }
-              hr { background: #30363d; }
-              .mermaid-diagram .node rect { fill: #161b22; stroke: #8b949e; }
-              .math-error { color: #d29922; border-color: #9e6a03; }
-              .mermaid-error { color: #d29922; border-color: #9e6a03; }
-              .image-warning { color: #d29922; border-color: #9e6a03; }
+              :root { \(MarkdownRenderPalette.dark.cssVariables) }
             }
+            @media (max-width: 640px) { body { padding: 24px 20px 56px; } }
           </style>
           \(PreviewAppearanceCSS.styleElement(for: configuration))
         </head>
@@ -235,7 +255,7 @@ enum MarkdownRenderer {
 enum PreviewAppearanceCSS {
     static func styleElement(for configuration: PreviewAppearanceConfiguration) -> String {
         let width = decimal(configuration.contentWidth)
-        let fontSize = decimal(17 * configuration.zoom)
+        let fontSize = decimal(MarkdownRenderMetrics.bodyFontSize * configuration.zoom)
         let themeRules: String = switch configuration.theme {
         case .standard:
             ""
@@ -251,9 +271,9 @@ enum PreviewAppearanceCSS {
         case .system:
             ":root { color-scheme: light dark; }"
         case .light:
-            ":root { color-scheme: light; } body { color: #111111; background: #ffffff; } h1, h2, th, td { border-color: #767676; } a { color: #004ea8; } blockquote { color: #333333; border-color: #606060; } pre { background: #f1f1f1; } thead { background: #004ea824; } tbody tr:nth-child(even) { background: #004ea80b; } code { background: #d8d8d866; } \(syntaxLightRules)"
+            ":root { color-scheme: light; \(MarkdownRenderPalette.light.cssVariables) }"
         case .dark:
-            ":root { color-scheme: dark; } body { color: #f2f2f2; background: #101214; } h1, h2, th, td { border-color: #8a8a8a; } a { color: #78b7ff; } blockquote { color: #d0d0d0; border-color: #a0a0a0; } pre { background: #202428; } thead { background: #78b7ff24; } tbody tr:nth-child(even) { background: #78b7ff12; } code { background: #ffffff24; } \(syntaxDarkRules)"
+            ":root { color-scheme: dark; \(MarkdownRenderPalette.dark.cssVariables) }"
         }
 
         let contrastRules = configuration.increasedContrast ? highContrastRules : ""
@@ -286,14 +306,8 @@ enum PreviewAppearanceCSS {
         return result
     }
 
-    private static let syntaxLightRules =
-        ".tok-keyword { color: #cf222e; } .tok-type { color: #8250df; } .tok-string { color: #0a3069; } .tok-number, .tok-literal { color: #0550ae; } .tok-comment { color: #57606a; } .tok-tag { color: #116329; }"
-
-    private static let syntaxDarkRules =
-        ".tok-keyword { color: #ff7b72; } .tok-type { color: #d2a8ff; } .tok-string { color: #a5d6ff; } .tok-number, .tok-literal { color: #79c0ff; } .tok-comment { color: #8b949e; } .tok-tag { color: #7ee787; }"
-
     private static let highContrastRules =
-        "body { color: CanvasText; background: Canvas; } a { color: LinkText; text-decoration: underline; text-decoration-thickness: 2px; } h1, h2, th, td, blockquote { border-color: currentColor; } .tok-keyword, .tok-type, .tok-string, .tok-number, .tok-literal, .tok-comment, .tok-tag { color: currentColor; } .tok-keyword, .tok-type { font-weight: 700; } .tok-comment { text-decoration: underline dotted; } :focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }"
+        ":root { --md-canvas: Canvas; --md-text: CanvasText; --md-heading: CanvasText; --md-secondary: CanvasText; --md-accent: LinkText; --md-border: CanvasText; --md-quote-bar: CanvasText; --md-surface: Canvas; --md-surface-strong: Canvas; --md-table-stripe: Canvas; --md-inline-code: Canvas; --md-keyword: CanvasText; --md-type: CanvasText; --md-string: CanvasText; --md-number: CanvasText; --md-comment: CanvasText; --md-tag: CanvasText; --md-warning: CanvasText; } a { text-decoration: underline; text-decoration-thickness: 2px; } .tok-keyword, .tok-type { font-weight: 700; } .tok-comment { text-decoration: underline dotted; } :focus-visible { outline: 3px solid currentColor; outline-offset: 3px; }"
 
     private static func decimal(_ value: Double) -> String {
         String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), value)

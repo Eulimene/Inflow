@@ -86,7 +86,10 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             width: CGFloat.greatestFiniteMagnitude,
             height: CGFloat.greatestFiniteMagnitude
         )
-        textView.textContainerInset = NSSize(width: 12, height: 14)
+        textView.textContainerInset = NSSize(
+            width: MarkdownRenderMetrics.editorHorizontalInset,
+            height: MarkdownRenderMetrics.editorVerticalInset
+        )
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.containerSize = NSSize(
             width: scrollView.contentSize.width,
@@ -151,6 +154,10 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
         textView.focusDidChangeHandler = { [weak self] in
             self?.scheduleRenderedInteractionPresentation()
+        }
+        textView.effectiveAppearanceDidChangeHandler = { [weak self] in
+            guard let self, self.presentation == .rendered else { return }
+            self.applyRenderedPresentation(source: self.textView.string, force: true)
         }
         NotificationCenter.default.addObserver(
             self,
@@ -522,6 +529,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             textView.clickableLinkRanges = []
             textView.clearRenderedImages()
             textView.renderedQuoteRanges = []
+            textView.renderedCodeBlockRanges = []
             textView.renderedReplacementMarkers = []
             textView.renderedRuleRanges = []
             textView.renderedCollapsedSourceRanges = []
@@ -655,6 +663,16 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             guard !rangesOverlap(style.sourceRange.utf16Range, editingRange) else { return nil }
             return (source as NSString).paragraphRange(for: style.sourceRange.utf16Range)
         }
+        textView.renderedCodeBlockRanges = plan.localSourceBlocks.compactMap { block in
+            guard block.reasons.contains(.fencedCode),
+                  !rangesOverlap(block.sourceRange.utf16Range, editingRange),
+                  let parts = fencedCodeParts(
+                      in: block.sourceRange.utf16Range,
+                      source: source
+                  )
+            else { return nil }
+            return parts.content
+        }
         scrollView.hasVerticalRuler = false
         scrollView.rulersVisible = false
 
@@ -700,11 +718,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         let baseParagraph = NSMutableParagraphStyle()
         baseParagraph.lineHeightMultiple = CGFloat(sourceAppearance.lineHeight)
         baseParagraph.paragraphSpacing = 0
+        let palette = MarkdownRenderPalette.resolved(for: textView.effectiveAppearance)
         textView.font = baseFont
         textView.defaultParagraphStyle = baseParagraph
         textView.typingAttributes = [
             .font: baseFont,
-            .foregroundColor: NSColor.textColor,
+            .foregroundColor: palette.textColor,
             .paragraphStyle: baseParagraph,
         ]
 
@@ -721,7 +740,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         storage.setAttributes(
             [
                 .font: baseFont,
-                .foregroundColor: NSColor.textColor,
+                .foregroundColor: palette.textColor,
                 .paragraphStyle: baseParagraph,
             ],
             range: fullRange
@@ -768,12 +787,26 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 storage.addAttributes(
                     [
                         .font: NSFont.monospacedSystemFont(
-                            ofSize: max(13, CGFloat(sourceAppearance.fontSize)),
+                            ofSize: max(
+                                13,
+                                CGFloat(sourceAppearance.fontSize)
+                                    * CGFloat(MarkdownRenderMetrics.inlineCodeScale)
+                            ),
                             weight: .regular
                         ),
-                        .foregroundColor: NSColor.labelColor,
-                        .backgroundColor: NSColor.quaternaryLabelColor.withAlphaComponent(0.16),
+                        .foregroundColor: palette.textColor,
+                        .backgroundColor: NSColor.clear,
                     ],
+                    range: parts.content
+                )
+                let codeParagraph = NSMutableParagraphStyle()
+                codeParagraph.lineHeightMultiple = MarkdownRenderMetrics.codeBlockLineHeight
+                codeParagraph.firstLineHeadIndent = MarkdownRenderMetrics.tableCellHorizontalPadding
+                codeParagraph.headIndent = MarkdownRenderMetrics.tableCellHorizontalPadding
+                codeParagraph.tailIndent = -MarkdownRenderMetrics.tableCellHorizontalPadding
+                storage.addAttribute(
+                    .paragraphStyle,
+                    value: codeParagraph,
                     range: parts.content
                 )
                 for fence in [parts.opening, parts.closing] where fence.length > 0 {
@@ -856,7 +889,10 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             let size = textView.setRenderedTable(
                 table,
                 baseFont: baseFont,
-                maximumWidth: max(160, scrollView.contentSize.width - 32),
+                maximumWidth: max(
+                    160,
+                    scrollView.contentSize.width - textView.textContainerInset.width * 2
+                ),
                 linkActivation: renderedLinkActivation,
                 onLinkClick: { [weak self] target in
                     self?.renderedLinkHandler?(target)
@@ -1272,14 +1308,15 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     private func renderedMermaidImage(from diagram: RenderedMarkdownMermaidDiagram) -> NSImage? {
+        let palette = MarkdownRenderPalette.resolved(for: textView.effectiveAppearance)
         let styledSVG = diagram.svg.replacingOccurrences(
             of: "<defs>",
             with: """
             <defs><style>
-            .node rect { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
-            .edge-label-background { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1; }
-            text { fill: #24292f; font: 14px -apple-system, BlinkMacSystemFont, sans-serif; }
-            .edge, marker path { color: #57606a; }
+            .node rect { fill: \(palette.subtleSurface); stroke: \(palette.border); stroke-width: 1.5; }
+            .edge-label-background { fill: \(palette.canvas); stroke: \(palette.border); stroke-width: 1; }
+            text { fill: \(palette.text); font: 14px -apple-system, BlinkMacSystemFont, sans-serif; }
+            .edge, marker path { color: \(palette.secondaryText); }
             </style>
             """
         )
@@ -1295,17 +1332,41 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         storage: NSTextStorage,
         baseFont: NSFont
     ) {
+        let palette = MarkdownRenderPalette.resolved(for: textView.effectiveAppearance)
         switch kind {
-        case .paragraph, .unorderedListItem, .orderedListItem, .taskListItem:
+        case .paragraph:
             break
+        case .unorderedListItem, .orderedListItem, .taskListItem:
+            let paragraphRange = storage.mutableString.paragraphRange(for: range)
+            let paragraph = (
+                storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
+                    as? NSParagraphStyle
+            )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+            paragraph.paragraphSpacing = max(paragraph.paragraphSpacing, 2)
+            storage.addAttribute(.paragraphStyle, value: paragraph, range: paragraphRange)
         case let .heading(level):
+            let metrics = MarkdownRenderMetrics.heading(level: level)
+            let paragraphRange = storage.mutableString.paragraphRange(for: range)
+            let paragraph = (
+                storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
+                    as? NSParagraphStyle
+            )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+            paragraph.paragraphSpacingBefore = baseFont.pointSize * CGFloat(metrics.spacingBefore)
+            paragraph.paragraphSpacing = baseFont.pointSize * CGFloat(metrics.spacingAfter)
+            storage.addAttribute(
+                .paragraphStyle,
+                value: paragraph,
+                range: paragraphRange
+            )
             storage.addAttributes(
                 [
-                .font: NSFont.systemFont(
-                    ofSize: max(baseFont.pointSize, 30 - CGFloat(level * 3)),
-                    weight: level <= 2 ? .bold : .semibold
-                ),
-                .foregroundColor: NSColor.labelColor,
+                    .font: NSFont.systemFont(
+                        ofSize: baseFont.pointSize * CGFloat(metrics.scale),
+                        weight: level <= 2 ? .bold : (level <= 5 ? .semibold : .medium)
+                    ),
+                    .foregroundColor: level == 6
+                        ? palette.secondaryTextColor
+                        : palette.headingColor,
                 ],
                 range: range
             )
@@ -1324,14 +1385,18 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         case .inlineCode:
             transformFonts(in: range, storage: storage) { font in
                 NSFont.monospacedSystemFont(
-                    ofSize: max(13, font.pointSize),
+                    ofSize: max(
+                        13,
+                        font.pointSize * CGFloat(MarkdownRenderMetrics.inlineCodeScale)
+                    ),
                     weight: .regular
                 )
             }
             storage.addAttributes(
                 [
                     .baselineOffset: 0,
-                    .backgroundColor: NSColor.quaternaryLabelColor.withAlphaComponent(0.22),
+                    .foregroundColor: palette.textColor,
+                    .backgroundColor: palette.inlineCodeColor,
                 ],
                 range: range
             )
@@ -1340,7 +1405,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 [
                     .font: NSFont(name: "Times New Roman", size: baseFont.pointSize)
                         ?? NSFont.systemFont(ofSize: baseFont.pointSize),
-                    .foregroundColor: NSColor.labelColor,
+                    .foregroundColor: palette.headingColor,
                 ],
                 range: range
             )
@@ -1356,7 +1421,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 [
                     .font: NSFont(name: "Times New Roman", size: baseFont.pointSize + 1)
                         ?? NSFont.systemFont(ofSize: baseFont.pointSize + 1),
-                    .foregroundColor: NSColor.labelColor,
+                    .foregroundColor: palette.headingColor,
                     .paragraphStyle: paragraph,
                 ],
                 range: range
@@ -1374,7 +1439,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             storage.addAttribute(.paragraphStyle, value: paragraphStyle, range: paragraphRange)
             storage.addAttribute(
                 .foregroundColor,
-                value: NSColor.secondaryLabelColor,
+                value: palette.secondaryTextColor,
                 range: range
             )
         case .tableHeader:
@@ -1384,20 +1449,20 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             applyRenderedTableRow(
                 range: range,
                 storage: storage,
-                backgroundColor: NSColor.controlAccentColor.withAlphaComponent(0.10)
+                backgroundColor: palette.mutedSurfaceColor
             )
         case let .tableBody(alternating):
             applyRenderedTableRow(
                 range: range,
                 storage: storage,
                 backgroundColor: alternating
-                    ? NSColor.quaternaryLabelColor.withAlphaComponent(0.22)
-                    : NSColor.quaternaryLabelColor.withAlphaComponent(0.10)
+                    ? palette.tableStripeColor
+                    : palette.canvasColor
             )
         case .link:
             storage.addAttributes(
                 [
-                    .foregroundColor: NSColor.linkColor,
+                    .foregroundColor: palette.accentColor,
                     .underlineStyle: 0,
                 ],
                 range: range
@@ -2413,6 +2478,7 @@ final class WindowAwareTextView: NSTextView {
     var engineRedoHandler: (() -> Void)?
     var didAttachToWindow: (() -> Void)?
     var focusDidChangeHandler: (() -> Void)?
+    var effectiveAppearanceDidChangeHandler: (() -> Void)?
     var textDidChangeHandler: ((String) -> Void)?
     var compositionDidCommitHandler: ((String, NSRange) -> Void)?
     var pasteImageHandler: ((ClipboardImagePayload) -> Void)?
@@ -2432,6 +2498,11 @@ final class WindowAwareTextView: NSTextView {
     var renderedQuoteRanges: [NSRange] = [] {
         didSet {
             if oldValue != renderedQuoteRanges { needsDisplay = true }
+        }
+    }
+    var renderedCodeBlockRanges: [NSRange] = [] {
+        didSet {
+            if oldValue != renderedCodeBlockRanges { needsDisplay = true }
         }
     }
     var renderedReplacementMarkers: [RenderedMarkdownMarker] = [] {
@@ -2479,6 +2550,11 @@ final class WindowAwareTextView: NSTextView {
             color: color,
             turnedOn: flag
         )
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        effectiveAppearanceDidChangeHandler?()
     }
 
     func isRenderedCharacterSuppressed(at location: Int) -> Bool {
@@ -2717,6 +2793,9 @@ final class WindowAwareTextView: NSTextView {
             if existing.tableView.table == table
                 || existing.tableView.hasSameLiveRenderedContent(as: table)
             {
+                existing.tableView.applyPalette(
+                    MarkdownRenderPalette.resolved(for: effectiveAppearance)
+                )
                 existing.tableView.update(table: table, onEdit: onEdit)
                 existing.tableView.updateMaximumWidth(maximumWidth)
                 return existing.tableView.renderedSize
@@ -2729,6 +2808,9 @@ final class WindowAwareTextView: NSTextView {
                 && state.tableView.linkActivation == linkActivation
         }) {
             renderedTableViews.removeValue(forKey: reusable.key)
+            reusable.value.tableView.applyPalette(
+                MarkdownRenderPalette.resolved(for: effectiveAppearance)
+            )
             reusable.value.tableView.update(table: table, onEdit: onEdit)
             reusable.value.tableView.updateMaximumWidth(maximumWidth)
             renderedTableViews[key] = RenderedTableViewState(
@@ -2744,6 +2826,7 @@ final class WindowAwareTextView: NSTextView {
             baseFont: baseFont,
             maximumWidth: maximumWidth,
             linkActivation: linkActivation,
+            palette: MarkdownRenderPalette.resolved(for: effectiveAppearance),
             onLinkClick: onLinkClick,
             onEdit: onEdit
         )
@@ -2901,12 +2984,48 @@ final class WindowAwareTextView: NSTextView {
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
         guard let layoutManager, let textContainer else { return }
-        NSColor.separatorColor.setFill()
+        let palette = MarkdownRenderPalette.resolved(for: effectiveAppearance)
+        for characterRange in renderedCodeBlockRanges where characterRange.length > 0 {
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: characterRange,
+                actualCharacterRange: nil
+            )
+            var backgroundRect = NSRect.null
+            layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) {
+                lineRect, _, _, _, _ in
+                backgroundRect = backgroundRect.union(lineRect)
+            }
+            guard !backgroundRect.isNull else { continue }
+            let localMinX = backgroundRect.minX
+            backgroundRect = NSRect(
+                x: textContainerOrigin.x + localMinX,
+                y: textContainerOrigin.y + backgroundRect.minY,
+                width: max(
+                    backgroundRect.width,
+                    textContainer.size.width - localMinX - textContainer.lineFragmentPadding
+                ),
+                height: backgroundRect.height
+            )
+            backgroundRect = backgroundRect.insetBy(dx: 0, dy: -4)
+            guard backgroundRect.intersects(rect) else { continue }
+            palette.subtleSurfaceColor.setFill()
+            palette.borderColor.setStroke()
+            let path = NSBezierPath(
+                roundedRect: backgroundRect,
+                xRadius: MarkdownRenderMetrics.blockCornerRadius,
+                yRadius: MarkdownRenderMetrics.blockCornerRadius
+            )
+            path.fill()
+            path.lineWidth = 1
+            path.stroke()
+        }
+        palette.quoteBarColor.setFill()
         for characterRange in renderedQuoteRanges where characterRange.length > 0 {
             let glyphRange = layoutManager.glyphRange(
                 forCharacterRange: characterRange,
                 actualCharacterRange: nil
             )
+            var blockBar = NSRect.null
             layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) {
                 lineRect, usedRect, _, _, _ in
                 let bar = RenderedMarkdownQuoteGeometry.barRect(
@@ -2915,10 +3034,17 @@ final class WindowAwareTextView: NSTextView {
                     textContainerOrigin: self.textContainerOrigin,
                     font: self.renderedReplacementBaseFont
                 )
-                if bar.intersects(rect) { bar.fill() }
+                blockBar = blockBar.union(bar)
+            }
+            if !blockBar.isNull, blockBar.intersects(rect) {
+                NSBezierPath(
+                    roundedRect: blockBar,
+                    xRadius: 1.5,
+                    yRadius: 1.5
+                ).fill()
             }
         }
-        NSColor.separatorColor.setStroke()
+        palette.borderColor.setStroke()
         for characterRange in renderedRuleRanges where characterRange.length > 0 {
             let glyphRange = layoutManager.glyphRange(
                 forCharacterRange: characterRange,
@@ -3331,21 +3457,25 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
 
     override var isFlipped: Bool { true }
 
-    static func backgroundColor(forRow index: Int) -> NSColor {
+    static func backgroundColor(
+        forRow index: Int,
+        appearance: NSAppearance = NSApp.effectiveAppearance
+    ) -> NSColor {
+        let palette = MarkdownRenderPalette.resolved(for: appearance)
         if index == 0 {
-            return NSColor.controlAccentColor.withAlphaComponent(0.14)
+            return palette.mutedSurfaceColor
         }
         return index.isMultiple(of: 2)
-            ? NSColor.controlAccentColor.withAlphaComponent(0.045)
-            : NSColor.textBackgroundColor
+            ? palette.tableStripeColor
+            : palette.canvasColor
     }
 
     static var borderColor: NSColor {
-        NSColor.separatorColor.withAlphaComponent(0.62)
+        MarkdownRenderPalette.resolved(for: NSApp.effectiveAppearance).borderColor
     }
 
     func backgroundColor(forRow index: Int) -> NSColor {
-        Self.backgroundColor(forRow: index)
+        Self.backgroundColor(forRow: index, appearance: effectiveAppearance)
     }
 
     init(
@@ -3353,6 +3483,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         baseFont: NSFont,
         maximumWidth: CGFloat,
         linkActivation: LinkActivationPreference,
+        palette: MarkdownRenderPalette,
         onLinkClick: @escaping (String) -> Void,
         onEdit: @escaping (RenderedMarkdownTableEdit) -> Void,
         layoutStrategy: any RenderedMarkdownTableLayoutStrategy =
@@ -3396,7 +3527,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
                     string: cell.text,
                     attributes: [
                         .font: font,
-                        .foregroundColor: NSColor.labelColor,
+                        .foregroundColor: palette.textColor,
                         .paragraphStyle: paragraph,
                     ]
                 )
@@ -3406,7 +3537,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
                     attributed.addAttributes(
                         [
                             .link: link.target,
-                            .foregroundColor: NSColor.linkColor,
+                            .foregroundColor: palette.accentColor,
                             .underlineStyle: 0,
                         ],
                         range: link.visibleRange
@@ -3437,7 +3568,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         cells = layouts
         super.init(frame: NSRect(origin: .zero, size: renderedSize))
         wantsLayer = true
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = MarkdownRenderMetrics.blockCornerRadius
         layer?.masksToBounds = true
         setAccessibilityElement(true)
         setAccessibilityRole(.table)
@@ -3487,6 +3618,19 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         }
     }
 
+    func applyPalette(_ palette: MarkdownRenderPalette) {
+        for cell in cells {
+            guard let storage = cell.textView.textStorage, storage.length > 0 else { continue }
+            let fullRange = NSRange(location: 0, length: storage.length)
+            storage.addAttribute(.foregroundColor, value: palette.textColor, range: fullRange)
+            storage.enumerateAttribute(.link, in: fullRange) { value, range, _ in
+                guard value != nil else { return }
+                storage.addAttribute(.foregroundColor, value: palette.accentColor, range: range)
+            }
+        }
+        needsDisplay = true
+    }
+
     @discardableResult
     func updateMaximumWidth(_ width: CGFloat) -> Bool {
         let width = max(160, width)
@@ -3515,14 +3659,25 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
             let font = rowIndex == 0
                 ? NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
                 : baseFont
-            var rowHeight = CGFloat(34)
+            var rowHeight = CGFloat(36)
             for (column, cell) in row.enumerated() where column < widths.count {
                 let bounds = (cell.text as NSString).boundingRect(
-                    with: NSSize(width: max(20, widths[column] - 16), height: 2_000),
+                    with: NSSize(
+                        width: max(
+                            20,
+                            widths[column]
+                                - CGFloat(MarkdownRenderMetrics.tableCellHorizontalPadding * 2)
+                        ),
+                        height: 2_000
+                    ),
                     options: [.usesLineFragmentOrigin, .usesFontLeading],
                     attributes: [.font: font]
                 )
-                rowHeight = max(rowHeight, ceil(bounds.height) + 12)
+                rowHeight = max(
+                    rowHeight,
+                    ceil(bounds.height)
+                        + CGFloat(MarkdownRenderMetrics.tableCellVerticalPadding * 2)
+                )
             }
             return rowHeight
         }
@@ -3537,11 +3692,13 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         }
         for cell in cells {
             guard cell.column + 1 < xOffsets.count, cell.row + 1 < yOffsets.count else { continue }
+            let horizontalPadding = CGFloat(MarkdownRenderMetrics.tableCellHorizontalPadding)
+            let verticalPadding = CGFloat(MarkdownRenderMetrics.tableCellVerticalPadding)
             cell.textView.frame = NSRect(
-                x: xOffsets[cell.column] + 8,
-                y: yOffsets[cell.row] + 6,
-                width: max(1, columnWidths[cell.column] - 16),
-                height: max(1, rowHeights[cell.row] - 12)
+                x: xOffsets[cell.column] + horizontalPadding,
+                y: yOffsets[cell.row] + verticalPadding,
+                width: max(1, columnWidths[cell.column] - horizontalPadding * 2),
+                height: max(1, rowHeights[cell.row] - verticalPadding * 2)
             )
         }
     }
@@ -3551,11 +3708,11 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         var y = CGFloat(0)
         for (index, height) in rowHeights.enumerated() {
             let rowRect = NSRect(x: 0, y: y, width: renderedSize.width, height: height)
-            Self.backgroundColor(forRow: index).setFill()
+            backgroundColor(forRow: index).setFill()
             rowRect.fill()
             y += height
         }
-        Self.borderColor.setStroke()
+        MarkdownRenderPalette.resolved(for: effectiveAppearance).borderColor.setStroke()
         let path = NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5))
         path.lineWidth = 1
         path.stroke()
@@ -3861,6 +4018,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
             textView.dropImageHandler = nil
             textView.linkClickHandler = nil
             textView.focusDidChangeHandler = nil
+            textView.effectiveAppearanceDidChangeHandler = nil
         }
     }
 

@@ -468,7 +468,20 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             RenderedMarkdownTableView.backgroundColor(forRow: 1),
             RenderedMarkdownTableView.backgroundColor(forRow: 2)
         )
-        XCTAssertLessThan(RenderedMarkdownTableView.borderColor.alphaComponent, 1)
+        XCTAssertNotEqual(
+            RenderedMarkdownTableView.backgroundColor(
+                forRow: 0,
+                appearance: try XCTUnwrap(NSAppearance(named: .aqua))
+            ),
+            RenderedMarkdownTableView.backgroundColor(
+                forRow: 0,
+                appearance: try XCTUnwrap(NSAppearance(named: .darkAqua))
+            )
+        )
+        XCTAssertEqual(
+            RenderedMarkdownTableView.borderColor,
+            MarkdownRenderPalette.resolved(for: NSApp.effectiveAppearance).borderColor
+        )
         let quoteLocation = (source as NSString).range(of: "行内引用").location
         let editableQuote = try XCTUnwrap(
             session.textView.textStorage?.attribute(
@@ -1029,6 +1042,23 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             try XCTUnwrap(storage.attribute(.font, at: body, effectiveRange: nil) as? NSFont)
                 .fontDescriptor.symbolicTraits.contains(.monoSpace)
         )
+        XCTAssertEqual(session.textView.renderedCodeBlockRanges.count, 1)
+        XCTAssertTrue(
+            NSLocationInRange(body, try XCTUnwrap(session.textView.renderedCodeBlockRanges.first))
+        )
+        let codeParagraph = try XCTUnwrap(
+            storage.attribute(.paragraphStyle, at: body, effectiveRange: nil) as? NSParagraphStyle
+        )
+        XCTAssertEqual(
+            codeParagraph.headIndent,
+            MarkdownRenderMetrics.tableCellHorizontalPadding,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            codeParagraph.lineHeightMultiple,
+            MarkdownRenderMetrics.codeBlockLineHeight,
+            accuracy: 0.001
+        )
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
@@ -1041,6 +1071,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertTrue(window.makeFirstResponder(session.textView))
         session.textView.setSelectedRange(NSRange(location: body, length: 0))
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        XCTAssertTrue(session.textView.renderedCodeBlockRanges.isEmpty)
         XCTAssertGreaterThan(
             try XCTUnwrap(storage.attribute(.font, at: opening, effectiveRange: nil) as? NSFont)
                 .pointSize,
@@ -1078,7 +1109,14 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
 
         let font = try XCTUnwrap(session.textView.typingAttributes[.font] as? NSFont)
-        XCTAssertEqual(font.pointSize, 27, accuracy: 0.001)
+        XCTAssertEqual(
+            font.pointSize,
+            CGFloat(
+                SourceEditorAppearance.default.fontSize
+                    * MarkdownRenderMetrics.heading(level: 1).scale
+            ),
+            accuracy: 0.001
+        )
         let rect = RenderedMarkdownCaretStyleResolver.adjustedInsertionRect(
             NSRect(x: 10, y: 10, width: 1, height: 40),
             font: font
@@ -1120,7 +1158,12 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             storage.attribute(.foregroundColor, at: contentLocation, effectiveRange: nil)
                 as? NSColor
         )
-        XCTAssertEqual(color, NSColor.secondaryLabelColor)
+        XCTAssertEqual(
+            color,
+            MarkdownRenderPalette.resolved(
+                for: session.textView.effectiveAppearance
+            ).secondaryTextColor
+        )
         XCTAssertEqual(session.textView.renderedQuoteRanges.count, 1)
         XCTAssertEqual(
             session.textView.renderedQuoteRanges.first,
@@ -1147,6 +1190,15 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
         XCTAssertEqual(bar.midY, 14 + usedRect.midY, accuracy: 0.001)
         XCTAssertLessThanOrEqual(bar.height, usedRect.height)
+
+        session.textView.appearance = try XCTUnwrap(NSAppearance(named: .darkAqua))
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let darkColor = try XCTUnwrap(
+            storage.attribute(.foregroundColor, at: contentLocation, effectiveRange: nil)
+                as? NSColor
+        )
+        XCTAssertEqual(darkColor, MarkdownRenderPalette.dark.secondaryTextColor)
+        XCTAssertEqual(session.textView.string, source)
     }
 
     @MainActor
@@ -1320,7 +1372,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             ) as? NSParagraphStyle
         )
         XCTAssertTrue(NSFontManager.shared.traits(of: reappliedFont).contains(.boldFontMask))
-        XCTAssertEqual(reappliedFont.pointSize, 27, accuracy: 0.001)
+        XCTAssertEqual(
+            reappliedFont.pointSize,
+            CGFloat(19 * MarkdownRenderMetrics.heading(level: 1).scale),
+            accuracy: 0.001
+        )
         XCTAssertEqual(paragraphStyle.lineHeightMultiple, 1.8, accuracy: 0.001)
 
         session.setPresentation(
@@ -1688,11 +1744,19 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         let linkFont = try XCTUnwrap(
             storage.attribute(.font, at: linkLocation, effectiveRange: nil) as? NSFont
         )
-        XCTAssertEqual(boldFont.pointSize, 27, accuracy: 0.001)
+        let headingPointSize = CGFloat(
+            SourceEditorAppearance.default.fontSize
+                * MarkdownRenderMetrics.heading(level: 1).scale
+        )
+        XCTAssertEqual(boldFont.pointSize, headingPointSize, accuracy: 0.001)
         XCTAssertTrue(NSFontManager.shared.traits(of: boldFont).contains(.boldFontMask))
-        XCTAssertEqual(codeFont.pointSize, 27, accuracy: 0.001)
+        XCTAssertEqual(
+            codeFont.pointSize,
+            headingPointSize * CGFloat(MarkdownRenderMetrics.inlineCodeScale),
+            accuracy: 0.001
+        )
         XCTAssertTrue(codeFont.fontDescriptor.symbolicTraits.contains(.monoSpace))
-        XCTAssertEqual(linkFont.pointSize, 27, accuracy: 0.001)
+        XCTAssertEqual(linkFont.pointSize, headingPointSize, accuracy: 0.001)
         let obliqueness = try XCTUnwrap(
             storage.attribute(.obliqueness, at: italicLocation, effectiveRange: nil) as? NSNumber
         )

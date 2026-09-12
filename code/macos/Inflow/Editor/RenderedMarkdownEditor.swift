@@ -143,7 +143,7 @@ struct AdaptiveRenderedMarkdownTableLayoutStrategy: RenderedMarkdownTableLayoutS
     let minimumColumnWidth: CGFloat = 56
     let minimumPreferredWidth: CGFloat = 72
     let maximumPreferredWidth: CGFloat = 360
-    let horizontalCellPadding: CGFloat = 24
+    let horizontalCellPadding = MarkdownRenderMetrics.tableCellHorizontalPadding * 2
 
     func columnWidths(
         for table: RenderedMarkdownTable,

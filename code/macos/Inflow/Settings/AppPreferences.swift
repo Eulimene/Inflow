@@ -2,6 +2,141 @@ import AppKit
 import Combine
 import Foundation
 
+struct MarkdownHeadingStyle: Equatable, Sendable {
+    let scale: Double
+    let spacingBefore: Double
+    let spacingAfter: Double
+}
+
+enum MarkdownRenderMetrics {
+    static let readingWidth = 760.0
+    static let bodyFontSize = 17.0
+    static let bodyLineHeight = 1.65
+    static let editorHorizontalInset = CGFloat(28)
+    static let editorVerticalInset = CGFloat(24)
+    static let blockCornerRadius = CGFloat(8)
+    static let inlineCodeScale = 0.88
+    static let codeBlockLineHeight = CGFloat(1.5)
+    static let tableCellHorizontalPadding = CGFloat(12)
+    static let tableCellVerticalPadding = CGFloat(8)
+
+    static func heading(level: Int) -> MarkdownHeadingStyle {
+        switch level {
+        case 1: MarkdownHeadingStyle(scale: 1.82, spacingBefore: 0.92, spacingAfter: 0.34)
+        case 2: MarkdownHeadingStyle(scale: 1.46, spacingBefore: 0.86, spacingAfter: 0.32)
+        case 3: MarkdownHeadingStyle(scale: 1.24, spacingBefore: 0.78, spacingAfter: 0.28)
+        case 4: MarkdownHeadingStyle(scale: 1.10, spacingBefore: 0.70, spacingAfter: 0.24)
+        case 5: MarkdownHeadingStyle(scale: 1.00, spacingBefore: 0.64, spacingAfter: 0.20)
+        default: MarkdownHeadingStyle(scale: 0.92, spacingBefore: 0.60, spacingAfter: 0.18)
+        }
+    }
+}
+
+struct MarkdownRenderPalette: Equatable, Sendable {
+    static let light = Self(
+        canvas: "#ffffff",
+        text: "#2b3038",
+        heading: "#1f2329",
+        secondaryText: "#697386",
+        accent: "#2f6fda",
+        border: "#d8dde5",
+        quoteBar: "#c3cad5",
+        subtleSurface: "#f7f8fa",
+        mutedSurface: "#eef1f5",
+        tableStripe: "#fafbfc",
+        inlineCode: "#edf0f4",
+        keyword: "#b42318",
+        type: "#6941c6",
+        string: "#175cd3",
+        number: "#026aa2",
+        comment: "#697386",
+        tag: "#067647",
+        warning: "#9a6700"
+    )
+
+    static let dark = Self(
+        canvas: "#0f1115",
+        text: "#dfe4ea",
+        heading: "#f1f4f7",
+        secondaryText: "#9ba7b4",
+        accent: "#79a8ff",
+        border: "#303744",
+        quoteBar: "#4a5565",
+        subtleSurface: "#171b22",
+        mutedSurface: "#202630",
+        tableStripe: "#141820",
+        inlineCode: "#252b35",
+        keyword: "#ff8a80",
+        type: "#c4a7ff",
+        string: "#9cc2ff",
+        number: "#7cd4fd",
+        comment: "#9ba7b4",
+        tag: "#75e0a7",
+        warning: "#e0b450"
+    )
+
+    let canvas: String
+    let text: String
+    let heading: String
+    let secondaryText: String
+    let accent: String
+    let border: String
+    let quoteBar: String
+    let subtleSurface: String
+    let mutedSurface: String
+    let tableStripe: String
+    let inlineCode: String
+    let keyword: String
+    let type: String
+    let string: String
+    let number: String
+    let comment: String
+    let tag: String
+    let warning: String
+
+    @MainActor
+    static func resolved(for appearance: NSAppearance) -> Self {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
+    }
+
+    var cssVariables: String {
+        """
+        --md-canvas: \(canvas); --md-text: \(text); --md-heading: \(heading);
+        --md-secondary: \(secondaryText); --md-accent: \(accent); --md-border: \(border);
+        --md-quote-bar: \(quoteBar); --md-surface: \(subtleSurface);
+        --md-surface-strong: \(mutedSurface); --md-table-stripe: \(tableStripe);
+        --md-inline-code: \(inlineCode); --md-keyword: \(keyword); --md-type: \(type);
+        --md-string: \(string); --md-number: \(number); --md-comment: \(comment);
+        --md-tag: \(tag); --md-warning: \(warning);
+        """
+    }
+
+    var canvasColor: NSColor { color(canvas) }
+    var textColor: NSColor { color(text) }
+    var headingColor: NSColor { color(heading) }
+    var secondaryTextColor: NSColor { color(secondaryText) }
+    var accentColor: NSColor { color(accent) }
+    var borderColor: NSColor { color(border) }
+    var quoteBarColor: NSColor { color(quoteBar) }
+    var subtleSurfaceColor: NSColor { color(subtleSurface) }
+    var mutedSurfaceColor: NSColor { color(mutedSurface) }
+    var tableStripeColor: NSColor { color(tableStripe) }
+    var inlineCodeColor: NSColor { color(inlineCode) }
+
+    private func color(_ value: String) -> NSColor {
+        let hex = value.dropFirst()
+        guard hex.count == 6, let number = UInt32(hex, radix: 16) else {
+            return .textColor
+        }
+        return NSColor(
+            srgbRed: CGFloat((number >> 16) & 0xFF) / 255,
+            green: CGFloat((number >> 8) & 0xFF) / 255,
+            blue: CGFloat(number & 0xFF) / 255,
+            alpha: 1
+        )
+    }
+}
+
 struct SourceEditorAppearance: Equatable, Sendable {
     static let `default` = Self(
         fontSize: 15,
@@ -164,7 +299,7 @@ enum AppPreferenceGroup: String, CaseIterable, Identifiable, Sendable {
 
 struct PreviewAppearanceConfiguration: Equatable, Sendable {
     static let `default` = Self(
-        contentWidth: 760,
+        contentWidth: MarkdownRenderMetrics.readingWidth,
         zoom: 1,
         colorScheme: .system,
         theme: .standard,
@@ -177,7 +312,7 @@ struct PreviewAppearanceConfiguration: Equatable, Sendable {
     /// The personal milestone has one intentionally fixed PDF treatment. It
     /// must not inherit a dark/system preview or any later preference surface.
     static let personalPDF = Self(
-        contentWidth: 760,
+        contentWidth: MarkdownRenderMetrics.readingWidth,
         zoom: 1,
         colorScheme: .light,
         theme: .standard,
@@ -218,12 +353,12 @@ struct PreviewAppearanceConfiguration: Equatable, Sendable {
 
     func nativeRenderedAppearance(spellingEnabled: Bool) -> SourceEditorAppearance {
         let lineHeight = switch theme {
-        case .standard, .highContrast: 1.65
+        case .standard, .highContrast: MarkdownRenderMetrics.bodyLineHeight
         case .longform: 1.82
         case .code: 1.58
         }
         return SourceEditorAppearance(
-            fontSize: 17 * zoom,
+            fontSize: MarkdownRenderMetrics.bodyFontSize * zoom,
             lineHeight: lineHeight,
             spellingEnabled: spellingEnabled,
             wrapsLines: true,

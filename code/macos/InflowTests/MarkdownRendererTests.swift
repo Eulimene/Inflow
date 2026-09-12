@@ -280,15 +280,32 @@ final class MarkdownRendererTests: XCTestCase {
             for: "`草稿`\n\n> 注意\n\n[链接](https://example.com)\n\n| 标题 |\n| --- |\n| 内容 |"
         )
 
+        XCTAssertTrue(html.contains(MarkdownRenderPalette.light.cssVariables))
+        XCTAssertTrue(html.contains(MarkdownRenderPalette.dark.cssVariables))
+        XCTAssertTrue(html.contains(
+            "font: \(MarkdownRenderMetrics.bodyFontSize)px/\(MarkdownRenderMetrics.bodyLineHeight)"
+        ))
+        XCTAssertTrue(html.contains("max-width: \(MarkdownRenderMetrics.readingWidth)px;"))
         XCTAssertTrue(html.contains("cursor: pointer;"))
         XCTAssertTrue(html.contains(
             "a:hover { text-decoration: underline; background: transparent; }"
         ))
-        XCTAssertTrue(html.contains("blockquote { margin: .75em 0; padding: 0 1em;"))
-        XCTAssertTrue(html.contains("line-height: inherit; background: #afb8c133;"))
-        XCTAssertTrue(html.contains("border-radius: 3px; padding: 0;"))
-        XCTAssertTrue(html.contains("thead { background: #0969da24; }"))
-        XCTAssertTrue(html.contains("tbody tr:nth-child(even) { background: #0969da0b; }"))
+        XCTAssertTrue(html.contains("border-left: 4px solid var(--md-quote-bar);"))
+        XCTAssertTrue(html.contains(
+            "line-height: inherit; background: var(--md-inline-code);"
+        ))
+        XCTAssertTrue(html.contains("border-radius: 4px; padding: 0;"))
+        XCTAssertTrue(html.contains(
+            "background: var(--md-surface); border: 1px solid var(--md-border);"
+        ))
+        XCTAssertTrue(html.contains("thead { background: var(--md-surface-strong); }"))
+        XCTAssertTrue(html.contains(
+            "tbody tr:nth-child(even) { background: var(--md-table-stripe); }"
+        ))
+        XCTAssertTrue(html.contains("tbody tr:last-child > td { border-bottom: 0; }"))
+        XCTAssertTrue(html.contains(
+            "body > :first-child { margin-top: 0 !important; }"
+        ))
     }
 
     func testPreviewDerivationReportsRelativeResourcesWithoutAnotherSourceScan() {
@@ -331,7 +348,9 @@ final class MarkdownRendererTests: XCTestCase {
                 mermaidRenderingEnabled: true
             )
         )
-        XCTAssertTrue(forcedDark.contains(".tok-keyword { color: #ff7b72; }"))
+        XCTAssertTrue(forcedDark.contains("color-scheme: dark;"))
+        XCTAssertTrue(forcedDark.contains("--md-keyword: \(MarkdownRenderPalette.dark.keyword);"))
+        XCTAssertTrue(forcedDark.contains("--md-canvas: \(MarkdownRenderPalette.dark.canvas);"))
 
         let highContrast = PreviewAppearanceCSS.styleElement(
             for: PreviewAppearanceConfiguration(
@@ -345,6 +364,7 @@ final class MarkdownRendererTests: XCTestCase {
                 mermaidRenderingEnabled: true
             )
         )
+        XCTAssertTrue(highContrast.contains("--md-accent: LinkText;"))
         XCTAssertTrue(highContrast.contains(".tok-comment { text-decoration: underline dotted; }"))
     }
 
