@@ -1,6 +1,8 @@
 //! Application ports consumed by the stateful editor engine.
 
 use crate::engine::{DerivedState, Revision};
+use crate::export::{ExportError, PreparedHtml};
+use crate::render::RenderConfiguration;
 
 /// Produces every revision-bound Markdown projection from one source snapshot.
 ///
@@ -14,4 +16,10 @@ pub trait MarkdownPort: Send + Sync {
         math_enabled: bool,
         mermaid_enabled: bool,
     ) -> DerivedState;
+
+    fn prepare_html_export(
+        &self,
+        source: &str,
+        configuration: RenderConfiguration,
+    ) -> Result<PreparedHtml, ExportError>;
 }

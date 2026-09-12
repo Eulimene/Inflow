@@ -89,6 +89,47 @@ extension EditorEngineDerivedContent {
 
 }
 
+extension EditorEngineHTMLExportPreparation {
+    static func prepareSynchronously(
+        source: String,
+        configuration: PreviewAppearanceConfiguration
+    ) throws -> Self {
+        do {
+            return try withTemporaryEditorEngine(source: source) { handle in
+                let requestID = UUID().uuidString
+                let envelope = EditorEnginePrepareHTMLExportEnvelope(
+                    schemaVersion: 1,
+                    requestID: requestID,
+                    command: EditorEnginePrepareHTMLExportCommand(
+                        type: "prepare_html_export",
+                        revision: 0,
+                        mathEnabled: configuration.mathRenderingEnabled,
+                        mermaidEnabled: configuration.mermaidRenderingEnabled
+                    )
+                )
+                let response = try dispatchTemporaryEditorEngine(envelope, to: handle)
+                guard response.requestID == requestID,
+                      response.patch.baseRevision == 0,
+                      response.patch.revision == 0,
+                      response.patch.effects.count == 1,
+                      let effect = response.patch.effects.first,
+                      effect.type == "html_export_prepared",
+                      effect.revision == 0,
+                      let html = effect.html,
+                      let warnings = effect.warnings
+                else { throw EditorEngineHTMLExportPreparationError.coreFailure }
+                return Self(html: html, warnings: warnings)
+            }
+        } catch EditorEngineBridgeError.core(_, let code, _) where code == "output_too_large" {
+            throw EditorEngineHTMLExportPreparationError.outputTooLarge
+        } catch let error as EditorEngineHTMLExportPreparationError {
+            throw error
+        } catch {
+            throw EditorEngineHTMLExportPreparationError.coreFailure
+        }
+    }
+}
+
 extension DocumentSearchResult {
     static func searchSynchronously(
         source: String,
@@ -1229,6 +1270,18 @@ private struct EditorEnginePrepareSaveEnvelope: Encodable {
     }
 }
 
+private struct EditorEnginePrepareHTMLExportEnvelope: Encodable {
+    let schemaVersion: UInt32
+    let requestID: String
+    let command: EditorEnginePrepareHTMLExportCommand
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case requestID = "request_id"
+        case command
+    }
+}
+
 private struct EditorEngineFinishSaveEnvelope: Encodable {
     let schemaVersion: UInt32
     let requestID: String
@@ -1292,6 +1345,20 @@ private struct EditorEnginePrepareSaveCommand: Encodable {
         case type
         case revision
         case saveID = "save_id"
+    }
+}
+
+private struct EditorEnginePrepareHTMLExportCommand: Encodable {
+    let type: String
+    let revision: UInt64
+    let mathEnabled: Bool
+    let mermaidEnabled: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case revision
+        case mathEnabled = "math_enabled"
+        case mermaidEnabled = "mermaid_enabled"
     }
 }
 
@@ -1506,6 +1573,8 @@ private struct EditorEngineRawHostEffect: Decodable {
     let revision: UInt64?
     let text: String?
     let contentHash: String?
+    let html: String?
+    let warnings: UInt64?
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -1513,6 +1582,8 @@ private struct EditorEngineRawHostEffect: Decodable {
         case revision
         case text
         case contentHash = "content_hash"
+        case html
+        case warnings
     }
 }
 
@@ -1568,6 +1639,7 @@ private struct EditorEngineDerivedState: Decodable {
     let render: EditorEngineRender
     let nativeRender: EditorEngineRawNativeRenderPlan
     let htmlFragment: String
+    let previewHTMLFragment: String
     let mathEnabled: Bool
     let mermaidEnabled: Bool
 
@@ -1579,6 +1651,7 @@ private struct EditorEngineDerivedState: Decodable {
         case render
         case nativeRender = "native_render"
         case htmlFragment = "html_fragment"
+        case previewHTMLFragment = "preview_html_fragment"
         case mathEnabled = "math_enabled"
         case mermaidEnabled = "mermaid_enabled"
     }
@@ -1634,6 +1707,7 @@ private struct EditorEngineDerivedState: Decodable {
             revision: revision,
             sourceSnapshot: source,
             htmlFragment: htmlFragment,
+            previewHTMLFragment: previewHTMLFragment,
             analysis: DocumentAnalysis(
                 headings: headings,
                 wordCount: wordCount,

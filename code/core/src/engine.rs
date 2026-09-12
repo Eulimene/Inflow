@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::analysis::DocumentAnalysis;
+use crate::export::ExportError;
 use crate::format::{self, FormatError, InlineFormat, ListFormat, MarkdownEdit};
 use crate::highlight::HighlightSpan;
 use crate::history::{History, HistoryEntry};
@@ -103,6 +104,13 @@ pub enum EditorCommand {
     PrepareSave {
         revision: Revision,
         save_id: String,
+    },
+    PrepareHtmlExport {
+        revision: Revision,
+        #[serde(default = "default_true")]
+        math_enabled: bool,
+        #[serde(default = "default_true")]
+        mermaid_enabled: bool,
     },
     SaveCompleted {
         save_id: String,
@@ -224,6 +232,11 @@ pub enum HostEffect {
         text: String,
         content_hash: String,
     },
+    HtmlExportPrepared {
+        revision: Revision,
+        html: String,
+        warnings: u64,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -241,6 +254,7 @@ pub struct DerivedState {
     pub render: RenderIr,
     pub native_render: NativeRenderPlan,
     pub html_fragment: String,
+    pub preview_html_fragment: String,
     pub math_enabled: bool,
     pub mermaid_enabled: bool,
 }
@@ -266,6 +280,7 @@ pub enum EngineError {
     EmptySaveId,
     UnknownSave,
     ReadOnly,
+    OutputTooLarge,
     RevisionOverflow,
 }
 
@@ -369,6 +384,11 @@ impl EditorEngine {
             EditorCommand::PrepareSave { revision, save_id } => {
                 self.prepare_save(revision, save_id)?
             }
+            EditorCommand::PrepareHtmlExport {
+                revision,
+                math_enabled,
+                mermaid_enabled,
+            } => self.prepare_html_export(revision, math_enabled, mermaid_enabled)?,
             EditorCommand::SaveCompleted { save_id } => self.save_completed(&save_id)?,
             EditorCommand::SaveAborted { save_id } => self.save_aborted(&save_id)?,
             EditorCommand::SetMode { revision, mode } => self.set_mode(revision, mode)?,
@@ -559,6 +579,38 @@ impl EditorEngine {
             revision,
             text: self.text.clone(),
             content_hash: hash,
+        });
+        Ok(patch)
+    }
+
+    fn prepare_html_export(
+        &self,
+        revision: Revision,
+        math_enabled: bool,
+        mermaid_enabled: bool,
+    ) -> Result<StatePatch, EngineError> {
+        if revision != self.revision {
+            return Err(EngineError::RevisionConflict);
+        }
+        let prepared = self
+            .markdown
+            .prepare_html_export(
+                &self.text,
+                crate::render::RenderConfiguration {
+                    math_enabled,
+                    mermaid_enabled,
+                },
+            )
+            .map_err(|error| match error {
+                ExportError::OutputTooLarge => EngineError::OutputTooLarge,
+                ExportError::UnsupportedContent(_) => EngineError::AmbiguousFormat,
+            })?;
+        let mut patch = self.empty_patch(revision);
+        patch.effects.push(HostEffect::HtmlExportPrepared {
+            revision,
+            html: String::from_utf8(prepared.bytes)
+                .expect("the Markdown adapter must emit UTF-8 HTML"),
+            warnings: prepared.warnings,
         });
         Ok(patch)
     }
@@ -882,6 +934,14 @@ mod tests {
             self.calls.fetch_add(1, Ordering::Relaxed);
             CommonMarkAdapter.derive(source, revision, math_enabled, mermaid_enabled)
         }
+
+        fn prepare_html_export(
+            &self,
+            source: &str,
+            configuration: crate::render::RenderConfiguration,
+        ) -> Result<crate::export::PreparedHtml, ExportError> {
+            CommonMarkAdapter.prepare_html_export(source, configuration)
+        }
     }
 
     fn engine(text: &str) -> EditorEngine {
@@ -1038,7 +1098,7 @@ mod tests {
         assert!(derived.html_fragment.contains(">标题</h1>"));
         assert!(
             derived
-                .html_fragment
+                .preview_html_fragment
                 .contains("data-inflow-block-id=\"heading-")
         );
         assert!(
@@ -1264,6 +1324,47 @@ mod tests {
                 },
             )),
             Err(EngineError::UnknownSave)
+        );
+    }
+
+    #[test]
+    fn html_export_is_revision_bound_and_returns_a_host_effect() {
+        let mut engine = engine("# Title\n\n[local](note.md)");
+        let prepared = engine
+            .dispatch(command(
+                "prepare-export",
+                EditorCommand::PrepareHtmlExport {
+                    revision: 0,
+                    math_enabled: true,
+                    mermaid_enabled: true,
+                },
+            ))
+            .expect("the current revision should prepare export HTML");
+        let [
+            HostEffect::HtmlExportPrepared {
+                revision,
+                html,
+                warnings,
+            },
+        ] = prepared.patch.effects.as_slice()
+        else {
+            panic!("HTML preparation must emit exactly one host effect");
+        };
+        assert_eq!(*revision, 0);
+        assert!(html.starts_with("<!doctype html>"));
+        assert!(html.contains("<h1>Title</h1>"));
+        assert_eq!(*warnings, crate::export::ISSUE_LOCAL_LINK);
+        assert_eq!(engine.snapshot().revision, 0);
+        assert_eq!(
+            engine.dispatch(command(
+                "stale-export",
+                EditorCommand::PrepareHtmlExport {
+                    revision: 1,
+                    math_enabled: true,
+                    mermaid_enabled: true,
+                },
+            )),
+            Err(EngineError::RevisionConflict)
         );
     }
 

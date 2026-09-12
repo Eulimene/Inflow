@@ -1,7 +1,8 @@
 //! Self-contained HTML export for immutable Markdown snapshots.
 
-use pulldown_cmark::{Event, Parser, Tag};
+use pulldown_cmark::{Event, Tag};
 
+use crate::markdown_ir::{DocumentIr, dialect_options};
 use crate::render;
 
 #[allow(dead_code)] // Reserved by the stable v1 C ABI for older core binaries.
@@ -43,7 +44,15 @@ pub fn prepare_html_document_with_configuration(
     markdown: &str,
     configuration: render::RenderConfiguration,
 ) -> Result<PreparedHtml, ExportError> {
-    prepare_html_document_with_limit(markdown, configuration, MAX_HTML_BYTES)
+    let document = DocumentIr::parse(markdown, dialect_options(configuration.math_enabled));
+    prepare_html_document_from_document(&document, configuration)
+}
+
+pub fn prepare_html_document_from_document(
+    document: &DocumentIr,
+    configuration: render::RenderConfiguration,
+) -> Result<PreparedHtml, ExportError> {
+    prepare_html_document_from_document_with_limit(document, configuration, MAX_HTML_BYTES)
 }
 
 fn html_document_with_limit(
@@ -64,13 +73,13 @@ fn html_document_with_limit(
     Ok(document.into_bytes())
 }
 
-fn prepare_html_document_with_limit(
-    markdown: &str,
+fn prepare_html_document_from_document_with_limit(
+    document: &DocumentIr,
     configuration: render::RenderConfiguration,
     maximum_bytes: usize,
 ) -> Result<PreparedHtml, ExportError> {
-    let warnings = blocking_issues(markdown);
-    let fragment = render::html_fragment_for_delivery(markdown, configuration);
+    let warnings = blocking_issues_from_document(document);
+    let fragment = render::html_fragment_for_delivery_from_document(document, configuration);
     let document = format!("{DOCUMENT_PREFIX}{fragment}{DOCUMENT_SUFFIX}");
     if document.len() > maximum_bytes {
         return Err(ExportError::OutputTooLarge);
@@ -82,10 +91,15 @@ fn prepare_html_document_with_limit(
 }
 
 pub fn blocking_issues(markdown: &str) -> u64 {
+    let document = DocumentIr::parse(markdown, dialect_options(true));
+    blocking_issues_from_document(&document)
+}
+
+fn blocking_issues_from_document(document: &DocumentIr) -> u64 {
     let mut issues = 0;
 
-    for event in Parser::new_ext(markdown, render::options()) {
-        if let Event::Start(Tag::Link { dest_url, .. }) = event {
+    for located in document.events() {
+        if let Event::Start(Tag::Link { dest_url, .. }) = &located.event {
             issues |= link_issue(dest_url.as_ref());
         }
     }

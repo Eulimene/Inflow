@@ -42,31 +42,11 @@ enum MarkdownRenderer {
         for markdown: String,
         configuration: PreviewAppearanceConfiguration
     ) throws -> String {
-        let utf8 = Data(markdown.utf8)
-        let result: InflowEncodeResult = utf8.withUnsafeBytes { buffer in
-            inflow_markdown_render_html_with_options(
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count),
-                configuration.coreRenderOptions
-            )
-        }
-        guard result.status == INFLOW_STATUS_OK else {
-            if result.status == INFLOW_STATUS_INVALID_UTF8 {
-                throw MarkdownRenderError.invalidUTF8
-            }
-            throw MarkdownRenderError.coreFailure
-        }
-
-        let htmlData: Data
-        do {
-            htmlData = try InflowCoreBridge.copyAndFree(result.bytes)
-        } catch {
-            throw MarkdownRenderError.coreFailure
-        }
-        guard let html = String(data: htmlData, encoding: .utf8) else {
-            throw MarkdownRenderError.coreFailure
-        }
-        return html
+        guard let derived = EditorEngineDerivedContent.deriveSynchronously(
+            source: markdown,
+            configuration: configuration
+        ) else { throw MarkdownRenderError.coreFailure }
+        return derived.htmlFragment
     }
 
     static func htmlDocument(
@@ -102,7 +82,7 @@ enum MarkdownRenderer {
             return previewFailureDocument(configuration: configuration)
         }
         return previewDocument(
-            coreFragment: derived.htmlFragment,
+            coreFragment: derived.previewHTMLFragment,
             references: derived.references,
             documentDirectory: documentDirectory,
             projectRoot: projectRoot,

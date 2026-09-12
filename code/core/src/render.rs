@@ -266,12 +266,20 @@ fn is_mermaid_code_block(kind: &CodeBlockKind<'_>) -> bool {
 
 /// Renders a delivery-safe fragment. Links which cannot be carried safely in a
 /// self-contained file remain readable but are deliberately not clickable.
+#[cfg(test)]
 pub(crate) fn html_fragment_for_delivery(
     markdown: &str,
     configuration: RenderConfiguration,
 ) -> String {
     let document = DocumentIr::parse(markdown, options_with_configuration(configuration));
-    let events = safe_events(&document, configuration, true, false);
+    html_fragment_for_delivery_from_document(&document, configuration)
+}
+
+pub(crate) fn html_fragment_for_delivery_from_document(
+    document: &DocumentIr,
+    configuration: RenderConfiguration,
+) -> String {
+    let events = safe_events(document, configuration, true, false);
     let mut output = String::with_capacity(document.source().len());
     html::push_html(&mut output, events.into_iter());
     output

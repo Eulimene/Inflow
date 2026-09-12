@@ -254,7 +254,7 @@ private actor DocumentContentDeriver {
               UTF8Text.isExactlyEqual(coreContent.sourceSnapshot, request.markdown)
         else { return nil }
         let previewDocument = MarkdownRenderer.previewDocument(
-            coreFragment: coreContent.htmlFragment,
+            coreFragment: coreContent.previewHTMLFragment,
             references: coreContent.references,
             documentDirectory: request.documentDirectory,
             projectRoot: request.projectRoot,

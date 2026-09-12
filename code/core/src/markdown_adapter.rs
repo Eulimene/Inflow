@@ -2,12 +2,15 @@
 
 use crate::analysis::analyze_document;
 use crate::engine::{DerivedState, Revision};
+use crate::export::{ExportError, PreparedHtml, prepare_html_document_from_document};
 use crate::highlight::spans_from_document;
 use crate::markdown_ir::{DocumentIr, dialect_options};
 use crate::native_render::NativeRenderPlan;
 use crate::ports::MarkdownPort;
 use crate::reference::references_from_document;
-use crate::render::{RenderConfiguration, html_fragment_for_preview_from_document};
+use crate::render::{
+    RenderConfiguration, html_fragment_for_preview_from_document, html_fragment_from_document,
+};
 use crate::render_ir::RenderIr;
 
 #[derive(Default)]
@@ -35,9 +38,22 @@ impl MarkdownPort for CommonMarkAdapter {
             references: references_from_document(&document),
             render,
             native_render,
-            html_fragment: html_fragment_for_preview_from_document(&document, configuration),
+            html_fragment: html_fragment_from_document(&document, configuration),
+            preview_html_fragment: html_fragment_for_preview_from_document(
+                &document,
+                configuration,
+            ),
             math_enabled,
             mermaid_enabled,
         }
+    }
+
+    fn prepare_html_export(
+        &self,
+        source: &str,
+        configuration: RenderConfiguration,
+    ) -> Result<PreparedHtml, ExportError> {
+        let document = DocumentIr::parse(source, dialect_options(configuration.math_enabled));
+        prepare_html_document_from_document(&document, configuration)
     }
 }

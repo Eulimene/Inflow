@@ -107,61 +107,38 @@ enum HTMLExporter {
     }
 
     static func prepare(snapshot: HTMLExportSnapshot) throws -> HTMLExportPreparation {
-        let result: InflowHTMLExportResult = snapshot.utf8.withUnsafeBytes { buffer in
-            inflow_markdown_prepare_html_with_options(
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count),
-                snapshot.appearance.coreRenderOptions
+        let markdown = String(decoding: snapshot.utf8, as: UTF8.self)
+        let prepared: EditorEngineHTMLExportPreparation
+        do {
+            prepared = try .prepareSynchronously(
+                source: markdown,
+                configuration: snapshot.appearance
             )
-        }
-
-        switch result.status {
-        case INFLOW_STATUS_OK:
-            do {
-                let coreData = try InflowCoreBridge.copyAndFree(result.html)
-                guard let coreHTML = String(data: coreData, encoding: .utf8) else {
-                    throw HTMLExportError.coreFailure
-                }
-                let resolved = LocalImageResolver.resolveSlotsForPreparedExport(
-                    in: coreHTML,
-                    documentDirectory: snapshot.documentDirectory,
-                    projectRoot: snapshot.projectRoot,
-                    expectedProjectRootIdentity: snapshot.expectedProjectRootIdentity,
-                    requiresProjectBoundary: snapshot.requiresProjectBoundary
-                )
-                let themed = PreviewAppearanceCSS.applying(snapshot.appearance, to: resolved.html)
-                let output = Data(themed.utf8)
-                guard output.count <= LocalImageValidator.maximumBytes else {
-                    throw HTMLExportError.outputTooLarge
-                }
-                var warnings = HTMLExportIssue.allCases.filter {
-                    result.blocking_issues & $0.rawValue != 0
-                }
-                if resolved.hasWarnings, !warnings.contains(.image) {
-                    warnings.insert(.image, at: 0)
-                }
-                return HTMLExportPreparation(data: output, warnings: warnings)
-            } catch let error as HTMLExportError {
-                throw error
-            } catch {
-                throw HTMLExportError.coreFailure
-            }
-        case INFLOW_STATUS_UNSUPPORTED_CONTENT:
-            inflow_owned_bytes_free(result.html.data, result.html.length)
-            let issues = HTMLExportIssue.allCases.filter {
-                result.blocking_issues & $0.rawValue != 0
-            }
-            throw HTMLExportError.unsupportedContent(issues)
-        case INFLOW_STATUS_OUTPUT_TOO_LARGE:
-            inflow_owned_bytes_free(result.html.data, result.html.length)
+        } catch EditorEngineHTMLExportPreparationError.outputTooLarge {
             throw HTMLExportError.outputTooLarge
-        case INFLOW_STATUS_INVALID_UTF8:
-            inflow_owned_bytes_free(result.html.data, result.html.length)
-            throw HTMLExportError.invalidUTF8
-        default:
-            inflow_owned_bytes_free(result.html.data, result.html.length)
+        } catch {
             throw HTMLExportError.coreFailure
         }
+
+        let resolved = LocalImageResolver.resolveSlotsForPreparedExport(
+            in: prepared.html,
+            documentDirectory: snapshot.documentDirectory,
+            projectRoot: snapshot.projectRoot,
+            expectedProjectRootIdentity: snapshot.expectedProjectRootIdentity,
+            requiresProjectBoundary: snapshot.requiresProjectBoundary
+        )
+        let themed = PreviewAppearanceCSS.applying(snapshot.appearance, to: resolved.html)
+        let output = Data(themed.utf8)
+        guard output.count <= LocalImageValidator.maximumBytes else {
+            throw HTMLExportError.outputTooLarge
+        }
+        var warnings = HTMLExportIssue.allCases.filter {
+            prepared.warnings & $0.rawValue != 0
+        }
+        if resolved.hasWarnings, !warnings.contains(.image) {
+            warnings.insert(.image, at: 0)
+        }
+        return HTMLExportPreparation(data: output, warnings: warnings)
     }
 }
 

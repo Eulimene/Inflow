@@ -655,6 +655,7 @@ const fn engine_error_status(error: EngineError) -> i32 {
         | EngineError::EmptySaveId
         | EngineError::UnknownSave
         | EngineError::ReadOnly => STATUS_INVALID_ARGUMENT,
+        EngineError::OutputTooLarge => STATUS_OUTPUT_TOO_LARGE,
         EngineError::RevisionOverflow => STATUS_PANIC,
     }
 }
@@ -699,6 +700,10 @@ const fn engine_error_details(error: EngineError) -> (&'static str, &'static str
         EngineError::ReadOnly => (
             "read_only",
             "The document mode does not permit text mutations.",
+        ),
+        EngineError::OutputTooLarge => (
+            "output_too_large",
+            "The generated output exceeds the configured size limit.",
         ),
         EngineError::RevisionOverflow => (
             "revision_overflow",

@@ -4,6 +4,7 @@ struct EditorEngineDerivedContent: Sendable {
     let revision: UInt64
     let sourceSnapshot: String
     let htmlFragment: String
+    let previewHTMLFragment: String
     let analysis: DocumentAnalysis
     let syntaxHighlighting: [MarkdownSyntaxSpan]
     let references: [MarkdownReference]
@@ -59,6 +60,16 @@ struct EditorEngineSavePreparation: Equatable, Sendable {
     let revision: UInt64
     let text: String
     let contentHash: String
+}
+
+struct EditorEngineHTMLExportPreparation: Equatable, Sendable {
+    let html: String
+    let warnings: UInt64
+}
+
+enum EditorEngineHTMLExportPreparationError: Error, Sendable {
+    case outputTooLarge
+    case coreFailure
 }
 
 enum EditorEngineFormatOperation: Equatable, Sendable {

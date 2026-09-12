@@ -40,9 +40,9 @@ revision，正文修改后立即失效。macOS 已用该单次请求作为分析
 
 `EditorEngine` 通过 `MarkdownPort` 获取派生模型，不再直接依赖具体 Markdown
 解析器或 renderer。默认 `CommonMarkAdapter` 负责从同一份 `DocumentIr` 一次生成分析、
-高亮、引用、Render IR、原生渲染计划与预览 HTML；Engine 只负责 revision 校验、
+高亮、引用、Render IR、原生渲染计划、普通 HTML 与带块定位 metadata 的预览 HTML；Engine 只负责 revision 校验、
 缓存和命令顺序。该端口也是测试替身和未来解析策略演进的唯一接入点。
-旧 `MarkdownAnalyzer` 与 `MarkdownHighlighter` 公开外观仍用于现有单元测试，但内部也已创建短生命 Engine 并消费同一 `RefreshDerived`，Swift 不再直接调用 analyze/highlight 数组 ABI。无预览 metadata 的交付 HTML 仍是独立低频边界，不与交互预览 HTML 混用。
+旧 `MarkdownAnalyzer` 与 `MarkdownHighlighter` 公开外观仍用于现有单元测试，但内部也已创建短生命 Engine 并消费同一 `RefreshDerived`，Swift 不再直接调用 analyze/highlight 数组 ABI。无预览 metadata 的普通 HTML 也来自这次派生；自包含交付 HTML 通过 revision-bound `PrepareHtmlExport` 返回 `HtmlExportPrepared` HostEffect，不再绕过 Engine 调用旧 render/export FFI。
 预览链接目标、标题 source range 与块 ID 在 Rust 生成对应 HTML 事件时直接写入 data attribute；
 Swift 不再把 HTML anchor、标题与引用列表做正则配对，也不再保留第二套 Markdown planner。
 Rust 同时把 RenderIR 的稳定 `block_id` 与 UTF-8 source range 写到顶层预览节点。WKWebView 首次加载
