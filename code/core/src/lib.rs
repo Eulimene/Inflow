@@ -5,6 +5,7 @@
 mod analysis;
 mod code_highlight;
 mod document;
+mod engine;
 mod export;
 mod ffi;
 mod format;

@@ -284,6 +284,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var renderedImageTask: Task<Void, Never>?
     private var renderedInteractionTask: Task<Void, Never>?
     private let lineNumberRuler: MarkdownLineNumberRulerView
+    private let engineShadow = EditorEngineShadowQueue()
     private var focusModeEnabled = false
     private var typewriterModeEnabled = false
 
@@ -338,6 +339,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         self.lineNumberRuler = lineNumberRuler
         super.init()
         textView.textDidChangeHandler = { [weak self] text in
+            if let self, !self.textView.hasMarkedText() {
+                self.engineShadow.submit(
+                    text: text,
+                    selectionUTF16: self.textView.selectedRange()
+                )
+            }
             self?.invalidateSyntaxApplication()
             self?.lineNumberRuler.updateText(text)
             self?.refreshWritingModePresentation()
@@ -1420,6 +1427,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private func undoManagerChangedText(_ notification: Notification) {
         invalidateSyntaxApplication()
         lineNumberRuler.updateText(textView.string)
+        if !textView.hasMarkedText() {
+            engineShadow.submit(
+                text: textView.string,
+                selectionUTF16: textView.selectedRange()
+            )
+        }
         updateBoundText?(textView.string)
         scheduleRenderedPresentation(for: textView.string)
     }
@@ -1437,6 +1450,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
         syncRenderedTypingAttributes()
         refreshWritingModePresentation()
+    }
+
+    fileprivate func synchronizeEngineShadow(text: String, selection: NSRange) {
+        guard !textView.hasMarkedText() else { return }
+        engineShadow.submit(text: text, selectionUTF16: selection)
     }
 
     func requestRestoration(_ state: MarkdownRestorationState) {
@@ -3054,6 +3072,10 @@ struct MarkdownSourceEditor: NSViewRepresentable {
                 let length = min(selection.length, utf16Length - location)
                 textView.setSelectedRange(NSRange(location: location, length: length))
             }
+            parent.session.synchronizeEngineShadow(
+                text: parent.text,
+                selection: textView.selectedRange()
+            )
             parent.session.applySourceAppearance(parent.appearance, force: textChanged)
             parent.session.setPresentation(
                 parent.presentation,

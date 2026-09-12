@@ -16,6 +16,7 @@ static const InflowStatus INFLOW_STATUS_MIXED_LINE_ENDINGS = 3;
 static const InflowStatus INFLOW_STATUS_UNSUPPORTED_CONTENT = 4;
 static const InflowStatus INFLOW_STATUS_OUTPUT_TOO_LARGE = 5;
 static const InflowStatus INFLOW_STATUS_AMBIGUOUS_FORMAT = 6;
+static const InflowStatus INFLOW_STATUS_REVISION_CONFLICT = 7;
 static const InflowStatus INFLOW_STATUS_PANIC = 255;
 
 static const uint8_t INFLOW_LINE_ENDING_LF = 0;
@@ -64,6 +65,19 @@ typedef struct InflowOwnedBytes {
     uint8_t *data;
     uintptr_t length;
 } InflowOwnedBytes;
+
+typedef struct InflowEditorEngine InflowEditorEngine;
+
+typedef struct InflowEngineCreateResult {
+    InflowStatus status;
+    InflowEditorEngine *engine;
+    InflowOwnedBytes payload;
+} InflowEngineCreateResult;
+
+typedef struct InflowBytesResult {
+    InflowStatus status;
+    InflowOwnedBytes bytes;
+} InflowBytesResult;
 
 typedef struct InflowDecodeResult {
     InflowStatus status;
@@ -198,6 +212,8 @@ static_assert(sizeof(InflowHighlightSpan) == 24, "InflowHighlightSpan ABI layout
 static_assert(sizeof(InflowHighlightResult) == 24, "InflowHighlightResult ABI layout changed");
 static_assert(sizeof(InflowHTMLExportResult) == 32, "InflowHTMLExportResult ABI layout changed");
 static_assert(sizeof(InflowMarkdownEditResult) == 56, "InflowMarkdownEditResult ABI layout changed");
+static_assert(sizeof(InflowEngineCreateResult) == 32, "InflowEngineCreateResult ABI layout changed");
+static_assert(sizeof(InflowBytesResult) == 24, "InflowBytesResult ABI layout changed");
 #else
 _Static_assert(sizeof(InflowHeading) == 40, "InflowHeading ABI layout changed");
 _Static_assert(sizeof(InflowDocumentOpenResult) == 32, "InflowDocumentOpenResult ABI layout changed");
@@ -210,6 +226,8 @@ _Static_assert(sizeof(InflowHighlightSpan) == 24, "InflowHighlightSpan ABI layou
 _Static_assert(sizeof(InflowHighlightResult) == 24, "InflowHighlightResult ABI layout changed");
 _Static_assert(sizeof(InflowHTMLExportResult) == 32, "InflowHTMLExportResult ABI layout changed");
 _Static_assert(sizeof(InflowMarkdownEditResult) == 56, "InflowMarkdownEditResult ABI layout changed");
+_Static_assert(sizeof(InflowEngineCreateResult) == 32, "InflowEngineCreateResult ABI layout changed");
+_Static_assert(sizeof(InflowBytesResult) == 24, "InflowBytesResult ABI layout changed");
 #endif
 #endif
 
@@ -217,6 +235,30 @@ _Static_assert(sizeof(InflowMarkdownEditResult) == 56, "InflowMarkdownEditResult
 /// Inflow core. Additive functions and trailing-independent structs do not
 /// change this value; incompatible ownership or layout changes do.
 uint32_t inflow_core_abi_version(void);
+
+/// Creates a stateful editor engine from a schema-versioned JSON request.
+/// The result payload is a full JSON snapshot. Returned bytes belong to Inflow
+/// and must be released with inflow_owned_bytes_free.
+InflowEngineCreateResult inflow_engine_create(
+    const uint8_t *request,
+    uintptr_t length
+);
+
+/// Dispatches one schema-versioned JSON command. A single engine must be
+/// serialized by its platform owner. The returned JSON is either a StatePatch
+/// or a structured error and must be released with inflow_owned_bytes_free.
+InflowBytesResult inflow_engine_dispatch(
+    InflowEditorEngine *engine,
+    const uint8_t *command,
+    uintptr_t length
+);
+
+/// Returns a full schema-versioned JSON snapshot for shadow comparison.
+/// Returned bytes must be released with inflow_owned_bytes_free.
+InflowBytesResult inflow_engine_snapshot(const InflowEditorEngine *engine);
+
+/// Releases an editor engine. A null pointer is accepted.
+void inflow_engine_free(InflowEditorEngine *engine);
 
 /// Decodes UTF-8 Markdown and normalizes in-memory line endings to LF.
 /// The returned bytes belong to Inflow and must be released with

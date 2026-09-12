@@ -5,6 +5,9 @@ use std::ptr;
 
 use crate::analysis;
 use crate::document::{self, DecodeError, LineEnding};
+use crate::engine::{
+    CommandEnvelope, ENGINE_SCHEMA_VERSION, EditorEngine, EngineCreateRequest, EngineError,
+};
 use crate::export::{self, ExportError};
 use crate::format::{self, FormatError, InlineFormat, ListFormat};
 use crate::highlight;
@@ -20,6 +23,7 @@ pub const STATUS_MIXED_LINE_ENDINGS: i32 = 3;
 pub const STATUS_UNSUPPORTED_CONTENT: i32 = 4;
 pub const STATUS_OUTPUT_TOO_LARGE: i32 = 5;
 pub const STATUS_AMBIGUOUS_FORMAT: i32 = 6;
+pub const STATUS_REVISION_CONFLICT: i32 = 7;
 pub const STATUS_PANIC: i32 = 255;
 
 pub const LINE_ENDING_LF: u8 = 0;
@@ -273,6 +277,53 @@ impl InflowEncodeResult {
 }
 
 #[repr(C)]
+pub struct InflowEditorEngine {
+    engine: EditorEngine,
+}
+
+#[repr(C)]
+pub struct InflowEngineCreateResult {
+    pub status: i32,
+    pub engine: *mut InflowEditorEngine,
+    pub payload: InflowOwnedBytes,
+}
+
+impl InflowEngineCreateResult {
+    const fn error(status: i32) -> Self {
+        Self {
+            status,
+            engine: ptr::null_mut(),
+            payload: InflowOwnedBytes::empty(),
+        }
+    }
+}
+
+#[repr(C)]
+pub struct InflowBytesResult {
+    pub status: i32,
+    pub bytes: InflowOwnedBytes,
+}
+
+impl InflowBytesResult {
+    const fn error(status: i32) -> Self {
+        Self {
+            status,
+            bytes: InflowOwnedBytes::empty(),
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+struct EngineErrorResponse<'a> {
+    schema_version: u32,
+    domain: &'static str,
+    code: &'static str,
+    message: &'static str,
+    revision: Option<u64>,
+    request_id: Option<&'a str>,
+}
+
+#[repr(C)]
 pub struct InflowAnalysisResult {
     pub status: i32,
     pub headings: InflowOwnedHeadings,
@@ -379,6 +430,256 @@ impl InflowSearchResult {
             status,
             matches: InflowOwnedSearchMatches::empty(),
         }
+    }
+}
+
+/// Creates an opaque stateful editor engine from a versioned JSON request.
+///
+/// # Safety
+///
+/// When `length` is non-zero, `request` must point to `length` readable bytes
+/// for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_engine_create(
+    request: *const u8,
+    length: usize,
+) -> InflowEngineCreateResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(input) = (unsafe { borrowed_bytes(request, length) }) else {
+            return engine_create_error(
+                STATUS_INVALID_ARGUMENT,
+                "invalid_request",
+                "The engine creation request pointer is invalid.",
+            );
+        };
+        let Ok(request) = serde_json::from_slice::<EngineCreateRequest>(input) else {
+            return engine_create_error(
+                STATUS_INVALID_ARGUMENT,
+                "invalid_request",
+                "The engine creation request is not valid schema-versioned JSON.",
+            );
+        };
+        let engine = match EditorEngine::create(request) {
+            Ok(engine) => engine,
+            Err(error) => {
+                let (code, message) = engine_error_details(error);
+                return engine_create_error(engine_error_status(error), code, message);
+            }
+        };
+        let Some(payload) = json_owned_bytes(&engine.snapshot()) else {
+            return InflowEngineCreateResult::error(STATUS_PANIC);
+        };
+        let engine = Box::into_raw(Box::new(InflowEditorEngine { engine }));
+
+        InflowEngineCreateResult {
+            status: STATUS_OK,
+            engine,
+            payload,
+        }
+    }))
+    .unwrap_or_else(|_| InflowEngineCreateResult::error(STATUS_PANIC))
+}
+
+/// Dispatches one versioned JSON command to an opaque editor engine.
+///
+/// A single engine must be serialized by its platform owner. Successful
+/// responses and structured errors are returned as owned JSON bytes.
+///
+/// # Safety
+///
+/// `engine` must be a live pointer returned by `inflow_engine_create`. When
+/// `length` is non-zero, `command` must point to `length` readable bytes for
+/// the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_engine_dispatch(
+    engine: *mut InflowEditorEngine,
+    command: *const u8,
+    length: usize,
+) -> InflowBytesResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(engine) = (unsafe { engine.as_mut() }) else {
+            return engine_bytes_error(
+                STATUS_INVALID_ARGUMENT,
+                "invalid_handle",
+                "The editor engine handle is null.",
+                None,
+                None,
+            );
+        };
+        let Some(input) = (unsafe { borrowed_bytes(command, length) }) else {
+            return engine_bytes_error(
+                STATUS_INVALID_ARGUMENT,
+                "invalid_request",
+                "The command pointer is invalid.",
+                Some(engine.engine.snapshot().revision),
+                None,
+            );
+        };
+        let Ok(envelope) = serde_json::from_slice::<CommandEnvelope>(input) else {
+            return engine_bytes_error(
+                STATUS_INVALID_ARGUMENT,
+                "invalid_request",
+                "The command is not valid schema-versioned JSON.",
+                Some(engine.engine.snapshot().revision),
+                None,
+            );
+        };
+        let request_id = envelope.request_id.clone();
+        match engine.engine.dispatch(envelope) {
+            Ok(response) => json_owned_bytes(&response).map_or_else(
+                || InflowBytesResult::error(STATUS_PANIC),
+                |bytes| InflowBytesResult {
+                    status: STATUS_OK,
+                    bytes,
+                },
+            ),
+            Err(error) => {
+                let (code, message) = engine_error_details(error);
+                engine_bytes_error(
+                    engine_error_status(error),
+                    code,
+                    message,
+                    Some(engine.engine.snapshot().revision),
+                    Some(&request_id),
+                )
+            }
+        }
+    }))
+    .unwrap_or_else(|_| InflowBytesResult::error(STATUS_PANIC))
+}
+
+/// Returns a full versioned JSON snapshot for shadow comparison and resync.
+///
+/// # Safety
+///
+/// `engine` must be a live pointer returned by `inflow_engine_create`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_engine_snapshot(
+    engine: *const InflowEditorEngine,
+) -> InflowBytesResult {
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(engine) = (unsafe { engine.as_ref() }) else {
+            return engine_bytes_error(
+                STATUS_INVALID_ARGUMENT,
+                "invalid_handle",
+                "The editor engine handle is null.",
+                None,
+                None,
+            );
+        };
+        json_owned_bytes(&engine.engine.snapshot()).map_or_else(
+            || InflowBytesResult::error(STATUS_PANIC),
+            |bytes| InflowBytesResult {
+                status: STATUS_OK,
+                bytes,
+            },
+        )
+    }))
+    .unwrap_or_else(|_| InflowBytesResult::error(STATUS_PANIC))
+}
+
+/// Releases one opaque editor engine.
+///
+/// # Safety
+///
+/// `engine` must be null or a live pointer returned by `inflow_engine_create`
+/// that has not already been released.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn inflow_engine_free(engine: *mut InflowEditorEngine) {
+    if !engine.is_null() {
+        drop(unsafe { Box::from_raw(engine) });
+    }
+}
+
+fn json_owned_bytes(value: &impl serde::Serialize) -> Option<InflowOwnedBytes> {
+    serde_json::to_vec(value)
+        .ok()
+        .map(InflowOwnedBytes::from_vec)
+}
+
+fn engine_create_error(
+    status: i32,
+    code: &'static str,
+    message: &'static str,
+) -> InflowEngineCreateResult {
+    let response = EngineErrorResponse {
+        schema_version: ENGINE_SCHEMA_VERSION,
+        domain: "editor_engine",
+        code,
+        message,
+        revision: None,
+        request_id: None,
+    };
+    InflowEngineCreateResult {
+        status,
+        engine: ptr::null_mut(),
+        payload: json_owned_bytes(&response).unwrap_or_else(InflowOwnedBytes::empty),
+    }
+}
+
+fn engine_bytes_error(
+    status: i32,
+    code: &'static str,
+    message: &'static str,
+    revision: Option<u64>,
+    request_id: Option<&str>,
+) -> InflowBytesResult {
+    let response = EngineErrorResponse {
+        schema_version: ENGINE_SCHEMA_VERSION,
+        domain: "editor_engine",
+        code,
+        message,
+        revision,
+        request_id,
+    };
+    InflowBytesResult {
+        status,
+        bytes: json_owned_bytes(&response).unwrap_or_else(InflowOwnedBytes::empty),
+    }
+}
+
+const fn engine_error_status(error: EngineError) -> i32 {
+    match error {
+        EngineError::RevisionConflict => STATUS_REVISION_CONFLICT,
+        EngineError::UnsupportedSchema
+        | EngineError::EmptyDocumentId
+        | EngineError::EmptyRequestId
+        | EngineError::InvalidRange
+        | EngineError::InvalidSelection => STATUS_INVALID_ARGUMENT,
+        EngineError::RevisionOverflow => STATUS_PANIC,
+    }
+}
+
+const fn engine_error_details(error: EngineError) -> (&'static str, &'static str) {
+    match error {
+        EngineError::UnsupportedSchema => (
+            "unsupported_schema",
+            "The request schema version is not supported.",
+        ),
+        EngineError::EmptyDocumentId => (
+            "empty_document_id",
+            "The document identifier must not be empty.",
+        ),
+        EngineError::EmptyRequestId => (
+            "empty_request_id",
+            "The request identifier must not be empty.",
+        ),
+        EngineError::RevisionConflict => (
+            "revision_conflict",
+            "The command base revision does not match the current revision.",
+        ),
+        EngineError::InvalidRange => (
+            "invalid_range",
+            "The edit range is not an extended-grapheme-aligned UTF-8 range.",
+        ),
+        EngineError::InvalidSelection => (
+            "invalid_selection",
+            "The selection is not an extended-grapheme-aligned UTF-8 range.",
+        ),
+        EngineError::RevisionOverflow => (
+            "revision_overflow",
+            "The document revision cannot be incremented.",
+        ),
     }
 }
 
@@ -1442,6 +1743,92 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ffi_editor_engine_round_trips_unicode_patches_and_rejects_stale_revisions() {
+        let create_request = r#"{
+            "schema_version": 1,
+            "document_id": "document-1",
+            "text": "Hi 🌍",
+            "selection": { "start": 7, "end": 7 }
+        }"#
+        .as_bytes();
+        let created =
+            unsafe { inflow_engine_create(create_request.as_ptr(), create_request.len()) };
+        assert_eq!(created.status, STATUS_OK);
+        assert!(!created.engine.is_null());
+        let created_payload = unsafe {
+            std::slice::from_raw_parts(created.payload.data, created.payload.length).to_vec()
+        };
+        unsafe { inflow_owned_bytes_free(created.payload.data, created.payload.length) };
+        let created_snapshot: serde_json::Value =
+            serde_json::from_slice(&created_payload).expect("snapshot should be JSON");
+        assert_eq!(created_snapshot["revision"], 0);
+        assert_eq!(created_snapshot["text"], "Hi 🌍");
+
+        let command = r#"{
+            "schema_version": 1,
+            "request_id": "request-1",
+            "command": {
+                "type": "replace_text",
+                "base_revision": 0,
+                "range": { "start": 3, "end": 7 },
+                "inserted": "世界",
+                "selection_after": { "start": 9, "end": 9 }
+            }
+        }"#
+        .as_bytes();
+        let dispatched =
+            unsafe { inflow_engine_dispatch(created.engine, command.as_ptr(), command.len()) };
+        assert_eq!(dispatched.status, STATUS_OK);
+        let patch = unsafe {
+            std::slice::from_raw_parts(dispatched.bytes.data, dispatched.bytes.length).to_vec()
+        };
+        unsafe { inflow_owned_bytes_free(dispatched.bytes.data, dispatched.bytes.length) };
+        let patch: serde_json::Value =
+            serde_json::from_slice(&patch).expect("patch should be JSON");
+        assert_eq!(patch["request_id"], "request-1");
+        assert_eq!(patch["patch"]["revision"], 1);
+
+        let snapshot = unsafe { inflow_engine_snapshot(created.engine) };
+        assert_eq!(snapshot.status, STATUS_OK);
+        let snapshot_bytes = unsafe {
+            std::slice::from_raw_parts(snapshot.bytes.data, snapshot.bytes.length).to_vec()
+        };
+        unsafe { inflow_owned_bytes_free(snapshot.bytes.data, snapshot.bytes.length) };
+        let snapshot: serde_json::Value =
+            serde_json::from_slice(&snapshot_bytes).expect("snapshot should be JSON");
+        assert_eq!(snapshot["revision"], 1);
+        assert_eq!(snapshot["text"], "Hi 世界");
+
+        let stale =
+            unsafe { inflow_engine_dispatch(created.engine, command.as_ptr(), command.len()) };
+        assert_eq!(stale.status, STATUS_REVISION_CONFLICT);
+        let error =
+            unsafe { std::slice::from_raw_parts(stale.bytes.data, stale.bytes.length).to_vec() };
+        unsafe { inflow_owned_bytes_free(stale.bytes.data, stale.bytes.length) };
+        let error: serde_json::Value =
+            serde_json::from_slice(&error).expect("error should be JSON");
+        assert_eq!(error["code"], "revision_conflict");
+        assert_eq!(error["revision"], 1);
+        assert_eq!(error["request_id"], "request-1");
+
+        unsafe { inflow_engine_free(created.engine) };
+    }
+
+    #[test]
+    fn ffi_editor_engine_rejects_invalid_handles_and_requests_without_allocating_state() {
+        let invalid = unsafe { inflow_engine_create(ptr::null(), 1) };
+        assert_eq!(invalid.status, STATUS_INVALID_ARGUMENT);
+        assert!(invalid.engine.is_null());
+        unsafe { inflow_owned_bytes_free(invalid.payload.data, invalid.payload.length) };
+
+        let snapshot = unsafe { inflow_engine_snapshot(ptr::null()) };
+        assert_eq!(snapshot.status, STATUS_INVALID_ARGUMENT);
+        unsafe { inflow_owned_bytes_free(snapshot.bytes.data, snapshot.bytes.length) };
+
+        unsafe { inflow_engine_free(ptr::null_mut()) };
+    }
+
+    #[test]
     fn ffi_round_trip_preserves_file_properties() {
         let source = [
             b"\xEF\xBB\xBF".as_slice(),
@@ -1646,6 +2033,8 @@ mod tests {
         assert_eq!(std::mem::size_of::<InflowHighlightResult>(), 24);
         assert_eq!(std::mem::size_of::<InflowHTMLExportResult>(), 32);
         assert_eq!(std::mem::size_of::<InflowMarkdownEditResult>(), 56);
+        assert_eq!(std::mem::size_of::<InflowEngineCreateResult>(), 32);
+        assert_eq!(std::mem::size_of::<InflowBytesResult>(), 24);
     }
 
     #[test]
