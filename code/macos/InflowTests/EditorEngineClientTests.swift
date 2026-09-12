@@ -3,6 +3,56 @@ import XCTest
 
 final class EditorEngineClientTests: XCTestCase {
     @MainActor
+    func testEquivalentDerivedRequestsDoNotRestartOrRepaintRenderedEditing() async throws {
+        let source = "# 标题\n\n正文"
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        session.textView.isEditable = true
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let previewSession = MarkdownSourceEditorSession(role: .renderedProjection)
+        previewSession.textView.isEditable = false
+        previewSession.setPresentation(.rendered, source: "", onLinkClick: nil)
+        let store = EditorStore(
+            sourceEditorSession: session,
+            renderedPreviewSession: previewSession
+        )
+        let delayed = EditorDerivedContentRequest(
+            markdown: source,
+            documentDirectory: nil,
+            projectRoot: nil,
+            expectedProjectRootIdentity: nil,
+            requiresProjectBoundary: false,
+            configuration: .default,
+            syntaxHighlightingEnabled: true,
+            delayNanoseconds: 50_000_000
+        )
+        let immediate = EditorDerivedContentRequest(
+            markdown: source,
+            documentDirectory: nil,
+            projectRoot: nil,
+            expectedProjectRootIdentity: nil,
+            requiresProjectBoundary: false,
+            configuration: .default,
+            syntaxHighlightingEnabled: true,
+            delayNanoseconds: 0
+        )
+
+        store.send(.refreshDerived(delayed))
+        store.send(.refreshDerived(immediate))
+        for _ in 0..<100 where store.state.previewSourceSnapshot != source {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(store.state.previewSourceSnapshot, source)
+        XCTAssertEqual(session.renderedPresentationPassCount, 1)
+        XCTAssertEqual(previewSession.renderedPresentationPassCount, 1)
+
+        store.send(.refreshDerived(immediate))
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(session.renderedPresentationPassCount, 1)
+        XCTAssertEqual(previewSession.renderedPresentationPassCount, 1)
+    }
+
+    @MainActor
     func testEditorStorePublishesOnlyTheLatestDerivedIntent() async throws {
         let session = MarkdownSourceEditorSession()
         let previewSession = MarkdownSourceEditorSession(role: .renderedProjection)

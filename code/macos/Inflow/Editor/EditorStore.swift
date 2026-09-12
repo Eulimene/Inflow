@@ -16,7 +16,7 @@ struct EditorViewState: Equatable {
     )
 }
 
-struct EditorDerivedContentRequest: Sendable {
+struct EditorDerivedContentRequest: Equatable, Sendable {
     let markdown: String
     let documentDirectory: URL?
     let projectRoot: URL?
@@ -25,6 +25,16 @@ struct EditorDerivedContentRequest: Sendable {
     let configuration: PreviewAppearanceConfiguration
     let syntaxHighlightingEnabled: Bool
     let delayNanoseconds: UInt64
+
+    func hasSameDerivationInput(as other: Self) -> Bool {
+        markdown == other.markdown
+            && documentDirectory == other.documentDirectory
+            && projectRoot == other.projectRoot
+            && expectedProjectRootIdentity == other.expectedProjectRootIdentity
+            && requiresProjectBoundary == other.requiresProjectBoundary
+            && configuration == other.configuration
+            && syntaxHighlightingEnabled == other.syntaxHighlightingEnabled
+    }
 }
 
 enum EditorIntent: Sendable {
@@ -41,6 +51,8 @@ final class EditorStore: ObservableObject {
     private let renderedPreviewSession: MarkdownSourceEditorSession
     private var derivedContentGeneration = 0
     private var derivedContentTask: Task<Void, Never>?
+    private var activeDerivedRequest: EditorDerivedContentRequest?
+    private var completedDerivedRequest: EditorDerivedContentRequest?
     private var requestedMode: EditorEngineMode
     private var modeSynchronizationTask: Task<Bool, Never>?
 
@@ -167,13 +179,20 @@ final class EditorStore: ObservableObject {
         case .cancelPending:
             derivedContentTask?.cancel()
             derivedContentGeneration &+= 1
+            activeDerivedRequest = nil
         }
     }
 
     private func refreshDerived(_ request: EditorDerivedContentRequest) {
+        if activeDerivedRequest?.hasSameDerivationInput(as: request) == true
+            || completedDerivedRequest?.hasSameDerivationInput(as: request) == true
+        {
+            return
+        }
         derivedContentTask?.cancel()
         derivedContentGeneration &+= 1
         let generation = derivedContentGeneration
+        activeDerivedRequest = request
         state.analysisState = .updating(previous: state.analysisState.displayedAnalysis)
 
         derivedContentTask = Task { @MainActor [weak self] in
@@ -192,6 +211,8 @@ final class EditorStore: ObservableObject {
                   UTF8Text.isExactlyEqual(coreContent.sourceSnapshot, request.markdown)
             else {
                 guard generation == derivedContentGeneration else { return }
+                activeDerivedRequest = nil
+                completedDerivedRequest = nil
                 LocalFailureLogController.shared.record(.previewing, code: .previewFailed)
                 state.analysisState = .failed(
                     previous: state.analysisState.displayedAnalysis,
@@ -202,6 +223,8 @@ final class EditorStore: ObservableObject {
             }
 
             guard !Task.isCancelled, generation == derivedContentGeneration else { return }
+            activeDerivedRequest = nil
+            completedDerivedRequest = request
             renderedPreviewSession.installSharedRenderedPlan(
                 coreContent.nativeRenderPlan,
                 source: request.markdown
@@ -226,6 +249,8 @@ final class EditorStore: ObservableObject {
     private func suspendDerived(markdown: String) {
         derivedContentTask?.cancel()
         derivedContentGeneration &+= 1
+        activeDerivedRequest = nil
+        completedDerivedRequest = nil
         renderedPreviewSession.installSharedRenderedPlan(nil, source: markdown)
         state = EditorViewState(
             previewSourceSnapshot: "",

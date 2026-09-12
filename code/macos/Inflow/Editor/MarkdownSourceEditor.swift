@@ -49,6 +49,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var pendingOptimisticText: String?
     private var focusModeEnabled = false
     private var typewriterModeEnabled = false
+    private var configuredLineWrapping: Bool?
     private let role: MarkdownSourceEditorSessionRole
     private(set) var renderedPresentationPassCount = 0
 
@@ -1480,6 +1481,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     private func configureLineWrapping(_ wrapsLines: Bool) {
+        guard configuredLineWrapping != wrapsLines else { return }
+        configuredLineWrapping = wrapsLines
         scrollView.hasHorizontalScroller = !wrapsLines
         textView.isHorizontallyResizable = !wrapsLines
         textView.textContainer?.widthTracksTextView = wrapsLines
@@ -1516,8 +1519,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 spans: previousSpans,
                 previousApplicationWasComplete: previousApplicationWasComplete
             )
-        } else {
-            applyRenderedPresentation(source: source, force: true)
+        } else if !renderedPresentationIsCurrent(source: source) {
+            applyRenderedPresentation(source: source, force: false)
         }
         return true
     }
