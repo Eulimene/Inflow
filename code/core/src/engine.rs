@@ -5,6 +5,13 @@ use std::ops::Range;
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::analysis::{DocumentAnalysis, analyze_document};
+use crate::highlight::{HighlightSpan, spans_from_document};
+use crate::markdown_ir::{DocumentIr, dialect_options};
+use crate::reference::{MarkdownReference, references_from_document};
+use crate::render::{RenderConfiguration, html_fragment_from_document};
+use crate::render_ir::RenderIr;
+
 pub const ENGINE_SCHEMA_VERSION: u32 = 1;
 
 pub type Revision = u64;
@@ -55,6 +62,9 @@ pub enum EditorCommand {
         inserted: String,
         selection_after: Selection,
     },
+    RefreshDerived {
+        revision: Revision,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -65,21 +75,33 @@ pub struct EngineSnapshot {
     pub text: String,
     pub selection: Selection,
     pub content_hash: String,
+    pub derived: Option<DerivedState>,
 }
 
-#[derive(Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct StatePatch {
     pub base_revision: Revision,
     pub revision: Revision,
-    pub text: TextPatch,
-    pub selection: Selection,
+    pub text: Option<TextPatch>,
+    pub selection: Option<Selection>,
+    pub derived: Option<DerivedState>,
     pub content_hash: String,
 }
 
-#[derive(Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TextPatch {
     pub range: ByteRange,
     pub inserted: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DerivedState {
+    pub revision: Revision,
+    pub analysis: DocumentAnalysis,
+    pub highlights: Vec<HighlightSpan>,
+    pub references: Vec<MarkdownReference>,
+    pub render: RenderIr,
+    pub html_fragment: String,
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize)]
@@ -105,6 +127,7 @@ pub struct EditorEngine {
     revision: Revision,
     text: String,
     selection: Selection,
+    derived: Option<DerivedState>,
 }
 
 impl EditorEngine {
@@ -122,6 +145,7 @@ impl EditorEngine {
             revision: 0,
             text: request.text,
             selection: request.selection,
+            derived: None,
         })
     }
 
@@ -141,6 +165,7 @@ impl EditorEngine {
                 inserted,
                 selection_after,
             } => self.replace_text(base_revision, range, inserted, selection_after)?,
+            EditorCommand::RefreshDerived { revision } => self.refresh_derived(revision)?,
         };
 
         Ok(DispatchResponse {
@@ -158,6 +183,7 @@ impl EditorEngine {
             text: self.text.clone(),
             selection: self.selection.clone(),
             content_hash: content_hash(&self.text),
+            derived: self.derived.clone(),
         }
     }
 
@@ -187,12 +213,47 @@ impl EditorEngine {
         self.text = updated;
         self.selection = selection_after.clone();
         self.revision = revision;
+        self.derived = None;
 
         Ok(StatePatch {
             base_revision,
             revision,
-            text,
-            selection: selection_after,
+            text: Some(text),
+            selection: Some(selection_after),
+            derived: None,
+            content_hash: content_hash(&self.text),
+        })
+    }
+
+    fn refresh_derived(&mut self, revision: Revision) -> Result<StatePatch, EngineError> {
+        if revision != self.revision {
+            return Err(EngineError::RevisionConflict);
+        }
+        let derived = if let Some(derived) = &self.derived {
+            derived.clone()
+        } else {
+            let document = DocumentIr::parse(&self.text, dialect_options(true));
+            let derived = DerivedState {
+                revision,
+                analysis: analyze_document(&document),
+                highlights: spans_from_document(&document),
+                references: references_from_document(&document),
+                render: RenderIr::from_document(&document),
+                html_fragment: html_fragment_from_document(
+                    &document,
+                    RenderConfiguration::default(),
+                ),
+            };
+            self.derived = Some(derived.clone());
+            derived
+        };
+
+        Ok(StatePatch {
+            base_revision: revision,
+            revision,
+            text: None,
+            selection: None,
+            derived: Some(derived),
             content_hash: content_hash(&self.text),
         })
     }
@@ -272,6 +333,14 @@ mod tests {
         }
     }
 
+    fn refresh(revision: Revision) -> CommandEnvelope {
+        CommandEnvelope {
+            schema_version: ENGINE_SCHEMA_VERSION,
+            request_id: format!("refresh-{revision}"),
+            command: EditorCommand::RefreshDerived { revision },
+        }
+    }
+
     #[test]
     fn replace_text_advances_revision_and_returns_an_incremental_patch() {
         let mut engine = engine("Hello 🌍");
@@ -281,8 +350,9 @@ mod tests {
 
         assert_eq!(response.patch.base_revision, 0);
         assert_eq!(response.patch.revision, 1);
-        assert_eq!(response.patch.text.range, ByteRange { start: 6, end: 10 });
-        assert_eq!(response.patch.text.inserted, "世界");
+        let text = response.patch.text.expect("replacement patch");
+        assert_eq!(text.range, ByteRange { start: 6, end: 10 });
+        assert_eq!(text.inserted, "世界");
         assert_eq!(engine.snapshot().text, "Hello 世界");
         assert_eq!(engine.snapshot().revision, 1);
     }
@@ -334,5 +404,47 @@ mod tests {
             selection: Selection { start: 0, end: 0 },
         });
         assert!(matches!(missing_id, Err(EngineError::EmptyDocumentId)));
+    }
+
+    #[test]
+    fn refresh_derived_uses_one_revision_and_is_invalidated_by_edits() {
+        let mut engine = engine("# 标题\n\n正文 **加粗** [链接](note.md)\n");
+
+        let first = engine
+            .dispatch(refresh(0))
+            .expect("current revision should derive");
+        let derived = first.patch.derived.expect("derived state");
+        assert_eq!(first.patch.base_revision, 0);
+        assert_eq!(first.patch.revision, 0);
+        assert!(first.patch.text.is_none());
+        assert_eq!(derived.revision, 0);
+        assert_eq!(derived.analysis.headings[0].title, "标题");
+        assert!(
+            derived
+                .highlights
+                .iter()
+                .any(|span| span.kind == crate::highlight::HighlightKind::Strong)
+        );
+        assert_eq!(derived.references[0].target, "note.md");
+        assert!(derived.html_fragment.contains("<h1>标题</h1>"));
+        assert!(
+            derived
+                .render
+                .blocks
+                .iter()
+                .any(|block| block.visible_text.contains("正文 加粗 链接"))
+        );
+        assert_eq!(engine.snapshot().revision, 0);
+        assert!(engine.snapshot().derived.is_some());
+
+        engine
+            .dispatch(replace(0, 0..0, "前缀\n\n", Selection { start: 0, end: 0 }))
+            .expect("edit should succeed");
+        assert!(engine.snapshot().derived.is_none());
+        assert_eq!(
+            engine.dispatch(refresh(0)),
+            Err(EngineError::RevisionConflict)
+        );
+        assert!(engine.dispatch(refresh(1)).is_ok());
     }
 }

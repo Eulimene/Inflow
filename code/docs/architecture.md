@@ -2,7 +2,7 @@
 
 > 状态：适用于个人首版（内部验证版）
 >
-> 对齐日期：2026-09-03
+> 对齐日期：2026-09-12
 >
 > 本文描述当前主流程的责任与不变量，不把仓库中保留的后续代码写成当前产品能力。
 
@@ -23,13 +23,19 @@ macOS 14 与 arm64 是当前工程构建目标，不是已经通过外部设备�
 
 ### 2.1 Rust 核心
 
-Rust 核心负责不依赖平台的纯值逻辑：
+Rust 核心负责不依赖平台的纯值逻辑，并正在通过版本化 Engine 边界接管编辑状态：
 
 - UTF-8 Markdown 分析、标题、统计、查找与格式计划；
 - CommonMark/GFM 派生结果和安全的语法范围；
 - Mermaid 围栏识别、语法校验和可确定复现的 SVG 生成；
 - 可复用的 UTF-8 end-exclusive 范围与版本化 C ABI；
 - 不访问用户任意文件，不持有 AppKit 对象。
+
+当前迁移阶段已经引入有状态 `EditorEngine` 的 opaque handle、`revision`、UTF-8
+`ReplaceText`、快照和 `RefreshDerived`。每次 `RefreshDerived` 只创建一个 owned
+`DocumentIr`，分析、语法范围、引用、`RenderIr` 与安全 HTML 都消费该事件流；派生缓存严格绑定
+revision，正文修改后立即失效。macOS 仍以影子模式镜像已提交的 NSTextView 修改并逐字节对账，
+保存和撤销尚未切换权威，因此此时不能把 Rust Engine 描述为已经完成接管。
 
 核心可能保留比个人首版更宽的解析或导出实现。产品能力必须由 macOS 当前入口与 UAT 再收窄，不能直接从核心函数存在性推导。
 
@@ -49,11 +55,12 @@ SwiftUI 与 AppKit 负责：
 
 ## 3. 单一正文不变量
 
-主数据流为：
+迁移期间主数据流为：
 
     MarkdownDocument.text
         ↕
     MarkdownSourceEditorSession + 持久 NSTextView
+        └─ ReplaceText 镜像 → Rust EditorEngine（revision + 字节快照对账）
         ├─ 源码展示属性
         ├─ 分栏预览派生结果
         └─ 即时编辑属性
@@ -66,6 +73,8 @@ SwiftUI 与 AppKit 负责：
 4. 展示属性、语法高亮和预览刷新不能发布正文变化，也不能登记正文 undo。
 5. 格式、查找替换与图片引用只通过已验证的编辑计划修改同一字符串，并形成可理解的原生撤销步骤。
 6. 结果必须绑定精确 UTF-8 字节快照；正文变化后，旧范围和旧链接决定立即失效。
+7. 影子迁移期只允许 Swift 写正文；Engine 只验证和派生。切换权威时必须一次完成写入方向反转，
+   禁止 Swift 与 Rust 同时独立接受正文写入。
 
 Swift String 的规范等价不能替代精确字节身份。Rust 返回 UTF-8 byte range，TextKit 使用 UTF-16 NSRange，转换必须同时验证边界、长度和完整扩展字素，不能截断 Unicode 或 ZWJ 序列。
 

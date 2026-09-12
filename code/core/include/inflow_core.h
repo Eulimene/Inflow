@@ -300,6 +300,16 @@ InflowEncodeResult inflow_markdown_render_html_with_options(
     InflowRenderOptions options
 );
 
+/// Renders the canonical in-app HTML fragment with inert source-range
+/// metadata used only by the editable WebKit host. Its visible markup is the
+/// same as inflow_markdown_render_html_with_options. Returned bytes belong to
+/// Inflow and must be released with inflow_owned_bytes_free.
+InflowEncodeResult inflow_markdown_render_editor_html_with_options(
+    const uint8_t *utf8,
+    uintptr_t length,
+    InflowRenderOptions options
+);
+
 /// Renders one Mermaid fenced Markdown block directly as deterministic,
 /// script-free SVG. Unsupported or malformed syntax returns
 /// INFLOW_STATUS_UNSUPPORTED_CONTENT and no bytes. Returned bytes belong to

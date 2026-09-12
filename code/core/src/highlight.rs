@@ -2,11 +2,13 @@
 
 use std::ops::Range;
 
-use pulldown_cmark::{Event, Parser, Tag};
+use pulldown_cmark::{Event, Tag};
+use serde::Serialize;
 
-use crate::render;
+use crate::markdown_ir::{DocumentIr, dialect_options};
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum HighlightKind {
     Heading = 1,
@@ -25,18 +27,24 @@ pub enum HighlightKind {
     Rule = 14,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct HighlightSpan {
     pub kind: HighlightKind,
     pub source_range: Range<usize>,
 }
 
 pub fn spans(source: &str) -> Vec<HighlightSpan> {
+    let document = DocumentIr::parse(source, dialect_options(true));
+    spans_from_document(&document)
+}
+
+pub fn spans_from_document(document: &DocumentIr) -> Vec<HighlightSpan> {
     let mut spans = Vec::new();
-    for (event, range) in Parser::new_ext(source, render::options()).into_offset_iter() {
-        let kind = match event {
+    for located in document.events() {
+        let range = located.source_range.clone();
+        let kind = match &located.event {
             Event::Start(Tag::Item) => {
-                if let Some(marker) = list_marker_range(source, range.start) {
+                if let Some(marker) = list_marker_range(document.source(), range.start) {
                     spans.push(HighlightSpan {
                         kind: HighlightKind::List,
                         source_range: marker,
@@ -44,7 +52,7 @@ pub fn spans(source: &str) -> Vec<HighlightSpan> {
                 }
                 None
             }
-            Event::Start(tag) => kind_for_tag(&tag),
+            Event::Start(tag) => kind_for_tag(tag),
             Event::Code(_) => Some(HighlightKind::Code),
             Event::InlineMath(_) | Event::DisplayMath(_) => Some(HighlightKind::Math),
             Event::Html(_) | Event::InlineHtml(_) => Some(HighlightKind::Raw),
@@ -55,11 +63,11 @@ pub fn spans(source: &str) -> Vec<HighlightSpan> {
         };
         if let Some(kind) = kind
             && !range.is_empty()
-            && source.get(range.clone()).is_some()
+            && document.source().get(range.clone()).is_some()
         {
             spans.push(HighlightSpan {
                 kind,
-                source_range: trim_line_ending(source, range),
+                source_range: trim_line_ending(document.source(), range),
             });
         }
     }

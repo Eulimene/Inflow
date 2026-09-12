@@ -1,6 +1,6 @@
 # Inflow 当前实现基线
 
-> 对齐日期：2026-09-03
+> 对齐日期：2026-09-12
 >
 > 适用里程碑：个人首版（内部验证版）
 >
@@ -48,6 +48,8 @@
 ### 2.2 单一正文与三种视图
 
 - MarkdownDocument.text 是 SwiftUI 文档模型中的正文事实；MarkdownSourceEditorSession 持有一个持久 NSTextView。
+- 有状态 Rust `EditorEngine` 已在 Debug 默认开启影子模式：NSTextView 完成一次非组合输入后，以 UTF-8 grapheme 边界的 `ReplaceText(base_revision, range, inserted)` 镜像到 Engine，并用快照执行逐字节对账。Release 默认关闭；保存、格式和撤销目前仍以 Swift/AppKit 为权威。
+- Engine 的 `RefreshDerived(revision)` 已由一次 `DocumentIr` 解析同时产生分析、语法范围、引用、稳定块 ID 的 `RenderIr` 和安全 HTML，并缓存到对应 revision；本阶段只建立核心合同，Swift 主预览热路径尚未切换，不能据此声称双解析器已经删除。
 - 源码编辑、实时预览分栏左侧与即时编辑复用同一个 MarkdownSourceEditor 和 MarkdownSourceEditorSession；分栏右侧使用当前内存正文生成的只读 WebKit 结果，即时编辑在原始字符串上应用 Rust 解析范围对应的 TextKit 展示属性。
 - 文本修改由 NSTextView 发布回同一个绑定，撤销与重做继续使用同一个 UndoManager。展示属性更新不登记正文 undo。
 - EditorViewMode 的历史内部 case 名 preview 现在对应用户可见的“即时编辑”。

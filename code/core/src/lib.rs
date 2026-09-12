@@ -10,10 +10,12 @@ mod export;
 mod ffi;
 mod format;
 mod highlight;
+mod markdown_ir;
 mod math;
 mod mermaid;
 mod reference;
 mod render;
+mod render_ir;
 mod search;
 
 /// Current version of the C ABI exposed to platform clients.

@@ -2,17 +2,19 @@
 
 use std::ops::Range;
 
-use pulldown_cmark::{Event, Parser, Tag};
+use pulldown_cmark::{Event, Tag};
+use serde::Serialize;
 
-use crate::render;
+use crate::markdown_ir::{DocumentIr, dialect_options};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReferenceKind {
     Link,
     Image,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct MarkdownReference {
     pub kind: ReferenceKind,
     pub target: String,
@@ -21,18 +23,24 @@ pub struct MarkdownReference {
 }
 
 pub fn references(markdown: &str) -> Vec<MarkdownReference> {
-    Parser::new_ext(markdown, render::options())
-        .into_offset_iter()
-        .filter_map(|(event, source_range)| match event {
+    let document = DocumentIr::parse(markdown, dialect_options(true));
+    references_from_document(&document)
+}
+
+pub fn references_from_document(document: &DocumentIr) -> Vec<MarkdownReference> {
+    document
+        .events()
+        .iter()
+        .filter_map(|located| match &located.event {
             Event::Start(Tag::Link { dest_url, .. }) => Some(MarkdownReference {
                 kind: ReferenceKind::Link,
-                target: dest_url.into_string(),
-                source_range,
+                target: dest_url.to_string(),
+                source_range: located.source_range.clone(),
             }),
             Event::Start(Tag::Image { dest_url, .. }) => Some(MarkdownReference {
                 kind: ReferenceKind::Image,
-                target: dest_url.into_string(),
-                source_range,
+                target: dest_url.to_string(),
+                source_range: located.source_range.clone(),
             }),
             _ => None,
         })

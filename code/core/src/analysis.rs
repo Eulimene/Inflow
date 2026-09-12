@@ -2,19 +2,20 @@
 
 use std::ops::Range;
 
-use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, HeadingLevel, Tag, TagEnd};
+use serde::Serialize;
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::render;
+use crate::markdown_ir::{DocumentIr, dialect_options};
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Heading {
     pub level: u8,
     pub title: String,
     pub source_range: Range<usize>,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DocumentAnalysis {
     pub headings: Vec<Heading>,
     pub word_count: u64,
@@ -29,13 +30,20 @@ struct ActiveHeading {
 }
 
 pub fn analyze(markdown: &str) -> DocumentAnalysis {
+    let document = DocumentIr::parse(markdown, dialect_options(true));
+    analyze_document(&document)
+}
+
+pub fn analyze_document(document: &DocumentIr) -> DocumentAnalysis {
     let mut headings = Vec::new();
     let mut active_heading: Option<ActiveHeading> = None;
-    let mut plain_text = String::with_capacity(markdown.len());
-    let mut visible_text = String::with_capacity(markdown.len());
+    let mut plain_text = String::with_capacity(document.source().len());
+    let mut visible_text = String::with_capacity(document.source().len());
 
-    for (event, source_range) in Parser::new_ext(markdown, render::options()).into_offset_iter() {
-        match &event {
+    for located in document.events() {
+        let event = &located.event;
+        let source_range = &located.source_range;
+        match event {
             Event::Start(Tag::Heading { level, .. }) => {
                 active_heading = Some(ActiveHeading {
                     level: heading_level(*level),
@@ -45,7 +53,7 @@ pub fn analyze(markdown: &str) -> DocumentAnalysis {
             }
             Event::End(TagEnd::Heading(_)) => {
                 if let Some(active) = active_heading.take() {
-                    let source_end = trim_line_ending(markdown, source_range.end);
+                    let source_end = trim_line_ending(document.source(), source_range.end);
                     headings.push(Heading {
                         level: active.level,
                         title: active.title.trim().to_owned(),
@@ -165,6 +173,7 @@ fn is_cjk(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render;
 
     #[test]
     fn extracts_repeated_unicode_headings_by_source_range() {
