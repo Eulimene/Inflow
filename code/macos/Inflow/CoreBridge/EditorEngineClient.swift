@@ -4,9 +4,11 @@ import os
 private func withTemporaryEditorEngine<Result>(
     source: String,
     selection: EditorEngineSelection = EditorEngineSelection(start: 0, end: 0),
-    _ body: (OpaquePointer) -> Result?
-) -> Result? {
-    guard InflowCoreBridge.isCompatible else { return nil }
+    _ body: (OpaquePointer) throws -> Result
+) throws -> Result {
+    guard InflowCoreBridge.isCompatible else {
+        throw EditorEngineBridgeError.invalidHandle
+    }
     let request = EditorEngineCreateRequest(
         schemaVersion: 1,
         documentID: UUID().uuidString,
@@ -14,27 +16,26 @@ private func withTemporaryEditorEngine<Result>(
         selection: selection,
         mode: .editable
     )
-    guard let data = try? JSONEncoder().encode(request) else { return nil }
+    let data = try JSONEncoder().encode(request)
     let created: InflowEngineCreateResult = data.withUnsafeBytes { bytes in
         inflow_engine_create(
             bytes.bindMemory(to: UInt8.self).baseAddress,
             UInt(bytes.count)
         )
     }
+    let payload = try InflowCoreBridge.copyAndFree(created.payload)
     guard created.status == INFLOW_STATUS_OK, let handle = created.engine else {
-        _ = try? InflowCoreBridge.copyAndFree(created.payload)
-        return nil
+        throw decodeEditorEngineBridgeError(status: created.status, payload: payload)
     }
     defer { inflow_engine_free(handle) }
-    _ = try? InflowCoreBridge.copyAndFree(created.payload)
-    return body(handle)
+    return try body(handle)
 }
 
 private func dispatchTemporaryEditorEngine<Envelope: Encodable>(
     _ envelope: Envelope,
     to handle: OpaquePointer
-) -> EditorEngineDispatchResponse? {
-    guard let encoded = try? JSONEncoder().encode(envelope) else { return nil }
+) throws -> EditorEngineDispatchResponse {
+    let encoded = try JSONEncoder().encode(envelope)
     let result: InflowBytesResult = encoded.withUnsafeBytes { bytes in
         inflow_engine_dispatch(
             handle,
@@ -42,10 +43,23 @@ private func dispatchTemporaryEditorEngine<Envelope: Encodable>(
             UInt(bytes.count)
         )
     }
-    guard let payload = try? InflowCoreBridge.copyAndFree(result.bytes),
-          result.status == INFLOW_STATUS_OK
-    else { return nil }
-    return try? JSONDecoder().decode(EditorEngineDispatchResponse.self, from: payload)
+    let payload = try InflowCoreBridge.copyAndFree(result.bytes)
+    guard result.status == INFLOW_STATUS_OK else {
+        throw decodeEditorEngineBridgeError(status: result.status, payload: payload)
+    }
+    return try JSONDecoder().decode(EditorEngineDispatchResponse.self, from: payload)
+}
+
+private func decodeEditorEngineBridgeError(
+    status: InflowStatus,
+    payload: Data
+) -> EditorEngineBridgeError {
+    let response = try? JSONDecoder().decode(EditorEngineErrorResponse.self, from: payload)
+    return .core(
+        status: status,
+        code: response?.code ?? "unknown",
+        revision: response?.revision
+    )
 }
 
 extension EditorEngineDerivedContent {
@@ -53,7 +67,7 @@ extension EditorEngineDerivedContent {
         source: String,
         configuration: PreviewAppearanceConfiguration = .default
     ) -> Self? {
-        withTemporaryEditorEngine(source: source) { handle in
+        try? withTemporaryEditorEngine(source: source) { handle in
             let requestID = UUID().uuidString
             let envelope = EditorEngineRefreshEnvelope(
                 schemaVersion: 1,
@@ -65,8 +79,8 @@ extension EditorEngineDerivedContent {
                     mermaidEnabled: configuration.mermaidRenderingEnabled
                 )
             )
-            guard let response = dispatchTemporaryEditorEngine(envelope, to: handle),
-                  response.requestID == requestID,
+            let response = try dispatchTemporaryEditorEngine(envelope, to: handle)
+            guard response.requestID == requestID,
                   let derived = response.patch.derived
             else { return nil }
             return try? derived.validated(source: source)
@@ -81,7 +95,7 @@ extension DocumentSearchResult {
         query: String,
         caseSensitive: Bool
     ) -> Self? {
-        withTemporaryEditorEngine(source: source) { handle in
+        try? withTemporaryEditorEngine(source: source) { handle in
             let requestID = UUID().uuidString
             let envelope = EditorEngineSearchEnvelope(
                 schemaVersion: 1,
@@ -93,15 +107,119 @@ extension DocumentSearchResult {
                     caseSensitive: caseSensitive
                 )
             )
-            guard let response = dispatchTemporaryEditorEngine(envelope, to: handle),
-                  response.requestID == requestID,
+            let response = try dispatchTemporaryEditorEngine(envelope, to: handle)
+            guard response.requestID == requestID,
                   response.patch.baseRevision == 0,
                   response.patch.revision == 0,
                   let search = response.patch.search,
                   search.revision == 0
             else { return nil }
-            return try? search.validated(source: source)
+            return try search.validated(source: source)
         }
+    }
+}
+
+enum EditorEngineSynchronousCommandError: Error {
+    case invalidSelection
+    case ambiguousFormat
+    case invalidResponse
+    case coreFailure
+}
+
+enum EditorEngineSynchronousCommands {
+    static func format(
+        source: String,
+        selectedUTF16Range: NSRange,
+        operation: EditorEngineFormatOperation
+    ) throws -> EditorEngineMutation {
+        guard let range = MarkdownSourceRange.utf8Range(
+            forUTF16Range: selectedUTF16Range,
+            in: source
+        ) else {
+            throw EditorEngineSynchronousCommandError.invalidSelection
+        }
+        do {
+            return try withTemporaryEditorEngine(
+                source: source,
+                selection: EditorEngineSelection(start: range.lowerBound, end: range.upperBound)
+            ) { handle in
+                let requestID = UUID().uuidString
+                let envelope = EditorEngineFormatEnvelope(
+                    schemaVersion: 1,
+                    requestID: requestID,
+                    command: EditorEngineFormatCommand(
+                        type: "format",
+                        baseRevision: 0,
+                        selection: EditorEngineSelection(
+                            start: range.lowerBound,
+                            end: range.upperBound
+                        ),
+                        operation: operation
+                    )
+                )
+                let response = try dispatchTemporaryEditorEngine(envelope, to: handle)
+                guard response.requestID == requestID,
+                      response.patch.baseRevision == 0,
+                      response.patch.revision == 1
+                else { throw EditorEngineSynchronousCommandError.invalidResponse }
+                return try response.patch.validatedMutation(source: source)
+            }
+        } catch let error as EditorEngineSynchronousCommandError {
+            throw error
+        } catch EditorEngineBridgeError.invalidSelection {
+            throw EditorEngineSynchronousCommandError.invalidSelection
+        } catch EditorEngineBridgeError.core(_, let code, _) {
+            switch code {
+            case "invalid_selection", "invalid_range":
+                throw EditorEngineSynchronousCommandError.invalidSelection
+            case "ambiguous_format":
+                throw EditorEngineSynchronousCommandError.ambiguousFormat
+            default:
+                throw EditorEngineSynchronousCommandError.coreFailure
+            }
+        } catch is DecodingError {
+            throw EditorEngineSynchronousCommandError.invalidResponse
+        } catch {
+            throw EditorEngineSynchronousCommandError.coreFailure
+        }
+    }
+
+    static func canClearFormat(
+        source: String,
+        selectedUTF16Range: NSRange
+    ) -> Bool {
+        guard selectedUTF16Range.length > 0,
+              let range = MarkdownSourceRange.utf8Range(
+                  forUTF16Range: selectedUTF16Range,
+                  in: source
+              )
+        else { return false }
+        return (try? withTemporaryEditorEngine(
+            source: source,
+            selection: EditorEngineSelection(start: range.lowerBound, end: range.upperBound)
+        ) { handle in
+            let requestID = UUID().uuidString
+            let envelope = EditorEngineInspectFormatEnvelope(
+                schemaVersion: 1,
+                requestID: requestID,
+                command: EditorEngineInspectFormatCommand(
+                    type: "inspect_format",
+                    revision: 0,
+                    selection: EditorEngineSelection(
+                        start: range.lowerBound,
+                        end: range.upperBound
+                    )
+                )
+            )
+            let response = try dispatchTemporaryEditorEngine(envelope, to: handle)
+            guard response.requestID == requestID,
+                  response.patch.baseRevision == 0,
+                  response.patch.revision == 0,
+                  let capabilities = response.patch.formatCapabilities,
+                  capabilities.revision == 0
+            else { throw EditorEngineSynchronousCommandError.invalidResponse }
+            return capabilities.canClear
+        }) ?? false
     }
 }
 

@@ -160,152 +160,65 @@ enum MarkdownFormatter {
         source: String,
         selectedUTF16Range: NSRange
     ) -> Bool {
-        guard InflowCoreBridge.isCompatible,
-              selectedUTF16Range.length > 0,
-              let selectedUTF8Range = MarkdownSourceRange.utf8Range(
-                  forUTF16Range: selectedUTF16Range,
-                  in: source
-              )
-        else {
-            return false
-        }
-
-        let sourceUTF8 = Data(source.utf8)
-        let result: InflowMarkdownEditResult = sourceUTF8.withUnsafeBytes { buffer in
-            inflow_markdown_clear_format(
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count),
-                UInt(selectedUTF8Range.lowerBound),
-                UInt(selectedUTF8Range.upperBound)
-            )
-        }
-        inflow_owned_bytes_free(result.replacement.data, result.replacement.length)
-        return result.status == INFLOW_STATUS_OK
+        EditorEngineSynchronousCommands.canClearFormat(
+            source: source,
+            selectedUTF16Range: selectedUTF16Range
+        )
     }
 
     static func mermaidPlan(
         source: String,
         selectedUTF16Range: NSRange
     ) throws -> MarkdownFormatPlan {
-        guard InflowCoreBridge.isCompatible else {
-            throw MarkdownFormatError.coreFailure
-        }
-        guard let selectedUTF8Range = MarkdownSourceRange.utf8Range(
-            forUTF16Range: selectedUTF16Range,
-            in: source
-        ) else {
-            throw MarkdownFormatError.invalidSelection
-        }
-        let sourceUTF8 = Data(source.utf8)
-        let result: InflowMarkdownEditResult = sourceUTF8.withUnsafeBytes { buffer in
-            inflow_markdown_insert_mermaid(
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count),
-                UInt(selectedUTF8Range.lowerBound),
-                UInt(selectedUTF8Range.upperBound)
-            )
-        }
-        return try decodePlan(result: result, source: source, sourceUTF8: sourceUTF8)
+        try enginePlan(
+            source: source,
+            selectedUTF16Range: selectedUTF16Range,
+            operation: .mermaid
+        )
     }
 
     static func mathPlan(
         source: String,
         selectedUTF16Range: NSRange
     ) throws -> MarkdownFormatPlan {
-        guard InflowCoreBridge.isCompatible else {
-            throw MarkdownFormatError.coreFailure
-        }
-        guard let selectedUTF8Range = MarkdownSourceRange.utf8Range(
-            forUTF16Range: selectedUTF16Range,
-            in: source
-        ) else {
-            throw MarkdownFormatError.invalidSelection
-        }
-        let sourceUTF8 = Data(source.utf8)
-        let result: InflowMarkdownEditResult = sourceUTF8.withUnsafeBytes { buffer in
-            inflow_markdown_insert_math(
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count),
-                UInt(selectedUTF8Range.lowerBound),
-                UInt(selectedUTF8Range.upperBound)
-            )
-        }
-        return try decodePlan(result: result, source: source, sourceUTF8: sourceUTF8)
+        try enginePlan(
+            source: source,
+            selectedUTF16Range: selectedUTF16Range,
+            operation: .math
+        )
     }
 
     static func footnotePlan(
         source: String,
         selectedUTF16Range: NSRange
     ) throws -> MarkdownFormatPlan {
-        guard InflowCoreBridge.isCompatible else {
-            throw MarkdownFormatError.coreFailure
-        }
-        guard let selectedUTF8Range = MarkdownSourceRange.utf8Range(
-            forUTF16Range: selectedUTF16Range,
-            in: source
-        ) else {
-            throw MarkdownFormatError.invalidSelection
-        }
-        let sourceUTF8 = Data(source.utf8)
-        let result: InflowMarkdownEditResult = sourceUTF8.withUnsafeBytes { buffer in
-            inflow_markdown_insert_footnote(
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count),
-                UInt(selectedUTF8Range.lowerBound),
-                UInt(selectedUTF8Range.upperBound)
-            )
-        }
-        return try decodePlan(result: result, source: source, sourceUTF8: sourceUTF8)
+        try enginePlan(
+            source: source,
+            selectedUTF16Range: selectedUTF16Range,
+            operation: .footnote
+        )
     }
 
     static func horizontalRulePlan(
         source: String,
         selectedUTF16Range: NSRange
     ) throws -> MarkdownFormatPlan {
-        guard InflowCoreBridge.isCompatible else {
-            throw MarkdownFormatError.coreFailure
-        }
-        guard let selectedUTF8Range = MarkdownSourceRange.utf8Range(
-            forUTF16Range: selectedUTF16Range,
-            in: source
-        ) else {
-            throw MarkdownFormatError.invalidSelection
-        }
-        let sourceUTF8 = Data(source.utf8)
-        let result: InflowMarkdownEditResult = sourceUTF8.withUnsafeBytes { buffer in
-            inflow_markdown_insert_horizontal_rule(
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count),
-                UInt(selectedUTF8Range.lowerBound),
-                UInt(selectedUTF8Range.upperBound)
-            )
-        }
-        return try decodePlan(result: result, source: source, sourceUTF8: sourceUTF8)
+        try enginePlan(
+            source: source,
+            selectedUTF16Range: selectedUTF16Range,
+            operation: .horizontalRule
+        )
     }
 
     static func tablePlan(
         source: String,
         selectedUTF16Range: NSRange
     ) throws -> MarkdownFormatPlan {
-        guard InflowCoreBridge.isCompatible else {
-            throw MarkdownFormatError.coreFailure
-        }
-        guard let selectedUTF8Range = MarkdownSourceRange.utf8Range(
-            forUTF16Range: selectedUTF16Range,
-            in: source
-        ) else {
-            throw MarkdownFormatError.invalidSelection
-        }
-        let sourceUTF8 = Data(source.utf8)
-        let result: InflowMarkdownEditResult = sourceUTF8.withUnsafeBytes { buffer in
-            inflow_markdown_insert_table(
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count),
-                UInt(selectedUTF8Range.lowerBound),
-                UInt(selectedUTF8Range.upperBound)
-            )
-        }
-        return try decodePlan(result: result, source: source, sourceUTF8: sourceUTF8)
+        try enginePlan(
+            source: source,
+            selectedUTF16Range: selectedUTF16Range,
+            operation: .table
+        )
     }
 
     static func linkPlan(
@@ -313,9 +226,6 @@ enum MarkdownFormatter {
         selectedUTF16Range: NSRange,
         destination: String
     ) throws -> MarkdownFormatPlan {
-        guard InflowCoreBridge.isCompatible else {
-            throw MarkdownFormatError.coreFailure
-        }
         let destination = destination.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !destination.isEmpty,
               !destination.unicodeScalars.contains(where: {
@@ -328,29 +238,12 @@ enum MarkdownFormatter {
         else {
             throw MarkdownFormatError.invalidDestination
         }
-        guard let selectedUTF8Range = MarkdownSourceRange.utf8Range(
-            forUTF16Range: selectedUTF16Range,
-            in: source
-        ) else {
-            throw MarkdownFormatError.invalidSelection
-        }
-
-        let sourceUTF8 = Data(source.utf8)
-        let destinationUTF8 = Data(destination.utf8)
-        let result: InflowMarkdownEditResult = sourceUTF8.withUnsafeBytes { sourceBuffer in
-            destinationUTF8.withUnsafeBytes { destinationBuffer in
-                inflow_markdown_insert_link(
-                    sourceBuffer.bindMemory(to: UInt8.self).baseAddress,
-                    UInt(sourceBuffer.count),
-                    UInt(selectedUTF8Range.lowerBound),
-                    UInt(selectedUTF8Range.upperBound),
-                    destinationBuffer.bindMemory(to: UInt8.self).baseAddress,
-                    UInt(destinationBuffer.count)
-                )
-            }
-        }
         do {
-            return try decodePlan(result: result, source: source, sourceUTF8: sourceUTF8)
+            return try enginePlan(
+                source: source,
+                selectedUTF16Range: selectedUTF16Range,
+                operation: .link(destination: destination)
+            )
         } catch MarkdownFormatError.invalidSelection {
             throw MarkdownFormatError.invalidDestination
         }
@@ -362,9 +255,6 @@ enum MarkdownFormatter {
         destination: String,
         defaultAlternative: String
     ) throws -> MarkdownFormatPlan {
-        guard InflowCoreBridge.isCompatible else {
-            throw MarkdownFormatError.coreFailure
-        }
         let destination = destination.trimmingCharacters(in: .whitespacesAndNewlines)
         let defaultAlternative = defaultAlternative.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !destination.isEmpty,
@@ -378,36 +268,19 @@ enum MarkdownFormatter {
               }),
               !defaultAlternative.unicodeScalars.contains(where: {
                   $0.value < 0x20 || $0.value == 0x7F
-              }),
-              let selectedUTF8Range = MarkdownSourceRange.utf8Range(
-                  forUTF16Range: selectedUTF16Range,
-                  in: source
-              )
+              })
         else {
             throw MarkdownFormatError.invalidDestination
         }
-
-        let sourceUTF8 = Data(source.utf8)
-        let destinationUTF8 = Data(destination.utf8)
-        let alternativeUTF8 = Data(defaultAlternative.utf8)
-        let result: InflowMarkdownEditResult = sourceUTF8.withUnsafeBytes { sourceBuffer in
-            destinationUTF8.withUnsafeBytes { destinationBuffer in
-                alternativeUTF8.withUnsafeBytes { alternativeBuffer in
-                    inflow_markdown_insert_image(
-                        sourceBuffer.bindMemory(to: UInt8.self).baseAddress,
-                        UInt(sourceBuffer.count),
-                        UInt(selectedUTF8Range.lowerBound),
-                        UInt(selectedUTF8Range.upperBound),
-                        destinationBuffer.bindMemory(to: UInt8.self).baseAddress,
-                        UInt(destinationBuffer.count),
-                        alternativeBuffer.bindMemory(to: UInt8.self).baseAddress,
-                        UInt(alternativeBuffer.count)
-                    )
-                }
-            }
-        }
         do {
-            return try decodePlan(result: result, source: source, sourceUTF8: sourceUTF8)
+            return try enginePlan(
+                source: source,
+                selectedUTF16Range: selectedUTF16Range,
+                operation: .image(
+                    destination: destination,
+                    defaultAlternative: defaultAlternative
+                )
+            )
         } catch MarkdownFormatError.invalidSelection {
             throw MarkdownFormatError.invalidDestination
         }
@@ -442,143 +315,40 @@ enum MarkdownFormatter {
         selectedUTF16Range: NSRange,
         command: MarkdownFormatCommand
     ) throws -> MarkdownFormatPlan {
-        guard InflowCoreBridge.isCompatible else {
-            throw MarkdownFormatError.coreFailure
-        }
-        guard let selectedUTF8Range = MarkdownSourceRange.utf8Range(
-            forUTF16Range: selectedUTF16Range,
-            in: source
-        ) else {
-            throw MarkdownFormatError.invalidSelection
-        }
-
-        let sourceUTF8 = Data(source.utf8)
-        let result: InflowMarkdownEditResult = sourceUTF8.withUnsafeBytes { buffer in
-            let sourcePointer = buffer.bindMemory(to: UInt8.self).baseAddress
-            return switch command {
-            case let .inline(format):
-                inflow_markdown_format_inline(
-                    sourcePointer,
-                    UInt(buffer.count),
-                    UInt(selectedUTF8Range.lowerBound),
-                    UInt(selectedUTF8Range.upperBound),
-                    format.coreValue
-                )
-            case .inlineCode:
-                inflow_markdown_format_inline_code(
-                    sourcePointer,
-                    UInt(buffer.count),
-                    UInt(selectedUTF8Range.lowerBound),
-                    UInt(selectedUTF8Range.upperBound)
-                )
-            case .codeBlock:
-                inflow_markdown_format_code_block(
-                    sourcePointer,
-                    UInt(buffer.count),
-                    UInt(selectedUTF8Range.lowerBound),
-                    UInt(selectedUTF8Range.upperBound)
-                )
-            case let .heading(level):
-                inflow_markdown_format_heading(
-                    sourcePointer,
-                    UInt(buffer.count),
-                    UInt(selectedUTF8Range.lowerBound),
-                    UInt(selectedUTF8Range.upperBound),
-                    level.rawValue
-                )
-            case .blockQuote:
-                inflow_markdown_format_block_quote(
-                    sourcePointer,
-                    UInt(buffer.count),
-                    UInt(selectedUTF8Range.lowerBound),
-                    UInt(selectedUTF8Range.upperBound)
-                )
-            case let .list(format):
-                inflow_markdown_format_list(
-                    sourcePointer,
-                    UInt(buffer.count),
-                    UInt(selectedUTF8Range.lowerBound),
-                    UInt(selectedUTF8Range.upperBound),
-                    format.coreValue
-                )
-            case .clear:
-                inflow_markdown_clear_format(
-                    sourcePointer,
-                    UInt(buffer.count),
-                    UInt(selectedUTF8Range.lowerBound),
-                    UInt(selectedUTF8Range.upperBound)
-                )
-            }
-        }
-
-        return try decodePlan(result: result, source: source, sourceUTF8: sourceUTF8)
+        try enginePlan(
+            source: source,
+            selectedUTF16Range: selectedUTF16Range,
+            operation: command.engineOperation
+        )
     }
 
-    private static func decodePlan(
-        result: InflowMarkdownEditResult,
+    private static func enginePlan(
         source: String,
-        sourceUTF8: Data
+        selectedUTF16Range: NSRange,
+        operation: EditorEngineFormatOperation
     ) throws -> MarkdownFormatPlan {
-        guard result.status == INFLOW_STATUS_OK else {
-            inflow_owned_bytes_free(result.replacement.data, result.replacement.length)
-            switch result.status {
-            case INFLOW_STATUS_AMBIGUOUS_FORMAT:
-                throw MarkdownFormatError.ambiguousSelection
-            case INFLOW_STATUS_INVALID_ARGUMENT:
-                throw MarkdownFormatError.invalidSelection
-            default:
-                throw MarkdownFormatError.coreFailure
-            }
-        }
-
-        let replacementData: Data
         do {
-            replacementData = try InflowCoreBridge.copyAndFree(result.replacement)
+            let mutation = try EditorEngineSynchronousCommands.format(
+                source: source,
+                selectedUTF16Range: selectedUTF16Range,
+                operation: operation
+            )
+            return MarkdownFormatPlan(
+                sourceSnapshot: mutation.sourceSnapshot,
+                replaceUTF8Range: mutation.replaceUTF8Range,
+                replacement: mutation.replacement,
+                resultingSource: mutation.resultingSource,
+                selectionUTF8Range: mutation.selectionUTF8Range
+            )
+        } catch EditorEngineSynchronousCommandError.invalidSelection {
+            throw MarkdownFormatError.invalidSelection
+        } catch EditorEngineSynchronousCommandError.ambiguousFormat {
+            throw MarkdownFormatError.ambiguousSelection
+        } catch EditorEngineSynchronousCommandError.invalidResponse {
+            throw MarkdownFormatError.invalidCoreResult
         } catch {
-            throw MarkdownFormatError.invalidCoreResult
+            throw MarkdownFormatError.coreFailure
         }
-        guard let replacement = String(data: replacementData, encoding: .utf8),
-              let replaceStart = Int(exactly: result.replace_start),
-              let replaceEnd = Int(exactly: result.replace_end),
-              let selectionStart = Int(exactly: result.selection_start),
-              let selectionEnd = Int(exactly: result.selection_end),
-              replaceStart >= 0,
-              replaceStart <= replaceEnd,
-              replaceEnd <= sourceUTF8.count,
-              MarkdownSourceRange.navigationTarget(
-                  forUTF8Range: replaceStart..<replaceEnd,
-                  in: source
-              ) != nil
-        else {
-            throw MarkdownFormatError.invalidCoreResult
-        }
-
-        var resultingUTF8 = Data()
-        resultingUTF8.reserveCapacity(
-            sourceUTF8.count - (replaceEnd - replaceStart) + replacementData.count
-        )
-        resultingUTF8.append(sourceUTF8.prefix(replaceStart))
-        resultingUTF8.append(replacementData)
-        resultingUTF8.append(sourceUTF8.suffix(from: replaceEnd))
-        guard let resultingSource = String(data: resultingUTF8, encoding: .utf8),
-              selectionStart >= 0,
-              selectionStart <= selectionEnd,
-              selectionEnd <= resultingUTF8.count,
-              MarkdownSourceRange.navigationTarget(
-                  forUTF8Range: selectionStart..<selectionEnd,
-                  in: resultingSource
-              ) != nil
-        else {
-            throw MarkdownFormatError.invalidCoreResult
-        }
-
-        return MarkdownFormatPlan(
-            sourceSnapshot: source,
-            replaceUTF8Range: replaceStart..<replaceEnd,
-            replacement: replacement,
-            resultingSource: resultingSource,
-            selectionUTF8Range: selectionStart..<selectionEnd
-        )
     }
 
 }
