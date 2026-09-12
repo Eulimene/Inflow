@@ -37,8 +37,10 @@ Rust 核心负责不依赖平台的纯值逻辑，并正在通过版本化 Engin
 `DocumentIr`，分析、语法范围、引用、`RenderIr` 与安全 HTML 都消费该事件流；派生缓存严格绑定
 revision，正文修改后立即失效。macOS 已用该单次请求作为分析、高亮、引用和预览的默认派生热路径；
 当前菜单格式与图片、链接、表格等插入操作也只发送 selection 与 operation，由 Engine 生成
-revision-bound patch 后回写 NSTextView，不再由 View 调用一次性 formatter 规划。普通输入修改仍以影子方式逐字节对账。
-保存和撤销尚未切换权威，因此此时不能把 Rust Engine
+revision-bound patch 后回写 NSTextView，不再由 View 调用一次性 formatter 规划。普通输入先由
+NSTextView 乐观显示，再串行提交 Engine 并逐字节对账。默认编辑会话关闭 AppKit 正文 undo
+registration，Command-Z 与 Shift-Command-Z 由第一响应者异步路由为 Engine `Undo/Redo`，返回 patch
+时禁止再次登记撤销。保存尚未切换权威，因此此时不能把 Rust Engine
 描述为已经完成正文接管。
 
 C ABI 用 `major/minor/capabilities` 协商兼容性：major 表示不兼容布局或所有权变化，minor

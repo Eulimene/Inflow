@@ -1199,7 +1199,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
 
     @MainActor
     func testRenderedSessionRefreshesAfterTypingUndoAndRedo() async throws {
-        let session = MarkdownSourceEditorSession()
+        let session = MarkdownSourceEditorSession(engineEnabled: false)
         session.textView.string = "plain"
         session.textView.setSelectedRange(NSRange(location: 5, length: 0))
         session.textView.undoManager?.removeAllActions()

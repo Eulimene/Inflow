@@ -48,12 +48,12 @@
 ### 2.2 单一正文与三种视图
 
 - MarkdownDocument.text 是 SwiftUI 文档模型中的正文事实；MarkdownSourceEditorSession 持有一个持久 NSTextView。
-- 有状态 Rust `EditorEngine` 已作为默认派生服务：NSTextView 完成一次非组合输入后，以 UTF-8 grapheme 边界的 `ReplaceText(base_revision, range, inserted)` 镜像到 Engine，并用快照执行逐字节对账；可用 `INFLOW_EDITOR_ENGINE_SHADOW=0` 失败关闭到旧派生路径。当前菜单格式与图片、链接、表格等插入命令均发送 selection 与 operation，由 Engine 生成并执行 revision-bound patch 后回写 NSTextView；保存和撤销目前仍以 Swift/AppKit 为权威。
+- 有状态 Rust `EditorEngine` 已作为默认编辑与派生服务：NSTextView 完成一次非组合输入后，以 UTF-8 grapheme 边界的 `ReplaceText(base_revision, range, inserted)` 提交 Engine，并用快照执行逐字节对账；可用 `INFLOW_EDITOR_ENGINE_SHADOW=0` 失败关闭到旧路径。当前菜单格式与图片、链接、表格等插入命令均发送 selection 与 operation，由 Engine 生成并执行 revision-bound patch 后回写 NSTextView。默认会话关闭 AppKit 正文 undo registration，Command-Z/Shift-Command-Z 发送 Engine `Undo/Redo`，Rust Memento 历史是撤销事实源；保存目前仍读取 Swift 文档投影。
 - Rust/Swift 边界通过 ABI major、minor 与 capability bits 协商；宿主要求 Engine、统一派生、Engine 历史和 Render IR 能力，不再精确比较单一整数。Xcode 构建脚本按目标架构生成 arm64、x86_64 或 universal 静态库，并允许依赖分析在输入未变化时跳过 Rust 重建。
 - Engine 的 `RefreshDerived(revision)` 由一次 `DocumentIr` 解析同时产生分析、语法范围、引用、稳定块 ID 的 `RenderIr` 和安全 HTML，并缓存到对应 revision；Swift 文档派生热路径直接消费这一响应，失败才回退旧散点调用。旧 `RenderedMarkdownPlanner` 尚未删除，因此不能据此声称双解析器已经完全清除。
 - 可编辑 WKWebView 只保留在显式环境开关 `INFLOW_EDITABLE_WEB_PREVIEW=1` 后作为实验；默认“即时编辑”仍是持久 NSTextView，不把 DOM 转换结果写成主编辑路径。
 - 源码编辑、实时预览分栏左侧与即时编辑复用同一个 MarkdownSourceEditor 和 MarkdownSourceEditorSession；分栏右侧使用当前内存正文生成的只读 WebKit 结果，即时编辑在原始字符串上应用 Rust 解析范围对应的 TextKit 展示属性。
-- 文本修改由 NSTextView 发布回同一个绑定，撤销与重做继续使用同一个 UndoManager。展示属性更新不登记正文 undo。
+- 文本修改由 NSTextView 发布回同一个绑定；默认撤销与重做走 Rust Engine 历史，旧 AppKit UndoManager 只在关闭 Engine 的回退路径中使用。展示属性和 Engine patch 回写不登记正文 undo。
 - EditorViewMode 的历史内部 case 名 preview 现在对应用户可见的“即时编辑”。
 - 视图切换复用同一选区与源范围导航入口。点击大纲后当前可编辑视图直接滚动到标题，把插入光标放到标题起点并聚焦编辑器；不切换视图，caret 导航不显示查找匹配高亮。
 
@@ -61,7 +61,7 @@
 
 - 即时编辑始终挂载同一个 MarkdownSourceEditor。普通文字、行内代码与引用在渲染态直接输入；Markdown 标记以透明和负字距折叠，不再用 0.1pt 字体改变行度量。CaretStyleResolver 从最近可见字符解析字体、字号和行高，并将插入光标在行框中居中。围栏代码平时隐藏围栏呈现代码，光标进入才局部显示源码；Mermaid 也使用同样的局部切换。保存内容和 undo 始终属于原始 Markdown。
 - 分栏右侧的 MarkdownPreviewView 使用 MarkdownRenderer 把当前内存正文生成 HTML，并在禁用页面脚本的 WKWebView 中展示。Mermaid `flowchart` 支持普通连线和仓库已有的 `-.文字.->` 带标签虚线，生成有明确固有尺寸的本地自包含 SVG；即时编辑通过 `inflow_mermaid_render_svg` 直接获取同一 Rust 渲染器的 SVG，不再解析或截取预览 HTML。进入 Mermaid 源码块时会先卸载图表覆视图，移出后再挂载。CSP 只放行 `data:` 以及 `http`/`https` 图片，仍禁止脚本、连接 API、媒体、嵌入、文件 URL 和页面自行导航；非持久数据存储不保留站点数据。
-- 展示属性不登记正文 undo；三种视图间切换时保持同一正文、修改状态、保存路径和撤销历史。
+- 展示属性与 Engine patch 回写都不登记 AppKit 正文 undo；三种视图间切换时保持同一正文、修改状态、保存路径和 Rust 撤销历史。
 - 即时编辑中的链接默认单击执行导航，“设置 > 预览”可改为只从右键菜单打开，此时单击只定位光标；文本与表格中的链接共享 Hover 高亮反馈。表格使用 AdaptiveRenderedMarkdownTableLayoutStrategy 按内容测量列宽，再随编辑区扩张或压缩；单元格可编辑，右键提供行列增删和列对齐。链接导航、本地图片和失败降级继续受当前内容快照与封闭宿主消息约束。
 
 对应组件入口在 RenderedMarkdownEditorTests；这些测试不能代替 UAT-PERSONAL-10 的中文输入法、富文本粘贴、跨视图撤销与真实链接操作。
@@ -125,7 +125,7 @@
 
 判断当前能力时，以已批准的个人首版范围、实际安装的菜单和主流程、以及 UAT-PERSONAL-01 至 10 为准，而不是以某个源文件或测试名称是否存在为准。
 
-自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 400 个 XCTest method：294 个 `current-direct`、13 个依赖真实 `NSApplication` 菜单或生命周期的 `current-host`、88 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
+自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 403 个 XCTest method：297 个 `current-direct`、13 个依赖真实 `NSApplication` 菜单或生命周期的 `current-host`、88 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
 
 ## 4. 人工 UAT 状态
 

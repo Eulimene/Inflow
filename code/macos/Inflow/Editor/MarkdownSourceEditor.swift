@@ -284,11 +284,13 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var renderedImageTask: Task<Void, Never>?
     private var renderedInteractionTask: Task<Void, Never>?
     private let lineNumberRuler: MarkdownLineNumberRulerView
-    private let engineShadow = EditorEngineShadowQueue()
+    private let engineShadow: EditorEngineShadowQueue
+    private var isApplyingEngineMutation = false
     private var focusModeEnabled = false
     private var typewriterModeEnabled = false
 
-    override init() {
+    init(engineEnabled: Bool = EditorEngineShadowFeature.isEnabled) {
+        engineShadow = EditorEngineShadowQueue(isEnabled: engineEnabled)
         let scrollView = NSScrollView()
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = true
@@ -305,7 +307,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.drawsBackground = true
         textView.isRichText = false
         textView.importsGraphics = false
-        textView.allowsUndo = true
+        textView.allowsUndo = false
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
@@ -338,8 +340,23 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         self.textView = textView
         self.lineNumberRuler = lineNumberRuler
         super.init()
+        textView.usesEngineHistory = engineShadow.isEnabled
+        textView.allowsUndo = !engineShadow.isEnabled
+        if engineShadow.isEnabled {
+            textView.undoManager?.disableUndoRegistration()
+        }
+        textView.engineUndoHandler = { [weak self] in
+            self?.performEngineHistory(.undo)
+        }
+        textView.engineRedoHandler = { [weak self] in
+            self?.performEngineHistory(.redo)
+        }
+        engineShadow.onHistoryStateChange = { [weak textView] canUndo, canRedo in
+            textView?.engineCanUndo = canUndo
+            textView?.engineCanRedo = canRedo
+        }
         textView.textDidChangeHandler = { [weak self] text in
-            if let self, !self.textView.hasMarkedText() {
+            if let self, !self.isApplyingEngineMutation, !self.textView.hasMarkedText() {
                 self.engineShadow.submit(
                     text: text,
                     selectionUTF16: self.textView.selectedRange()
@@ -461,7 +478,83 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             resultingSource: mutation.resultingSource,
             selectionUTF8Range: mutation.selectionUTF8Range
         )
-        return applyMarkdownFormat(plan, actionName: actionName)
+        return applyEngineMutation(mutation, plan: plan, actionName: actionName)
+    }
+
+    private enum EngineHistoryAction {
+        case undo
+        case redo
+    }
+
+    private func performEngineHistory(_ action: EngineHistoryAction) {
+        guard !textView.hasMarkedText(), !isApplyingEngineMutation else { return }
+        let source = textView.string
+        let selection = textView.selectedRange()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let mutation: EditorEngineMutation?
+            switch action {
+            case .undo:
+                mutation = await self.engineShadow.undo(
+                    text: source,
+                    selectionUTF16: selection
+                )
+            case .redo:
+                mutation = await self.engineShadow.redo(
+                    text: source,
+                    selectionUTF16: selection
+                )
+            }
+            guard let mutation else { return }
+            _ = self.applyEngineMutation(mutation, plan: nil, actionName: nil)
+        }
+    }
+
+    @discardableResult
+    private func applyEngineMutation(
+        _ mutation: EditorEngineMutation,
+        plan: MarkdownFormatPlan?,
+        actionName _: String?
+    ) -> Bool {
+        guard textView.isEditable,
+              !textView.hasMarkedText(),
+              UTF8Text.isExactlyEqual(textView.string, mutation.sourceSnapshot),
+              let replacementTarget = MarkdownSourceRange.navigationTarget(
+                  forUTF8Range: mutation.replaceUTF8Range,
+                  in: mutation.sourceSnapshot
+              ),
+              let finalSelection = MarkdownSourceRange.navigationTarget(
+                  forUTF8Range: mutation.selectionUTF8Range,
+                  in: mutation.resultingSource
+              ),
+              plan == nil || (
+                  plan?.sourceSnapshot == mutation.sourceSnapshot
+                      && plan?.replaceUTF8Range == mutation.replaceUTF8Range
+                      && plan?.replacement == mutation.replacement
+                      && plan?.resultingSource == mutation.resultingSource
+                      && plan?.selectionUTF8Range == mutation.selectionUTF8Range
+              )
+        else { return false }
+
+        let undoManager = textView.undoManager
+        let restoresUndo = undoManager?.isUndoRegistrationEnabled == true
+        if restoresUndo { undoManager?.disableUndoRegistration() }
+        isApplyingEngineMutation = true
+        defer {
+            isApplyingEngineMutation = false
+            if restoresUndo { undoManager?.enableUndoRegistration() }
+        }
+        textView.insertText(
+            mutation.replacement,
+            replacementRange: replacementTarget.revealRange
+        )
+        guard UTF8Text.isExactlyEqual(textView.string, mutation.resultingSource) else {
+            return false
+        }
+        textView.setSelectedRange(finalSelection.revealRange)
+        updateSelectedRange(finalSelection.revealRange)
+        textView.scrollRangeToVisible(finalSelection.revealRange)
+        return true
     }
 
     func authoritativeSnapshot() async -> EditorEngineDocumentSnapshot? {
@@ -1945,6 +2038,11 @@ final class WindowAwareTextView: NSTextView {
     }
 
     private let persistentUndoManager = UndoManager()
+    var usesEngineHistory = false
+    var engineCanUndo = false
+    var engineCanRedo = false
+    var engineUndoHandler: (() -> Void)?
+    var engineRedoHandler: (() -> Void)?
     var didAttachToWindow: (() -> Void)?
     var focusDidChangeHandler: (() -> Void)?
     var textDidChangeHandler: ((String) -> Void)?
@@ -2512,19 +2610,27 @@ final class WindowAwareTextView: NSTextView {
     /// responder. NSTextView owns an undo manager but does not itself expose
     /// the menu selectors, so bridge them explicitly for this persistent view.
     @objc func undo(_ sender: Any?) {
-        persistentUndoManager.undo()
+        if usesEngineHistory {
+            engineUndoHandler?()
+        } else {
+            persistentUndoManager.undo()
+        }
     }
 
     @objc func redo(_ sender: Any?) {
-        persistentUndoManager.redo()
+        if usesEngineHistory {
+            engineRedoHandler?()
+        } else {
+            persistentUndoManager.redo()
+        }
     }
 
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
         switch item.action {
         case #selector(undo(_:)):
-            persistentUndoManager.canUndo
+            usesEngineHistory ? engineCanUndo : persistentUndoManager.canUndo
         case #selector(redo(_:)):
-            persistentUndoManager.canRedo
+            usesEngineHistory ? engineCanRedo : persistentUndoManager.canRedo
         default:
             super.validateUserInterfaceItem(item)
         }

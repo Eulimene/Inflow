@@ -847,7 +847,7 @@ final class MarkdownInsertionTests: XCTestCase {
                 originalFilename: sourceURL.lastPathComponent
             )
         )
-        let session = MarkdownSourceEditorSession()
+        let session = MarkdownSourceEditorSession(engineEnabled: false)
         session.textView.isEditable = true
         session.textView.string = "Before "
         session.textView.setSelectedRange(NSRange(location: 7, length: 0))
@@ -899,7 +899,7 @@ final class MarkdownInsertionTests: XCTestCase {
                 originalFilename: sourceURL.lastPathComponent
             )
         )
-        let session = MarkdownSourceEditorSession()
+        let session = MarkdownSourceEditorSession(engineEnabled: false)
         session.textView.isEditable = true
         let plan = try MarkdownFormatter.imagePlan(
             source: "",
@@ -1076,7 +1076,7 @@ final class MarkdownInsertionTests: XCTestCase {
     @MainActor
     func testInsertionPlansApplyAsOneUndoUnit() throws {
         let source = "Read docs"
-        let session = MarkdownSourceEditorSession()
+        let session = MarkdownSourceEditorSession(engineEnabled: false)
         session.textView.isEditable = true
         session.textView.string = source
         session.textView.setSelectedRange((source as NSString).range(of: "docs"))

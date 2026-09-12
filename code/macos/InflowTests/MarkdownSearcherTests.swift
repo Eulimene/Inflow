@@ -583,7 +583,7 @@ final class MarkdownSearcherTests: XCTestCase {
             MarkdownSearcher.matches(in: source, query: "alpha", caseSensitive: true).first
         )
         let model = SearchEditorHarnessModel(text: source)
-        let session = MarkdownSourceEditorSession()
+        let session = MarkdownSourceEditorSession(engineEnabled: false)
         let window = makeHarnessWindow(model: model, session: session)
         defer { window.orderOut(nil) }
         renderPendingUI()
@@ -667,7 +667,7 @@ final class MarkdownSearcherTests: XCTestCase {
             caseSensitive: true
         )
         let model = SearchEditorHarnessModel(text: source)
-        let session = MarkdownSourceEditorSession()
+        let session = MarkdownSourceEditorSession(engineEnabled: false)
         let window = makeHarnessWindow(model: model, session: session)
         defer { window.orderOut(nil) }
         renderPendingUI()
@@ -713,7 +713,7 @@ final class MarkdownSearcherTests: XCTestCase {
             caseSensitive: true
         )
         let model = SearchEditorHarnessModel(text: source)
-        let session = MarkdownSourceEditorSession()
+        let session = MarkdownSourceEditorSession(engineEnabled: false)
         let window = makeHarnessWindow(model: model, session: session)
         defer { window.orderOut(nil) }
         renderPendingUI()

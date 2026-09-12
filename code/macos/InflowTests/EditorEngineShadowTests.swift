@@ -76,6 +76,92 @@ final class EditorEngineShadowTests: XCTestCase {
         XCTAssertEqual(snapshot?.canUndo, true)
     }
 
+    @MainActor
+    func testEngineHistoryOwnsUndoAndRedoPatches() async throws {
+        let queue = EditorEngineShadowQueue(isEnabled: true)
+        let source = "Hello 世界"
+        let selection = (source as NSString).range(of: "世界")
+        let formattedResult = await queue.format(
+            text: source,
+            selectionUTF16: selection,
+            operation: .bold
+        )
+        let formatted = try XCTUnwrap(formattedResult)
+
+        let undoneResult = await queue.undo(
+            text: formatted.resultingSource,
+            selectionUTF16: NSRange(location: 8, length: 2)
+        )
+        let undone = try XCTUnwrap(undoneResult)
+        XCTAssertEqual(undone.resultingSource, source)
+        XCTAssertFalse(undone.canUndo)
+        XCTAssertTrue(undone.canRedo)
+
+        let redoneResult = await queue.redo(
+            text: undone.resultingSource,
+            selectionUTF16: selection
+        )
+        let redone = try XCTUnwrap(redoneResult)
+        XCTAssertEqual(redone.resultingSource, formatted.resultingSource)
+        XCTAssertTrue(redone.canUndo)
+        XCTAssertFalse(redone.canRedo)
+    }
+
+    @MainActor
+    func testSourceSessionRoutesUndoAndRedoToEngineHistory() async throws {
+        let session = MarkdownSourceEditorSession()
+        session.textView.isEditable = true
+        session.textView.string = "Hello 世界"
+        let selected = (session.textView.string as NSString).range(of: "世界")
+        session.textView.setSelectedRange(selected)
+
+        let applied = await session.applyEngineFormat(
+            .bold,
+            expectedText: session.textView.string,
+            selectedUTF16Range: selected,
+            actionName: "粗体格式"
+        )
+        XCTAssertTrue(applied)
+        XCTAssertTrue(session.textView.usesEngineHistory)
+        XCTAssertFalse(session.textView.allowsUndo)
+        XCTAssertTrue(session.textView.engineCanUndo)
+
+        session.textView.undo(nil)
+        for _ in 0..<20 where session.textView.string != "Hello 世界" {
+            await Task.yield()
+        }
+        XCTAssertEqual(session.textView.string, "Hello 世界")
+        XCTAssertTrue(session.textView.engineCanRedo)
+
+        session.textView.redo(nil)
+        for _ in 0..<20 where session.textView.string != "Hello **世界**" {
+            await Task.yield()
+        }
+        XCTAssertEqual(session.textView.string, "Hello **世界**")
+    }
+
+    @MainActor
+    func testCommittedTypingCreatesOnlyEngineUndoHistory() async throws {
+        let session = MarkdownSourceEditorSession()
+        session.textView.isEditable = true
+        session.textView.string = "alpha"
+        session.textView.setSelectedRange(NSRange(location: 5, length: 0))
+        _ = await session.authoritativeSnapshot()
+
+        session.textView.insertText(" beta", replacementRange: session.textView.selectedRange())
+        let committed = await session.authoritativeSnapshot()
+        XCTAssertEqual(committed?.text, "alpha beta")
+        XCTAssertEqual(committed?.canUndo, true)
+        XCTAssertFalse(session.textView.undoManager?.canUndo == true)
+
+        session.textView.undo(nil)
+        for _ in 0..<20 where session.textView.string != "alpha" {
+            await Task.yield()
+        }
+        XCTAssertEqual(session.textView.string, "alpha")
+        XCTAssertTrue(session.textView.engineCanRedo)
+    }
+
     func testDiffReturnsOneUTF8ReplacementForUnicodeText() {
         XCTAssertEqual(
             EditorEngineShadowTextDiff.replacement(from: "A🌍B", to: "A世界B"),

@@ -468,7 +468,7 @@ final class MarkdownFormatterTests: XCTestCase {
         )
         XCTAssertEqual(plan.resultingSource, "标题👩‍💻 and code\n")
 
-        let session = MarkdownSourceEditorSession()
+        let session = MarkdownSourceEditorSession(engineEnabled: false)
         session.textView.isEditable = true
         session.textView.string = source
         session.textView.setSelectedRange(fullSelection)
@@ -488,7 +488,7 @@ final class MarkdownFormatterTests: XCTestCase {
     @MainActor
     func testSessionAppliesFormatAsOneUndoUnitAndRestoresSelection() throws {
         let source = "Hello 世界"
-        let session = MarkdownSourceEditorSession()
+        let session = MarkdownSourceEditorSession(engineEnabled: false)
         session.textView.isEditable = true
         session.textView.string = source
         session.textView.setSelectedRange((source as NSString).range(of: "世界"))

@@ -602,7 +602,7 @@ final class AppPreferencesTests: XCTestCase {
     }
 
     func testLineNumbersTrackPhysicalLinesWithoutChangingTextOrUndo() throws {
-        let session = MarkdownSourceEditorSession()
+        let session = MarkdownSourceEditorSession(engineEnabled: false)
         session.textView.string = "first\nsecond\n"
         session.applySourceAppearance(
             SourceEditorAppearance(

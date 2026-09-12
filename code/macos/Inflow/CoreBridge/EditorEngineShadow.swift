@@ -122,6 +122,9 @@ final class EditorEngineShadowQueue {
     private let client: EditorEngineShadowClient?
     private var lastSubmittedText: String?
     private var pending: Task<Void, Never>?
+    var onHistoryStateChange: ((Bool, Bool) -> Void)?
+
+    var isEnabled: Bool { client != nil }
 
     init(isEnabled: Bool = EditorEngineShadowFeature.isEnabled) {
         client = isEnabled ? EditorEngineShadowClient() : nil
@@ -137,6 +140,11 @@ final class EditorEngineShadowQueue {
             await previous?.value
             guard !Task.isCancelled else { return }
             await client.synchronize(to: text, selectionUTF16: selectionUTF16)
+            guard !Task.isCancelled,
+                  lastSubmittedText?.utf8.elementsEqual(text.utf8) == true,
+                  let snapshot = await client.snapshot(expectedText: text)
+            else { return }
+            onHistoryStateChange?(snapshot.canUndo, snapshot.canRedo)
         }
     }
 
@@ -172,7 +180,24 @@ final class EditorEngineShadowQueue {
         if lastSubmittedText?.utf8.elementsEqual(text.utf8) == true {
             lastSubmittedText = mutation.resultingSource
         }
+        onHistoryStateChange?(mutation.canUndo, mutation.canRedo)
         return mutation
+    }
+
+    func undo(text: String, selectionUTF16: NSRange) async -> EditorEngineMutation? {
+        await historyMutation(
+            direction: .undo,
+            text: text,
+            selectionUTF16: selectionUTF16
+        )
+    }
+
+    func redo(text: String, selectionUTF16: NSRange) async -> EditorEngineMutation? {
+        await historyMutation(
+            direction: .redo,
+            text: text,
+            selectionUTF16: selectionUTF16
+        )
     }
 
     func authoritativeSnapshot(
@@ -188,6 +213,29 @@ final class EditorEngineShadowQueue {
     deinit {
         pending?.cancel()
     }
+
+    private func historyMutation(
+        direction: EditorEngineHistoryDirection,
+        text: String,
+        selectionUTF16: NSRange
+    ) async -> EditorEngineMutation? {
+        submit(text: text, selectionUTF16: selectionUTF16)
+        await pending?.value
+        guard !Task.isCancelled,
+              let mutation = await client?.historyMutation(
+                  direction: direction,
+                  expectedText: text
+              )
+        else { return nil }
+        lastSubmittedText = mutation.resultingSource
+        onHistoryStateChange?(mutation.canUndo, mutation.canRedo)
+        return mutation
+    }
+}
+
+private enum EditorEngineHistoryDirection: String, Sendable {
+    case undo
+    case redo
 }
 
 private final class EditorEngineShadowHandle: @unchecked Sendable {
@@ -341,6 +389,42 @@ private actor EditorEngineShadowClient {
         } catch {
             logger.error(
                 "Engine format failed; revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    func historyMutation(
+        direction: EditorEngineHistoryDirection,
+        expectedText: String
+    ) -> EditorEngineMutation? {
+        do {
+            guard projection.utf8.elementsEqual(expectedText.utf8) else {
+                throw EditorEngineShadowError.mismatch(revision: revision)
+            }
+            let requestID = UUID().uuidString
+            let envelope = EditorEngineHistoryEnvelope(
+                schemaVersion: Self.schemaVersion,
+                requestID: requestID,
+                command: EditorEngineHistoryCommand(
+                    type: direction.rawValue,
+                    baseRevision: revision
+                )
+            )
+            let response: EditorEngineDispatchResponse = try dispatch(envelope)
+            guard response.schemaVersion == Self.schemaVersion,
+                  response.requestID == requestID,
+                  response.patch.baseRevision == revision,
+                  response.patch.revision == revision + 1
+            else { throw EditorEngineShadowError.invalidResponse }
+            let mutation = try response.patch.validatedMutation(source: expectedText)
+            revision = mutation.revision
+            projection = mutation.resultingSource
+            try compareSnapshot(to: mutation.resultingSource)
+            return mutation
+        } catch {
+            logger.error(
+                "Engine \(direction.rawValue, privacy: .public) failed; revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
             return nil
         }
@@ -535,6 +619,28 @@ private struct EditorEngineFormatEnvelope: Encodable {
         case schemaVersion = "schema_version"
         case requestID = "request_id"
         case command
+    }
+}
+
+private struct EditorEngineHistoryEnvelope: Encodable {
+    let schemaVersion: UInt32
+    let requestID: String
+    let command: EditorEngineHistoryCommand
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case requestID = "request_id"
+        case command
+    }
+}
+
+private struct EditorEngineHistoryCommand: Encodable {
+    let type: String
+    let baseRevision: UInt64
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case baseRevision = "base_revision"
     }
 }
 
