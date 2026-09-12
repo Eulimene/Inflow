@@ -648,8 +648,10 @@ struct MarkdownEditorView: View {
         self.showsProjectSidebar = showsProjectSidebar
         self.tearsDownWhenRemovedFromWorkspace = tearsDownWhenRemovedFromWorkspace
         self.isWorkspaceSurfaceActive = isWorkspaceSurfaceActive
-        _sourceEditorSession = StateObject(
-            wrappedValue: sourceEditorSessionOverride ?? MarkdownSourceEditorSession()
+        let sourceEditorSession = sourceEditorSessionOverride ?? MarkdownSourceEditorSession()
+        _sourceEditorSession = StateObject(wrappedValue: sourceEditorSession)
+        _editorStore = StateObject(
+            wrappedValue: EditorStore(sourceEditorSession: sourceEditorSession)
         )
         let initialDocument = document.wrappedValue
         _recoveryRecordID = State(
@@ -671,13 +673,7 @@ struct MarkdownEditorView: View {
     @SceneStorage("isTypewriterModeEnabled") private var restoredTypewriterModeEnabled = false
     private var isFocusModeEnabled: Bool { false }
     private var isTypewriterModeEnabled: Bool { false }
-    @State private var previewHTML = MarkdownRenderer.htmlDocument(for: "")
-    @State private var previewSourceSnapshot = ""
-    @State private var previewFailureMessage: String?
-    @State private var analysisState = DocumentAnalysisState.updating(previous: .empty)
-    @State private var derivedContentGeneration = 0
-    @State private var derivedContentTask: Task<Void, Never>?
-    @State private var contentDeriver = DocumentContentDeriver()
+    @StateObject private var editorStore: EditorStore
     @State private var previewScrollGeneration = 0
     @State private var previewScrollRequest: PreviewScrollRequest?
     @State private var previewScrollPausedByUser = false
@@ -728,6 +724,11 @@ struct MarkdownEditorView: View {
     @State private var relocationNativeDocument: NSDocument?
     @State private var isSavingDocument = false
     @State private var documentSaveFailureMessage: String?
+
+    private var previewHTML: String { editorStore.state.previewHTML }
+    private var previewSourceSnapshot: String { editorStore.state.previewSourceSnapshot }
+    private var previewFailureMessage: String? { editorStore.state.previewFailureMessage }
+    private var analysisState: DocumentAnalysisState { editorStore.state.analysisState }
 
     private var viewMode: EditorViewMode {
         get {
@@ -1055,7 +1056,6 @@ struct MarkdownEditorView: View {
             let markdown = document.text
             selectedHeadingID = nil
             sourceSelectionRequest = nil
-            analysisState = .updating(previous: analysisState.displayedAnalysis)
             scheduleDerivedContent(
                 for: markdown,
                 documentDirectory: fileURL?.deletingLastPathComponent(),
@@ -1139,6 +1139,11 @@ struct MarkdownEditorView: View {
         }
         .onChange(of: preferences.workspaceViewMode) { _, _ in
             updateRecoveryProtection()
+        }
+        .onChange(of: editorStore.state.analysisState) { _, state in
+            if case .ready = state {
+                applyPendingDocumentNavigationIfPossible()
+            }
         }
         .onChange(of: preferences.previewConfiguration) { _, configuration in
             scheduleDerivedContent(
@@ -2385,7 +2390,7 @@ struct MarkdownEditorView: View {
     }
 
     private func tearDownDocumentSession() {
-        derivedContentTask?.cancel()
+        editorStore.send(.cancelPending)
         previewLinkTask?.cancel()
         findSearchTask?.cancel()
         abandonExportTracking()
@@ -3932,68 +3937,28 @@ struct MarkdownEditorView: View {
             && authorizedProjectRoot == nil
             ? nil
             : documentDirectory
-        derivedContentTask?.cancel()
-        derivedContentGeneration &+= 1
-        let generation = derivedContentGeneration
 
         guard !usesSourceOnlyExperience else {
-            previewHTML = MarkdownRenderer.htmlDocument(for: "")
-            previewSourceSnapshot = ""
-            previewFailureMessage = nil
-            analysisState = .ready(.empty)
             selectedHeadingID = nil
             incomingNavigationIsPending = false
-            _ = sourceEditorSession.applySyntaxHighlighting(
-                [],
-                source: markdown,
-                enabled: false
-            )
+            editorStore.send(.suspendDerived(markdown: markdown))
             return
         }
 
-        derivedContentTask = Task { @MainActor in
-            if delayNanoseconds > 0 {
-                try? await Task.sleep(nanoseconds: delayNanoseconds)
-            }
-            guard !Task.isCancelled else { return }
-
-            let coreContent = await sourceEditorSession.deriveContent(
-                for: markdown,
-                configuration: configuration
-            )
-            guard !Task.isCancelled else { return }
-            guard let content = await contentDeriver.derive(
-                markdown: markdown,
-                coreContent: coreContent,
-                documentDirectory: authorizedDocumentDirectory,
-                projectRoot: authorizedProjectRoot,
-                expectedProjectRootIdentity: projectRootIdentity,
-                requiresProjectBoundary: requiresProjectBoundary,
-                configuration: configuration,
-                syntaxHighlightingEnabled: syntaxHighlightingEnabled
-            ) else { return }
-
-            guard !Task.isCancelled, generation == derivedContentGeneration else { return }
-            previewHTML = content.html
-            previewSourceSnapshot = content.sourceSnapshot
-            previewFailureMessage = content.previewFailureMessage
-            _ = sourceEditorSession.applySyntaxHighlighting(
-                content.syntaxHighlighting,
-                source: markdown,
-                enabled: syntaxHighlightingEnabled
-            )
-            switch content.analysis {
-            case let .success(analysis):
-                analysisState = .ready(analysis)
-                applyPendingDocumentNavigationIfPossible()
-            case let .failure(message):
-                LocalFailureLogController.shared.record(.previewing, code: .previewFailed)
-                analysisState = .failed(
-                    previous: analysisState.displayedAnalysis,
-                    message: message
+        editorStore.send(
+            .refreshDerived(
+                EditorDerivedContentRequest(
+                    markdown: markdown,
+                    documentDirectory: authorizedDocumentDirectory,
+                    projectRoot: authorizedProjectRoot,
+                    expectedProjectRootIdentity: projectRootIdentity,
+                    requiresProjectBoundary: requiresProjectBoundary,
+                    configuration: configuration,
+                    syntaxHighlightingEnabled: syntaxHighlightingEnabled,
+                    delayNanoseconds: delayNanoseconds
                 )
-            }
-        }
+            )
+        )
     }
 
     private func retryPreview() {
@@ -4080,55 +4045,6 @@ struct MarkdownEditorView: View {
             + "（含空格） / "
             + "\(analysisState.displayedAnalysis.characterCountExcludingSpaces)"
             + "（不含空格）"
-    }
-}
-
-private struct DerivedDocumentContent: Sendable {
-    let sourceSnapshot: String
-    let html: String
-    let previewFailureMessage: String?
-    let analysis: DocumentAnalysisOutcome
-    let syntaxHighlighting: [MarkdownSyntaxSpan]
-}
-
-private enum DocumentAnalysisOutcome: Sendable {
-    case success(DocumentAnalysis)
-    case failure(String)
-}
-
-private actor DocumentContentDeriver {
-    func derive(
-        markdown: String,
-        coreContent: EditorEngineDerivedContent?,
-        documentDirectory: URL?,
-        projectRoot: URL?,
-        expectedProjectRootIdentity: FolderProjectDirectoryIdentity?,
-        requiresProjectBoundary: Bool,
-        configuration: PreviewAppearanceConfiguration,
-        syntaxHighlightingEnabled: Bool
-    ) -> DerivedDocumentContent? {
-        guard !Task.isCancelled else { return nil }
-        guard let coreContent,
-              UTF8Text.isExactlyEqual(coreContent.sourceSnapshot, markdown)
-        else { return nil }
-        let previewDocument = MarkdownRenderer.previewDocument(
-            coreFragment: coreContent.htmlFragment,
-            references: coreContent.references,
-            documentDirectory: documentDirectory,
-            projectRoot: projectRoot,
-            expectedProjectRootIdentity: expectedProjectRootIdentity,
-            requiresProjectBoundary: requiresProjectBoundary,
-            configuration: configuration
-        )
-        return DerivedDocumentContent(
-            sourceSnapshot: markdown,
-            html: previewDocument.html,
-            previewFailureMessage: previewDocument.failureMessage,
-            analysis: .success(coreContent.analysis),
-            syntaxHighlighting: syntaxHighlightingEnabled
-                ? coreContent.syntaxHighlighting
-                : []
-        )
     }
 }
 

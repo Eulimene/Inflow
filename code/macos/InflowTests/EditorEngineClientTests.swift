@@ -3,6 +3,47 @@ import XCTest
 
 final class EditorEngineClientTests: XCTestCase {
     @MainActor
+    func testEditorStorePublishesOnlyTheLatestDerivedIntent() async throws {
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = "# Old"
+        let store = EditorStore(sourceEditorSession: session)
+
+        store.send(.refreshDerived(EditorDerivedContentRequest(
+            markdown: "# Old",
+            documentDirectory: nil,
+            projectRoot: nil,
+            expectedProjectRootIdentity: nil,
+            requiresProjectBoundary: false,
+            configuration: .default,
+            syntaxHighlightingEnabled: true,
+            delayNanoseconds: 1_000_000_000
+        )))
+        session.textView.string = "# New"
+        store.send(.refreshDerived(EditorDerivedContentRequest(
+            markdown: "# New",
+            documentDirectory: nil,
+            projectRoot: nil,
+            expectedProjectRootIdentity: nil,
+            requiresProjectBoundary: false,
+            configuration: .default,
+            syntaxHighlightingEnabled: true,
+            delayNanoseconds: 0
+        )))
+
+        for _ in 0..<100 where store.state.previewSourceSnapshot != "# New" {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(store.state.previewSourceSnapshot, "# New")
+        XCTAssertEqual(store.state.analysisState.displayedAnalysis.headings.map(\.title), ["New"])
+        XCTAssertTrue(store.state.previewHTML.contains(">New</h1>"))
+        XCTAssertFalse(store.state.previewHTML.contains(">Old</h1>"))
+
+        store.send(.suspendDerived(markdown: "# New"))
+        XCTAssertEqual(store.state.previewSourceSnapshot, "")
+        XCTAssertEqual(store.state.analysisState, .ready(.empty))
+    }
+
+    @MainActor
     func testUnifiedDerivationReturnsOneRevisionBoundResult() async throws {
         let queue = EditorEngineClient(isEnabled: true)
         let source = "# 标题\n\n正文 **加粗** [链接](note.md)"

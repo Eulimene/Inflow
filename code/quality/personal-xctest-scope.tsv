@@ -99,6 +99,7 @@ EditorEngineClientTests/testCommittedTypingCreatesOnlyEngineUndoHistory	current-
 EditorEngineClientTests/testDiffPreservesByteDistinctCanonicalForms	current-direct	engine client must compare exact UTF-8 rather than canonically equivalent Swift strings
 EditorEngineClientTests/testDiffReturnsNilOnlyForByteIdenticalText	current-direct	engine client must avoid redundant commands only for byte-identical projections
 EditorEngineClientTests/testDiffReturnsOneUTF8ReplacementForUnicodeText	current-direct	engine client must produce grapheme-aligned UTF-8 replacement ranges
+EditorEngineClientTests/testEditorStorePublishesOnlyTheLatestDerivedIntent	current-direct	editor MVI store must cancel stale derivation and publish only the newest revision projection
 EditorEngineClientTests/testEngineHistoryOwnsUndoAndRedoPatches	current-direct	engine undo and redo must return revisioned inverse and forward patches from one authoritative history
 EditorEngineClientTests/testFormatAndSnapshotUseTheSameRevisionedEngine	current-direct	format command and authoritative snapshot must share one revisioned engine handle
 EditorEngineClientTests/testSearchUsesTheSameRevisionedEngineAndPreservesMatchedBytes	current-direct	find must return revision-bound ranges and exact matched bytes from the authoritative engine
