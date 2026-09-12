@@ -1,4 +1,4 @@
-//! Stateful editor authority introduced behind the macOS shadow-mode bridge.
+//! Stateful editor authority shared by the Rust domain and platform clients.
 
 use std::collections::HashMap;
 use std::ops::Range;

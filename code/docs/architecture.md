@@ -59,7 +59,7 @@ Engine 的 Memento 栈与连续输入合并策略封装在独立 `History`，Eng
 
 C ABI 3 已收缩为 Engine create/dispatch/snapshot/free 与 owned-bytes free 五个函数，不再暴露 document/render/analyze/highlight/search/format 数组或规划函数。边界用 `major/minor/capabilities` 协商兼容性：major 表示不兼容布局或所有权变化，minor
 表示可加性演进，宿主只要求自身使用的 capability bits，不再因为链接到更新 minor 版本而拒绝启动。
-旧 `inflow_core_abi_version` 保留为 major 的兼容别名。Rust build phase 声明源码输入和静态库输出，
+旧 `inflow_core_abi_version` 保留为 major 的兼容别名。Rust build phase 声明全部 `core/src/*.rs` 源码输入和静态库输出，仓库门禁会拒绝任何未声明的新 Rust 源文件；
 未变化时允许 Xcode 跳过；脚本按 `ARCHS` 分别构建 Rust target，多架构时用 `lipo` 合并。稳定入口 header 只引入 `core/include/generated/inflow_core.h`，后者由固定版本 cbindgen 和 `core/cbindgen.toml` 生成；`cargo xtask verify-bindings` 逐字节拒绝过期绑定，手写 Swift/Rust ABI 声明不再是可接受路径。
 Swift 边界中可在 Store/View 传递的稳定领域 DTO 集中在 `CoreBridge/CoreDTO.swift`；`EditorEngineClient.swift` 仅保留 actor 串行化、FFI envelope 与结果校验，不再同时定义上层命令模型。
 
@@ -78,7 +78,7 @@ SwiftUI 与 AppKit 负责：
 - 本地图片读取、资源写入、链接激活、只读临时副本、PDF 和日志；
 - 只在当前主流程安装个人首版允许的命令。
 
-文件读写不跨越 Rust ABI。所有路径规范化、符号链接解析、安全作用域和目标状态都属于 macOS 宿主事实。
+文件系统访问不跨越 Rust ABI。原始字节的 UTF-8/BOM/换行编解码属于 Engine，路径规范化、符号链接解析、安全作用域、文件协调和目标状态仍属于 macOS 宿主事实。
 
 ## 3. 单一正文不变量
 
@@ -101,8 +101,8 @@ SwiftUI 与 AppKit 负责：
 4. 展示属性、语法高亮和预览刷新不能发布正文变化，也不能登记正文 undo。
 5. 格式、插入、查找替换与正文撤销只通过 Engine Command 修改同一字符串；查找替换由 Engine 先生成 revision-bound patch，再由 Swift 回写显示缓存。
 6. NSTextView 为 1.5 秒内同类型、相邻的普通键入或删除复用一个 `group_id`；Engine 只在补丁确实相邻且可逆时合并 Memento。换行、粘贴、IME 提交、格式命令和不同分组始终保留独立撤销边界。
-6. 结果必须绑定精确 UTF-8 字节快照；正文变化后，旧范围和旧链接决定立即失效。
-7. 写入方向已经反转：NSTextView 只保留乐观显示缓存，Rust 接受命令后才发布 Swift 文档投影；
+7. 结果必须绑定精确 UTF-8 字节快照；正文变化后，旧范围和旧链接决定立即失效。
+8. 写入方向已经反转：NSTextView 只保留乐观显示缓存，Rust 接受命令后才发布 Swift 文档投影；
    禁止 Swift 与 Rust 同时独立接受正文写入。编辑会话不再提供关闭 Engine 事实源的开关或 AppKit 正文撤销备用路径。
 
 Swift String 的规范等价不能替代精确字节身份。Rust 返回 UTF-8 byte range，TextKit 使用 UTF-16 NSRange，转换必须同时验证边界、长度和完整扩展字素，不能截断 Unicode 或 ZWJ 序列。
@@ -123,7 +123,7 @@ Swift String 的规范等价不能替代精确字节身份。Rust 返回 UTF-8 b
 
 EditorViewMode 的内部历史 case 名 preview 对应用户可见的“即时编辑”。该模式始终挂载共享的 MarkdownSourceEditorSession。Rust Engine 从同一次 `DocumentIr` 产生 revision-bound `NativeRenderPlan`，Swift 只校验 UTF-8 范围并映射为 TextKit 属性，不再分析 Markdown。普通文字保持渲染属性直接编辑，选区变化时从当前可见字符同步 typing attributes，使光标高度、字号和基线与文字一致。
 
-只有围栏代码、Mermaid 和其他无法无损结构化编辑的块会在光标进入时局部恢复源码；普通文字和表格不进入该路径。RenderedMarkdownMermaidRenderer 是 Rust C ABI 的 Adapter，不再通过 HTML 字符串截取 SVG。表格宽度计算委托给 RenderedMarkdownTableLayoutStrategy，默认策略按内容和当前 viewport 自适应，并复用已挂载视图。CaretStyleResolver 负责跳过透明标记和换行符选择排版属性；隐藏标记不再使用微小字体改变光标和行高。链接激活策略作为持久偏好传入文本与表格链接，两者共享 Hover 反馈。该过程不替换 NSTextView，不创建第二份内容事实，也不登记展示层 undo。
+只有围栏代码、Mermaid 和其他无法无损结构化编辑的块会在光标进入时局部恢复源码；普通文字和表格不进入该路径。Mermaid SVG 由同一次 Engine 派生直接进入 `NativeRenderPlan`，不再通过专用 C ABI 或 HTML 字符串截取。表格宽度计算委托给 RenderedMarkdownTableLayoutStrategy，默认策略按内容和当前 viewport 自适应，并复用已挂载视图。CaretStyleResolver 负责跳过透明标记和换行符选择排版属性；隐藏标记不再使用微小字体改变光标和行高。链接激活策略作为持久偏好传入文本与表格链接，两者共享 Hover 反馈。该过程不替换 NSTextView，不创建第二份内容事实，也不登记展示层 undo。
 
 ## 5. 当前编辑命令边界
 

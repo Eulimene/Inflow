@@ -56,6 +56,18 @@ EOF
   esac
 }
 
+verify_rust_build_inputs() {
+  project_file="${PROJECT_PATH}/project.pbxproj"
+  for rust_source in "${CODE_ROOT}"/core/src/*.rs; do
+    relative_source="${rust_source#"${CODE_ROOT}/"}"
+    declared_path="\$(PROJECT_DIR)/${relative_source}"
+    /usr/bin/grep -Fq "\"${declared_path}\"," "${project_file}" || {
+      echo "error: Rust build input is missing from Xcode: ${relative_source}" >&2
+      exit 1
+    }
+  done
+}
+
 if [ "$#" -eq 2 ] && [ "$1" = "--describe-profile" ]; then
   describe_profile "$2"
   exit 0
@@ -393,6 +405,7 @@ run_personal_macos_tests() {
 
 cd "${CODE_ROOT}"
 
+verify_rust_build_inputs
 "${CARGO_BIN}" run --manifest-path xtask/Cargo.toml --locked -- verify-bindings
 
 if [ "${IS_DEFERRED_RELEASE}" -eq 1 ]; then
