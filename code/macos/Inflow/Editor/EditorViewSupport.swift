@@ -1,5 +1,67 @@
 import AppKit
+import CoreGraphics
 import Foundation
+import SwiftUI
+
+enum EditorWorkspacePane: Equatable {
+    case projectSidebar
+    case editor
+    case outline
+}
+
+enum EditorWorkspaceLayout {
+    static func panes(
+        hasProjectContext: Bool,
+        projectSidebarVisible: Bool,
+        outlineAvailable: Bool,
+        outlineVisible: Bool
+    ) -> [EditorWorkspacePane] {
+        var result: [EditorWorkspacePane] = []
+        if hasProjectContext && projectSidebarVisible { result.append(.projectSidebar) }
+        result.append(.editor)
+        if outlineAvailable && outlineVisible { result.append(.outline) }
+        return result
+    }
+}
+
+enum EditorWorkspaceMetrics {
+    static let minimumWindowWidth: CGFloat = 820
+    static let minimumWindowHeight: CGFloat = 520
+    static let defaultWindowWidth: CGFloat = 1_200
+    static let defaultWindowHeight: CGFloat = 760
+    static let projectSidebarMinimumWidth: CGFloat = 200
+    static let projectSidebarIdealWidth: CGFloat = 228
+    static let projectSidebarMaximumWidth: CGFloat = 300
+    static let editorMinimumWidth: CGFloat = 560
+    static let outlineMinimumWidth: CGFloat = 200
+    static let outlineIdealWidth: CGFloat = 228
+    static let outlineMaximumWidth: CGFloat = 288
+    static let navigationHeaderHeight: CGFloat = 40
+    static let statusBarHeight: CGFloat = 30
+}
+
+struct WorkspacePaneVisibilityButton: View {
+    let paneName: String
+    let systemImage: String
+    let isExpanded: Bool
+    let action: () -> Void
+
+    private var label: String { "\(isExpanded ? "折叠" : "展开")\(paneName)" }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .medium))
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 6))
+        .help(label)
+        .accessibilityLabel(label)
+    }
+}
 
 enum EditorViewMode: String, CaseIterable, Identifiable {
     case source
