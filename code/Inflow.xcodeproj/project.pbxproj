@@ -81,6 +81,7 @@
 		C10000000000000000000005 /* EditorViewSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000005 /* EditorViewSupport.swift */; };
 		C10000000000000000000006 /* EditorExportSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000006 /* EditorExportSupport.swift */; };
 		C10000000000000000000007 /* EditorChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000007 /* EditorChrome.swift */; };
+		C10000000000000000000008 /* SourceEditorSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000008 /* SourceEditorSupport.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -175,6 +176,7 @@
 		C20000000000000000000005 /* EditorViewSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/EditorViewSupport.swift; sourceTree = "<group>"; };
 		C20000000000000000000006 /* EditorExportSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/EditorExportSupport.swift; sourceTree = "<group>"; };
 		C20000000000000000000007 /* EditorChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/EditorChrome.swift; sourceTree = "<group>"; };
+		C20000000000000000000008 /* SourceEditorSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/SourceEditorSupport.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -258,6 +260,7 @@
 				C20000000000000000000005 /* EditorViewSupport.swift */,
 				C20000000000000000000006 /* EditorExportSupport.swift */,
 				C20000000000000000000007 /* EditorChrome.swift */,
+				C20000000000000000000008 /* SourceEditorSupport.swift */,
 				A20000000000000000000004 /* Inflow-Bridging-Header.h */,
 				A20000000000000000000008 /* Info.plist */,
 				A20000000000000000000009 /* Inflow.entitlements */,
@@ -464,6 +467,7 @@
 				C10000000000000000000005 /* EditorViewSupport.swift in Sources */,
 				C10000000000000000000006 /* EditorExportSupport.swift in Sources */,
 				C10000000000000000000007 /* EditorChrome.swift in Sources */,
+				C10000000000000000000008 /* SourceEditorSupport.swift in Sources */,
 				A10000000000000000000004 /* MarkdownDocument.swift in Sources */,
 				A10000000000000000000005 /* MarkdownCodec.swift in Sources */,
 				A10000000000000000000008 /* MarkdownRenderer.swift in Sources */,
