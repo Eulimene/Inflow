@@ -254,6 +254,7 @@ struct DocumentResourceIdentity: Hashable, Sendable {
 enum DocumentRelocationAnalyzer {
     static func plan(
         markdown: String,
+        references: [MarkdownReference],
         sourceData: Data,
         sourceURL: URL?,
         targetURL: URL
@@ -267,7 +268,6 @@ enum DocumentRelocationAnalyzer {
             throw DocumentRelocationError.cannotInspect
         }
 
-        let references = try MarkdownReferenceScanner.references(in: markdown)
         let items = try references.compactMap { reference -> DocumentRelocationItem? in
             guard let path = relativePath(from: reference.target) else { return nil }
             let oldURL = sourceDirectory?.appendingPathComponent(path).standardizedFileURL
@@ -299,6 +299,21 @@ enum DocumentRelocationAnalyzer {
             targetURL: targetURL.standardizedFileURL,
             targetSnapshot: targetSnapshot,
             items: items
+        )
+    }
+
+    static func plan(
+        markdown: String,
+        sourceData: Data,
+        sourceURL: URL?,
+        targetURL: URL
+    ) throws -> DocumentRelocationPlan {
+        try plan(
+            markdown: markdown,
+            references: MarkdownReferenceScanner.references(in: markdown),
+            sourceData: sourceData,
+            sourceURL: sourceURL,
+            targetURL: targetURL
         )
     }
 

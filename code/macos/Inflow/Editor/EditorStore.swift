@@ -5,12 +5,14 @@ struct EditorViewState: Equatable {
     var previewSourceSnapshot: String
     var previewFailureMessage: String?
     var analysisState: DocumentAnalysisState
+    var references: [MarkdownReference]
 
     static let initial = Self(
         previewHTML: MarkdownRenderer.htmlDocument(for: ""),
         previewSourceSnapshot: "",
         previewFailureMessage: nil,
-        analysisState: .updating(previous: .empty)
+        analysisState: .updating(previous: .empty),
+        references: []
     )
 }
 
@@ -100,7 +102,8 @@ final class EditorStore: ObservableObject {
                 previewHTML: content.html,
                 previewSourceSnapshot: content.sourceSnapshot,
                 previewFailureMessage: content.previewFailureMessage,
-                analysisState: .ready(content.analysis)
+                analysisState: .ready(content.analysis),
+                references: content.references
             )
             _ = sourceEditorSession.applySyntaxHighlighting(
                 content.syntaxHighlighting,
@@ -117,7 +120,8 @@ final class EditorStore: ObservableObject {
             previewHTML: MarkdownRenderer.htmlDocument(for: ""),
             previewSourceSnapshot: "",
             previewFailureMessage: nil,
-            analysisState: .ready(.empty)
+            analysisState: .ready(.empty),
+            references: []
         )
         _ = sourceEditorSession.applySyntaxHighlighting(
             [],
@@ -133,6 +137,7 @@ private struct DerivedDocumentContent: Sendable {
     let previewFailureMessage: String?
     let analysis: DocumentAnalysis
     let syntaxHighlighting: [MarkdownSyntaxSpan]
+    let references: [MarkdownReference]
 }
 
 private actor DocumentContentDeriver {
@@ -160,7 +165,8 @@ private actor DocumentContentDeriver {
             analysis: coreContent.analysis,
             syntaxHighlighting: request.syntaxHighlightingEnabled
                 ? coreContent.syntaxHighlighting
-                : []
+                : [],
+            references: coreContent.references
         )
     }
 }

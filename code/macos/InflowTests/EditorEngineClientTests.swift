@@ -18,9 +18,9 @@ final class EditorEngineClientTests: XCTestCase {
             syntaxHighlightingEnabled: true,
             delayNanoseconds: 1_000_000_000
         )))
-        session.textView.string = "# New"
+        session.textView.string = "# New\n\n[next](note.md)"
         store.send(.refreshDerived(EditorDerivedContentRequest(
-            markdown: "# New",
+            markdown: "# New\n\n[next](note.md)",
             documentDirectory: nil,
             projectRoot: nil,
             expectedProjectRootIdentity: nil,
@@ -30,17 +30,19 @@ final class EditorEngineClientTests: XCTestCase {
             delayNanoseconds: 0
         )))
 
-        for _ in 0..<100 where store.state.previewSourceSnapshot != "# New" {
+        for _ in 0..<100 where store.state.previewSourceSnapshot != "# New\n\n[next](note.md)" {
             try await Task.sleep(for: .milliseconds(5))
         }
-        XCTAssertEqual(store.state.previewSourceSnapshot, "# New")
+        XCTAssertEqual(store.state.previewSourceSnapshot, "# New\n\n[next](note.md)")
         XCTAssertEqual(store.state.analysisState.displayedAnalysis.headings.map(\.title), ["New"])
+        XCTAssertEqual(store.state.references.map(\.target), ["note.md"])
         XCTAssertTrue(store.state.previewHTML.contains(">New</h1>"))
         XCTAssertFalse(store.state.previewHTML.contains(">Old</h1>"))
 
-        store.send(.suspendDerived(markdown: "# New"))
+        store.send(.suspendDerived(markdown: "# New\n\n[next](note.md)"))
         XCTAssertEqual(store.state.previewSourceSnapshot, "")
         XCTAssertEqual(store.state.analysisState, .ready(.empty))
+        XCTAssertTrue(store.state.references.isEmpty)
     }
 
     @MainActor

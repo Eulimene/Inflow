@@ -1020,7 +1020,8 @@ final class MarkdownRendererTests: XCTestCase {
                 sourceUTF8Offset: second.sourceUTF8Range.lowerBound,
                 target: "missing.png",
                 renderedSource: markdown,
-                currentSource: markdown
+                currentSource: markdown,
+                references: references
             ),
             second
         )
@@ -1028,20 +1029,24 @@ final class MarkdownRendererTests: XCTestCase {
             sourceUTF8Offset: references[0].sourceUTF8Range.lowerBound,
             target: "other.png",
             renderedSource: markdown,
-            currentSource: markdown
+            currentSource: markdown,
+            references: references
         ))
         XCTAssertNil(PreviewImageIssueNavigation.validatedReference(
             sourceUTF8Offset: second.sourceUTF8Range.lowerBound,
             target: "missing.png",
             renderedSource: markdown,
-            currentSource: markdown + "\nchanged"
+            currentSource: markdown + "\nchanged",
+            references: references
         ))
     }
 
-    func testLinkPlannerRequiresAnExactParsedReferenceAndSupportsWebAndFileURLs() {
+    func testLinkPlannerRequiresAnExactParsedReferenceAndSupportsWebAndFileURLs() throws {
         let markdown = "[web](https://example.com/path) [mail](mailto:writer@example.com)"
+        let references = try MarkdownReferenceScanner.references(in: markdown)
         let web = PreviewLinkPlanner.plan(
             markdown: markdown,
+            references: references,
             target: "https://example.com/path",
             documentURL: nil
         )
@@ -1055,6 +1060,7 @@ final class MarkdownRendererTests: XCTestCase {
 
         let stale = PreviewLinkPlanner.plan(
             markdown: markdown,
+            references: references,
             target: "https://removed.example",
             documentURL: nil
         )

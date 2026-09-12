@@ -36,6 +36,7 @@ Rust 核心负责不依赖平台的纯值逻辑，并正在通过版本化 Engin
 `ReplaceText`、格式 Command、Memento undo/redo、快照和 `RefreshDerived`。每次 `RefreshDerived` 只创建一个 owned
 `DocumentIr`，分析、语法范围、引用、`RenderIr`、`NativeRenderPlan` 与安全 HTML 都消费该事件流；派生缓存严格绑定
 revision，正文修改后立即失效。macOS 已用该单次请求作为分析、高亮、引用、原生展示计划和预览的唯一文档派生热路径。
+这份 revision-bound 引用集合由 `EditorStore` 与预览快照原子发布，预览链接、图片问题导航与文档迁移均显式消费它，不在交互时再把全文传入旧引用扫描 FFI。旧 scanner 入口仅作为隔离测试和迁移兼容层保留。
 预览链接目标、标题 source range 与块 ID 在 Rust 生成对应 HTML 事件时直接写入 data attribute；
 Swift 不再把 HTML anchor、标题与引用列表做正则配对，也不再保留第二套 Markdown planner。
 Rust 同时把 RenderIR 的稳定 `block_id` 与 UTF-8 source range 写到顶层预览节点。WKWebView 首次加载
@@ -60,7 +61,7 @@ C ABI 用 `major/minor/capabilities` 协商兼容性：major 表示不兼容布�
 
 SwiftUI 与 AppKit 负责：
 
-- `MarkdownEditorView` 只向 `EditorStore` 发送文档派生意图并消费 `EditorViewState`；Store 统一持有 generation、取消和主线程发布；
+- `MarkdownEditorView` 只向 `EditorStore` 发送文档派生意图并消费 `EditorViewState`；Store 统一持有 generation、取消，并原子发布预览、分析和引用；
 - 原生文档窗口、新建、打开、手动保存、另存和关闭确认；
 - 没有外部目标时由应用委托显式创建并聚焦未命名文档，普通启动或 Finder 双击 App 不弹文件选择器；带外部目标时复用统一打开路由且不残留多余空白窗口；
 - 普通文件夹项目、目录树、沙箱授权与项目根边界；

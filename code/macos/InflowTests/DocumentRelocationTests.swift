@@ -45,6 +45,7 @@ final class DocumentRelocationTests: XCTestCase {
 
             let plan = try DocumentRelocationAnalyzer.plan(
                 markdown: markdown,
+                references: try MarkdownReferenceScanner.references(in: markdown),
                 sourceData: data,
                 sourceURL: source,
                 targetURL: target

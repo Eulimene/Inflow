@@ -660,6 +660,7 @@ enum PreviewLinkOpenPolicy {
 actor PreviewLinkWorker {
     func plan(
         markdown: String,
+        references: [MarkdownReference],
         target: String,
         documentURL: URL?,
         projectRoot: URL? = nil,
@@ -667,6 +668,7 @@ actor PreviewLinkWorker {
     ) -> PreviewLinkPlan {
         PreviewLinkPlanner.plan(
             markdown: markdown,
+            references: references,
             target: target,
             documentURL: documentURL,
             projectRoot: projectRoot,
@@ -680,6 +682,7 @@ enum PreviewLinkPlanner {
 
     static func plan(
         markdown: String,
+        references: [MarkdownReference],
         target: String,
         documentURL: URL?,
         projectRoot: URL? = nil,
@@ -704,7 +707,7 @@ enum PreviewLinkPlanner {
                 safeTarget: safeTarget
             )
         }
-        guard containsExactLink(target, in: markdown) else {
+        guard containsExactLink(target, references: references) else {
             return blocked(
                 sourceUTF8: sourceUTF8,
                 target: target,
@@ -853,9 +856,26 @@ enum PreviewLinkPlanner {
         )
     }
 
+    static func plan(
+        markdown: String,
+        target: String,
+        documentURL: URL?,
+        projectRoot: URL? = nil,
+        expectedProjectRootIdentity: FolderProjectDirectoryIdentity? = nil
+    ) -> PreviewLinkPlan {
+        let references = (try? MarkdownReferenceScanner.references(in: markdown)) ?? []
+        return plan(
+            markdown: markdown,
+            references: references,
+            target: target,
+            documentURL: documentURL,
+            projectRoot: projectRoot,
+            expectedProjectRootIdentity: expectedProjectRootIdentity
+        )
+    }
+
     static func isCurrent(_ plan: PreviewLinkPlan, markdown: String) -> Bool {
         plan.sourceUTF8 == Data(markdown.utf8)
-            && containsExactLink(plan.target, in: markdown)
     }
 
     static func localTargetIsCurrent(_ link: PreviewLocalLink) -> Bool {
@@ -1074,10 +1094,10 @@ enum PreviewLinkPlanner {
         return FolderProjectDirectoryIdentity.capture(projectRoot) == expectedIdentity
     }
 
-    private static func containsExactLink(_ target: String, in markdown: String) -> Bool {
-        guard let references = try? MarkdownReferenceScanner.references(in: markdown) else {
-            return false
-        }
+    private static func containsExactLink(
+        _ target: String,
+        references: [MarkdownReference]
+    ) -> Bool {
         let targetUTF8 = Data(target.utf8)
         return references.contains {
             $0.kind == .link && Data($0.target.utf8) == targetUTF8

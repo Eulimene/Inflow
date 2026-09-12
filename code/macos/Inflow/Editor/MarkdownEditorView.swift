@@ -729,6 +729,7 @@ struct MarkdownEditorView: View {
     private var previewSourceSnapshot: String { editorStore.state.previewSourceSnapshot }
     private var previewFailureMessage: String? { editorStore.state.previewFailureMessage }
     private var analysisState: DocumentAnalysisState { editorStore.state.analysisState }
+    private var derivedReferences: [MarkdownReference] { editorStore.state.references }
 
     private var viewMode: EditorViewMode {
         get {
@@ -2281,8 +2282,20 @@ struct MarkdownEditorView: View {
                 guard try document.encodedFileData() == snapshotData else {
                     throw DocumentRelocationError.staleDecision
                 }
+                let relocationReferences: [MarkdownReference]
+                if UTF8Text.isExactlyEqual(previewSourceSnapshot, document.text) {
+                    relocationReferences = derivedReferences
+                } else if let content = await sourceEditorSession.deriveContent(
+                    for: document.text,
+                    configuration: preferences.previewConfiguration
+                ), UTF8Text.isExactlyEqual(content.sourceSnapshot, document.text) {
+                    relocationReferences = content.references
+                } else {
+                    throw DocumentRelocationError.cannotInspect
+                }
                 let plan = try DocumentRelocationAnalyzer.plan(
                     markdown: document.text,
+                    references: relocationReferences,
                     sourceData: snapshotData,
                     sourceURL: fileURL,
                     targetURL: targetURL
@@ -2499,7 +2512,8 @@ struct MarkdownEditorView: View {
             sourceUTF8Offset: sourceUTF8Offset,
             target: target,
             renderedSource: previewSourceSnapshot,
-            currentSource: document.text
+            currentSource: document.text,
+            references: derivedReferences
         ) else {
             retryPreview()
             return
@@ -2544,6 +2558,9 @@ struct MarkdownEditorView: View {
         previewLinkGeneration &+= 1
         let generation = previewLinkGeneration
         let markdown = document.text
+        let references = UTF8Text.isExactlyEqual(previewSourceSnapshot, markdown)
+            ? derivedReferences
+            : []
         let documentURL = fileURL
         let candidateProjectRoot = activeProjectRoot
         let projectRootIdentity = currentProjectRootIdentity(for: candidateProjectRoot)
@@ -2552,6 +2569,7 @@ struct MarkdownEditorView: View {
         previewLinkTask = Task { @MainActor in
             let plan = await previewLinkWorker.plan(
                 markdown: markdown,
+                references: references,
                 target: target,
                 documentURL: documentURL,
                 projectRoot: projectRoot,
@@ -4120,11 +4138,10 @@ enum PreviewImageIssueNavigation {
         sourceUTF8Offset: Int,
         target: String,
         renderedSource: String,
-        currentSource: String
+        currentSource: String,
+        references: [MarkdownReference]
     ) -> MarkdownReference? {
-        guard UTF8Text.isExactlyEqual(renderedSource, currentSource),
-              let references = try? MarkdownReferenceScanner.references(in: currentSource)
-        else {
+        guard UTF8Text.isExactlyEqual(renderedSource, currentSource) else {
             return nil
         }
         return references.first { reference in
@@ -4132,5 +4149,23 @@ enum PreviewImageIssueNavigation {
                 && reference.sourceUTF8Range.lowerBound == sourceUTF8Offset
                 && UTF8Text.isExactlyEqual(reference.target, target)
         }
+    }
+
+    static func validatedReference(
+        sourceUTF8Offset: Int,
+        target: String,
+        renderedSource: String,
+        currentSource: String
+    ) -> MarkdownReference? {
+        guard let references = try? MarkdownReferenceScanner.references(in: currentSource) else {
+            return nil
+        }
+        return validatedReference(
+            sourceUTF8Offset: sourceUTF8Offset,
+            target: target,
+            renderedSource: renderedSource,
+            currentSource: currentSource,
+            references: references
+        )
     }
 }
