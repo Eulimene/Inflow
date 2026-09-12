@@ -36,7 +36,7 @@ Rust 核心负责不依赖平台的纯值逻辑，并正在通过版本化 Engin
 `ReplaceText`、格式 Command、Memento undo/redo、快照和 `RefreshDerived`。每次 `RefreshDerived` 只创建一个 owned
 `DocumentIr`，分析、语法范围、引用、`RenderIr`、`NativeRenderPlan` 与安全 HTML 都消费该事件流；派生缓存严格绑定
 revision，正文修改后立即失效。macOS 已用该单次请求作为分析、高亮、引用、原生展示计划和预览的唯一文档派生热路径。
-这份 revision-bound 引用集合由 `EditorStore` 与预览快照原子发布，预览链接、图片问题导航与文档迁移均显式消费它，不在交互时再把全文传入旧引用扫描 FFI。旧 scanner 入口仅作为隔离测试和迁移兼容层保留。
+这份 revision-bound 引用集合由 `EditorStore` 与预览快照原子发布，预览链接、图片问题导航与文档迁移均显式消费它，不在交互时再把全文传入旧引用扫描 FFI。同步工具与隔离测试所需的 scanner 兼容入口也创建短生命周期 Engine，从统一 `DocumentIr` 读取引用，不再调用独立引用 FFI。
 
 `EditorEngine` 通过 `MarkdownPort` 获取派生模型，不再直接依赖具体 Markdown
 解析器或 renderer。默认 `CommonMarkAdapter` 负责从同一份 `DocumentIr` 一次生成分析、

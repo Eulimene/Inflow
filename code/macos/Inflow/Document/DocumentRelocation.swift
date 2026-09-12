@@ -33,77 +33,10 @@ enum MarkdownReferenceError: Error, LocalizedError {
 
 enum MarkdownReferenceScanner {
     static func references(in markdown: String) throws -> [MarkdownReference] {
-        guard InflowCoreBridge.isCompatible else {
+        guard let derived = EditorEngineDerivedContent.deriveSynchronously(source: markdown) else {
             throw MarkdownReferenceError.coreFailure
         }
-
-        let utf8 = Data(markdown.utf8)
-        let result: InflowReferenceResult = utf8.withUnsafeBytes { buffer in
-            inflow_document_references(
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count)
-            )
-        }
-        defer {
-            inflow_owned_references_free(result.references.data, result.references.length)
-            inflow_owned_bytes_free(
-                result.target_text_utf8.data,
-                result.target_text_utf8.length
-            )
-        }
-
-        guard result.status == INFLOW_STATUS_OK else {
-            throw MarkdownReferenceError.coreFailure
-        }
-        guard let count = Int(exactly: result.references.length),
-              count == 0 || result.references.data != nil,
-              let targetCount = Int(exactly: result.target_text_utf8.length),
-              targetCount == 0 || result.target_text_utf8.data != nil
-        else {
-            throw MarkdownReferenceError.invalidCoreResult
-        }
-
-        let targets = targetCount == 0
-            ? Data()
-            : Data(bytes: result.target_text_utf8.data!, count: targetCount)
-        let rawReferences = UnsafeBufferPointer(
-            start: result.references.data,
-            count: count
-        )
-
-        return try rawReferences.map { raw in
-            let kind: MarkdownReferenceKind
-            switch raw.kind {
-            case UInt8(INFLOW_REFERENCE_KIND_LINK): kind = .link
-            case UInt8(INFLOW_REFERENCE_KIND_IMAGE): kind = .image
-            default: throw MarkdownReferenceError.invalidCoreResult
-            }
-
-            guard let start = Int(exactly: raw.target_start),
-                  let length = Int(exactly: raw.target_length),
-                  let sourceStart = Int(exactly: raw.source_start),
-                  let sourceEnd = Int(exactly: raw.source_end)
-            else {
-                throw MarkdownReferenceError.invalidCoreResult
-            }
-            let (end, overflow) = start.addingReportingOverflow(length)
-            guard !overflow, start >= 0, end <= targets.count,
-                  sourceStart >= 0, sourceStart <= sourceEnd,
-                  sourceEnd <= utf8.count,
-                  MarkdownSourceRange.navigationTarget(
-                      forUTF8Range: sourceStart..<sourceEnd,
-                      in: markdown
-                  ) != nil,
-                  let target = String(data: targets[start..<end], encoding: .utf8)
-            else {
-                throw MarkdownReferenceError.invalidCoreResult
-            }
-            return MarkdownReference(
-                kind: kind,
-                target: target,
-                sourceUTF8Range: sourceStart..<sourceEnd
-            )
-        }
+        return derived.references
     }
 }
 
