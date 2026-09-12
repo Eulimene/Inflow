@@ -418,13 +418,20 @@ impl EditorEngine {
             inserted: deleted,
         };
         let patch = self.apply_patch(base_revision, forward.clone(), selection_after.clone())?;
-        self.undo.push(HistoryEntry {
+        let entry = HistoryEntry {
             forward,
             inverse,
             selection_before,
             selection_after,
             group_id,
-        });
+        };
+        if !self
+            .undo
+            .last_mut()
+            .is_some_and(|previous| merge_history_entries(previous, &entry))
+        {
+            self.undo.push(entry);
+        }
         self.redo.clear();
         Ok(self.with_history_state(patch))
     }
@@ -851,6 +858,61 @@ fn content_hash(text: &str) -> String {
     format!("{hash:016x}")
 }
 
+fn merge_history_entries(previous: &mut HistoryEntry, next: &HistoryEntry) -> bool {
+    let Some(group_id) = previous.group_id.as_deref() else {
+        return false;
+    };
+    if next.group_id.as_deref() != Some(group_id) {
+        return false;
+    }
+
+    let previous_is_insertion = previous.forward.range.start == previous.forward.range.end
+        && !previous.forward.inserted.is_empty()
+        && previous.inverse.inserted.is_empty();
+    let next_is_insertion = next.forward.range.start == next.forward.range.end
+        && !next.forward.inserted.is_empty()
+        && next.inverse.inserted.is_empty();
+    if previous_is_insertion
+        && next_is_insertion
+        && next.forward.range.start
+            == previous.forward.range.start + previous.forward.inserted.len()
+    {
+        previous.forward.inserted.push_str(&next.forward.inserted);
+        previous.inverse.range.end += next.forward.inserted.len();
+        previous.selection_after = next.selection_after.clone();
+        return true;
+    }
+
+    let previous_is_deletion = previous.forward.inserted.is_empty()
+        && previous.inverse.range.start == previous.inverse.range.end
+        && !previous.inverse.inserted.is_empty();
+    let next_is_deletion = next.forward.inserted.is_empty()
+        && next.inverse.range.start == next.inverse.range.end
+        && !next.inverse.inserted.is_empty();
+    if !previous_is_deletion || !next_is_deletion {
+        return false;
+    }
+
+    if next.forward.range.end == previous.forward.range.start {
+        previous.forward.range.start = next.forward.range.start;
+        previous.inverse.range.start = next.inverse.range.start;
+        previous.inverse.range.end = next.inverse.range.end;
+        previous.inverse.inserted =
+            format!("{}{}", next.inverse.inserted, previous.inverse.inserted);
+        previous.selection_after = next.selection_after.clone();
+        return true;
+    }
+
+    if next.forward.range.start == previous.forward.range.start {
+        previous.forward.range.end += next.inverse.inserted.len();
+        previous.inverse.inserted.push_str(&next.inverse.inserted);
+        previous.selection_after = next.selection_after.clone();
+        return true;
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -891,6 +953,16 @@ mod tests {
         inserted: &str,
         selection_after: Selection,
     ) -> CommandEnvelope {
+        grouped_replace(base_revision, range, inserted, selection_after, None)
+    }
+
+    fn grouped_replace(
+        base_revision: Revision,
+        range: Range<usize>,
+        inserted: &str,
+        selection_after: Selection,
+        group_id: Option<&str>,
+    ) -> CommandEnvelope {
         CommandEnvelope {
             schema_version: ENGINE_SCHEMA_VERSION,
             request_id: format!("request-{base_revision}"),
@@ -902,7 +974,7 @@ mod tests {
                 },
                 inserted: inserted.to_owned(),
                 selection_after,
-                group_id: None,
+                group_id: group_id.map(str::to_owned),
             },
         }
     }
@@ -1294,6 +1366,120 @@ mod tests {
         assert_eq!(redone.patch.revision, 3);
         assert!(redone.patch.can_undo);
         assert!(!redone.patch.can_redo);
+    }
+
+    #[test]
+    fn adjacent_typing_with_one_group_undoes_and_redoes_as_one_entry() {
+        let mut engine = engine("");
+        for (revision, offset, inserted) in [(0, 0, "a"), (1, 1, "b"), (2, 2, "c")] {
+            engine
+                .dispatch(grouped_replace(
+                    revision,
+                    offset..offset,
+                    inserted,
+                    Selection {
+                        start: offset + 1,
+                        end: offset + 1,
+                    },
+                    Some("typing-1"),
+                ))
+                .expect("grouped insertion");
+        }
+
+        engine
+            .dispatch(command(
+                "undo-group",
+                EditorCommand::Undo { base_revision: 3 },
+            ))
+            .expect("one undo removes the group");
+        assert_eq!(engine.snapshot().text, "");
+        assert!(!engine.snapshot().can_undo);
+
+        engine
+            .dispatch(command(
+                "redo-group",
+                EditorCommand::Redo { base_revision: 4 },
+            ))
+            .expect("one redo restores the group");
+        assert_eq!(engine.snapshot().text, "abc");
+    }
+
+    #[test]
+    fn grouped_backward_and_forward_deletions_restore_original_text() {
+        let mut backward = engine("abc");
+        for (revision, range, caret) in [(0, 2..3, 2), (1, 1..2, 1), (2, 0..1, 0)] {
+            backward
+                .dispatch(grouped_replace(
+                    revision,
+                    range,
+                    "",
+                    Selection {
+                        start: caret,
+                        end: caret,
+                    },
+                    Some("backspace-1"),
+                ))
+                .expect("grouped backward deletion");
+        }
+        backward
+            .dispatch(command(
+                "undo-backward-group",
+                EditorCommand::Undo { base_revision: 3 },
+            ))
+            .expect("undo backward deletion group");
+        assert_eq!(backward.snapshot().text, "abc");
+
+        let mut forward = engine("abc");
+        for revision in 0..3 {
+            forward
+                .dispatch(grouped_replace(
+                    revision,
+                    0..1,
+                    "",
+                    Selection { start: 0, end: 0 },
+                    Some("delete-1"),
+                ))
+                .expect("grouped forward deletion");
+        }
+        forward
+            .dispatch(command(
+                "undo-forward-group",
+                EditorCommand::Undo { base_revision: 3 },
+            ))
+            .expect("undo forward deletion group");
+        assert_eq!(forward.snapshot().text, "abc");
+    }
+
+    #[test]
+    fn different_group_ids_keep_separate_undo_entries() {
+        let mut engine = engine("");
+        engine
+            .dispatch(grouped_replace(
+                0,
+                0..0,
+                "a",
+                Selection { start: 1, end: 1 },
+                Some("typing-1"),
+            ))
+            .expect("first group");
+        engine
+            .dispatch(grouped_replace(
+                1,
+                1..1,
+                "b",
+                Selection { start: 2, end: 2 },
+                Some("typing-2"),
+            ))
+            .expect("second group");
+
+        engine
+            .dispatch(command(
+                "undo-second-group",
+                EditorCommand::Undo { base_revision: 2 },
+            ))
+            .expect("undo only latest group");
+        assert_eq!(engine.snapshot().text, "a");
+        assert!(engine.snapshot().can_undo);
     }
 
     #[test]

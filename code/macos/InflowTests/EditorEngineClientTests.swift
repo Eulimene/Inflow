@@ -345,6 +345,47 @@ final class EditorEngineClientTests: XCTestCase {
         XCTAssertTrue(imeSnapshot?.canUndo == true)
     }
 
+    @MainActor
+    func testAdjacentTypingUsesOneEngineUndoGroupAndNewlineBreaksIt() async throws {
+        let session = MarkdownSourceEditorSession()
+        session.textView.isEditable = true
+        session.textView.string = ""
+        session.textView.setSelectedRange(NSRange(location: 0, length: 0))
+        _ = await session.authoritativeSnapshot()
+
+        for character in ["a", "b", "c"] {
+            session.textView.insertText(
+                character,
+                replacementRange: session.textView.selectedRange()
+            )
+        }
+        let typed = await session.persistenceSnapshot()
+        XCTAssertEqual(typed?.text, "abc")
+
+        session.textView.undo(nil)
+        for _ in 0..<40 where !session.textView.string.isEmpty {
+            await Task.yield()
+        }
+        XCTAssertEqual(session.textView.string, "")
+
+        for character in ["a", "b"] {
+            session.textView.insertText(
+                character,
+                replacementRange: session.textView.selectedRange()
+            )
+        }
+        session.textView.insertNewline(nil)
+        session.textView.insertText("c", replacementRange: session.textView.selectedRange())
+        _ = await session.persistenceSnapshot()
+        XCTAssertEqual(session.textView.string, "ab\nc")
+
+        session.textView.undo(nil)
+        for _ in 0..<40 where session.textView.string != "ab\n" {
+            await Task.yield()
+        }
+        XCTAssertEqual(session.textView.string, "ab\n")
+    }
+
     func testDiffReturnsOneUTF8ReplacementForUnicodeText() {
         XCTAssertEqual(
             EditorEngineTextDiff.replacement(from: "A🌍B", to: "A世界B"),

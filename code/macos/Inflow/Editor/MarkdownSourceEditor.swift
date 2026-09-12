@@ -374,8 +374,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             if let self, !self.isApplyingEngineMutation, !self.textView.hasMarkedText() {
                 self.engineClient.submit(
                     text: text,
-                    selectionUTF16: self.textView.selectedRange()
+                    selectionUTF16: self.textView.selectedRange(),
+                    groupID: self.textView.consumeEngineEditGroupID()
                 )
+            } else {
+                _ = self?.textView.consumeEngineEditGroupID()
             }
             self?.invalidateSyntaxApplication()
             self?.scheduleFormatInspection()
@@ -2170,6 +2173,12 @@ final class WindowAwareTextView: NSTextView {
         let tableView: RenderedMarkdownTableView
     }
 
+    private enum EngineTypingKind {
+        case insertion
+        case backwardDeletion
+        case forwardDeletion
+    }
+
     private let persistentUndoManager = UndoManager()
     var usesEngineHistory = false
     var engineCanUndo = false
@@ -2211,6 +2220,11 @@ final class WindowAwareTextView: NSTextView {
     private var isUpdatingRenderedOverlayLayout = false
     private var hoverTrackingArea: NSTrackingArea?
     private(set) var hoveredLinkRange: NSRange?
+    private var engineTypingKind: EngineTypingKind?
+    private var engineTypingGroupID: String?
+    private var engineTypingDeadline = TimeInterval.zero
+    private var pendingEngineEditGroupID: String?
+    private var suppressesAutomaticEngineGrouping = false
 
     override var undoManager: UndoManager? {
         persistentUndoManager
@@ -2622,10 +2636,74 @@ final class WindowAwareTextView: NSTextView {
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
         let wasComposing = compositionBaseline != nil || hasMarkedText()
+        let effectiveRange = replacementRange.location == NSNotFound
+            ? selectedRange()
+            : replacementRange
+        if !wasComposing,
+           !suppressesAutomaticEngineGrouping,
+           effectiveRange.length == 0,
+           let inserted = Self.plainText(from: insertString),
+           inserted.count == 1,
+           !inserted.contains(where: \.isNewline)
+        {
+            prepareEngineTypingGroup(.insertion)
+        } else {
+            breakEngineTypingGroup()
+        }
         super.insertText(insertString, replacementRange: replacementRange)
         if wasComposing, !hasMarkedText() {
             finishCompositionIfNeeded()
         }
+    }
+
+    override func deleteBackward(_ sender: Any?) {
+        if !suppressesAutomaticEngineGrouping, selectedRange().length == 0 {
+            prepareEngineTypingGroup(.backwardDeletion)
+        } else {
+            breakEngineTypingGroup()
+        }
+        super.deleteBackward(sender)
+    }
+
+    override func deleteForward(_ sender: Any?) {
+        if !suppressesAutomaticEngineGrouping, selectedRange().length == 0 {
+            prepareEngineTypingGroup(.forwardDeletion)
+        } else {
+            breakEngineTypingGroup()
+        }
+        super.deleteForward(sender)
+    }
+
+    override func insertNewline(_ sender: Any?) {
+        breakEngineTypingGroup()
+        super.insertNewline(sender)
+    }
+
+    func consumeEngineEditGroupID() -> String? {
+        defer { pendingEngineEditGroupID = nil }
+        return pendingEngineEditGroupID
+    }
+
+    private func prepareEngineTypingGroup(_ kind: EngineTypingKind) {
+        let now = ProcessInfo.processInfo.systemUptime
+        if engineTypingKind != kind || now > engineTypingDeadline {
+            engineTypingGroupID = UUID().uuidString
+        }
+        engineTypingKind = kind
+        engineTypingDeadline = now + 1.5
+        pendingEngineEditGroupID = engineTypingGroupID
+    }
+
+    private func breakEngineTypingGroup() {
+        engineTypingKind = nil
+        engineTypingGroupID = nil
+        engineTypingDeadline = 0
+        pendingEngineEditGroupID = nil
+    }
+
+    private static func plainText(from value: Any) -> String? {
+        if let string = value as? String { return string }
+        return (value as? NSAttributedString)?.string
     }
 
     private var compositionBaseline: CompositionBaseline?
@@ -2651,6 +2729,9 @@ final class WindowAwareTextView: NSTextView {
 
     override func paste(_ sender: Any?) {
         if consumeImagePaste(from: .general) { return }
+        breakEngineTypingGroup()
+        suppressesAutomaticEngineGrouping = true
+        defer { suppressesAutomaticEngineGrouping = false }
         super.paste(sender)
     }
 

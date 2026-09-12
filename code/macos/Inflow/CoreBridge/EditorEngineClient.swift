@@ -71,7 +71,11 @@ final class EditorEngineClient {
         client = isEnabled ? EditorEngineTransport() : nil
     }
 
-    func submit(text: String, selectionUTF16: NSRange) {
+    func submit(
+        text: String,
+        selectionUTF16: NSRange,
+        groupID: String? = nil
+    ) {
         guard let client,
               lastSubmittedText.map({ !$0.utf8.elementsEqual(text.utf8) }) ?? true
         else { return }
@@ -80,7 +84,11 @@ final class EditorEngineClient {
         pending = Task {
             await previous?.value
             guard !Task.isCancelled else { return }
-            await client.synchronize(to: text, selectionUTF16: selectionUTF16)
+            await client.synchronize(
+                to: text,
+                selectionUTF16: selectionUTF16,
+                groupID: groupID
+            )
             guard !Task.isCancelled,
                   lastSubmittedText?.utf8.elementsEqual(text.utf8) == true,
                   let snapshot = await client.snapshot(expectedText: text)
@@ -279,7 +287,11 @@ private actor EditorEngineTransport {
     private var revision: UInt64 = 0
     private var mode: EditorEngineMode = .editable
 
-    func synchronize(to swiftText: String, selectionUTF16: NSRange) {
+    func synchronize(
+        to swiftText: String,
+        selectionUTF16: NSRange,
+        groupID: String?
+    ) {
         do {
             let selection = try Self.byteSelection(selectionUTF16, in: swiftText)
             guard handle != nil else {
@@ -303,7 +315,8 @@ private actor EditorEngineTransport {
                     baseRevision: revision,
                     range: EditorEngineByteRange(start: edit.start, end: edit.end),
                     inserted: edit.inserted,
-                    selectionAfter: selection
+                    selectionAfter: selection,
+                    groupID: groupID
                 )
             )
             let response: EditorEngineDispatchResponse = try dispatch(command)
@@ -1108,6 +1121,7 @@ private struct EditorEngineReplaceCommand: Encodable {
     let range: EditorEngineByteRange
     let inserted: String
     let selectionAfter: EditorEngineSelection
+    let groupID: String?
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -1115,6 +1129,7 @@ private struct EditorEngineReplaceCommand: Encodable {
         case range
         case inserted
         case selectionAfter = "selection_after"
+        case groupID = "group_id"
     }
 }
 
