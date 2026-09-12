@@ -4,6 +4,42 @@ import XCTest
 
 final class RenderedMarkdownEditorTests: XCTestCase {
     @MainActor
+    func testInitialRenderedDocumentStaysHiddenUntilItsPlanIsInstalled() async throws {
+        let source = "# 标题\n\n正文 **加粗**"
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        session.textView.isEditable = true
+
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        XCTAssertTrue(session.isRenderedPresentationSuppressed)
+        XCTAssertEqual(session.textView.alphaValue, 0)
+
+        let content = await session.deriveContent(for: source, configuration: .default)
+        XCTAssertNotNil(content)
+        XCTAssertFalse(session.isRenderedPresentationSuppressed)
+        XCTAssertEqual(session.textView.alphaValue, 1)
+        XCTAssertEqual(session.renderedPresentationPassCount, 1)
+    }
+
+    @MainActor
+    func testOptimisticRenderedTypingDoesNotBlankWhileWaitingForTheNextPlan() async throws {
+        let source = "# 标题\n\n正文"
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        session.textView.isEditable = true
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        _ = await session.deriveContent(for: source, configuration: .default)
+        XCTAssertEqual(session.textView.alphaValue, 1)
+
+        let optimisticSource = source + "a"
+        session.textView.string = optimisticSource
+        session.setPresentation(.rendered, source: optimisticSource, onLinkClick: nil)
+
+        XCTAssertFalse(session.isRenderedPresentationSuppressed)
+        XCTAssertEqual(session.textView.alphaValue, 1)
+    }
+
+    @MainActor
     func testPlanCoversPersonalEditionDirectEditingStructures() async {
         let source = """
         普通段落
