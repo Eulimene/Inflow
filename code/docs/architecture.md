@@ -17,7 +17,8 @@
 - 复杂或不确定结构失败关闭到可见源码，不猜测性改写；
 - 当前界面不暴露未进入个人首版范围的能力。
 
-macOS 14 与 arm64 是当前工程构建目标，不是已经通过外部设备矩阵验证的公开支持承诺。
+macOS 14 是当前工程构建目标。构建边界支持按 Xcode 的架构集合生成 arm64、x86_64
+或 universal Rust 静态库，但尚未形成两类真实设备的公开支持承诺。
 
 ## 2. 分层与责任
 
@@ -37,6 +38,11 @@ Rust 核心负责不依赖平台的纯值逻辑，并正在通过版本化 Engin
 revision，正文修改后立即失效。macOS 已用该单次请求作为分析、高亮、引用和预览的默认派生热路径；
 NSTextView 修改仍以影子方式逐字节对账。保存和撤销尚未切换权威，因此此时不能把 Rust Engine
 描述为已经完成正文接管。
+
+C ABI 用 `major/minor/capabilities` 协商兼容性：major 表示不兼容布局或所有权变化，minor
+表示可加性演进，宿主只要求自身使用的 capability bits，不再因为链接到更新 minor 版本而拒绝启动。
+旧 `inflow_core_abi_version` 保留为 major 的兼容别名。Rust build phase 声明源码输入和静态库输出，
+未变化时允许 Xcode 跳过；脚本按 `ARCHS` 分别构建 Rust target，多架构时用 `lipo` 合并。
 
 核心可能保留比个人首版更宽的解析或导出实现。产品能力必须由 macOS 当前入口与 UAT 再收窄，不能直接从核心函数存在性推导。
 

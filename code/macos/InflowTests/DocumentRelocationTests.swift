@@ -5,6 +5,10 @@ import XCTest
 final class DocumentRelocationTests: XCTestCase {
     func testReferenceABILayoutAndUnicodeExtractionMatchRustContract() throws {
         XCTAssertEqual(InflowCoreBridge.abiVersion, 2)
+        XCTAssertEqual(InflowCoreBridge.abiMajor, 2)
+        XCTAssertGreaterThanOrEqual(InflowCoreBridge.abiMinor, 1)
+        XCTAssertTrue(InflowCoreBridge.capabilities.isSuperset(of: .editorRequired))
+        XCTAssertTrue(InflowCoreBridge.isCompatible)
         XCTAssertEqual(MemoryLayout<InflowReference>.size, 40)
         XCTAssertEqual(MemoryLayout<InflowReference>.alignment, 8)
         XCTAssertEqual(MemoryLayout<InflowReferenceResult>.size, 40)

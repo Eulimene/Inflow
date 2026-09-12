@@ -236,6 +236,20 @@ _Static_assert(sizeof(InflowBytesResult) == 24, "InflowBytesResult ABI layout ch
 /// change this value; incompatible ownership or layout changes do.
 uint32_t inflow_core_abi_version(void);
 
+/// Incompatible-change coordinate of the stable C ABI.
+uint32_t inflow_core_abi_major(void);
+
+/// Additive-change coordinate of the stable C ABI.
+uint32_t inflow_core_abi_minor(void);
+
+/// Additive contracts implemented by the linked core. Unknown bits must be
+/// ignored by clients.
+static const uint64_t INFLOW_CAPABILITY_EDITOR_ENGINE = UINT64_C(1) << 0;
+static const uint64_t INFLOW_CAPABILITY_UNIFIED_DERIVATION = UINT64_C(1) << 1;
+static const uint64_t INFLOW_CAPABILITY_ENGINE_HISTORY = UINT64_C(1) << 2;
+static const uint64_t INFLOW_CAPABILITY_RENDER_IR = UINT64_C(1) << 3;
+uint64_t inflow_core_capabilities(void);
+
 /// Creates a stateful editor engine from a schema-versioned JSON request.
 /// The result payload is a full JSON snapshot. Returned bytes belong to Inflow
 /// and must be released with inflow_owned_bytes_free.
