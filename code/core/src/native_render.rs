@@ -1,14 +1,14 @@
 //! `TextKit` presentation data derived from the canonical Markdown parse.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::ops::Range;
 
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, LinkType, Tag, TagEnd};
 use serde::Serialize;
 
 use crate::markdown_ir::{DocumentIr, LocatedEvent};
-use crate::mermaid;
 use crate::render_ir::{RenderBlockKind, RenderIr};
+use crate::{math, mermaid};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct NativeRenderPlan {
@@ -26,6 +26,7 @@ pub struct NativeMarker {
     pub kind: MarkerKind,
     pub source_range: Range<usize>,
     pub heading_level: Option<u8>,
+    pub replacement_text: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -46,6 +47,10 @@ pub enum MarkerKind {
     ReferenceDefinition,
     LinkDelimiter,
     LinkDestination,
+    Rule,
+    FootnoteReference,
+    FootnoteDefinition,
+    MathDelimiter,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -73,6 +78,8 @@ pub enum ContentStyleKind {
     TableHeader,
     TableBody,
     Link,
+    InlineMath,
+    DisplayMath,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -160,6 +167,7 @@ impl NativeRenderPlan {
         let mut images = Vec::new();
         let mut locals = Vec::new();
         let mut diagrams = Vec::new();
+        let mut footnote_numbers = HashMap::new();
         reference_markers(source, &mut markers);
         triple_dash_fallback(source, &mut locals);
         malformed_fallback(document, &mut locals);
@@ -182,6 +190,16 @@ impl NativeRenderPlan {
                 Event::Start(Tag::BlockQuote(_)) => quote(source, range, &mut markers, &mut styles),
                 Event::Start(Tag::Item) => {
                     list_item(events, index, source, range, &mut markers, &mut styles);
+                }
+                Event::Start(Tag::FootnoteDefinition(name)) => {
+                    let number = footnote_number(&mut footnote_numbers, name);
+                    if let Some(prefix) = footnote_definition_prefix(source, &range) {
+                        markers.push(replacement_mark(
+                            MarkerKind::FootnoteDefinition,
+                            prefix,
+                            format!("{number} "),
+                        ));
+                    }
                 }
                 Event::Start(Tag::Strong) => wrapped(
                     range,
@@ -208,6 +226,24 @@ impl NativeRenderPlan {
                     &mut styles,
                 ),
                 Event::Code(_) => inline_code(source, range, &mut markers, &mut styles),
+                Event::InlineMath(value) => math_span(
+                    source,
+                    range,
+                    value,
+                    false,
+                    &mut markers,
+                    &mut styles,
+                    &mut locals,
+                ),
+                Event::DisplayMath(value) => math_span(
+                    source,
+                    range,
+                    value,
+                    true,
+                    &mut markers,
+                    &mut styles,
+                    &mut locals,
+                ),
                 Event::Start(Tag::Link {
                     link_type,
                     dest_url,
@@ -263,6 +299,15 @@ impl NativeRenderPlan {
                     located.source_range.clone(),
                     LocalSourceReason::RawHtml,
                 ),
+                Event::FootnoteReference(name) => {
+                    let number = footnote_number(&mut footnote_numbers, name);
+                    markers.push(replacement_mark(
+                        MarkerKind::FootnoteReference,
+                        range,
+                        number.to_string(),
+                    ));
+                }
+                Event::Rule => markers.push(mark(MarkerKind::Rule, range)),
                 _ => {}
             }
         }
@@ -301,6 +346,15 @@ fn mark(kind: MarkerKind, range: Range<usize>) -> NativeMarker {
         kind,
         source_range: range,
         heading_level: None,
+        replacement_text: None,
+    }
+}
+fn replacement_mark(kind: MarkerKind, range: Range<usize>, text: String) -> NativeMarker {
+    NativeMarker {
+        kind,
+        source_range: range,
+        heading_level: None,
+        replacement_text: Some(text),
     }
 }
 fn style(kind: ContentStyleKind, range: Range<usize>) -> NativeContentStyle {
@@ -338,6 +392,7 @@ fn heading(
             kind: MarkerKind::Heading,
             source_range: opening..cursor,
             heading_level: Some(level),
+            replacement_text: None,
         });
         let mut end = first_end;
         while end > cursor && matches!(bytes[end - 1], b' ' | b'\t') {
@@ -373,6 +428,7 @@ fn heading(
                 kind: MarkerKind::Heading,
                 source_range: delimiter_start..delimiter_end,
                 heading_level: Some(level),
+                replacement_text: None,
             });
         }
     }
@@ -437,14 +493,11 @@ fn list_item(
     while cursor < end && matches!(bytes[cursor], b' ' | b'\t') {
         cursor += 1;
     }
-    markers.push(mark(
-        if ordered {
-            MarkerKind::OrderedList
-        } else {
-            MarkerKind::UnorderedList
-        },
-        start..cursor,
-    ));
+    markers.push(if ordered {
+        mark(MarkerKind::OrderedList, start..cursor)
+    } else {
+        replacement_mark(MarkerKind::UnorderedList, start..cursor, "• ".to_owned())
+    });
     let task = events[index + 1..]
         .iter()
         .take_while(|event| event.source_range.start < end)
@@ -460,7 +513,11 @@ fn list_item(
         while task_end < end && matches!(bytes[task_end], b' ' | b'\t') {
             task_end += 1;
         }
-        markers.push(mark(MarkerKind::TaskList, task.start..task_end));
+        markers.push(replacement_mark(
+            MarkerKind::TaskList,
+            task.start..task_end,
+            if checked { "☑ " } else { "☐ " }.to_owned(),
+        ));
         cursor = task_end;
         (ContentStyleKind::TaskListItem, Some(checked))
     } else if ordered {
@@ -525,6 +582,43 @@ fn inline_code(
     if !content.is_empty() {
         styles.push(style(ContentStyleKind::InlineCode, content));
     }
+}
+
+fn math_span(
+    source: &str,
+    range: Range<usize>,
+    value: &str,
+    display: bool,
+    markers: &mut Vec<NativeMarker>,
+    styles: &mut Vec<NativeContentStyle>,
+    locals: &mut Vec<Local>,
+) {
+    if math::mathml(value, display).is_err() {
+        add_local(locals, range, LocalSourceReason::UnsupportedSyntax);
+        return;
+    }
+    let Some(local) = source.get(range.clone()) else {
+        return;
+    };
+    let Some(relative_start) = local.find(value) else {
+        add_local(locals, range, LocalSourceReason::ComplexOrAmbiguous);
+        return;
+    };
+    let content = range.start + relative_start..range.start + relative_start + value.len();
+    if range.start < content.start {
+        markers.push(mark(MarkerKind::MathDelimiter, range.start..content.start));
+    }
+    if content.end < range.end {
+        markers.push(mark(MarkerKind::MathDelimiter, content.end..range.end));
+    }
+    styles.push(style(
+        if display {
+            ContentStyleKind::DisplayMath
+        } else {
+            ContentStyleKind::InlineMath
+        },
+        content,
+    ));
 }
 
 fn link(
@@ -618,9 +712,7 @@ fn link_markers(source: &str, link: &NativeLink, markers: &mut Vec<NativeMarker>
             link.text_range.end..link.text_range.end + 1,
         ));
     }
-    if !link.target_range.is_empty() && link.target_range != link.text_range {
-        markers.push(mark(MarkerKind::LinkDestination, link.target_range.clone()));
-    } else if link.text_range.end + 1 < link.source_range.end {
+    if link.target_range != link.text_range && link.text_range.end + 1 < link.source_range.end {
         markers.push(mark(
             MarkerKind::LinkDestination,
             link.text_range.end + 1..link.source_range.end,
@@ -761,12 +853,43 @@ fn alignment(value: Alignment) -> NativeTableAlignment {
 fn reference_markers(source: &str, markers: &mut Vec<NativeMarker>) {
     for line in line_ranges(source.as_bytes(), 0..source.len()) {
         let text = source[line.clone()].trim_start();
-        if text.starts_with('[') && text.contains("]: ")
-            || text.starts_with('[') && text.contains("]:")
+        if !text.starts_with("[^")
+            && (text.starts_with('[') && text.contains("]: ")
+                || text.starts_with('[') && text.contains("]:"))
         {
             markers.push(mark(MarkerKind::ReferenceDefinition, line));
         }
     }
+}
+
+fn footnote_number(numbers: &mut HashMap<String, usize>, name: &str) -> usize {
+    let next = numbers.len() + 1;
+    *numbers.entry(name.to_owned()).or_insert(next)
+}
+
+fn footnote_definition_prefix(source: &str, range: &Range<usize>) -> Option<Range<usize>> {
+    let bytes = source.as_bytes();
+    let line_end = line_end(bytes, range.start, range.end);
+    let mut cursor = range.start;
+    while cursor < line_end && matches!(bytes[cursor], b' ' | b'\t') {
+        cursor += 1;
+    }
+    if bytes.get(cursor..cursor.saturating_add(2)) != Some(b"[^") {
+        return None;
+    }
+    let marker_start = cursor;
+    cursor += 2;
+    while cursor + 1 < line_end && bytes.get(cursor..cursor + 2) != Some(b"]:") {
+        cursor += 1;
+    }
+    if cursor + 1 >= line_end {
+        return None;
+    }
+    cursor += 2;
+    while cursor < line_end && matches!(bytes[cursor], b' ' | b'\t') {
+        cursor += 1;
+    }
+    Some(marker_start..cursor)
 }
 fn triple_dash_fallback(source: &str, locals: &mut Vec<Local>) {
     let lines = line_ranges(source.as_bytes(), 0..source.len());
@@ -970,5 +1093,87 @@ mod tests {
                 .iter()
                 .any(|item| item.reasons.contains(&LocalSourceReason::RawHtml))
         );
+    }
+
+    #[test]
+    fn native_markers_match_preview_visible_structure() {
+        let source = "[link](https://example.com)\n\n- item\n- [x] done\n\n---\n\nNote[^b] then[^a].\n\n[^a]: Alpha\n[^b]: Beta\n";
+        let plan = plan(source);
+
+        let marker = |kind| {
+            plan.markers
+                .iter()
+                .find(|item| item.kind == kind)
+                .expect("marker")
+        };
+        assert_eq!(
+            &source[marker(MarkerKind::LinkDestination).source_range.clone()],
+            "(https://example.com)"
+        );
+        assert_eq!(
+            marker(MarkerKind::UnorderedList)
+                .replacement_text
+                .as_deref(),
+            Some("• ")
+        );
+        assert_eq!(
+            marker(MarkerKind::TaskList).replacement_text.as_deref(),
+            Some("☑ ")
+        );
+        assert_eq!(
+            &source[marker(MarkerKind::Rule).source_range.clone()],
+            "---"
+        );
+
+        let references: Vec<_> = plan
+            .markers
+            .iter()
+            .filter(|item| item.kind == MarkerKind::FootnoteReference)
+            .map(|item| item.replacement_text.as_deref())
+            .collect();
+        assert_eq!(references, [Some("1"), Some("2")]);
+        let definitions: Vec<_> = plan
+            .markers
+            .iter()
+            .filter(|item| item.kind == MarkerKind::FootnoteDefinition)
+            .map(|item| item.replacement_text.as_deref())
+            .collect();
+        assert_eq!(definitions, [Some("2 "), Some("1 ")]);
+        assert!(!plan.markers.iter().any(|item| {
+            item.kind == MarkerKind::ReferenceDefinition
+                && source[item.source_range.clone()].starts_with("[^")
+        }));
+    }
+
+    #[test]
+    fn valid_math_hides_only_delimiters_and_invalid_math_stays_source() {
+        let source = "$x_1^2$\n\n$$\n\\frac{x}{y}\n$$\n\n$\\unknown{x}$";
+        let plan = plan(source);
+
+        assert_eq!(
+            plan.content_styles
+                .iter()
+                .filter(|item| item.kind == ContentStyleKind::InlineMath)
+                .count(),
+            1
+        );
+        assert_eq!(
+            plan.content_styles
+                .iter()
+                .filter(|item| item.kind == ContentStyleKind::DisplayMath)
+                .count(),
+            1
+        );
+        assert_eq!(
+            plan.markers
+                .iter()
+                .filter(|item| item.kind == MarkerKind::MathDelimiter)
+                .count(),
+            4
+        );
+        assert!(plan.local_source_blocks.iter().any(|item| {
+            item.reasons.contains(&LocalSourceReason::UnsupportedSyntax)
+                && &source[item.source_range.clone()] == "$\\unknown{x}$"
+        }));
     }
 }

@@ -1954,10 +1954,12 @@ private struct EditorEngineRawNativeRenderPlan: Decodable {
         let kind: String
         let sourceRange: EditorEngineByteRange
         let headingLevel: Int?
+        let replacementText: String?
         enum CodingKeys: String, CodingKey {
             case kind
             case sourceRange = "source_range"
             case headingLevel = "heading_level"
+            case replacementText = "replacement_text"
         }
     }
 
@@ -2098,9 +2100,17 @@ private struct EditorEngineRawNativeRenderPlan: Decodable {
             case "reference_definition": .referenceDefinition
             case "link_delimiter": .linkDelimiter
             case "link_destination": .linkDestination
+            case "rule": .rule
+            case "footnote_reference": .footnoteReference
+            case "footnote_definition": .footnoteDefinition
+            case "math_delimiter": .mathDelimiter
             default: throw EditorEngineBridgeError.invalidResponse
             }
-            return RenderedMarkdownMarker(kind: kind, sourceRange: try mapped(item.sourceRange))
+            return RenderedMarkdownMarker(
+                kind: kind,
+                sourceRange: try mapped(item.sourceRange),
+                replacementText: item.replacementText
+            )
         }
         let mappedStyles = try contentStyles.map { item in
             let kind: RenderedMarkdownContentStyleKind = switch item.kind {
@@ -2117,6 +2127,8 @@ private struct EditorEngineRawNativeRenderPlan: Decodable {
             case "table_header": .tableHeader
             case "table_body": .tableBody(alternating: item.alternating ?? false)
             case "link": .link
+            case "inline_math": .inlineMath
+            case "display_math": .displayMath
             default: throw EditorEngineBridgeError.invalidResponse
             }
             return RenderedMarkdownContentStyle(kind: kind, sourceRange: try mapped(item.sourceRange))

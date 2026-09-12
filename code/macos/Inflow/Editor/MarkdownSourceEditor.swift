@@ -455,6 +455,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             textView.clearRenderedImages()
             textView.renderedQuoteRanges = []
             textView.renderedInlineCodeRanges = []
+            textView.renderedReplacementMarkers = []
+            textView.renderedRuleRanges = []
             textView.setAccessibilityLabel("Markdown 源码编辑器")
             applySourceAppearance(sourceAppearance, force: changed)
         case .rendered:
@@ -589,6 +591,16 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         scrollView.rulersVisible = false
 
         let baseFont = NSFont.systemFont(ofSize: max(15, CGFloat(sourceAppearance.fontSize)))
+        textView.renderedReplacementBaseFont = baseFont
+        textView.renderedReplacementMarkers = plan.markers.filter { marker in
+            marker.replacementText != nil
+                && !rangesOverlap(marker.sourceRange.utf16Range, editingRange)
+        }
+        textView.renderedRuleRanges = plan.markers.compactMap { marker in
+            marker.kind == .rule && !rangesOverlap(marker.sourceRange.utf16Range, editingRange)
+                ? marker.sourceRange.utf16Range
+                : nil
+        }
         let baseParagraph = NSMutableParagraphStyle()
         baseParagraph.lineHeightMultiple = CGFloat(sourceAppearance.lineHeight)
         baseParagraph.paragraphSpacing = 6
@@ -702,6 +714,14 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 continue
             }
             if rangesOverlap(range, editingRange) { continue }
+            if marker.replacementText != nil {
+                applyRenderedReplacement(marker, storage: storage, baseFont: baseFont)
+                continue
+            }
+            if marker.kind == .rule {
+                applyRenderedRule(range, storage: storage, baseFont: baseFont)
+                continue
+            }
             if marker.kind.remainsVisibleWhenInactive {
                 storage.addAttributes(
                     [
@@ -1045,6 +1065,66 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
     }
 
+    private func applyRenderedReplacement(
+        _ marker: RenderedMarkdownMarker,
+        storage: NSTextStorage,
+        baseFont: NSFont
+    ) {
+        let range = marker.sourceRange.utf16Range
+        guard let replacement = marker.replacementText,
+              range.length > 0,
+              NSMaxRange(range) <= storage.length
+        else { return }
+        let font = marker.kind == .footnoteReference
+            ? NSFont.systemFont(ofSize: max(9, baseFont.pointSize * 0.72), weight: .medium)
+            : baseFont
+        storage.addAttributes(
+            [
+                .font: NSFont.systemFont(ofSize: 0.1),
+                .foregroundColor: NSColor.clear,
+                .backgroundColor: NSColor.clear,
+                .kern: 0,
+                .underlineStyle: 0,
+                .strikethroughStyle: 0,
+                .obliqueness: 0,
+            ],
+            range: range
+        )
+        let width = ceil((replacement as NSString).size(withAttributes: [.font: font]).width)
+        storage.addAttribute(
+            .kern,
+            value: max(1, width),
+            range: NSRange(location: range.location, length: 1)
+        )
+    }
+
+    private func applyRenderedRule(
+        _ range: NSRange,
+        storage: NSTextStorage,
+        baseFont: NSFont
+    ) {
+        guard range.length > 0, NSMaxRange(range) <= storage.length else { return }
+        storage.addAttributes(
+            [
+                .font: NSFont.systemFont(ofSize: 0.1),
+                .foregroundColor: NSColor.clear,
+                .backgroundColor: NSColor.clear,
+                .kern: 0,
+            ],
+            range: range
+        )
+        let paragraph = (
+            storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
+                as? NSParagraphStyle
+        )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+        paragraph.minimumLineHeight = max(paragraph.minimumLineHeight, baseFont.pointSize * 1.4)
+        storage.addAttribute(
+            .paragraphStyle,
+            value: paragraph,
+            range: NSRange(location: range.location, length: 1)
+        )
+    }
+
     private func applyRenderedTableEdit(
         _ edit: RenderedMarkdownTableEdit,
         to table: RenderedMarkdownTable
@@ -1130,6 +1210,32 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 )
             }
             storage.addAttribute(.baselineOffset, value: 0, range: range)
+        case .inlineMath:
+            storage.addAttributes(
+                [
+                    .font: NSFont(name: "Times New Roman", size: baseFont.pointSize)
+                        ?? NSFont.systemFont(ofSize: baseFont.pointSize),
+                    .foregroundColor: NSColor.labelColor,
+                ],
+                range: range
+            )
+        case .displayMath:
+            let paragraph = (
+                storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
+                    as? NSParagraphStyle
+            )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+            paragraph.alignment = .center
+            paragraph.paragraphSpacingBefore = max(paragraph.paragraphSpacingBefore, 8)
+            paragraph.paragraphSpacing = max(paragraph.paragraphSpacing, 8)
+            storage.addAttributes(
+                [
+                    .font: NSFont(name: "Times New Roman", size: baseFont.pointSize + 1)
+                        ?? NSFont.systemFont(ofSize: baseFont.pointSize + 1),
+                    .foregroundColor: NSColor.labelColor,
+                    .paragraphStyle: paragraph,
+                ],
+                range: range
+            )
         case .blockQuote:
             let paragraphStyle = (
                 storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
@@ -2152,6 +2258,17 @@ final class WindowAwareTextView: NSTextView {
             if oldValue != renderedInlineCodeRanges { needsDisplay = true }
         }
     }
+    var renderedReplacementMarkers: [RenderedMarkdownMarker] = [] {
+        didSet {
+            if oldValue != renderedReplacementMarkers { needsDisplay = true }
+        }
+    }
+    var renderedRuleRanges: [NSRange] = [] {
+        didSet {
+            if oldValue != renderedRuleRanges { needsDisplay = true }
+        }
+    }
+    var renderedReplacementBaseFont = NSFont.systemFont(ofSize: 15)
     private var renderedImageViews: [Int: RenderedImageViewState] = [:]
     private var renderedTableViews: [Int: RenderedTableViewState] = [:]
     private var retainedRenderedOverlayKeys: Set<Int>?
@@ -2511,6 +2628,80 @@ final class WindowAwareTextView: NSTextView {
                     height: max(1, lineRect.height - 2)
                 )
                 if bar.intersects(rect) { bar.fill() }
+            }
+        }
+        NSColor.separatorColor.setStroke()
+        for characterRange in renderedRuleRanges where characterRange.length > 0 {
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: characterRange,
+                actualCharacterRange: nil
+            )
+            guard glyphRange.location < layoutManager.numberOfGlyphs else { continue }
+            let lineRect = layoutManager.lineFragmentRect(
+                forGlyphAt: glyphRange.location,
+                effectiveRange: nil,
+                withoutAdditionalLayout: true
+            )
+            let y = textContainerOrigin.y + lineRect.midY
+            let startX = textContainerOrigin.x + lineRect.minX
+            let endX = textContainerOrigin.x + textContainer.size.width
+                - textContainer.lineFragmentPadding
+            let path = NSBezierPath()
+            path.lineWidth = 1
+            path.move(to: NSPoint(x: startX, y: y))
+            path.line(to: NSPoint(x: endX, y: y))
+            let strokeRect = NSRect(
+                x: startX,
+                y: y - 1,
+                width: max(1, endX - startX),
+                height: 2
+            )
+            if strokeRect.intersects(rect) { path.stroke() }
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let layoutManager, let textContainer else { return }
+        for marker in renderedReplacementMarkers {
+            let range = marker.sourceRange.utf16Range
+            guard let text = marker.replacementText,
+                  range.length > 0,
+                  NSMaxRange(range) <= (string as NSString).length
+            else { continue }
+            let glyphIndex = layoutManager.glyphIndexForCharacter(at: range.location)
+            guard glyphIndex < layoutManager.numberOfGlyphs else { continue }
+            let lineRect = layoutManager.lineFragmentRect(
+                forGlyphAt: glyphIndex,
+                effectiveRange: nil,
+                withoutAdditionalLayout: true
+            )
+            let glyphRect = layoutManager.boundingRect(
+                forGlyphRange: NSRange(location: glyphIndex, length: 1),
+                in: textContainer
+            )
+            let font = marker.kind == .footnoteReference
+                ? NSFont.systemFont(
+                    ofSize: max(9, renderedReplacementBaseFont.pointSize * 0.72),
+                    weight: .medium
+                )
+                : renderedReplacementBaseFont
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: marker.kind == .footnoteReference
+                    ? NSColor.linkColor
+                    : NSColor.labelColor,
+            ]
+            let size = (text as NSString).size(withAttributes: attributes)
+            let baselineLift = marker.kind == .footnoteReference ? lineRect.height * 0.22 : 0
+            let point = NSPoint(
+                x: textContainerOrigin.x + glyphRect.minX,
+                y: textContainerOrigin.y + lineRect.minY
+                    + max(0, (lineRect.height - size.height) / 2) - baselineLift
+            )
+            let drawRect = NSRect(origin: point, size: size)
+            if drawRect.intersects(dirtyRect) {
+                (text as NSString).draw(at: point, withAttributes: attributes)
             }
         }
     }

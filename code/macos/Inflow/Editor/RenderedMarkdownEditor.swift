@@ -27,11 +27,16 @@ enum RenderedMarkdownMarkerKind: Equatable, Sendable {
     case referenceDefinition
     case linkDelimiter
     case linkDestination
+    case rule
+    case footnoteReference
+    case footnoteDefinition
+    case mathDelimiter
 }
 
 struct RenderedMarkdownMarker: Equatable, Sendable {
     let kind: RenderedMarkdownMarkerKind
     let sourceRange: RenderedMarkdownSourceRange
+    let replacementText: String?
 }
 
 enum RenderedMarkdownContentStyleKind: Equatable, Sendable {
@@ -48,6 +53,8 @@ enum RenderedMarkdownContentStyleKind: Equatable, Sendable {
     case tableHeader
     case tableBody(alternating: Bool)
     case link
+    case inlineMath
+    case displayMath
 }
 
 struct RenderedMarkdownContentStyle: Equatable, Sendable {
@@ -338,6 +345,11 @@ enum RenderedMarkdownEditor {
 
         let replacementRanges = plan.localSourceBlocks.map(\.sourceRange.utf16Range)
             + plan.mermaidDiagrams.map(\.sourceRange.utf16Range)
+            + plan.markers.compactMap { marker in
+                marker.replacementText != nil || marker.kind == .rule
+                    ? marker.sourceRange.utf16Range
+                    : nil
+            }
         if let replacement = replacementRanges.first(where: {
             containsCaret(location, in: $0, sourceLength: sourceLength)
         }) {

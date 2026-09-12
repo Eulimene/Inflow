@@ -101,7 +101,14 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertTrue(hasMarker(.emphasis, text: "*", source: source, plan: plan))
         XCTAssertTrue(hasMarker(.strikethrough, text: "~~", source: source, plan: plan))
         XCTAssertTrue(hasMarker(.inlineCode, text: "`", source: source, plan: plan))
-        XCTAssertTrue(hasMarker(.linkDestination, text: "https://example.com/path", source: source, plan: plan))
+        XCTAssertTrue(
+            hasMarker(
+                .linkDestination,
+                text: "(https://example.com/path)",
+                source: source,
+                plan: plan
+            )
+        )
         XCTAssertTrue(hasMarker(.tableBoundary, text: "|", source: source, plan: plan))
         XCTAssertTrue(hasMarker(.tableSeparator, text: "|", source: source, plan: plan))
         XCTAssertTrue(
@@ -1114,16 +1121,24 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             message: "quote source marker must be hidden without shrinking the caret"
         )
 
-        for marker in ["- ", "1. ", "[x] "] {
-            let location = try XCTUnwrap((source as NSString).range(of: marker).nonEmptyLocation)
-            let font = try XCTUnwrap(
-                session.textView.textStorage?.attribute(
-                    .font,
-                    at: location,
-                    effectiveRange: nil
-                ) as? NSFont
-            )
-            XCTAssertGreaterThan(font.pointSize, 1, "\(marker) must remain visible")
+        let orderedLocation = try XCTUnwrap(
+            (source as NSString).range(of: "1. ").nonEmptyLocation
+        )
+        let orderedFont = try XCTUnwrap(
+            session.textView.textStorage?.attribute(
+                .font,
+                at: orderedLocation,
+                effectiveRange: nil
+            ) as? NSFont
+        )
+        XCTAssertGreaterThan(orderedFont.pointSize, 1, "ordered marker must remain visible")
+        XCTAssertEqual(
+            session.textView.renderedReplacementMarkers.compactMap(\.replacementText),
+            ["• ", "• ", "☑ "]
+        )
+        for marker in RenderedMarkdownEditor.plan(for: source).markers
+        where marker.replacementText != nil {
+            assertVisuallyHidden(marker.sourceRange.utf16Range, in: session.textView.textStorage)
         }
 
         let inlineMarkerFont = try XCTUnwrap(
@@ -1139,6 +1154,110 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             in: session.textView.textStorage,
             message: "inline Markdown delimiters must stay visually collapsed while editing"
         )
+    }
+
+    @MainActor
+    func testRenderedSessionMatchesPreviewMarkersRulesLinksAndFootnotes() async throws {
+        let source = """
+        [link](https://example.com)
+
+        - item
+        - [x] done
+
+        ---
+
+        Note[^b] then[^a].
+
+        [^a]: Alpha
+        [^b]: Beta
+        """
+        let plan = RenderedMarkdownEditor.plan(for: source)
+
+        let linkSuffix = try XCTUnwrap(
+            plan.markers.first { $0.kind == .linkDestination }
+        )
+        XCTAssertEqual(
+            utf8Text(linkSuffix.sourceRange, source: source),
+            "(https://example.com)"
+        )
+        XCTAssertEqual(
+            plan.markers.first { $0.kind == .unorderedList }?.replacementText,
+            "• "
+        )
+        XCTAssertEqual(
+            plan.markers.first { $0.kind == .taskList }?.replacementText,
+            "☑ "
+        )
+        XCTAssertEqual(plan.markers.filter { $0.kind == .rule }.count, 1)
+        XCTAssertEqual(
+            plan.markers.filter { $0.kind == .footnoteReference }.map(\.replacementText),
+            ["1", "2"]
+        )
+        XCTAssertEqual(
+            plan.markers.filter { $0.kind == .footnoteDefinition }.map(\.replacementText),
+            ["2 ", "1 "]
+        )
+        XCTAssertFalse(plan.markers.contains { marker in
+            marker.kind == .referenceDefinition
+                && utf8Text(marker.sourceRange, source: source).hasPrefix("[^")
+        })
+
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+
+        XCTAssertEqual(
+            session.textView.renderedReplacementMarkers.compactMap(\.replacementText),
+            ["• ", "• ", "☑ ", "1", "2", "2 ", "1 "]
+        )
+        XCTAssertEqual(session.textView.renderedRuleRanges.count, 1)
+        for marker in plan.markers where marker.replacementText != nil || marker.kind == .rule {
+            assertVisuallyHidden(marker.sourceRange.utf16Range, in: session.textView.textStorage)
+        }
+        assertVisuallyHidden(linkSuffix.sourceRange.utf16Range, in: session.textView.textStorage)
+        let alpha = (source as NSString).range(of: "Alpha")
+        let alphaColor = session.textView.textStorage?.attribute(
+            .foregroundColor,
+            at: alpha.location,
+            effectiveRange: nil
+        ) as? NSColor
+        XCTAssertGreaterThan(alphaColor?.alphaComponent ?? 0, 0.9)
+    }
+
+    @MainActor
+    func testRenderedSessionUsesThePreviewMathParseAndKeepsFailuresEditable() async throws {
+        let source = "$x_1^2$\n\n$$\n\\frac{x}{y}\n$$\n\n$\\unknown{x}$"
+        let derived = try XCTUnwrap(
+            EditorEngineDerivedContent.deriveSynchronously(
+                source: source,
+                configuration: .default
+            )
+        )
+        let plan = derived.nativeRenderPlan
+
+        XCTAssertTrue(plan.contentStyles.contains { $0.kind == .inlineMath })
+        XCTAssertTrue(plan.contentStyles.contains { $0.kind == .displayMath })
+        XCTAssertEqual(plan.markers.filter { $0.kind == .mathDelimiter }.count, 4)
+        XCTAssertTrue(plan.localSourceBlocks.contains { block in
+            block.reasons.contains(.unsupportedSyntax)
+                && utf8Text(block.sourceRange, source: source) == "$\\unknown{x}$"
+        })
+
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        for marker in plan.markers where marker.kind == .mathDelimiter {
+            assertVisuallyHidden(marker.sourceRange.utf16Range, in: session.textView.textStorage)
+        }
+        let invalidLocation = (source as NSString).range(of: "\\unknown").location
+        let invalidColor = session.textView.textStorage?.attribute(
+            .foregroundColor,
+            at: invalidLocation,
+            effectiveRange: nil
+        ) as? NSColor
+        XCTAssertGreaterThan(invalidColor?.alphaComponent ?? 0, 0.8)
     }
 
     @MainActor

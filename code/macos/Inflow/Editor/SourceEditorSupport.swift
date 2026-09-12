@@ -124,10 +124,11 @@ actor RenderedMarkdownImageLoader {
 extension RenderedMarkdownMarkerKind {
     var remainsVisibleWhenInactive: Bool {
         switch self {
-        case .unorderedList, .orderedList, .taskList: true
+        case .orderedList: true
+        case .unorderedList, .taskList, .rule, .footnoteReference, .footnoteDefinition: false
         case .heading, .blockQuote, .referenceDefinition, .emphasis, .strong, .strikethrough,
              .inlineCode, .tableBoundary, .tableSeparator, .tableDelimiterRow, .linkDelimiter,
-             .linkDestination: false
+             .linkDestination, .mathDelimiter: false
         }
     }
 }
