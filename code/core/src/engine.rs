@@ -160,6 +160,10 @@ const fn default_true() -> bool {
     true
 }
 
+const fn default_table_dimension() -> usize {
+    3
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FormatOperation {
@@ -183,7 +187,12 @@ pub enum FormatOperation {
         destination: String,
         default_alternative: String,
     },
-    Table,
+    Table {
+        #[serde(default = "default_table_dimension")]
+        columns: usize,
+        #[serde(default = "default_table_dimension")]
+        rows: usize,
+    },
     HorizontalRule,
     Footnote,
     Math,
@@ -819,7 +828,9 @@ impl EditorEngine {
                 destination,
                 default_alternative,
             } => format::insert_image(&self.text, range, &destination, &default_alternative),
-            FormatOperation::Table => format::insert_table(&self.text, range),
+            FormatOperation::Table { columns, rows } => {
+                format::insert_table_with_dimensions(&self.text, range, columns, rows)
+            }
             FormatOperation::HorizontalRule => format::insert_horizontal_rule(&self.text, range),
             FormatOperation::Footnote => format::insert_footnote(&self.text, range),
             FormatOperation::Math => format::insert_math(&self.text, range),

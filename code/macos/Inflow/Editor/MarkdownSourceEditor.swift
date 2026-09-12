@@ -522,7 +522,6 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             textView.clickableLinkRanges = []
             textView.clearRenderedImages()
             textView.renderedQuoteRanges = []
-            textView.renderedInlineCodeRanges = []
             textView.renderedReplacementMarkers = []
             textView.renderedRuleRanges = []
             textView.renderedCollapsedSourceRanges = []
@@ -655,11 +654,6 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             guard style.kind == .blockQuote else { return nil }
             guard !rangesOverlap(style.sourceRange.utf16Range, editingRange) else { return nil }
             return (source as NSString).paragraphRange(for: style.sourceRange.utf16Range)
-        }
-        textView.renderedInlineCodeRanges = plan.contentStyles.compactMap { style in
-            guard style.kind == .inlineCode else { return nil }
-            guard !rangesOverlap(style.sourceRange.utf16Range, editingRange) else { return nil }
-            return style.sourceRange.utf16Range
         }
         scrollView.hasVerticalRuler = false
         scrollView.rulersVisible = false
@@ -1334,7 +1328,13 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                     weight: .regular
                 )
             }
-            storage.addAttribute(.baselineOffset, value: 0, range: range)
+            storage.addAttributes(
+                [
+                    .baselineOffset: 0,
+                    .backgroundColor: NSColor.quaternaryLabelColor.withAlphaComponent(0.22),
+                ],
+                range: range
+            )
         case .inlineMath:
             storage.addAttributes(
                 [
@@ -1368,8 +1368,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
             paragraphStyle.firstLineHeadIndent += 16
             paragraphStyle.headIndent += 16
-            paragraphStyle.paragraphSpacingBefore = max(paragraphStyle.paragraphSpacingBefore, 3)
-            paragraphStyle.paragraphSpacing = max(paragraphStyle.paragraphSpacing, 3)
+            paragraphStyle.paragraphSpacingBefore = 0
+            paragraphStyle.paragraphSpacing = 0
             let paragraphRange = storage.mutableString.paragraphRange(for: range)
             storage.addAttribute(.paragraphStyle, value: paragraphStyle, range: paragraphRange)
             storage.addAttribute(
@@ -2348,6 +2348,26 @@ enum RenderedMarkdownCaretStyleResolver {
     }
 }
 
+enum RenderedMarkdownQuoteGeometry {
+    static func barRect(
+        lineFragment: NSRect,
+        usedRect: NSRect,
+        textContainerOrigin: NSPoint,
+        font: NSFont
+    ) -> NSRect {
+        let textHeight = min(
+            usedRect.height,
+            max(1, ceil(font.ascender - font.descender + font.leading))
+        )
+        return NSRect(
+            x: textContainerOrigin.x + lineFragment.minX + 4,
+            y: textContainerOrigin.y + usedRect.midY - textHeight / 2,
+            width: 3,
+            height: textHeight
+        )
+    }
+}
+
 @MainActor
 final class WindowAwareTextView: NSTextView {
     private struct CompositionBaseline {
@@ -2412,11 +2432,6 @@ final class WindowAwareTextView: NSTextView {
     var renderedQuoteRanges: [NSRange] = [] {
         didSet {
             if oldValue != renderedQuoteRanges { needsDisplay = true }
-        }
-    }
-    var renderedInlineCodeRanges: [NSRange] = [] {
-        didSet {
-            if oldValue != renderedInlineCodeRanges { needsDisplay = true }
         }
     }
     var renderedReplacementMarkers: [RenderedMarkdownMarker] = [] {
@@ -2533,6 +2548,11 @@ final class WindowAwareTextView: NSTextView {
         let point = localPoint(forWindowPoint: event.locationInWindow)
         updateHoveredLink(atLocalPoint: point)
         super.mouseMoved(with: event)
+        cursorForRenderedContent(atLocalPoint: point).set()
+    }
+
+    func cursorForRenderedContent(atLocalPoint point: NSPoint) -> NSCursor {
+        clickableLinkLocation(at: point) == nil ? .iBeam : .pointingHand
     }
 
     func updateHoveredLink(atLocalPoint point: NSPoint) {
@@ -2881,28 +2901,6 @@ final class WindowAwareTextView: NSTextView {
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
         guard let layoutManager, let textContainer else { return }
-        for range in renderedInlineCodeRanges {
-            drawRoundedBackground(
-                for: range,
-                color: NSColor.quaternaryLabelColor.withAlphaComponent(0.24),
-                horizontalPadding: 3,
-                radius: 4,
-                layoutManager: layoutManager,
-                textContainer: textContainer,
-                dirtyRect: rect
-            )
-        }
-        if let hoveredLinkRange {
-            drawRoundedBackground(
-                for: hoveredLinkRange,
-                color: NSColor.controlAccentColor.withAlphaComponent(0.13),
-                horizontalPadding: 3,
-                radius: 4,
-                layoutManager: layoutManager,
-                textContainer: textContainer,
-                dirtyRect: rect
-            )
-        }
         NSColor.separatorColor.setFill()
         for characterRange in renderedQuoteRanges where characterRange.length > 0 {
             let glyphRange = layoutManager.glyphRange(
@@ -2910,12 +2908,12 @@ final class WindowAwareTextView: NSTextView {
                 actualCharacterRange: nil
             )
             layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) {
-                lineRect, _, _, _, _ in
-                let bar = NSRect(
-                    x: self.textContainerOrigin.x + lineRect.minX + 3,
-                    y: self.textContainerOrigin.y + lineRect.minY + 1,
-                    width: 3,
-                    height: max(1, lineRect.height - 2)
+                lineRect, usedRect, _, _, _ in
+                let bar = RenderedMarkdownQuoteGeometry.barRect(
+                    lineFragment: lineRect,
+                    usedRect: usedRect,
+                    textContainerOrigin: self.textContainerOrigin,
+                    font: self.renderedReplacementBaseFont
                 )
                 if bar.intersects(rect) { bar.fill() }
             }
@@ -2993,36 +2991,6 @@ final class WindowAwareTextView: NSTextView {
             if drawRect.intersects(dirtyRect) {
                 (text as NSString).draw(at: point, withAttributes: attributes)
             }
-        }
-    }
-
-    private func drawRoundedBackground(
-        for characterRange: NSRange,
-        color: NSColor,
-        horizontalPadding: CGFloat,
-        radius: CGFloat,
-        layoutManager: NSLayoutManager,
-        textContainer: NSTextContainer,
-        dirtyRect: NSRect
-    ) {
-        guard characterRange.length > 0,
-              NSMaxRange(characterRange) <= (string as NSString).length
-        else { return }
-        let glyphRange = layoutManager.glyphRange(
-            forCharacterRange: characterRange,
-            actualCharacterRange: nil
-        )
-        layoutManager.enumerateEnclosingRects(
-            forGlyphRange: glyphRange,
-            withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
-            in: textContainer
-        ) { glyphRect, _ in
-            let background = glyphRect
-                .offsetBy(dx: self.textContainerOrigin.x, dy: self.textContainerOrigin.y)
-                .insetBy(dx: -horizontalPadding, dy: -1)
-            guard background.intersects(dirtyRect) else { return }
-            color.setFill()
-            NSBezierPath(roundedRect: background, xRadius: radius, yRadius: radius).fill()
         }
     }
 
@@ -3365,11 +3333,15 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
 
     static func backgroundColor(forRow index: Int) -> NSColor {
         if index == 0 {
-            return NSColor.controlAccentColor.withAlphaComponent(0.10)
+            return NSColor.controlAccentColor.withAlphaComponent(0.14)
         }
         return index.isMultiple(of: 2)
-            ? NSColor.quaternaryLabelColor.withAlphaComponent(0.18)
+            ? NSColor.controlAccentColor.withAlphaComponent(0.045)
             : NSColor.textBackgroundColor
+    }
+
+    static var borderColor: NSColor {
+        NSColor.separatorColor.withAlphaComponent(0.62)
     }
 
     func backgroundColor(forRow index: Int) -> NSColor {
@@ -3465,7 +3437,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         cells = layouts
         super.init(frame: NSRect(origin: .zero, size: renderedSize))
         wantsLayer = true
-        layer?.cornerRadius = 6
+        layer?.cornerRadius = 8
         layer?.masksToBounds = true
         setAccessibilityElement(true)
         setAccessibilityRole(.table)
@@ -3583,7 +3555,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
             rowRect.fill()
             y += height
         }
-        NSColor.separatorColor.setStroke()
+        Self.borderColor.setStroke()
         let path = NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5))
         path.lineWidth = 1
         path.stroke()
@@ -3730,8 +3702,10 @@ final class RenderedMarkdownTableCellTextView: NSTextView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        setHoveredLinkRange(link(at: event)?.range)
+        let link = link(at: event)
+        setHoveredLinkRange(link?.range)
         super.mouseMoved(with: event)
+        (link == nil ? NSCursor.iBeam : NSCursor.pointingHand).set()
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -3747,23 +3721,24 @@ final class RenderedMarkdownTableCellTextView: NSTextView {
         super.mouseDown(with: event)
     }
 
-    override func drawBackground(in rect: NSRect) {
-        super.drawBackground(in: rect)
-        guard let hoveredLinkRange, let layoutManager, let textContainer else { return }
-        let glyphRange = layoutManager.glyphRange(
-            forCharacterRange: hoveredLinkRange,
-            actualCharacterRange: nil
-        )
-        let glyphRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
-            .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
-            .insetBy(dx: -3, dy: -1)
-        guard glyphRect.intersects(rect) else { return }
-        NSColor.controlAccentColor.withAlphaComponent(0.13).setFill()
-        NSBezierPath(roundedRect: glyphRect, xRadius: 4, yRadius: 4).fill()
-    }
-
     override func menu(for event: NSEvent) -> NSMenu? {
         contextMenuProvider?(event) ?? super.menu(for: event)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard let storage = textStorage, let layoutManager, let textContainer else { return }
+        let fullRange = NSRange(location: 0, length: storage.length)
+        storage.enumerateAttribute(.link, in: fullRange) { value, range, _ in
+            guard value != nil, range.length > 0 else { return }
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: range,
+                actualCharacterRange: nil
+            )
+            let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+                .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+            if !rect.isEmpty { addCursorRect(rect, cursor: .pointingHand) }
+        }
     }
 
     func linkTarget(at event: NSEvent) -> String? {

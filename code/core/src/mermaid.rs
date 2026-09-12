@@ -273,6 +273,7 @@ fn require_content(diagram: Diagram) -> Result<Diagram, MermaidError> {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn render(diagram: &Diagram, source: &str) -> Result<String, MermaidError> {
     let node_height = 52usize;
     let spacing = 70usize;
@@ -364,11 +365,11 @@ fn render(diagram: &Diagram, source: &str) -> Result<String, MermaidError> {
     }
     for (label, label_x, label_y) in edge_labels {
         let label_width = text_width(label) + 16;
-        let label_x_origin = label_x.saturating_sub(label_width / 2);
-        let label_y_origin = label_y.saturating_sub(11);
+        let label_left = label_x.saturating_sub(label_width / 2);
+        let label_top = label_y.saturating_sub(11);
         let _ = write!(
             output,
-            "<rect x=\"{label_x_origin}\" y=\"{label_y_origin}\" width=\"{label_width}\" height=\"22\" rx=\"4\" class=\"edge-label-background\"/><text x=\"{label_x}\" y=\"{label_y}\" text-anchor=\"middle\" dominant-baseline=\"middle\" class=\"edge-label\">{}</text>",
+            "<rect x=\"{label_left}\" y=\"{label_top}\" width=\"{label_width}\" height=\"22\" rx=\"4\" class=\"edge-label-background\"/><text x=\"{label_x}\" y=\"{label_y}\" text-anchor=\"middle\" dominant-baseline=\"middle\" class=\"edge-label\">{}</text>",
             escape(label)
         );
     }

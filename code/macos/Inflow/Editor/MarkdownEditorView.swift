@@ -108,6 +108,7 @@ struct MarkdownEditorView: View {
     @State private var pendingExportConfirmation: PendingExportConfirmation?
     @State private var markdownFormatErrorMessage: String?
     @State private var linkInsertionRequest: MarkdownLinkInsertionRequest?
+    @State private var tableInsertionRequest: MarkdownTableInsertionRequest?
     @State private var isImportingImage = false
     @State private var deferredImageInsertionQueue = DeferredImageInsertionQueue()
     @State private var imageAssetWorker = ImageAssetWorker()
@@ -725,6 +726,15 @@ struct MarkdownEditorView: View {
                 request: request,
                 onCancel: { linkInsertionRequest = nil },
                 onInsert: { destination in insertLink(request, destination: destination) }
+            )
+        }
+        .sheet(item: $tableInsertionRequest) { request in
+            MarkdownTableInsertionView(
+                request: request,
+                onCancel: { tableInsertionRequest = nil },
+                onInsert: { columns, rows in
+                    insertTable(request, columns: columns, rows: rows)
+                }
             )
         }
         .sheet(isPresented: $isRecoveryCenterPresented) {
@@ -2339,7 +2349,10 @@ struct MarkdownEditorView: View {
             canInsert: canEditDocument,
             insertLink: presentLinkInsertion,
             insertImage: insertImage,
-            insertTable: insertTable,
+            insertTable: { columns, rows in
+                insertTable(columns: columns, rows: rows)
+            },
+            presentTableInsertion: presentTableInsertion,
             insertHorizontalRule: insertHorizontalRule,
             insertFootnote: insertFootnote,
             insertFormula: insertFormula,
@@ -2643,8 +2656,44 @@ struct MarkdownEditorView: View {
         applyEngineInsertion(.horizontalRule, actionName: "插入分隔线", noun: "分隔线")
     }
 
-    private func insertTable() {
-        applyEngineInsertion(.table, actionName: "插入表格", noun: "表格")
+    private func insertTable(columns: UInt8, rows: UInt8) {
+        applyEngineInsertion(
+            .table(columns: columns, rows: rows),
+            actionName: "插入表格",
+            noun: "表格"
+        )
+    }
+
+    private func presentTableInsertion() {
+        guard canEditDocument, tableInsertionRequest == nil else { return }
+        tableInsertionRequest = MarkdownTableInsertionRequest(
+            sourceSnapshot: document.text,
+            selectedUTF16Range: sourceEditorSession.textView.selectedRange()
+        )
+    }
+
+    private func insertTable(
+        _ request: MarkdownTableInsertionRequest,
+        columns: UInt8,
+        rows: UInt8
+    ) {
+        guard tableInsertionRequest?.id == request.id else { return }
+        revealSourceSurface()
+        Task { @MainActor in
+            guard await editorStore.applyFormat(
+                .table(columns: columns, rows: rows),
+                expectedText: request.sourceSnapshot,
+                selectedUTF16Range: request.selectedUTF16Range,
+                actionName: "插入表格"
+            ) else {
+                tableInsertionRequest = nil
+                markdownFormatErrorMessage = "正文、选区或输入法状态已变化，本次未插入表格。"
+                return
+            }
+            tableInsertionRequest = nil
+            await Task.yield()
+            _ = sourceEditorSession.focusEditor()
+        }
     }
 
     private func presentLinkInsertion() {

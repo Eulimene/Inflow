@@ -90,7 +90,7 @@ enum EditorEngineFormatOperation: Equatable, Sendable {
     case list(style: String)
     case link(destination: String)
     case image(destination: String, defaultAlternative: String)
-    case table
+    case table(columns: UInt8, rows: UInt8)
     case horizontalRule
     case footnote
     case math

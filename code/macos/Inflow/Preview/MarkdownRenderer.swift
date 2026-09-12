@@ -138,9 +138,10 @@ enum MarkdownRenderer {
             h1[data-inflow-source-start], h2[data-inflow-source-start], h3[data-inflow-source-start], h4[data-inflow-source-start], h5[data-inflow-source-start], h6[data-inflow-source-start] { cursor: pointer; }
             h1, h2 { border-bottom: 1px solid #d8dee4; padding-bottom: .28em; }
             h1 { font-size: 2em; } h2 { font-size: 1.5em; } h3 { font-size: 1.25em; }
-            a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
-            blockquote { margin: 1em 0; padding: .15em 1em; color: #57606a; border-left: 4px solid #d0d7de; }
-            code { font: .88em/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: #afb8c133; border-radius: 5px; padding: .16em .34em; }
+            a { color: #0969da; text-decoration: none; cursor: pointer; } a:hover { text-decoration: underline; background: transparent; }
+            blockquote { margin: .75em 0; padding: 0 1em; color: #57606a; border-left: 4px solid #d0d7de; line-height: inherit; }
+            blockquote > :first-child { margin-top: 0; } blockquote > :last-child { margin-bottom: 0; }
+            code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88em; line-height: inherit; background: #afb8c133; border-radius: 3px; padding: 0; }
             pre { overflow: auto; padding: 16px; background: #f6f8fa; border-radius: 8px; }
             pre code { padding: 0; background: transparent; }
             .tok-keyword { color: #cf222e; font-weight: 600; }
@@ -151,7 +152,8 @@ enum MarkdownRenderer {
             .tok-tag { color: #116329; }
             table { width: 100%; border-collapse: collapse; display: block; overflow-x: auto; }
             th, td { border: 1px solid #d0d7de; padding: 7px 12px; }
-            tr:nth-child(even) { background: #f6f8fa; }
+            thead { background: #0969da24; } th { font-weight: 600; }
+            tbody tr:nth-child(even) { background: #0969da0b; }
             img { max-width: 100%; height: auto; }
             .image-warning { display: flex; flex-direction: column; gap: .2em; margin: 1em 0; padding: 12px 14px; border: 1px solid #d4a72c; border-radius: 8px; color: #9a6700; }
             .image-warning span { font-size: .9em; }
@@ -181,7 +183,9 @@ enum MarkdownRenderer {
               h1, h2, th, td { border-color: #30363d; }
               a { color: #58a6ff; }
               blockquote { color: #8b949e; border-color: #3b434b; }
-              pre, tr:nth-child(even) { background: #161b22; }
+              pre { background: #161b22; }
+              thead { background: #58a6ff24; }
+              tbody tr:nth-child(even) { background: #58a6ff12; }
               code { background: #6e768166; }
               .tok-keyword { color: #ff7b72; }
               .tok-type { color: #d2a8ff; }
@@ -247,9 +251,9 @@ enum PreviewAppearanceCSS {
         case .system:
             ":root { color-scheme: light dark; }"
         case .light:
-            ":root { color-scheme: light; } body { color: #111111; background: #ffffff; } h1, h2, th, td { border-color: #767676; } a { color: #004ea8; } blockquote { color: #333333; border-color: #606060; } pre, tr:nth-child(even) { background: #f1f1f1; } code { background: #d8d8d866; } \(syntaxLightRules)"
+            ":root { color-scheme: light; } body { color: #111111; background: #ffffff; } h1, h2, th, td { border-color: #767676; } a { color: #004ea8; } blockquote { color: #333333; border-color: #606060; } pre { background: #f1f1f1; } thead { background: #004ea824; } tbody tr:nth-child(even) { background: #004ea80b; } code { background: #d8d8d866; } \(syntaxLightRules)"
         case .dark:
-            ":root { color-scheme: dark; } body { color: #f2f2f2; background: #101214; } h1, h2, th, td { border-color: #8a8a8a; } a { color: #78b7ff; } blockquote { color: #d0d0d0; border-color: #a0a0a0; } pre, tr:nth-child(even) { background: #202428; } code { background: #ffffff24; } \(syntaxDarkRules)"
+            ":root { color-scheme: dark; } body { color: #f2f2f2; background: #101214; } h1, h2, th, td { border-color: #8a8a8a; } a { color: #78b7ff; } blockquote { color: #d0d0d0; border-color: #a0a0a0; } pre { background: #202428; } thead { background: #78b7ff24; } tbody tr:nth-child(even) { background: #78b7ff12; } code { background: #ffffff24; } \(syntaxDarkRules)"
         }
 
         let contrastRules = configuration.increasedContrast ? highContrastRules : ""

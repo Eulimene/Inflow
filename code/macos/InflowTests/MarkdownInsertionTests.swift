@@ -957,6 +957,22 @@ final class MarkdownInsertionTests: XCTestCase {
         ))
     }
 
+    func testTablePlanCreatesRequestedDimensions() throws {
+        let plan = try MarkdownFormatter.tablePlan(
+            source: "",
+            selectedUTF16Range: NSRange(location: 0, length: 0),
+            columns: 2,
+            rows: 4
+        )
+        XCTAssertEqual(
+            plan.resultingSource,
+            "| 标题 1 | 标题 2 |\n| --- | --- |\n| 内容 1 | 内容 2 |\n| 内容 3 | 内容 4 |\n| 内容 5 | 内容 6 |"
+        )
+        XCTAssertTrue(try MarkdownRenderer.htmlFragment(for: plan.resultingSource).contains(
+            "<table>"
+        ))
+    }
+
     func testTablePlanRejectsInsertionInsideExistingTable() {
         let source = "| One | Two |\n| --- | --- |\n| A | B |\n"
         XCTAssertThrowsError(
@@ -1114,7 +1130,7 @@ final class MarkdownInsertionTests: XCTestCase {
             selectedUTF16Range: session.textView.selectedRange()
         )
         let tableInserted = await session.applyEngineFormat(
-            .table,
+            .table(columns: 3, rows: 3),
             expectedText: "Header",
             selectedUTF16Range: session.textView.selectedRange(),
             actionName: "插入表格"
@@ -1231,7 +1247,8 @@ final class MarkdownInsertionTests: XCTestCase {
             canInsert: true,
             insertLink: { firstCount += 1 },
             insertImage: { firstImageCount += 1 },
-            insertTable: { firstTableCount += 1 },
+            insertTable: { _, _ in firstTableCount += 1 },
+            presentTableInsertion: { firstTableCount += 1 },
             insertHorizontalRule: { firstRuleCount += 1 },
             insertFootnote: { firstFootnoteCount += 1 },
             insertFormula: { firstFormulaCount += 1 },
@@ -1241,7 +1258,8 @@ final class MarkdownInsertionTests: XCTestCase {
             canInsert: false,
             insertLink: { secondCount += 1 },
             insertImage: { secondCount += 1 },
-            insertTable: { secondCount += 1 },
+            insertTable: { _, _ in secondCount += 1 },
+            presentTableInsertion: { secondCount += 1 },
             insertHorizontalRule: { secondCount += 1 },
             insertFootnote: { secondCount += 1 },
             insertFormula: { secondCount += 1 },
@@ -1249,14 +1267,15 @@ final class MarkdownInsertionTests: XCTestCase {
         )
         first.insertLink()
         first.insertImage()
-        first.insertTable()
+        first.insertTable(3, 3)
+        first.presentTableInsertion()
         first.insertHorizontalRule()
         first.insertFootnote()
         first.insertFormula()
         first.insertDiagram()
         XCTAssertEqual(firstCount, 1)
         XCTAssertEqual(firstImageCount, 1)
-        XCTAssertEqual(firstTableCount, 1)
+        XCTAssertEqual(firstTableCount, 2)
         XCTAssertEqual(firstRuleCount, 1)
         XCTAssertEqual(firstFootnoteCount, 1)
         XCTAssertEqual(firstFormulaCount, 1)
@@ -1282,10 +1301,15 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertEqual(imageItems.first?.keyEquivalent, "")
 
         let tableItems = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu)).filter {
-            $0.title == "表格"
+            $0.title == "3 列 × 3 行"
         }
         XCTAssertEqual(tableItems.count, 1)
         XCTAssertEqual(tableItems.first?.keyEquivalent, "")
+
+        let customTableItems = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu)).filter {
+            $0.title == "自定义表格…"
+        }
+        XCTAssertEqual(customTableItems.count, 1)
 
         let horizontalRuleItems = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu)).filter {
             $0.title == "分隔线"

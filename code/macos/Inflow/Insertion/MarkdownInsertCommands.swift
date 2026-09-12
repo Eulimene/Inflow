@@ -5,7 +5,8 @@ final class MarkdownInsertCommandActions {
     let canInsert: Bool
     let insertLink: () -> Void
     let insertImage: () -> Void
-    let insertTable: () -> Void
+    let insertTable: (_ columns: UInt8, _ rows: UInt8) -> Void
+    let presentTableInsertion: () -> Void
     let insertHorizontalRule: () -> Void
     let insertFootnote: () -> Void
     let insertFormula: () -> Void
@@ -15,7 +16,8 @@ final class MarkdownInsertCommandActions {
         canInsert: Bool,
         insertLink: @escaping () -> Void,
         insertImage: @escaping () -> Void,
-        insertTable: @escaping () -> Void,
+        insertTable: @escaping (_ columns: UInt8, _ rows: UInt8) -> Void,
+        presentTableInsertion: @escaping () -> Void,
         insertHorizontalRule: @escaping () -> Void,
         insertFootnote: @escaping () -> Void,
         insertFormula: @escaping () -> Void,
@@ -25,6 +27,7 @@ final class MarkdownInsertCommandActions {
         self.insertLink = insertLink
         self.insertImage = insertImage
         self.insertTable = insertTable
+        self.presentTableInsertion = presentTableInsertion
         self.insertHorizontalRule = insertHorizontalRule
         self.insertFootnote = insertFootnote
         self.insertFormula = insertFormula
@@ -59,8 +62,20 @@ struct MarkdownInsertCommands: Commands {
             }
             .disabled(actions?.canInsert != true)
 
-            Button("表格") {
-                actions?.insertTable()
+            Menu("表格") {
+                Button("2 列 × 2 行") {
+                    actions?.insertTable(2, 2)
+                }
+                Button("3 列 × 3 行") {
+                    actions?.insertTable(3, 3)
+                }
+                Button("4 列 × 4 行") {
+                    actions?.insertTable(4, 4)
+                }
+                Divider()
+                Button("自定义表格…") {
+                    actions?.presentTableInsertion()
+                }
             }
             .disabled(actions?.canInsert != true)
 

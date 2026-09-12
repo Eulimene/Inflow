@@ -460,6 +460,15 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             readOnlyTable.backgroundColor(forRow: 1),
             contextMenuTable.backgroundColor(forRow: 1)
         )
+        XCTAssertNotEqual(
+            contextMenuTable.backgroundColor(forRow: 0),
+            contextMenuTable.backgroundColor(forRow: 1)
+        )
+        XCTAssertNotEqual(
+            RenderedMarkdownTableView.backgroundColor(forRow: 1),
+            RenderedMarkdownTableView.backgroundColor(forRow: 2)
+        )
+        XCTAssertLessThan(RenderedMarkdownTableView.borderColor.alphaComponent, 1)
         let quoteLocation = (source as NSString).range(of: "行内引用").location
         let editableQuote = try XCTUnwrap(
             session.textView.textStorage?.attribute(
@@ -1121,8 +1130,23 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
         )
         XCTAssertEqual(paragraph.headIndent, 16, accuracy: 0.001)
+        XCTAssertEqual(paragraph.paragraphSpacingBefore, 0, accuracy: 0.001)
+        XCTAssertEqual(paragraph.paragraphSpacing, 0, accuracy: 0.001)
         XCTAssertTrue(session.textView.isRenderedCharacterSuppressed(at: 0))
         XCTAssertTrue(session.textView.isRenderedCharacterSuppressed(at: 1))
+
+        let font = try XCTUnwrap(
+            storage.attribute(.font, at: contentLocation, effectiveRange: nil) as? NSFont
+        )
+        let usedRect = NSRect(x: 0, y: 8, width: 80, height: 28)
+        let bar = RenderedMarkdownQuoteGeometry.barRect(
+            lineFragment: NSRect(x: 0, y: 6, width: 400, height: 32),
+            usedRect: usedRect,
+            textContainerOrigin: NSPoint(x: 12, y: 14),
+            font: font
+        )
+        XCTAssertEqual(bar.midY, 14 + usedRect.midY, accuracy: 0.001)
+        XCTAssertLessThanOrEqual(bar.height, usedRect.height)
     }
 
     @MainActor
@@ -1438,6 +1462,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             storage.attribute(.font, at: contentLocation, effectiveRange: nil) as? NSFont
         )
         XCTAssertTrue(contentFont.fontDescriptor.symbolicTraits.contains(.monoSpace))
+        let contentBackground = try XCTUnwrap(
+            storage.attribute(.backgroundColor, at: contentLocation, effectiveRange: nil)
+                as? NSColor
+        )
+        XCTAssertGreaterThan(contentBackground.alphaComponent, 0)
 
         for marker in markers {
             let location = marker.sourceRange.utf16Range.location
@@ -1450,7 +1479,19 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             XCTAssertLessThan(font.pointSize, 1)
             XCTAssertEqual(kern.doubleValue, -0.1, accuracy: 0.001)
             XCTAssertTrue(session.textView.isRenderedCharacterSuppressed(at: location))
+            let markerBackground = storage.attribute(
+                .backgroundColor,
+                at: location,
+                effectiveRange: nil
+            ) as? NSColor
+            XCTAssertEqual(markerBackground?.alphaComponent ?? 0, 0, accuracy: 0.001)
         }
+        let proseBackground = storage.attribute(
+            .backgroundColor,
+            at: 0,
+            effectiveRange: nil
+        ) as? NSColor
+        XCTAssertEqual(proseBackground?.alphaComponent ?? 0, 0, accuracy: 0.001)
         XCTAssertEqual(session.textView.string, source)
     }
 
@@ -1783,6 +1824,10 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
         session.textView.updateHoveredLink(atLocalPoint: viewPoint)
         XCTAssertEqual(session.textView.hoveredLinkRange, link.textRange.utf16Range)
+        XCTAssertTrue(
+            session.textView.cursorForRenderedContent(atLocalPoint: viewPoint)
+                === NSCursor.pointingHand
+        )
         XCTAssertEqual(
             (session.textView.layoutManager?.temporaryAttribute(
                 .underlineStyle,
@@ -1790,6 +1835,13 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                 effectiveRange: nil
             ) as? NSNumber)?.intValue,
             NSUnderlineStyle.single.rawValue
+        )
+        XCTAssertNil(
+            session.textView.layoutManager?.temporaryAttribute(
+                .backgroundColor,
+                atCharacterIndex: link.textRange.utf16Range.location,
+                effectiveRange: nil
+            )
         )
         session.textView.updateHoveredLink(atLocalPoint: NSPoint(x: -20, y: -20))
         XCTAssertNil(session.textView.hoveredLinkRange)

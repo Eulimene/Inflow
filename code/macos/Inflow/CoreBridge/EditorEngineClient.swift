@@ -1,6 +1,49 @@
 import Foundation
 import os
 
+private final class TemporaryDerivedContentCache: @unchecked Sendable {
+    private struct Entry {
+        let source: String
+        let mathEnabled: Bool
+        let mermaidEnabled: Bool
+        let content: EditorEngineDerivedContent
+    }
+
+    private let lock = NSLock()
+    private var entry: Entry?
+
+    func content(
+        for source: String,
+        configuration: PreviewAppearanceConfiguration
+    ) -> EditorEngineDerivedContent? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry,
+              entry.source == source,
+              entry.mathEnabled == configuration.mathRenderingEnabled,
+              entry.mermaidEnabled == configuration.mermaidRenderingEnabled
+        else { return nil }
+        return entry.content
+    }
+
+    func store(
+        _ content: EditorEngineDerivedContent,
+        source: String,
+        configuration: PreviewAppearanceConfiguration
+    ) {
+        lock.lock()
+        entry = Entry(
+            source: source,
+            mathEnabled: configuration.mathRenderingEnabled,
+            mermaidEnabled: configuration.mermaidRenderingEnabled,
+            content: content
+        )
+        lock.unlock()
+    }
+}
+
+private let temporaryDerivedContentCache = TemporaryDerivedContentCache()
+
 private func withTemporaryEditorEngine<Result>(
     source: String,
     selection: EditorEngineSelection = EditorEngineSelection(start: 0, end: 0),
@@ -67,7 +110,13 @@ extension EditorEngineDerivedContent {
         source: String,
         configuration: PreviewAppearanceConfiguration = .default
     ) -> Self? {
-        try? withTemporaryEditorEngine(source: source) { handle in
+        if let cached = temporaryDerivedContentCache.content(
+            for: source,
+            configuration: configuration
+        ) {
+            return cached
+        }
+        let derived: Self? = try? withTemporaryEditorEngine(source: source) { handle -> Self? in
             let requestID = UUID().uuidString
             let envelope = EditorEngineRefreshEnvelope(
                 schemaVersion: 1,
@@ -85,6 +134,14 @@ extension EditorEngineDerivedContent {
             else { return nil }
             return try? derived.validated(source: source)
         }
+        if let derived {
+            temporaryDerivedContentCache.store(
+                derived,
+                source: source,
+                configuration: configuration
+            )
+        }
+        return derived
     }
 
 }
@@ -1534,6 +1591,8 @@ extension EditorEngineFormatOperation: Encodable {
         case style
         case destination
         case defaultAlternative = "default_alternative"
+        case columns
+        case rows
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1559,7 +1618,10 @@ extension EditorEngineFormatOperation: Encodable {
             try container.encode("image", forKey: .kind)
             try container.encode(destination, forKey: .destination)
             try container.encode(defaultAlternative, forKey: .defaultAlternative)
-        case .table: try container.encode("table", forKey: .kind)
+        case let .table(columns, rows):
+            try container.encode("table", forKey: .kind)
+            try container.encode(columns, forKey: .columns)
+            try container.encode(rows, forKey: .rows)
         case .horizontalRule: try container.encode("horizontal_rule", forKey: .kind)
         case .footnote: try container.encode("footnote", forKey: .kind)
         case .math: try container.encode("math", forKey: .kind)

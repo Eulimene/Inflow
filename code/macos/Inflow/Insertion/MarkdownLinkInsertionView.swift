@@ -12,6 +12,68 @@ struct MarkdownLinkInsertionRequest: Identifiable {
     }
 }
 
+struct MarkdownTableInsertionRequest: Identifiable {
+    let id = UUID()
+    let sourceSnapshot: String
+    let selectedUTF16Range: NSRange
+}
+
+struct MarkdownTableInsertionView: View {
+    let request: MarkdownTableInsertionRequest
+    let onCancel: () -> Void
+    let onInsert: (_ columns: UInt8, _ rows: UInt8) -> Void
+
+    @State private var columns = 3
+    @State private var rows = 3
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("插入表格")
+                .font(.title2.bold())
+
+            Text("选择表格的列数和总行数（包含标题行）。插入后可在表格中直接编辑，或使用右键菜单增删行列。")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
+                GridRow {
+                    Text("列数")
+                    Stepper(value: $columns, in: 2...10) {
+                        Text("\(columns) 列")
+                            .monospacedDigit()
+                            .frame(width: 52, alignment: .trailing)
+                    }
+                }
+                GridRow {
+                    Text("行数")
+                    Stepper(value: $rows, in: 2...10) {
+                        Text("\(rows) 行")
+                            .monospacedDigit()
+                            .frame(width: 52, alignment: .trailing)
+                    }
+                }
+            }
+
+            Text("将创建 \(columns) 列 × \(rows) 行的 Markdown 表格")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Spacer()
+                Button("取消", role: .cancel, action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("插入") {
+                    onInsert(UInt8(columns), UInt8(rows))
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+    }
+}
+
 struct MarkdownLinkInsertionView: View {
     let request: MarkdownLinkInsertionRequest
     let onCancel: () -> Void

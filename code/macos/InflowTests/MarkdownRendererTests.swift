@@ -275,6 +275,22 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertFalse(result.html.contains(PreviewFailurePrompt.title))
     }
 
+    func testPreviewStyleMatchesInlineQuoteLinkAndTablePresentationContract() {
+        let html = MarkdownRenderer.htmlDocument(
+            for: "`草稿`\n\n> 注意\n\n[链接](https://example.com)\n\n| 标题 |\n| --- |\n| 内容 |"
+        )
+
+        XCTAssertTrue(html.contains("cursor: pointer;"))
+        XCTAssertTrue(html.contains(
+            "a:hover { text-decoration: underline; background: transparent; }"
+        ))
+        XCTAssertTrue(html.contains("blockquote { margin: .75em 0; padding: 0 1em;"))
+        XCTAssertTrue(html.contains("line-height: inherit; background: #afb8c133;"))
+        XCTAssertTrue(html.contains("border-radius: 3px; padding: 0;"))
+        XCTAssertTrue(html.contains("thead { background: #0969da24; }"))
+        XCTAssertTrue(html.contains("tbody tr:nth-child(even) { background: #0969da0b; }"))
+    }
+
     func testPreviewDerivationReportsRelativeResourcesWithoutAnotherSourceScan() {
         let local = MarkdownRenderer.previewDocument(
             for: "![cover](assets/cover.png) [guide](guide/readme.md)"

@@ -619,12 +619,17 @@ pub fn insert_image(
     })
 }
 
-pub fn insert_table(
+pub fn insert_table_with_dimensions(
     source: &str,
     requested_selection: Range<usize>,
+    columns: usize,
+    rows: usize,
 ) -> Result<MarkdownEdit, FormatError> {
     if !is_valid_selection(source, &requested_selection) {
         return Err(FormatError::InvalidSelection);
+    }
+    if !(2..=10).contains(&columns) || !(2..=10).contains(&rows) {
+        return Err(FormatError::AmbiguousSelection);
     }
     let tables = table_spans(source);
     if tables.iter().any(|table| {
@@ -655,18 +660,33 @@ pub fn insert_table(
     } else {
         ""
     };
-    let table = format!(
-        "| {label} | 标题 2 | 标题 3 |\n| --- | --- | --- |\n| 内容 1 | 内容 2 | 内容 3 |\n| 内容 4 | 内容 5 | 内容 6 |"
-    );
+    let mut header_cells = (1..=columns)
+        .map(|column| format!("标题 {column}"))
+        .collect::<Vec<_>>();
+    header_cells[0].clone_from(&label);
+    let header = format!("| {} |", header_cells.join(" | "));
+    let delimiter = format!("| {} |", vec!["---"; columns].join(" | "));
+    let mut table_lines = vec![header, delimiter];
+    let mut content_index = 1;
+    for _ in 1..rows {
+        let cells = (0..columns)
+            .map(|_| {
+                let cell = format!("内容 {content_index}");
+                content_index += 1;
+                cell
+            })
+            .collect::<Vec<_>>();
+        table_lines.push(format!("| {} |", cells.join(" | ")));
+    }
+    let table = table_lines.join("\n");
     let replacement = format!("{prefix}{table}{suffix}");
     let table_start = requested_selection.start + prefix.len();
     let label_start = table_start + 2;
     let label_range = label_start..label_start + label.len();
     let candidate = replacing(source, requested_selection.clone(), &replacement);
-    if !table_spans(&candidate)
-        .iter()
-        .any(|span| span.full.start == table_start && span.columns == 3 && span.body_rows == 2)
-    {
+    if !table_spans(&candidate).iter().any(|span| {
+        span.full.start == table_start && span.columns == columns && span.body_rows == rows - 1
+    }) {
         return Err(FormatError::AmbiguousSelection);
     }
 
@@ -2644,7 +2664,7 @@ mod tests {
 
     #[test]
     fn table_inserts_three_by_three_template_and_selects_first_header() {
-        let edit = insert_table("", 0..0).unwrap();
+        let edit = insert_table_with_dimensions("", 0..0, 3, 3).unwrap();
         assert_eq!(
             edit.replacement,
             "| 标题 1 | 标题 2 | 标题 3 |\n| --- | --- | --- |\n| 内容 1 | 内容 2 | 内容 3 |\n| 内容 4 | 内容 5 | 内容 6 |"
@@ -2654,11 +2674,29 @@ mod tests {
     }
 
     #[test]
+    fn table_inserts_requested_dimensions_and_rejects_unsupported_sizes() {
+        let edit = insert_table_with_dimensions("", 0..0, 2, 4).unwrap();
+        assert_eq!(
+            edit.replacement,
+            "| 标题 1 | 标题 2 |\n| --- | --- |\n| 内容 1 | 内容 2 |\n| 内容 3 | 内容 4 |\n| 内容 5 | 内容 6 |"
+        );
+        assert_eq!(edit.selection_range, 2..10);
+        assert_eq!(
+            insert_table_with_dimensions("", 0..0, 1, 3),
+            Err(FormatError::AmbiguousSelection)
+        );
+        assert_eq!(
+            insert_table_with_dimensions("", 0..0, 3, 11),
+            Err(FormatError::AmbiguousSelection)
+        );
+    }
+
+    #[test]
     fn table_preserves_selection_with_cell_escaping_and_block_boundaries() {
         let source = "before A|B\nC after";
         let start = "before ".len();
         let end = source.len() - " after".len();
-        let edit = insert_table(source, start..end).unwrap();
+        let edit = insert_table_with_dimensions(source, start..end, 3, 3).unwrap();
         assert!(edit.replacement.starts_with("\n\n| A\\|B<br>C |"));
         assert!(edit.replacement.ends_with("|\n\n"));
         let formatted = replacing(source, edit.replace_range, &edit.replacement);
@@ -2671,11 +2709,11 @@ mod tests {
         let source = "| One | Two |\n| --- | --- |\n| A | B |\n";
         let caret = source.find('A').unwrap();
         assert_eq!(
-            insert_table(source, caret..caret),
+            insert_table_with_dimensions(source, caret..caret, 3, 3),
             Err(FormatError::AmbiguousSelection)
         );
         assert_eq!(
-            insert_table("e\u{301}", 1..1),
+            insert_table_with_dimensions("e\u{301}", 1..1, 3, 3),
             Err(FormatError::InvalidSelection)
         );
     }

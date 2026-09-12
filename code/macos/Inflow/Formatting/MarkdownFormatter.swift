@@ -198,12 +198,14 @@ enum MarkdownFormatter {
 
     static func tablePlan(
         source: String,
-        selectedUTF16Range: NSRange
+        selectedUTF16Range: NSRange,
+        columns: UInt8 = 3,
+        rows: UInt8 = 3
     ) throws -> MarkdownFormatPlan {
         try enginePlan(
             source: source,
             selectedUTF16Range: selectedUTF16Range,
-            operation: .table
+            operation: .table(columns: columns, rows: rows)
         )
     }
 
