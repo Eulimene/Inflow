@@ -105,6 +105,15 @@ final class EditorEngineShadowTests: XCTestCase {
         XCTAssertEqual(redone.resultingSource, formatted.resultingSource)
         XCTAssertTrue(redone.canUndo)
         XCTAssertFalse(redone.canRedo)
+
+        queue.reset(text: "reloaded", selectionUTF16: NSRange(location: 0, length: 0))
+        let reset = await queue.authoritativeSnapshot(
+            matching: "reloaded",
+            selectionUTF16: NSRange(location: 0, length: 0)
+        )
+        XCTAssertEqual(reset?.revision, 0)
+        XCTAssertFalse(reset?.canUndo == true)
+        XCTAssertFalse(reset?.canRedo == true)
     }
 
     @MainActor
@@ -143,14 +152,17 @@ final class EditorEngineShadowTests: XCTestCase {
     @MainActor
     func testCommittedTypingCreatesOnlyEngineUndoHistory() async throws {
         let session = MarkdownSourceEditorSession()
+        var publishedText = ""
+        session.updateBoundText = { publishedText = $0 }
         session.textView.isEditable = true
         session.textView.string = "alpha"
         session.textView.setSelectedRange(NSRange(location: 5, length: 0))
         _ = await session.authoritativeSnapshot()
 
         session.textView.insertText(" beta", replacementRange: session.textView.selectedRange())
-        let committed = await session.authoritativeSnapshot()
+        let committed = await session.persistenceSnapshot()
         XCTAssertEqual(committed?.text, "alpha beta")
+        XCTAssertEqual(publishedText, "alpha beta")
         XCTAssertEqual(committed?.canUndo, true)
         XCTAssertFalse(session.textView.undoManager?.canUndo == true)
 

@@ -123,6 +123,7 @@ final class EditorEngineShadowQueue {
     private var lastSubmittedText: String?
     private var pending: Task<Void, Never>?
     var onHistoryStateChange: ((Bool, Bool) -> Void)?
+    var onAuthoritativeSnapshot: ((EditorEngineDocumentSnapshot) -> Void)?
 
     var isEnabled: Bool { client != nil }
 
@@ -145,6 +146,7 @@ final class EditorEngineShadowQueue {
                   let snapshot = await client.snapshot(expectedText: text)
             else { return }
             onHistoryStateChange?(snapshot.canUndo, snapshot.canRedo)
+            onAuthoritativeSnapshot?(snapshot)
         }
     }
 
@@ -208,6 +210,23 @@ final class EditorEngineShadowQueue {
         await pending?.value
         guard !Task.isCancelled else { return nil }
         return await client?.snapshot(expectedText: text)
+    }
+
+    func reset(text: String, selectionUTF16: NSRange) {
+        guard let client else { return }
+        lastSubmittedText = text
+        let previous = pending
+        pending = Task {
+            await previous?.value
+            guard !Task.isCancelled,
+                  let snapshot = await client.reset(
+                      text: text,
+                      selectionUTF16: selectionUTF16
+                  )
+            else { return }
+            onHistoryStateChange?(snapshot.canUndo, snapshot.canRedo)
+            onAuthoritativeSnapshot?(snapshot)
+        }
     }
 
     deinit {
@@ -311,6 +330,28 @@ private actor EditorEngineShadowClient {
                     "Shadow resync failed; command=create revision=0 error=\(String(describing: error), privacy: .public)"
                 )
             }
+        }
+    }
+
+    func reset(
+        text: String,
+        selectionUTF16: NSRange
+    ) -> EditorEngineDocumentSnapshot? {
+        do {
+            handle = nil
+            projection = ""
+            revision = 0
+            let selection = try Self.byteSelection(selectionUTF16, in: text)
+            try create(text: text, selection: selection)
+            return snapshot(expectedText: text)
+        } catch {
+            logger.error(
+                "Engine reset failed; revision=0 error=\(String(describing: error), privacy: .public)"
+            )
+            handle = nil
+            projection = ""
+            revision = 0
+            return nil
         }
     }
 

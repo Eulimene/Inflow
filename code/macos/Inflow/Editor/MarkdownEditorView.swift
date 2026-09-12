@@ -8,6 +8,14 @@ enum EditableWebInstantEditorFeature {
     }
 }
 
+private enum EditorPersistenceError: LocalizedError {
+    case unavailableAuthoritativeSnapshot
+
+    var errorDescription: String? {
+        "无法冻结当前 Engine revision，未执行保存或导出。"
+    }
+}
+
 enum EditorWorkspacePane: Equatable {
     case projectSidebar
     case editor
@@ -2088,6 +2096,20 @@ struct MarkdownEditorView: View {
         )
     }
 
+    @discardableResult
+    private func freezeAuthoritativeTextForPersistence() async throws -> String {
+        guard sourceEditorSession.usesEngineAuthority else { return document.text }
+        guard let snapshot = await sourceEditorSession.persistenceSnapshot(),
+              UTF8Text.isExactlyEqual(snapshot.text, sourceEditorSession.textView.string)
+        else {
+            throw EditorPersistenceError.unavailableAuthoritativeSnapshot
+        }
+        if !UTF8Text.isExactlyEqual(document.text, snapshot.text) {
+            document.text = snapshot.text
+        }
+        return snapshot.text
+    }
+
     private func saveCurrentDocument() {
         guard !isSavingDocument, !isRelocatingDocument, relocationRequest == nil else { return }
         guard let fileURL else {
@@ -2113,6 +2135,7 @@ struct MarkdownEditorView: View {
         Task { @MainActor in
             defer { isSavingDocument = false }
             do {
+                _ = try await freezeAuthoritativeTextForPersistence()
                 let envelope = try fileSafetySession.prepareSave(
                     document: document,
                     sourceURL: fileURL,
@@ -2156,6 +2179,7 @@ struct MarkdownEditorView: View {
         isSavingDocument = true
         defer { isSavingDocument = false }
         do {
+            _ = try await freezeAuthoritativeTextForPersistence()
             let envelope = try await fileSafetySession.prepareConfirmedOverwrite(
                 document: document,
                 snapshot: snapshot
@@ -2190,14 +2214,6 @@ struct MarkdownEditorView: View {
             presentFileOperationFailure(DocumentRelocationError.cannotInspect)
             return false
         }
-        let snapshotData: Data
-        do {
-            snapshotData = try document.encodedFileData()
-        } catch {
-            presentFileOperationFailure(error, fallback: "当前正文无法编码，未写入任何文件。")
-            return false
-        }
-
         let panel = NSSavePanel()
         let isSavingBeforeImage = operation == .saveAs
             && fileURL == nil
@@ -2219,6 +2235,17 @@ struct MarkdownEditorView: View {
         relocationNativeDocument = nativeDocument
 
         Task { @MainActor in
+            let snapshotData: Data
+            do {
+                _ = try await freezeAuthoritativeTextForPersistence()
+                snapshotData = try document.encodedFileData()
+            } catch {
+                isRelocatingDocument = false
+                relocationNativeDocument = nil
+                if isSavingBeforeImage { deferredImageInsertionQueue.cancel() }
+                presentFileOperationFailure(error, fallback: "当前正文无法编码，未写入任何文件。")
+                return
+            }
             let response = await withCheckedContinuation { continuation in
                 if let window = sourceEditorSession.textView.window ?? NSApp.keyWindow {
                     panel.beginSheetModal(for: window) { continuation.resume(returning: $0) }
@@ -2284,6 +2311,7 @@ struct MarkdownEditorView: View {
         }
 
         do {
+            _ = try await freezeAuthoritativeTextForPersistence()
             let currentData = try document.encodedFileData()
             try DocumentRelocationAnalyzer.verify(
                 request.plan,
@@ -3395,10 +3423,24 @@ struct MarkdownEditorView: View {
         else {
             return
         }
-        prepareExport(makeFrozenExportRequest(format: .pdf))
+        Task { @MainActor in
+            do {
+                let markdown = try await freezeAuthoritativeTextForPersistence()
+                guard !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      !isExportingHTML,
+                      !isExportingPDF
+                else { return }
+                prepareExport(makeFrozenExportRequest(format: .pdf, markdown: markdown))
+            } catch {
+                exportIssueDetails = ExportIssueDetails(message: error.localizedDescription)
+            }
+        }
     }
 
-    private func makeFrozenExportRequest(format: ExportFormat) -> FrozenExportRequest {
+    private func makeFrozenExportRequest(
+        format: ExportFormat,
+        markdown: String
+    ) -> FrozenExportRequest {
         let requiresProjectBoundary = folderBrowser.isAssociatedProjectDocument(nativeDocument)
         let candidateProjectRoot = activeProjectRoot
         let projectRootIdentity = currentProjectRootIdentity(for: candidateProjectRoot)
@@ -3407,7 +3449,7 @@ struct MarkdownEditorView: View {
             ? nil
             : fileURL?.deletingLastPathComponent()
         let snapshot = HTMLExportSnapshot(
-            markdown: document.text,
+            markdown: markdown,
             documentDirectory: documentDirectory,
             projectRoot: projectRoot,
             expectedProjectRootIdentity: projectRootIdentity,

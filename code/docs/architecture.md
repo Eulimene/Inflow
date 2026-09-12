@@ -40,8 +40,8 @@ revision，正文修改后立即失效。macOS 已用该单次请求作为分析
 revision-bound patch 后回写 NSTextView，不再由 View 调用一次性 formatter 规划。普通输入先由
 NSTextView 乐观显示，再串行提交 Engine 并逐字节对账。默认编辑会话关闭 AppKit 正文 undo
 registration，Command-Z 与 Shift-Command-Z 由第一响应者异步路由为 Engine `Undo/Redo`，返回 patch
-时禁止再次登记撤销。保存尚未切换权威，因此此时不能把 Rust Engine
-描述为已经完成正文接管。
+时禁止再次登记撤销。普通编辑只有在 Engine 返回匹配快照后才发布到 Swift 文档投影；保存、另存、
+覆盖确认与导出开始前会提交 marked text、排空命令队列并冻结同一 revision 的 Engine snapshot。
 
 C ABI 用 `major/minor/capabilities` 协商兼容性：major 表示不兼容布局或所有权变化，minor
 表示可加性演进，宿主只要求自身使用的 capability bits，不再因为链接到更新 minor 版本而拒绝启动。
@@ -78,14 +78,14 @@ SwiftUI 与 AppKit 负责：
 
 必须同时保持以下约束：
 
-1. NSTextView 的 string 与 MarkdownDocument.text 表示同一份 Markdown。
+1. NSTextView 的 string 是乐观显示缓存，MarkdownDocument.text 是 Engine 已确认的 Swift 投影；命令排空后两者必须逐字节一致。
 2. 三种视图的可编辑侧都复用同一个 MarkdownSourceEditorSession；分栏右侧消费 previewHTML，即时编辑则把同一 Rust 解析范围映射到原始字符串的 TextKit 展示属性，不建立第二份可编辑内容。
 3. 分栏右侧只消费当前源快照生成的派生结果，不可反向成为正文事实。
 4. 展示属性、语法高亮和预览刷新不能发布正文变化，也不能登记正文 undo。
-5. 格式、查找替换与图片引用只通过已验证的编辑计划修改同一字符串，并形成可理解的原生撤销步骤。
+5. 格式、插入与正文撤销只通过 Engine Command 修改同一字符串；尚未迁移的查找替换先作为普通 `ReplaceText` 对账，不能建立第二套权威历史。
 6. 结果必须绑定精确 UTF-8 字节快照；正文变化后，旧范围和旧链接决定立即失效。
-7. 影子迁移期只允许 Swift 写正文；Engine 只验证和派生。切换权威时必须一次完成写入方向反转，
-   禁止 Swift 与 Rust 同时独立接受正文写入。
+7. 默认写入方向已经反转：NSTextView 只保留乐观显示缓存，Rust 接受命令后才发布 Swift 文档投影；
+   禁止 Swift 与 Rust 同时独立接受正文写入。`INFLOW_EDITOR_ENGINE_SHADOW=0` 仅保留为迁移回退。
 
 Swift String 的规范等价不能替代精确字节身份。Rust 返回 UTF-8 byte range，TextKit 使用 UTF-16 NSRange，转换必须同时验证边界、长度和完整扩展字素，不能截断 Unicode 或 ZWJ 序列。
 

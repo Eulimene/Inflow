@@ -265,7 +265,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     fileprivate var appliedSelectionGeneration: Int?
     fileprivate var pendingSelectionRequest: SourceSelectionRequest?
     fileprivate var pendingRestorationState: MarkdownRestorationState?
-    fileprivate var updateBoundText: ((String) -> Void)?
+    var updateBoundText: ((String) -> Void)?
     private(set) var sourceAppearance = SourceEditorAppearance.default
     private var hasAppliedSourceAppearance = false
     private var syntaxHighlightingEnabled = false
@@ -355,6 +355,13 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             textView?.engineCanUndo = canUndo
             textView?.engineCanRedo = canRedo
         }
+        engineShadow.onAuthoritativeSnapshot = { [weak self] snapshot in
+            guard let self,
+                  !self.isApplyingEngineMutation,
+                  UTF8Text.isExactlyEqual(self.textView.string, snapshot.text)
+            else { return }
+            self.updateBoundText?(snapshot.text)
+        }
         textView.textDidChangeHandler = { [weak self] text in
             if let self, !self.isApplyingEngineMutation, !self.textView.hasMarkedText() {
                 self.engineShadow.submit(
@@ -365,7 +372,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             self?.invalidateSyntaxApplication()
             self?.lineNumberRuler.updateText(text)
             self?.refreshWritingModePresentation()
-            self?.updateBoundText?(text)
+            if self?.engineShadow.isEnabled != true {
+                self?.updateBoundText?(text)
+            }
             self?.scheduleRenderedPresentation(for: text)
         }
         textView.focusDidChangeHandler = { [weak self] in
@@ -554,6 +563,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.setSelectedRange(finalSelection.revealRange)
         updateSelectedRange(finalSelection.revealRange)
         textView.scrollRangeToVisible(finalSelection.revealRange)
+        updateBoundText?(mutation.resultingSource)
         return true
     }
 
@@ -563,6 +573,16 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             matching: textView.string,
             selectionUTF16: textView.selectedRange()
         )
+    }
+
+    var usesEngineAuthority: Bool { engineShadow.isEnabled }
+
+    func persistenceSnapshot() async -> EditorEngineDocumentSnapshot? {
+        if textView.hasMarkedText() {
+            textView.unmarkText()
+            await Task.yield()
+        }
+        return await authoritativeSnapshot()
     }
 
     func setPresentation(
@@ -1611,6 +1631,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.setSelectedRange(selection)
         updateSelectedRange(selection)
         textView.undoManager?.removeAllActions()
+        engineShadow.reset(text: text, selectionUTF16: selection)
         lineNumberRuler.updateText(text)
         refreshWritingModePresentation()
     }

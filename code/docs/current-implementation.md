@@ -47,8 +47,8 @@
 
 ### 2.2 单一正文与三种视图
 
-- MarkdownDocument.text 是 SwiftUI 文档模型中的正文事实；MarkdownSourceEditorSession 持有一个持久 NSTextView。
-- 有状态 Rust `EditorEngine` 已作为默认编辑与派生服务：NSTextView 完成一次非组合输入后，以 UTF-8 grapheme 边界的 `ReplaceText(base_revision, range, inserted)` 提交 Engine，并用快照执行逐字节对账；可用 `INFLOW_EDITOR_ENGINE_SHADOW=0` 失败关闭到旧路径。当前菜单格式与图片、链接、表格等插入命令均发送 selection 与 operation，由 Engine 生成并执行 revision-bound patch 后回写 NSTextView。默认会话关闭 AppKit 正文 undo registration，Command-Z/Shift-Command-Z 发送 Engine `Undo/Redo`，Rust Memento 历史是撤销事实源；保存目前仍读取 Swift 文档投影。
+- Rust `EditorEngine` 是默认正文、revision 与历史事实源；`MarkdownDocument.text` 是 FileDocument/SwiftUI 使用的已确认投影，`MarkdownSourceEditorSession` 中的持久 NSTextView 是可乐观更新的显示缓存。
+- NSTextView 完成一次非组合输入后，以 UTF-8 grapheme 边界的 `ReplaceText(base_revision, range, inserted)` 提交 Engine，并在 Engine 返回逐字节匹配的快照后才发布 Swift 文档投影；可用 `INFLOW_EDITOR_ENGINE_SHADOW=0` 失败关闭到旧路径。当前菜单格式与图片、链接、表格等插入命令均发送 selection 与 operation，由 Engine 生成并执行 revision-bound patch 后回写 NSTextView。默认会话关闭 AppKit 正文 undo registration，Command-Z/Shift-Command-Z 发送 Engine `Undo/Redo`，Rust Memento 历史是撤销事实源。原位保存、另存、覆盖确认与 PDF 导出开始前会提交 marked text、排空 Engine 队列并冻结权威 snapshot，再把该文本写入 FileDocument 投影。
 - Rust/Swift 边界通过 ABI major、minor 与 capability bits 协商；宿主要求 Engine、统一派生、Engine 历史和 Render IR 能力，不再精确比较单一整数。Xcode 构建脚本按目标架构生成 arm64、x86_64 或 universal 静态库，并允许依赖分析在输入未变化时跳过 Rust 重建。
 - Engine 的 `RefreshDerived(revision)` 由一次 `DocumentIr` 解析同时产生分析、语法范围、引用、稳定块 ID 的 `RenderIr` 和安全 HTML，并缓存到对应 revision；Swift 文档派生热路径直接消费这一响应，失败才回退旧散点调用。旧 `RenderedMarkdownPlanner` 尚未删除，因此不能据此声称双解析器已经完全清除。
 - 可编辑 WKWebView 只保留在显式环境开关 `INFLOW_EDITABLE_WEB_PREVIEW=1` 后作为实验；默认“即时编辑”仍是持久 NSTextView，不把 DOM 转换结果写成主编辑路径。
