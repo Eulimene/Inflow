@@ -2009,7 +2009,8 @@ mod tests {
         let editor_html = String::from_utf8(editor_html).expect("editor UTF-8");
 
         assert_eq!(preview_html, "<p>正文 <strong>加粗</strong></p>\n");
-        assert!(editor_html.starts_with("<p data-inflow-source-start=\"0\""));
+        assert!(editor_html.starts_with("<p data-inflow-block-id=\"paragraph-"));
+        assert!(editor_html.contains("data-inflow-source-start=\"0\""));
         assert!(editor_html.ends_with(">正文 <strong>加粗</strong></p>\n"));
     }
 

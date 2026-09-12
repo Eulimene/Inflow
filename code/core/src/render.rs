@@ -6,6 +6,7 @@ use std::ops::Range;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Tag, TagEnd, html};
 
 use crate::markdown_ir::{DocumentIr, dialect_options};
+use crate::render_ir::RenderIr;
 use crate::{code_highlight, math, mermaid};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,7 +57,7 @@ pub fn html_fragment_for_preview_from_document(
     let events = safe_events(document, configuration, false, true);
     let mut output = String::with_capacity(document.source().len());
     html::push_html(&mut output, events.into_iter());
-    output
+    annotate_blocks(output, document, configuration, false)
 }
 
 /// Renders the canonical in-app fragment and adds inert source metadata used
@@ -64,10 +65,11 @@ pub fn html_fragment_for_preview_from_document(
 /// otherwise byte-for-byte the same as the read-only preview fragment.
 pub fn html_fragment_for_editor(markdown: &str, configuration: RenderConfiguration) -> String {
     let document = DocumentIr::parse(markdown, options_with_configuration(configuration));
-    annotate_editable_blocks(
+    annotate_blocks(
         html_fragment_from_document(&document, configuration),
         &document,
         configuration,
+        true,
     )
 }
 
@@ -75,6 +77,7 @@ pub fn html_fragment_for_editor(markdown: &str, configuration: RenderConfigurati
 struct EditableBlockAnnotation {
     opening_tag: String,
     source_range: Range<usize>,
+    block_id: String,
 }
 
 /// Adds inert source metadata to the exact HTML consumed by both preview hosts.
@@ -82,10 +85,11 @@ struct EditableBlockAnnotation {
 /// Keeping this in the core means editability never requires a second Markdown
 /// parser or a second renderer in the platform layer. The attributes are data
 /// only, have no visual effect, and are omitted from delivery/export HTML.
-fn annotate_editable_blocks(
+fn annotate_blocks(
     mut html: String,
     document: &DocumentIr,
     configuration: RenderConfiguration,
+    include_source_hex: bool,
 ) -> String {
     let annotations = editable_block_annotations(document, configuration);
     let mut search_start = 0;
@@ -105,13 +109,15 @@ fn annotate_editable_blocks(
         if !opening.contains("data-inflow-source-start=") {
             write!(
                 attributes,
-                " data-inflow-source-start=\"{}\" data-inflow-source-end=\"{}\"",
-                annotation.source_range.start, annotation.source_range.end
+                " data-inflow-block-id=\"{}\" data-inflow-source-start=\"{}\" data-inflow-source-end=\"{}\"",
+                annotation.block_id, annotation.source_range.start, annotation.source_range.end
             )
             .expect("writing to a String cannot fail");
         }
-        write!(attributes, " data-inflow-source-hex=\"{}\"", hex(source))
-            .expect("writing to a String cannot fail");
+        if include_source_hex {
+            write!(attributes, " data-inflow-source-hex=\"{}\"", hex(source))
+                .expect("writing to a String cannot fail");
+        }
         let insertion = if html.as_bytes().get(tag_end.wrapping_sub(1)) == Some(&b'/') {
             tag_end - 1
         } else {
@@ -128,6 +134,7 @@ fn editable_block_annotations(
     configuration: RenderConfiguration,
 ) -> Vec<EditableBlockAnnotation> {
     let mut annotations = Vec::new();
+    let render = RenderIr::from_document(document);
     let mut block_depth = 0_u32;
     for located in document.events() {
         let source_range = located.source_range.clone();
@@ -137,9 +144,22 @@ fn editable_block_annotations(
                     && !source_range.is_empty()
                     && let Some(opening_tag) = opening_tag_for(tag, configuration)
                 {
+                    let block_id = render
+                        .blocks
+                        .iter()
+                        .find(|block| {
+                            block.depth == 0
+                                && block.source_range.start == source_range.start
+                                && block.source_range.end == source_range.end
+                        })
+                        .map_or_else(
+                            || format!("source-{}-{}", source_range.start, source_range.end),
+                            |block| block.block_id.clone(),
+                        );
                     annotations.push(EditableBlockAnnotation {
                         opening_tag,
                         source_range,
+                        block_id,
                     });
                 }
                 block_depth += 1;
@@ -148,9 +168,22 @@ fn editable_block_annotations(
                 block_depth = block_depth.saturating_sub(1);
             }
             Event::Rule if block_depth == 0 && !source_range.is_empty() => {
+                let block_id = render
+                    .blocks
+                    .iter()
+                    .find(|block| {
+                        block.depth == 0
+                            && block.source_range.start == source_range.start
+                            && block.source_range.end == source_range.end
+                    })
+                    .map_or_else(
+                        || format!("source-{}-{}", source_range.start, source_range.end),
+                        |block| block.block_id.clone(),
+                    );
                 annotations.push(EditableBlockAnnotation {
                     opening_tag: "hr".to_owned(),
                     source_range,
+                    block_id,
                 });
             }
             _ => {}
@@ -492,12 +525,13 @@ mod tests {
         let preview = html_fragment_for_editor(markdown, RenderConfiguration::default());
 
         let heading_end = markdown.find('\n').expect("heading line ending") + 1;
+        assert!(preview.contains("<h1 data-inflow-block-id=\"heading-"));
         assert!(preview.contains(&format!(
-            "<h1 data-inflow-source-start=\"0\" data-inflow-source-end=\"{heading_end}\""
+            "data-inflow-source-start=\"0\" data-inflow-source-end=\"{heading_end}\""
         )));
         assert!(preview.contains("data-inflow-source-hex=\"2320e6a087e9a2980a\""));
-        assert!(preview.contains("<p data-inflow-source-start="));
-        assert!(preview.contains("<table data-inflow-source-start="));
+        assert!(preview.contains("<p data-inflow-block-id=\"paragraph-"));
+        assert!(preview.contains("<table data-inflow-block-id=\"table-"));
 
         let delivery = html_fragment_for_delivery(markdown, RenderConfiguration::default());
         assert!(!delivery.contains("data-inflow-source-"));
@@ -684,6 +718,8 @@ mod tests {
         ));
         assert!(html.contains("data-inflow-link-target-hex=\"e8b584e696992fe8afb4e6988e2e6d64\""));
         assert_eq!(html.matches("data-inflow-link-target-hex").count(), 2);
+        assert!(html.contains("data-inflow-block-id=\"paragraph-"));
+        assert!(!html.contains("data-inflow-source-hex"));
     }
 
     #[test]

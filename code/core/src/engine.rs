@@ -684,7 +684,12 @@ mod tests {
                 .any(|span| span.kind == crate::highlight::HighlightKind::Strong)
         );
         assert_eq!(derived.references[0].target, "note.md");
-        assert!(derived.html_fragment.contains("<h1>标题</h1>"));
+        assert!(derived.html_fragment.contains(">标题</h1>"));
+        assert!(
+            derived
+                .html_fragment
+                .contains("data-inflow-block-id=\"heading-")
+        );
         assert!(
             derived
                 .render

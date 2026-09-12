@@ -269,13 +269,18 @@ struct MarkdownPreviewView: NSViewRepresentable {
         let htmlChanged = context.coordinator.lastHTML.map {
             !UTF8Text.isExactlyEqual($0, html)
         } ?? true
-        guard htmlChanged || context.coordinator.lastBaseURL != baseURL else {
+        let baseURLChanged = context.coordinator.lastBaseURL != baseURL
+        guard htmlChanged || baseURLChanged else {
             return
         }
 
         context.coordinator.lastHTML = html
         context.coordinator.lastBaseURL = baseURL
-        context.coordinator.scheduleDocumentLoad(html, in: webView)
+        context.coordinator.scheduleDocumentUpdate(
+            html,
+            permitsBlockPatch: !baseURLChanged,
+            in: webView
+        )
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -379,6 +384,48 @@ struct MarkdownPreviewView: NSViewRepresentable {
                 // converted to data URLs. Never give WebKit a filesystem origin
                 // or read scope.
                 webView.loadHTMLString(html, baseURL: nil)
+            }
+        }
+
+        func scheduleDocumentUpdate(
+            _ html: String,
+            permitsBlockPatch: Bool,
+            in webView: WKWebView
+        ) {
+            guard permitsBlockPatch, isDocumentLoaded else {
+                scheduleDocumentLoad(html, in: webView)
+                return
+            }
+            documentLoadTask?.cancel()
+            documentLoadGeneration &+= 1
+            let generation = documentLoadGeneration
+            documentLoadTask = Task { @MainActor [weak self, weak webView] in
+                await Task.yield()
+                guard !Task.isCancelled,
+                      let self,
+                      self.documentLoadGeneration == generation,
+                      let webView
+                else { return }
+                webView.callAsyncJavaScript(
+                    Self.blockPatchFunction,
+                    arguments: ["html": html],
+                    in: nil,
+                    in: .defaultClient
+                ) { [weak self, weak webView] result in
+                    guard let self,
+                          self.documentLoadGeneration == generation,
+                          let webView
+                    else { return }
+                    switch result {
+                    case let .success(value) where (value as? Bool) == true:
+                        self.isDocumentLoaded = true
+                        webView.setAccessibilityValue("Markdown 预览已更新")
+                        self.applyEditingModeIfPossible(to: webView)
+                        self.applyScrollIfPossible(to: webView)
+                    default:
+                        self.scheduleDocumentLoad(html, in: webView)
+                    }
+                }
             }
         }
 
@@ -503,6 +550,51 @@ struct MarkdownPreviewView: NSViewRepresentable {
         );
         window.scrollTo(0, maximum * fraction);
         return window.scrollY;
+        """
+
+        private static let blockPatchFunction = """
+        const parsed = new DOMParser().parseFromString(html, 'text/html');
+        if (!parsed || !parsed.body) return false;
+
+        const currentChildren = Array.from(document.body.children);
+        const nextChildren = Array.from(parsed.body.children);
+        const currentByID = new Map();
+        for (const node of currentChildren) {
+          const id = node.getAttribute('data-inflow-block-id');
+          if (id) currentByID.set(id, node);
+        }
+
+        const anchor = currentChildren.find((node) => {
+          const rect = node.getBoundingClientRect();
+          return rect.bottom >= 0 && node.hasAttribute('data-inflow-block-id');
+        });
+        const anchorID = anchor?.getAttribute('data-inflow-block-id') ?? null;
+        const anchorTop = anchor?.getBoundingClientRect().top ?? 0;
+
+        const fragment = document.createDocumentFragment();
+        for (const nextNode of nextChildren) {
+          const id = nextNode.getAttribute('data-inflow-block-id');
+          const current = id ? currentByID.get(id) : null;
+          if (current && current.outerHTML === nextNode.outerHTML) {
+            fragment.appendChild(current);
+          } else {
+            fragment.appendChild(document.importNode(nextNode, true));
+          }
+        }
+        document.body.replaceChildren(fragment);
+
+        const currentStyles = Array.from(document.head.querySelectorAll('style'));
+        for (const style of currentStyles) style.remove();
+        for (const style of Array.from(parsed.head.querySelectorAll('style'))) {
+          document.head.appendChild(document.importNode(style, true));
+        }
+
+        if (anchorID) {
+          const escaped = CSS.escape(anchorID);
+          const restored = document.querySelector(`[data-inflow-block-id="${escaped}"]`);
+          if (restored) window.scrollBy(0, restored.getBoundingClientRect().top - anchorTop);
+        }
+        return true;
         """
     }
 
