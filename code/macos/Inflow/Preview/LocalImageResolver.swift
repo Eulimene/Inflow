@@ -96,9 +96,16 @@ enum LocalImageResolver {
         let hasWarnings: Bool
     }
 
-    private static let slotExpression = try! NSRegularExpression(
-        pattern: #"<span class="inflow-image-slot" data-inflow-target="([0-9a-f]*)" data-inflow-alt="([0-9a-f]*)"></span>"#
-    )
+    private struct ImageSlot {
+        let range: NSRange
+        let targetHex: String
+        let alternativeHex: String
+    }
+
+    private static let slotPrefix =
+        #"<span class="inflow-image-slot" data-inflow-target=""#
+    private static let alternativePrefix = #" data-inflow-alt=""#
+    private static let slotSuffix = #""></span>"#
 
     static func resolveSlots(
         in fragment: String,
@@ -129,22 +136,19 @@ enum LocalImageResolver {
         allowsOutsideProject: Bool = false,
         sanitizesImageMetadata: Bool = false
     ) -> (html: String, hasFailure: Bool) {
-        let fullRange = NSRange(location: 0, length: (fragment as NSString).length)
-        let matches = slotExpression.matches(in: fragment, range: fullRange)
-        guard !matches.isEmpty else { return (fragment, false) }
+        let slots = imageSlots(in: fragment)
+        guard !slots.isEmpty else { return (fragment, false) }
 
         let output = NSMutableString(string: fragment)
         var hasFailure = false
-        let referencesMatchSlots = imageReferences.count == matches.count
-        for (index, match) in matches.enumerated().reversed() {
-            guard let target = decodedHexString(
-                (fragment as NSString).substring(with: match.range(at: 1))
-            ), let alternative = decodedHexString(
-                (fragment as NSString).substring(with: match.range(at: 2))
-            ) else {
+        let referencesMatchSlots = imageReferences.count == slots.count
+        for (index, slot) in slots.enumerated().reversed() {
+            guard let target = decodedHexString(slot.targetHex),
+                  let alternative = decodedHexString(slot.alternativeHex)
+            else {
                 hasFailure = true
                 output.replaceCharacters(
-                    in: match.range,
+                    in: slot.range,
                     with: warning(title: "无法读取图片引用", detail: "图片引用不是有效的 UTF-8。")
                 )
                 continue
@@ -183,9 +187,46 @@ enum LocalImageResolver {
             {
                 hasFailure = true
             }
-            output.replaceCharacters(in: match.range, with: replacement)
+            output.replaceCharacters(in: slot.range, with: replacement)
         }
         return (output as String, hasFailure)
+    }
+
+    private static func imageSlots(in fragment: String) -> [ImageSlot] {
+        var slots: [ImageSlot] = []
+        var cursor = fragment.startIndex
+        while let start = fragment.range(
+            of: slotPrefix,
+            range: cursor..<fragment.endIndex
+        )?.lowerBound {
+            let targetStart = fragment.index(start, offsetBy: slotPrefix.count)
+            guard let targetEnd = fragment[targetStart...].firstIndex(of: "\"") else {
+                break
+            }
+            let afterTarget = fragment.index(after: targetEnd)
+            guard fragment[afterTarget...].hasPrefix(alternativePrefix) else {
+                cursor = afterTarget
+                continue
+            }
+            let alternativeStart = fragment.index(afterTarget, offsetBy: alternativePrefix.count)
+            guard let alternativeEnd = fragment[alternativeStart...].firstIndex(of: "\"") else {
+                break
+            }
+            guard fragment[alternativeEnd...].hasPrefix(slotSuffix) else {
+                cursor = fragment.index(after: alternativeEnd)
+                continue
+            }
+            let end = fragment.index(alternativeEnd, offsetBy: slotSuffix.count)
+            slots.append(
+                ImageSlot(
+                    range: NSRange(start..<end, in: fragment),
+                    targetHex: String(fragment[targetStart..<targetEnd]),
+                    alternativeHex: String(fragment[alternativeStart..<alternativeEnd])
+                )
+            )
+            cursor = end
+        }
+        return slots
     }
 
     static func resolveSlotsForExport(

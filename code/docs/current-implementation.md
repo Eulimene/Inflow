@@ -61,7 +61,7 @@
 - 源码高亮应用保留上一 revision 的 source/span 快照，用单一 UTF-8 replacement 映射未受影响的 span，并只重置、批量重绘新旧 span 的差异范围；若前一批仍未完成或范围无法安全映射，才回退为全文属性刷新。
 - `MarkdownSourceEditor.swift` 保留持久 NSTextView 会话与 AppKit 呈现；UTF-8/UTF-16 坐标转换、选区请求、渲染模式和本地/远程图片资源加载已拆到 `SourceEditorSupport.swift`。
 - 兼容用 `MarkdownAnalyzer`/`MarkdownHighlighter` 也已改为消费短生命 Engine 的统一派生响应，macOS Swift 代码中不再存在 analyze/highlight 的独立 C ABI 调用。交付/语料所需的无定位 metadata HTML 仍保留独立低频渲染边界。
-- Engine 预览 HTML 的标题 source range、块 ID 和链接 target metadata 都在 Rust 遍历同一份 IR 时直接附着；Swift 只执行本地图片槽的平台权限解析与整页外壳组装，不再用正则改写标题或链接 HTML。
+- Engine 预览 HTML 的标题 source range、块 ID 和链接 target metadata 都在 Rust 遍历同一份 IR 时直接附着；Swift 只执行本地图片槽的平台权限解析与整页外壳组装。图片槽使用严格的定界结构扫描器，Swift 不再用正则改写预览 HTML。
 - 顶层预览节点携带 Rust RenderIR 的稳定 `data-inflow-block-id` 与 source range；WKWebView 首次装载后通过隔离 content world 做块级 DOM patch，字节相同的节点保留实例，变化节点替换并按新顺序挂载，同时以原顶部可见块恢复滚动位置。只有初次装载、页面未就绪或补丁失败才执行完整 `loadHTMLString`。
 - 可编辑 WKWebView 实验及 DOM→Markdown 转换路径已经删除；“即时编辑”固定使用持久 NSTextView，WKWebView 只承担只读预览。
 - 源码编辑、实时预览分栏左侧与即时编辑复用同一个 MarkdownSourceEditor 和 MarkdownSourceEditorSession；分栏右侧使用当前内存正文生成的只读 WebKit 结果，即时编辑在原始字符串上应用 Rust 解析范围对应的 TextKit 展示属性。
