@@ -581,6 +581,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             textView.clickableLinkRanges = []
             textView.clearRenderedImages()
             textView.renderedQuoteRanges = []
+            textView.renderedInlineCodeRanges = []
             textView.renderedCodeBlockRanges = []
             textView.renderedHeadingDividerRanges = []
             textView.renderedReplacementMarkers = []
@@ -788,6 +789,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             guard style.kind == .blockQuote else { return nil }
             guard !rangesOverlap(style.sourceRange.utf16Range, editingRange) else { return nil }
             return (source as NSString).paragraphRange(for: style.sourceRange.utf16Range)
+        }
+        textView.renderedInlineCodeRanges = plan.contentStyles.compactMap { style in
+            guard style.kind == .inlineCode,
+                  !rangesOverlap(style.sourceRange.utf16Range, editingRange)
+            else { return nil }
+            return style.sourceRange.utf16Range
         }
         textView.renderedHeadingDividerRanges = plan.contentStyles.compactMap { style in
             guard case let .heading(level) = style.kind,
@@ -1019,7 +1026,13 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                     )
                 }
             } else {
-                hideRenderedMarker(range, storage: storage)
+                hideRenderedMarker(
+                    range,
+                    storage: storage,
+                    reservedAdvance: marker.kind == .inlineCode
+                        ? MarkdownRenderMetrics.inlineCodeHorizontalPadding
+                        : 0
+                )
             }
         }
         for image in plan.images {
@@ -1408,7 +1421,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
 
     private func hideRenderedMarker(
         _ range: NSRange,
-        storage: NSTextStorage
+        storage: NSTextStorage,
+        reservedAdvance: CGFloat = 0
     ) {
         guard range.length > 0, NSMaxRange(range) <= storage.length else { return }
         let collapsedFont = NSFont.systemFont(ofSize: 0.1)
@@ -1428,6 +1442,13 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             ],
             range: range
         )
+        if reservedAdvance > 0 {
+            storage.addAttribute(
+                .kern,
+                value: reservedAdvance - collapsedFont.pointSize,
+                range: NSRange(location: range.location, length: 1)
+            )
+        }
     }
 
     private func applyRenderedReplacement(
@@ -1632,7 +1653,10 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 [
                     .baselineOffset: 0,
                     .foregroundColor: palette.textColor,
-                    .backgroundColor: palette.inlineCodeColor,
+                    // Attribute backgrounds use the line box and make the
+                    // smaller monospace font look vertically displaced. The
+                    // text view draws a glyph-bound rounded background instead.
+                    .backgroundColor: NSColor.clear,
                 ],
                 range: range
             )
@@ -2697,6 +2721,30 @@ enum RenderedMarkdownQuoteGeometry {
     }
 }
 
+enum RenderedMarkdownInlineCodeGeometry {
+    static func backgroundRect(
+        glyphRect: NSRect,
+        lineFragment: NSRect,
+        textContainerOrigin: NSPoint,
+        font: NSFont,
+        baselineOffset: CGFloat
+    ) -> NSRect {
+        let horizontalPadding = MarkdownRenderMetrics.inlineCodeHorizontalPadding
+        let verticalPadding = MarkdownRenderMetrics.inlineCodeVerticalPadding
+        let textHeight = max(1, ceil(font.ascender - font.descender))
+        let textMinY = textContainerOrigin.y
+            + lineFragment.minY
+            + baselineOffset
+            - font.ascender
+        return NSRect(
+            x: textContainerOrigin.x + glyphRect.minX - horizontalPadding,
+            y: textMinY - verticalPadding,
+            width: max(1, glyphRect.width + horizontalPadding * 2),
+            height: textHeight + verticalPadding * 2
+        )
+    }
+}
+
 enum RenderedMarkdownMarkerTypography {
     static func font(for kind: RenderedMarkdownMarkerKind, baseFont: NSFont) -> NSFont {
         if kind == .footnoteReference {
@@ -2800,6 +2848,11 @@ final class WindowAwareTextView: NSTextView {
     var renderedQuoteRanges: [NSRange] = [] {
         didSet {
             if oldValue != renderedQuoteRanges { needsDisplay = true }
+        }
+    }
+    var renderedInlineCodeRanges: [NSRange] = [] {
+        didSet {
+            if oldValue != renderedInlineCodeRanges { needsDisplay = true }
         }
     }
     var renderedCodeBlockRanges: [NSRange] = [] {
@@ -3352,6 +3405,41 @@ final class WindowAwareTextView: NSTextView {
         super.drawBackground(in: rect)
         guard let layoutManager, let textContainer else { return }
         let palette = MarkdownRenderPalette.resolved(for: effectiveAppearance)
+        palette.inlineCodeColor.setFill()
+        for characterRange in renderedInlineCodeRanges where characterRange.length > 0 {
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: characterRange,
+                actualCharacterRange: nil
+            )
+            layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) {
+                lineRect, _, _, lineGlyphRange, _ in
+                let segment = NSIntersectionRange(glyphRange, lineGlyphRange)
+                guard segment.length > 0 else { return }
+                let character = layoutManager.characterIndexForGlyph(at: segment.location)
+                guard let font = self.textStorage?.attribute(
+                    .font,
+                    at: character,
+                    effectiveRange: nil
+                ) as? NSFont else { return }
+                let glyphRect = layoutManager.boundingRect(
+                    forGlyphRange: segment,
+                    in: textContainer
+                )
+                let background = RenderedMarkdownInlineCodeGeometry.backgroundRect(
+                    glyphRect: glyphRect,
+                    lineFragment: lineRect,
+                    textContainerOrigin: self.textContainerOrigin,
+                    font: font,
+                    baselineOffset: layoutManager.location(forGlyphAt: segment.location).y
+                )
+                guard background.intersects(rect) else { return }
+                NSBezierPath(
+                    roundedRect: background,
+                    xRadius: MarkdownRenderMetrics.inlineCodeCornerRadius,
+                    yRadius: MarkdownRenderMetrics.inlineCodeCornerRadius
+                ).fill()
+            }
+        }
         for characterRange in renderedCodeBlockRanges where characterRange.length > 0 {
             let glyphRange = layoutManager.glyphRange(
                 forCharacterRange: characterRange,

@@ -1653,11 +1653,16 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             storage.attribute(.font, at: contentLocation, effectiveRange: nil) as? NSFont
         )
         XCTAssertTrue(contentFont.fontDescriptor.symbolicTraits.contains(.monoSpace))
-        let contentBackground = try XCTUnwrap(
-            storage.attribute(.backgroundColor, at: contentLocation, effectiveRange: nil)
-                as? NSColor
+        let contentBackground = storage.attribute(
+            .backgroundColor,
+            at: contentLocation,
+            effectiveRange: nil
+        ) as? NSColor
+        XCTAssertEqual(contentBackground?.alphaComponent ?? 0, 0, accuracy: 0.001)
+        XCTAssertEqual(
+            session.textView.renderedInlineCodeRanges,
+            [NSRange(location: contentLocation, length: "inline code".utf16.count)]
         )
-        XCTAssertGreaterThan(contentBackground.alphaComponent, 0)
 
         for marker in markers {
             let location = marker.sourceRange.utf16Range.location
@@ -1668,7 +1673,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                 storage.attribute(.kern, at: location, effectiveRange: nil) as? NSNumber
             )
             XCTAssertLessThan(font.pointSize, 1)
-            XCTAssertEqual(kern.doubleValue, -0.1, accuracy: 0.001)
+            XCTAssertEqual(
+                kern.doubleValue,
+                Double(MarkdownRenderMetrics.inlineCodeHorizontalPadding - 0.1),
+                accuracy: 0.001
+            )
             XCTAssertTrue(session.textView.isRenderedCharacterSuppressed(at: location))
             let markerBackground = storage.attribute(
                 .backgroundColor,
@@ -1684,6 +1693,68 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         ) as? NSColor
         XCTAssertEqual(proseBackground?.alphaComponent ?? 0, 0, accuracy: 0.001)
         XCTAssertEqual(session.textView.string, source)
+    }
+
+    @MainActor
+    func testInlineCodeBackgroundTracksTheGlyphBaselineInsteadOfTheLineBox() async throws {
+        let source = "统一状态为：`草稿`、`待评审`。"
+        let session = MarkdownSourceEditorSession()
+        session.scrollView.frame = NSRect(x: 0, y: 0, width: 520, height: 120)
+        session.textView.frame = NSRect(x: 0, y: 0, width: 520, height: 120)
+        session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+
+        let storage = try XCTUnwrap(session.textView.textStorage)
+        let layoutManager = try XCTUnwrap(session.textView.layoutManager)
+        let textContainer = try XCTUnwrap(session.textView.textContainer)
+        let codeRange = (source as NSString).range(of: "草稿")
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphRange = layoutManager.glyphRange(
+            forCharacterRange: codeRange,
+            actualCharacterRange: nil
+        )
+        let glyphRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        let lineFragment = layoutManager.lineFragmentRect(
+            forGlyphAt: glyphRange.location,
+            effectiveRange: nil,
+            withoutAdditionalLayout: true
+        )
+        let font = try XCTUnwrap(
+            storage.attribute(.font, at: codeRange.location, effectiveRange: nil) as? NSFont
+        )
+        let baselineOffset = layoutManager.location(forGlyphAt: glyphRange.location).y
+        let background = RenderedMarkdownInlineCodeGeometry.backgroundRect(
+            glyphRect: glyphRect,
+            lineFragment: lineFragment,
+            textContainerOrigin: session.textView.textContainerOrigin,
+            font: font,
+            baselineOffset: baselineOffset
+        )
+        let textTop = session.textView.textContainerOrigin.y
+            + lineFragment.minY
+            + baselineOffset
+            - font.ascender
+
+        XCTAssertEqual(
+            background.minY + MarkdownRenderMetrics.inlineCodeVerticalPadding,
+            textTop,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            background.height,
+            ceil(font.ascender - font.descender)
+                + MarkdownRenderMetrics.inlineCodeVerticalPadding * 2,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            background.minX,
+            session.textView.textContainerOrigin.x
+                + glyphRect.minX
+                - MarkdownRenderMetrics.inlineCodeHorizontalPadding,
+            accuracy: 0.001
+        )
+        XCTAssertLessThan(background.height, lineFragment.height)
     }
 
     @MainActor

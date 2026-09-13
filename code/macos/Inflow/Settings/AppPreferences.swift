@@ -19,6 +19,9 @@ enum MarkdownRenderMetrics {
     static let editorVerticalInset = CGFloat(24)
     static let blockCornerRadius = CGFloat(8)
     static let inlineCodeScale = 0.88
+    static let inlineCodeHorizontalPadding = CGFloat(4)
+    static let inlineCodeVerticalPadding = CGFloat(2)
+    static let inlineCodeCornerRadius = CGFloat(4)
     static let codeBlockLineHeight = CGFloat(1.5)
     static let tableCellHorizontalPadding = CGFloat(12)
     static let tableCellVerticalPadding = CGFloat(8)
