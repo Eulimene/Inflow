@@ -414,6 +414,10 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertEqual(tableView.cellTexts, [["名称", "文档"], ["Inflow", "打开"]])
         XCTAssertGreaterThan(tableView.renderedSize.width, 100)
         XCTAssertGreaterThan(tableView.renderedSize.height, 60)
+        XCTAssertEqual(
+            tableView.restingLinkUnderlineStyles(),
+            [MarkdownLinkVisualStyle.restingUnderline]
+        )
         XCTAssertTrue(
             tableView.textView(NSTextView(), clickedOnLink: "guide.md", at: 0)
         )
@@ -2253,7 +2257,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                 atCharacterIndex: link.textRange.utf16Range.location,
                 effectiveRange: nil
             ) as? NSNumber)?.intValue,
-            NSUnderlineStyle.single.rawValue
+            MarkdownLinkVisualStyle.hoverUnderline
         )
         XCTAssertNil(
             session.textView.layoutManager?.temporaryAttribute(

@@ -38,7 +38,7 @@ final class MarkdownHighlighterTests: XCTestCase {
     @MainActor
     func testSessionAppliesAndDisablesHighlightingWithoutChangingDocumentOrUndo() async throws {
         let session = MarkdownSourceEditorSession()
-        let source = "# Title\n\n**bold**"
+        let source = "# Title\n\n**bold** [link](guide.md)"
         session.textView.string = source
         session.textView.setSelectedRange(NSRange(location: 3, length: 2))
         session.textView.insertText("TL", replacementRange: NSRange(location: 2, length: 2))
@@ -64,6 +64,25 @@ final class MarkdownHighlighterTests: XCTestCase {
             effectiveRange: nil
         ) as? NSColor
         XCTAssertEqual(headingColor, .systemBlue)
+        let linkLocation = (editedSource as NSString).range(of: "link").location
+        XCTAssertEqual(
+            (session.textView.textStorage?.attribute(
+                .underlineStyle,
+                at: linkLocation,
+                effectiveRange: nil
+            ) as? NSNumber)?.intValue,
+            MarkdownLinkVisualStyle.restingUnderline
+        )
+        XCTAssertEqual(
+            session.textView.textStorage?.attribute(
+                .foregroundColor,
+                at: linkLocation,
+                effectiveRange: nil
+            ) as? NSColor,
+            MarkdownRenderPalette.resolved(
+                for: session.textView.effectiveAppearance
+            ).accentColor
+        )
 
         XCTAssertTrue(
             session.applySyntaxHighlighting([], source: editedSource, enabled: false)

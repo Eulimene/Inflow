@@ -1,6 +1,20 @@
 import AppKit
 import Foundation
 
+enum MarkdownLinkVisualStyle {
+    static let restingUnderline = 0
+    static let hoverUnderline = NSUnderlineStyle.single.rawValue
+
+    static func restingAttributes(
+        foregroundColor: NSColor
+    ) -> [NSAttributedString.Key: Any] {
+        [
+            .foregroundColor: foregroundColor,
+            .underlineStyle: restingUnderline,
+        ]
+    }
+}
+
 struct RenderedMarkdownResourceContext: Equatable, Sendable {
     let documentDirectory: URL?
     let projectRoot: URL?

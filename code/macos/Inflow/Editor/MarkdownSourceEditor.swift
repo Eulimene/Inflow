@@ -862,6 +862,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         let palette = MarkdownRenderPalette.resolved(for: textView.effectiveAppearance)
         textView.font = baseFont
         textView.defaultParagraphStyle = baseParagraph
+        textView.linkTextAttributes = MarkdownLinkVisualStyle.restingAttributes(
+            foregroundColor: palette.accentColor
+        )
         textView.typingAttributes = [
             .font: baseFont,
             .foregroundColor: palette.textColor,
@@ -1721,10 +1724,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             )
         case .link:
             storage.addAttributes(
-                [
-                    .foregroundColor: palette.accentColor,
-                    .underlineStyle: 0,
-                ],
+                MarkdownLinkVisualStyle.restingAttributes(
+                    foregroundColor: palette.accentColor
+                ),
                 range: range
             )
         }
@@ -2184,10 +2186,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 .backgroundColor: NSColor.quaternaryLabelColor.withAlphaComponent(0.18),
             ]
         case .link:
-            [
-                .foregroundColor: NSColor.systemPurple,
-                .underlineStyle: NSUnderlineStyle.single.rawValue,
-            ]
+            MarkdownLinkVisualStyle.restingAttributes(
+                foregroundColor: MarkdownRenderPalette.resolved(
+                    for: textView.effectiveAppearance
+                ).accentColor
+            )
         case .image:
             [.foregroundColor: NSColor.systemPink]
         case .blockQuote:
@@ -3017,7 +3020,7 @@ final class WindowAwareTextView: NSTextView {
         if let range {
             layoutManager?.addTemporaryAttribute(
                 .underlineStyle,
-                value: NSUnderlineStyle.single.rawValue,
+                value: MarkdownLinkVisualStyle.hoverUnderline,
                 forCharacterRange: range
             )
         }
@@ -4019,6 +4022,26 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         Self.backgroundColor(forRow: index, appearance: effectiveAppearance)
     }
 
+    func restingLinkUnderlineStyles() -> [Int] {
+        cells.flatMap { cell -> [Int] in
+            guard let storage = cell.textView.textStorage, storage.length > 0 else { return [] }
+            var styles: [Int] = []
+            storage.enumerateAttribute(
+                .link,
+                in: NSRange(location: 0, length: storage.length)
+            ) { value, range, _ in
+                guard value != nil, range.length > 0 else { return }
+                let style = storage.attribute(
+                    .underlineStyle,
+                    at: range.location,
+                    effectiveRange: nil
+                ) as? NSNumber
+                styles.append(style?.intValue ?? NSUnderlineStyle.single.rawValue)
+            }
+            return styles
+        }
+    }
+
     init(
         table: RenderedMarkdownTable,
         baseFont: NSFont,
@@ -4076,11 +4099,9 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
                 where link.visibleRange.length > 0
                     && NSMaxRange(link.visibleRange) <= attributed.length {
                     attributed.addAttributes(
-                        [
-                            .link: link.target,
-                            .foregroundColor: palette.accentColor,
-                            .underlineStyle: 0,
-                        ],
+                        MarkdownLinkVisualStyle.restingAttributes(
+                            foregroundColor: palette.accentColor
+                        ).merging([.link: link.target]) { current, _ in current },
                         range: link.visibleRange
                     )
                 }
@@ -4093,6 +4114,9 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
                 textView.textContainer?.lineFragmentPadding = 0
                 textView.textContainer?.widthTracksTextView = true
                 textView.textContainer?.heightTracksTextView = false
+                textView.linkTextAttributes = MarkdownLinkVisualStyle.restingAttributes(
+                    foregroundColor: palette.accentColor
+                )
                 textView.textStorage?.setAttributedString(attributed)
                 textView.delegate = nil
                 textView.setAccessibilityLabel(cell.text)
@@ -4162,11 +4186,19 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
     func applyPalette(_ palette: MarkdownRenderPalette) {
         for cell in cells {
             guard let storage = cell.textView.textStorage, storage.length > 0 else { continue }
+            cell.textView.linkTextAttributes = MarkdownLinkVisualStyle.restingAttributes(
+                foregroundColor: palette.accentColor
+            )
             let fullRange = NSRange(location: 0, length: storage.length)
             storage.addAttribute(.foregroundColor, value: palette.textColor, range: fullRange)
             storage.enumerateAttribute(.link, in: fullRange) { value, range, _ in
                 guard value != nil else { return }
-                storage.addAttribute(.foregroundColor, value: palette.accentColor, range: range)
+                storage.addAttributes(
+                    MarkdownLinkVisualStyle.restingAttributes(
+                        foregroundColor: palette.accentColor
+                    ),
+                    range: range
+                )
             }
         }
         needsDisplay = true
@@ -4486,7 +4518,7 @@ final class RenderedMarkdownTableCellTextView: NSTextView {
         if let range {
             layoutManager?.addTemporaryAttribute(
                 .underlineStyle,
-                value: NSUnderlineStyle.single.rawValue,
+                value: MarkdownLinkVisualStyle.hoverUnderline,
                 forCharacterRange: range
             )
         }

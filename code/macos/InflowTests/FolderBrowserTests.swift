@@ -2094,6 +2094,7 @@ final class FolderBrowserTests: XCTestCase {
         let fileMenu = try XCTUnwrap(NSApp.mainMenu?.item(withTitle: "文件")?.submenu)
         XCTAssertEqual(fileMenu.items.filter { $0.title == "打开…" }.count, 1)
         XCTAssertTrue(fileMenu.items.filter { $0.title == "打开文件夹…" }.isEmpty)
+        XCTAssertEqual(FinderRevealAction.title, "在 Finder 中显示")
     }
 
     private func temporaryDirectory() throws -> URL {

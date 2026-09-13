@@ -1996,6 +1996,10 @@ private struct ProjectDocumentTabBar: View {
                                 .joined(separator: "，")
                         )
                         .contextMenu {
+                            Button(FinderRevealAction.title) {
+                                FinderRevealAction.perform(for: surface.fileURL)
+                            }
+                            Divider()
                             Button("关闭当前文件") {
                                 projectCoordinator.closeDocumentSurfaces(
                                     in: .current,

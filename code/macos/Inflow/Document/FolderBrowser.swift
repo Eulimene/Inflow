@@ -5,6 +5,15 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+@MainActor
+enum FinderRevealAction {
+    static let title = "在 Finder 中显示"
+
+    static func perform(for url: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([url.standardizedFileURL])
+    }
+}
+
 enum InflowLaunchPolicy {
     /// Launch directly into an editable untitled Markdown document. Creating
     /// the document does not present a file panel; the user chooses a path on
@@ -1656,6 +1665,12 @@ struct FolderBrowserSidebar: View {
                 Button("刷新项目") { controller.refresh() }
             }
             .contextMenu {
+                if let folderURL = controller.folderURL {
+                    Button(FinderRevealAction.title) {
+                        FinderRevealAction.perform(for: folderURL)
+                    }
+                    Divider()
+                }
                 Button("新建 Markdown 文件…") {
                     beginCreatingMarkdown(in: .none)
                 }
@@ -1689,6 +1704,12 @@ struct FolderBrowserSidebar: View {
                 activateItem(withID: selectedItemID) ? .handled : .ignored
             }
             .contextMenu {
+                if let folderURL = controller.folderURL {
+                    Button(FinderRevealAction.title) {
+                        FinderRevealAction.perform(for: folderURL)
+                    }
+                    Divider()
+                }
                 Button("新建 Markdown 文件…") {
                     selectedItemID = nil
                     beginCreatingMarkdown(in: .none)
@@ -1917,6 +1938,10 @@ private struct FolderProjectTreeRows: View {
             }
         }
         .contextMenu {
+            Button(FinderRevealAction.title) {
+                FinderRevealAction.perform(for: item.url)
+            }
+            Divider()
             Button("新建 Markdown 文件…") {
                 onBeginCreation(item)
             }
