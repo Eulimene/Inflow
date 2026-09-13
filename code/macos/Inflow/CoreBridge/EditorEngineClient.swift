@@ -126,7 +126,8 @@ extension EditorEngineDerivedContent {
                     revision: 0,
                     mathEnabled: configuration.mathRenderingEnabled,
                     mermaidEnabled: configuration.mermaidRenderingEnabled,
-                    deferMermaid: false
+                    deferMermaid: false,
+                    includeHTML: true
                 )
             )
             let response = try dispatchTemporaryEditorEngine(envelope, to: handle)
@@ -467,13 +468,13 @@ final class EditorEngineClient {
     func resolveDeferredMermaid(
         source: String,
         configuration: PreviewAppearanceConfiguration
-    ) async -> EditorEngineDerivedContent? {
-        await Task.detached(priority: .utility) {
-            EditorEngineDerivedContent.deriveSynchronously(
-                source: source,
-                configuration: configuration
-            )
-        }.value
+    ) async -> EditorEngineMermaidResolution? {
+        await pending?.value
+        guard !Task.isCancelled else { return nil }
+        return await client.resolveMermaid(
+            expectedText: source,
+            mathEnabled: configuration.mathRenderingEnabled
+        )
     }
 
     func format(
@@ -777,7 +778,8 @@ private actor EditorEngineTransport {
                     revision: revision,
                     mathEnabled: mathEnabled,
                     mermaidEnabled: mermaidEnabled,
-                    deferMermaid: deferMermaid
+                    deferMermaid: deferMermaid,
+                    includeHTML: false
                 )
             )
             let response: EditorEngineDispatchResponse = try dispatch(envelope)
@@ -796,6 +798,40 @@ private actor EditorEngineTransport {
         } catch {
             logger.error(
                 "Unified derivation failed; revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    func resolveMermaid(
+        expectedText: String,
+        mathEnabled: Bool
+    ) -> EditorEngineMermaidResolution? {
+        do {
+            guard projection.utf8.elementsEqual(expectedText.utf8) else {
+                throw EditorEngineBridgeError.mismatch(revision: revision)
+            }
+            let requestID = UUID().uuidString
+            let envelope = EditorEngineResolveMermaidEnvelope(
+                schemaVersion: Self.schemaVersion,
+                requestID: requestID,
+                command: EditorEngineResolveMermaidCommand(
+                    type: "resolve_mermaid",
+                    revision: revision,
+                    mathEnabled: mathEnabled
+                )
+            )
+            let response: EditorEngineDispatchResponse = try dispatch(envelope)
+            guard response.schemaVersion == Self.schemaVersion,
+                  response.requestID == requestID,
+                  response.patch.revision == revision,
+                  let raw = response.patch.mermaid,
+                  raw.revision == revision
+            else { throw EditorEngineBridgeError.invalidResponse }
+            return try raw.validated(source: expectedText)
+        } catch {
+            logger.error(
+                "Mermaid resolution failed; revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
             return nil
         }
@@ -1438,6 +1474,18 @@ private struct EditorEngineRefreshEnvelope: Encodable {
     }
 }
 
+private struct EditorEngineResolveMermaidEnvelope: Encodable {
+    let schemaVersion: UInt32
+    let requestID: String
+    let command: EditorEngineResolveMermaidCommand
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case requestID = "request_id"
+        case command
+    }
+}
+
 private struct EditorEngineFormatEnvelope: Encodable {
     let schemaVersion: UInt32
     let requestID: String
@@ -1654,6 +1702,7 @@ private struct EditorEngineRefreshCommand: Encodable {
     let mathEnabled: Bool
     let mermaidEnabled: Bool
     let deferMermaid: Bool
+    let includeHTML: Bool
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -1661,6 +1710,19 @@ private struct EditorEngineRefreshCommand: Encodable {
         case mathEnabled = "math_enabled"
         case mermaidEnabled = "mermaid_enabled"
         case deferMermaid = "defer_mermaid"
+        case includeHTML = "include_html"
+    }
+}
+
+private struct EditorEngineResolveMermaidCommand: Encodable {
+    let type: String
+    let revision: UInt64
+    let mathEnabled: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case revision
+        case mathEnabled = "math_enabled"
     }
 }
 
@@ -1739,6 +1801,7 @@ private struct EditorEngineStatePatch: Decodable {
     let text: EditorEngineTextPatch?
     let selection: EditorEngineSelection?
     let derived: EditorEngineDerivedState?
+    let mermaid: EditorEngineRawMermaidPatch?
     let search: EditorEngineRawSearchResult?
     let formatCapabilities: EditorEngineRawFormatCapabilities?
     let effects: [EditorEngineRawHostEffect]
@@ -1753,6 +1816,7 @@ private struct EditorEngineStatePatch: Decodable {
         case text
         case selection
         case derived
+        case mermaid
         case search
         case formatCapabilities = "format_capabilities"
         case effects
@@ -1869,8 +1933,8 @@ private struct EditorEngineDerivedState: Decodable {
     let references: [EditorEngineReference]
     let render: EditorEngineRender
     let nativeRender: EditorEngineRawNativeRenderPlan
-    let htmlFragment: String
-    let previewHTMLFragment: String
+    let htmlFragment: String?
+    let previewHTMLFragment: String?
     let mathEnabled: Bool
     let mermaidEnabled: Bool
     let mermaidDeferred: Bool
@@ -1952,6 +2016,52 @@ private struct EditorEngineDerivedState: Decodable {
             renderBlocks: blocks,
             nativeRenderPlan: nativeRenderPlan,
             mermaidDeferred: mermaidDeferred
+        )
+    }
+}
+
+private struct EditorEngineRawMermaidPatch: Decodable {
+    let revision: UInt64
+    let diagrams: [EditorEngineRawNativeRenderPlan.Diagram]
+    let failedSourceRanges: [EditorEngineByteRange]
+
+    enum CodingKeys: String, CodingKey {
+        case revision
+        case diagrams
+        case failedSourceRanges = "failed_source_ranges"
+    }
+
+    func validated(source: String) throws -> EditorEngineMermaidResolution {
+        func mapped(_ raw: EditorEngineByteRange) throws -> RenderedMarkdownSourceRange {
+            guard let utf8 = raw.validated(in: source, permitsEmpty: false),
+                  let target = MarkdownSourceRange.navigationTarget(
+                      forUTF8Range: utf8,
+                      in: source
+                  )
+            else { throw EditorEngineBridgeError.invalidResponse }
+            return RenderedMarkdownSourceRange(
+                utf8Range: utf8,
+                utf16Range: target.revealRange
+            )
+        }
+
+        let mappedDiagrams = try diagrams.map { item in
+            guard item.intrinsicWidth > 0,
+                  item.intrinsicHeight > 0,
+                  !item.isPlaceholder
+            else { throw EditorEngineBridgeError.invalidResponse }
+            return RenderedMarkdownMermaidDiagram(
+                sourceRange: try mapped(item.sourceRange),
+                svg: item.svg,
+                intrinsicWidth: item.intrinsicWidth,
+                intrinsicHeight: item.intrinsicHeight,
+                isPlaceholder: false
+            )
+        }
+        return EditorEngineMermaidResolution(
+            revision: revision,
+            diagrams: mappedDiagrams,
+            failedSourceRanges: try failedSourceRanges.map(mapped)
         )
     }
 }

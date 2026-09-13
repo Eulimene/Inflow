@@ -376,7 +376,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
         session.deferredMermaidResolver = { _, _ in
             try? await Task.sleep(for: .milliseconds(100))
-            return resolvedContent
+            return EditorEngineMermaidResolution(
+                revision: resolvedContent.revision,
+                diagrams: resolvedContent.nativeRenderPlan.mermaidDiagrams,
+                failedSourceRanges: []
+            )
         }
         let derivedContent = await session.deriveContent(
             for: source,
@@ -385,7 +389,8 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         let content = try XCTUnwrap(derivedContent)
         XCTAssertTrue(content.mermaidDeferred)
         XCTAssertTrue(content.nativeRenderPlan.mermaidDiagrams.allSatisfy(\.isPlaceholder))
-        XCTAssertFalse(content.htmlFragment.contains("mermaid-diagram"))
+        XCTAssertNil(content.htmlFragment)
+        XCTAssertNil(content.previewHTMLFragment)
         session.textView.undoManager?.removeAllActions()
         session.setPresentation(
             .rendered,

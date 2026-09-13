@@ -200,11 +200,8 @@ final class EditorEngineClientTests: XCTestCase {
         XCTAssertEqual(derived.analysis.headings.map(\.title), ["标题"])
         XCTAssertTrue(derived.syntaxHighlighting.contains { $0.kind == .strong })
         XCTAssertEqual(derived.references.map(\.target), ["note.md"])
-        XCTAssertTrue(derived.htmlFragment.contains("<strong>加粗</strong>"))
-        XCTAssertFalse(derived.htmlFragment.contains("data-inflow-link-target-hex"))
-        XCTAssertTrue(derived.previewHTMLFragment.contains(
-            "data-inflow-link-target-hex=\"6e6f74652e6d64\""
-        ))
+        XCTAssertNil(derived.htmlFragment)
+        XCTAssertNil(derived.previewHTMLFragment)
         XCTAssertTrue(derived.renderBlocks.contains { $0.visibleText.contains("正文 加粗 链接") })
         XCTAssertTrue(derived.nativeRenderPlan.contentStyles.contains { $0.kind == .strong })
         XCTAssertEqual(derived.nativeRenderPlan.links.map(\.target), ["note.md"])

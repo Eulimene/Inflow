@@ -306,6 +306,66 @@ struct RenderedMarkdownPlan: Equatable, Sendable {
             && images == other.images
             && tables == other.tables
     }
+
+    func resolvingMermaid(
+        with resolution: EditorEngineMermaidResolution
+    ) -> Self? {
+        let placeholders = mermaidDiagrams.filter(\.isPlaceholder)
+        guard placeholders.count == mermaidDiagrams.count,
+              resolution.diagrams.allSatisfy({ !$0.isPlaceholder })
+        else { return nil }
+
+        let expected = placeholders.map(\.sourceRange.utf8Range).sorted(by: rangeOrder)
+        let received = (
+            resolution.diagrams.map(\.sourceRange.utf8Range)
+                + resolution.failedSourceRanges.map(\.utf8Range)
+        ).sorted(by: rangeOrder)
+        guard expected == received else { return nil }
+
+        var resolvedLocals = localSourceBlocks
+        for failed in resolution.failedSourceRanges {
+            if let index = resolvedLocals.firstIndex(where: {
+                $0.sourceRange.utf8Range == failed.utf8Range
+            }) {
+                var reasons = Set(resolvedLocals[index].reasons)
+                reasons.insert(.mermaid)
+                resolvedLocals[index] = RenderedMarkdownLocalSourceBlock(
+                    sourceRange: resolvedLocals[index].sourceRange,
+                    reasons: reasons.sorted { $0.rawValue < $1.rawValue }
+                )
+            } else {
+                resolvedLocals.append(
+                    RenderedMarkdownLocalSourceBlock(
+                        sourceRange: failed,
+                        reasons: [.mermaid]
+                    )
+                )
+            }
+        }
+        resolvedLocals.sort {
+            rangeOrder($0.sourceRange.utf8Range, $1.sourceRange.utf8Range)
+        }
+
+        return Self(
+            sourceSnapshot: sourceSnapshot,
+            sourceUTF8: sourceUTF8,
+            markers: markers,
+            contentStyles: contentStyles,
+            localSourceBlocks: resolvedLocals,
+            links: links,
+            images: images,
+            tables: tables,
+            mermaidDiagrams: resolution.diagrams.sorted {
+                rangeOrder($0.sourceRange.utf8Range, $1.sourceRange.utf8Range)
+            }
+        )
+    }
+
+    private func rangeOrder(_ lhs: Range<Int>, _ rhs: Range<Int>) -> Bool {
+        lhs.lowerBound == rhs.lowerBound
+            ? lhs.upperBound < rhs.upperBound
+            : lhs.lowerBound < rhs.lowerBound
+    }
 }
 
 enum RenderedMarkdownRefreshDecision: Equatable, Sendable {

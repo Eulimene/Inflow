@@ -3,14 +3,20 @@ import Foundation
 struct EditorEngineDerivedContent: Sendable {
     let revision: UInt64
     let sourceSnapshot: String
-    let htmlFragment: String
-    let previewHTMLFragment: String
+    let htmlFragment: String?
+    let previewHTMLFragment: String?
     let analysis: DocumentAnalysis
     let syntaxHighlighting: [MarkdownSyntaxSpan]
     let references: [MarkdownReference]
     let renderBlocks: [EditorEngineRenderBlock]
     let nativeRenderPlan: RenderedMarkdownPlan
     let mermaidDeferred: Bool
+}
+
+struct EditorEngineMermaidResolution: Equatable, Sendable {
+    let revision: UInt64
+    let diagrams: [RenderedMarkdownMermaidDiagram]
+    let failedSourceRanges: [RenderedMarkdownSourceRange]
 }
 
 struct EditorEngineRenderBlock: Equatable, Sendable {

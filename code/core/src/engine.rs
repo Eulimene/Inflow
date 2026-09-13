@@ -13,6 +13,7 @@ use crate::format::{self, FormatError, InlineFormat, ListFormat, MarkdownEdit};
 use crate::highlight::HighlightSpan;
 use crate::history::{History, HistoryEntry};
 use crate::markdown_adapter::CommonMarkAdapter;
+use crate::markdown_ir::DocumentIr;
 use crate::native_render::NativeRenderPlan;
 use crate::ports::MarkdownPort;
 use crate::reference::MarkdownReference;
@@ -83,6 +84,13 @@ pub enum EditorCommand {
         mermaid_enabled: bool,
         #[serde(default)]
         defer_mermaid: bool,
+        #[serde(default)]
+        include_html: bool,
+    },
+    ResolveMermaid {
+        revision: Revision,
+        #[serde(default = "default_true")]
+        math_enabled: bool,
     },
     Format {
         base_revision: Revision,
@@ -240,6 +248,7 @@ pub struct StatePatch {
     pub text: Option<TextPatch>,
     pub selection: Option<Selection>,
     pub derived: Option<DerivedState>,
+    pub mermaid: Option<MermaidPatch>,
     pub search: Option<SearchResult>,
     pub format_capabilities: Option<FormatCapabilities>,
     pub effects: Vec<HostEffect>,
@@ -301,11 +310,20 @@ pub struct DerivedState {
     pub references: Vec<MarkdownReference>,
     pub render: RenderIr,
     pub native_render: NativeRenderPlan,
-    pub html_fragment: String,
-    pub preview_html_fragment: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub html_fragment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_html_fragment: Option<String>,
     pub math_enabled: bool,
     pub mermaid_enabled: bool,
     pub mermaid_deferred: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MermaidPatch {
+    pub revision: Revision,
+    pub diagrams: Vec<crate::native_render::NativeMermaidDiagram>,
+    pub failed_source_ranges: Vec<ByteRange>,
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize)]
@@ -342,10 +360,18 @@ pub struct EditorEngine {
     selection: Selection,
     mode: EditorMode,
     derived: Option<DerivedState>,
+    parsed: Option<ParsedDocument>,
+    mermaid_resolution: Option<MermaidPatch>,
     history: History,
     saved_content_hash: String,
     prepared_saves: HashMap<String, String>,
     markdown: Box<dyn MarkdownPort>,
+}
+
+struct ParsedDocument {
+    revision: Revision,
+    math_enabled: bool,
+    document: DocumentIr,
 }
 
 impl EditorEngine {
@@ -373,6 +399,8 @@ impl EditorEngine {
             selection: request.selection,
             mode: request.mode,
             derived: None,
+            parsed: None,
+            mermaid_resolution: None,
             history: History::default(),
             saved_content_hash,
             prepared_saves: HashMap::new(),
@@ -416,7 +444,18 @@ impl EditorEngine {
                 math_enabled,
                 mermaid_enabled,
                 defer_mermaid,
-            } => self.refresh_derived(revision, math_enabled, mermaid_enabled, defer_mermaid)?,
+                include_html,
+            } => self.refresh_derived(
+                revision,
+                math_enabled,
+                mermaid_enabled,
+                defer_mermaid,
+                include_html,
+            )?,
+            EditorCommand::ResolveMermaid {
+                revision,
+                math_enabled,
+            } => self.resolve_mermaid(revision, math_enabled)?,
             EditorCommand::Format {
                 base_revision,
                 selection,
@@ -525,6 +564,7 @@ impl EditorEngine {
         math_enabled: bool,
         mermaid_enabled: bool,
         defer_mermaid: bool,
+        include_html: bool,
     ) -> Result<StatePatch, EngineError> {
         if revision != self.revision {
             return Err(EngineError::RevisionConflict);
@@ -533,15 +573,23 @@ impl EditorEngine {
             && derived.math_enabled == math_enabled
             && derived.mermaid_enabled == mermaid_enabled
             && derived.mermaid_deferred == defer_mermaid
+            && derived.html_fragment.is_some() == include_html
         {
             derived.clone()
         } else {
+            self.ensure_parsed(math_enabled);
+            let document = &self
+                .parsed
+                .as_ref()
+                .expect("parsed document must be available")
+                .document;
             let derived = self.markdown.derive(
-                &self.text,
+                document,
                 revision,
                 math_enabled,
                 mermaid_enabled,
                 defer_mermaid,
+                include_html,
             );
             self.derived = Some(derived.clone());
             derived
@@ -554,6 +602,7 @@ impl EditorEngine {
             text: None,
             selection: None,
             derived: Some(derived),
+            mermaid: None,
             search: None,
             format_capabilities: None,
             effects: Vec::new(),
@@ -562,6 +611,47 @@ impl EditorEngine {
             can_redo: self.history.can_redo(),
             dirty: self.is_dirty(),
         })
+    }
+
+    fn resolve_mermaid(
+        &mut self,
+        revision: Revision,
+        math_enabled: bool,
+    ) -> Result<StatePatch, EngineError> {
+        if revision != self.revision {
+            return Err(EngineError::RevisionConflict);
+        }
+        let mermaid = if let Some(cached) = &self.mermaid_resolution
+            && cached.revision == revision
+        {
+            cached.clone()
+        } else {
+            self.ensure_parsed(math_enabled);
+            let document = &self
+                .parsed
+                .as_ref()
+                .expect("parsed document must be available")
+                .document;
+            let resolved = self.markdown.resolve_mermaid(document, revision);
+            if let Some(derived) = &mut self.derived
+                && derived.revision == revision
+                && derived.mermaid_deferred
+            {
+                let failed = resolved
+                    .failed_source_ranges
+                    .iter()
+                    .map(ByteRange::as_range)
+                    .collect::<Vec<_>>();
+                derived
+                    .native_render
+                    .apply_mermaid_resolution(&resolved.diagrams, &failed);
+            }
+            self.mermaid_resolution = Some(resolved.clone());
+            resolved
+        };
+        let mut patch = self.empty_patch(revision);
+        patch.mermaid = Some(mermaid);
+        Ok(patch)
     }
 
     fn search(
@@ -587,6 +677,7 @@ impl EditorEngine {
             text: None,
             selection: None,
             derived: None,
+            mermaid: None,
             search: Some(SearchResult { revision, matches }),
             format_capabilities: None,
             effects: Vec::new(),
@@ -614,6 +705,7 @@ impl EditorEngine {
             text: None,
             selection: None,
             derived: None,
+            mermaid: None,
             search: None,
             format_capabilities: Some(FormatCapabilities {
                 revision,
@@ -695,7 +787,7 @@ impl EditorEngine {
     }
 
     fn prepare_html_export(
-        &self,
+        &mut self,
         revision: Revision,
         math_enabled: bool,
         mermaid_enabled: bool,
@@ -703,10 +795,16 @@ impl EditorEngine {
         if revision != self.revision {
             return Err(EngineError::RevisionConflict);
         }
+        self.ensure_parsed(math_enabled);
+        let document = &self
+            .parsed
+            .as_ref()
+            .expect("parsed document must be available")
+            .document;
         let prepared = self
             .markdown
             .prepare_html_export(
-                &self.text,
+                document,
                 crate::render::RenderConfiguration {
                     math_enabled,
                     mermaid_enabled,
@@ -780,6 +878,8 @@ impl EditorEngine {
         self.selection = selection.clone();
         self.revision = revision;
         self.derived = None;
+        self.parsed = None;
+        self.mermaid_resolution = None;
         self.history.clear();
         self.saved_content_hash = saved_content_hash;
         self.prepared_saves.clear();
@@ -796,6 +896,7 @@ impl EditorEngine {
             }),
             selection: Some(selection),
             derived: None,
+            mermaid: None,
             search: None,
             format_capabilities: None,
             effects: Vec::new(),
@@ -923,6 +1024,8 @@ impl EditorEngine {
         self.selection = selection_after.clone();
         self.revision = revision;
         self.derived = None;
+        self.parsed = None;
+        self.mermaid_resolution = None;
         Ok(StatePatch {
             base_revision,
             revision,
@@ -930,6 +1033,7 @@ impl EditorEngine {
             text: Some(text),
             selection: Some(selection_after),
             derived: None,
+            mermaid: None,
             search: None,
             format_capabilities: None,
             effects: Vec::new(),
@@ -948,6 +1052,7 @@ impl EditorEngine {
             text: None,
             selection: None,
             derived: None,
+            mermaid: None,
             search: None,
             format_capabilities: None,
             effects: Vec::new(),
@@ -960,6 +1065,19 @@ impl EditorEngine {
 
     fn is_dirty(&self) -> bool {
         content_hash(&self.text) != self.saved_content_hash
+    }
+
+    fn ensure_parsed(&mut self, math_enabled: bool) {
+        let needs_parse = self.parsed.as_ref().is_none_or(|parsed| {
+            parsed.revision != self.revision || parsed.math_enabled != math_enabled
+        });
+        if needs_parse {
+            self.parsed = Some(ParsedDocument {
+                revision: self.revision,
+                math_enabled,
+                document: self.markdown.parse(&self.text, math_enabled),
+            });
+        }
     }
 
     fn ensure_editable(&self) -> Result<(), EngineError> {
@@ -1033,34 +1151,48 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct CountingMarkdownPort {
-        calls: Arc<AtomicUsize>,
+        parse_calls: Arc<AtomicUsize>,
+        derive_calls: Arc<AtomicUsize>,
+        resolve_calls: Arc<AtomicUsize>,
     }
 
     impl MarkdownPort for CountingMarkdownPort {
+        fn parse(&self, source: &str, math_enabled: bool) -> DocumentIr {
+            self.parse_calls.fetch_add(1, Ordering::Relaxed);
+            CommonMarkAdapter.parse(source, math_enabled)
+        }
+
         fn derive(
             &self,
-            source: &str,
+            document: &DocumentIr,
             revision: Revision,
             math_enabled: bool,
             mermaid_enabled: bool,
             defer_mermaid: bool,
+            include_html: bool,
         ) -> DerivedState {
-            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.derive_calls.fetch_add(1, Ordering::Relaxed);
             CommonMarkAdapter.derive(
-                source,
+                document,
                 revision,
                 math_enabled,
                 mermaid_enabled,
                 defer_mermaid,
+                include_html,
             )
+        }
+
+        fn resolve_mermaid(&self, document: &DocumentIr, revision: Revision) -> MermaidPatch {
+            self.resolve_calls.fetch_add(1, Ordering::Relaxed);
+            CommonMarkAdapter.resolve_mermaid(document, revision)
         }
 
         fn prepare_html_export(
             &self,
-            source: &str,
+            document: &DocumentIr,
             configuration: crate::render::RenderConfiguration,
         ) -> Result<crate::export::PreparedHtml, ExportError> {
-            CommonMarkAdapter.prepare_html_export(source, configuration)
+            CommonMarkAdapter.prepare_html_export(document, configuration)
         }
     }
 
@@ -1117,6 +1249,21 @@ mod tests {
                 math_enabled: true,
                 mermaid_enabled: true,
                 defer_mermaid: false,
+                include_html: false,
+            },
+        }
+    }
+
+    fn refresh_with_html(revision: Revision) -> CommandEnvelope {
+        CommandEnvelope {
+            schema_version: ENGINE_SCHEMA_VERSION,
+            request_id: format!("refresh-html-{revision}"),
+            command: EditorCommand::RefreshDerived {
+                revision,
+                math_enabled: true,
+                mermaid_enabled: true,
+                defer_mermaid: false,
+                include_html: true,
             },
         }
     }
@@ -1216,12 +1363,11 @@ mod tests {
                 .any(|span| span.kind == crate::highlight::HighlightKind::Strong)
         );
         assert_eq!(derived.references[0].target, "note.md");
-        assert!(derived.html_fragment.contains(">标题</h1>"));
-        assert!(
-            derived
-                .preview_html_fragment
-                .contains("data-inflow-block-id=\"heading-")
-        );
+        assert!(derived.html_fragment.is_none());
+        assert!(derived.preview_html_fragment.is_none());
+        let encoded = serde_json::to_value(&derived).expect("derived state should encode");
+        assert!(encoded.get("html_fragment").is_none());
+        assert!(encoded.get("preview_html_fragment").is_none());
         assert!(
             derived
                 .render
@@ -1245,7 +1391,9 @@ mod tests {
 
     #[test]
     fn engine_caches_the_markdown_port_result_by_revision_and_configuration() {
-        let calls = Arc::new(AtomicUsize::new(0));
+        let parse_calls = Arc::new(AtomicUsize::new(0));
+        let derive_calls = Arc::new(AtomicUsize::new(0));
+        let resolve_calls = Arc::new(AtomicUsize::new(0));
         let mut engine = EditorEngine::create_with_markdown(
             EngineCreateRequest {
                 schema_version: ENGINE_SCHEMA_VERSION,
@@ -1255,14 +1403,17 @@ mod tests {
                 mode: EditorMode::Editable,
             },
             Box::new(CountingMarkdownPort {
-                calls: Arc::clone(&calls),
+                parse_calls: Arc::clone(&parse_calls),
+                derive_calls: Arc::clone(&derive_calls),
+                resolve_calls: Arc::clone(&resolve_calls),
             }),
         )
         .expect("engine with injected port should be valid");
 
         engine.dispatch(refresh(0)).expect("initial derivation");
         engine.dispatch(refresh(0)).expect("cached derivation");
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert_eq!(parse_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(derive_calls.load(Ordering::Relaxed), 1);
 
         engine
             .dispatch(command(
@@ -1272,10 +1423,12 @@ mod tests {
                     math_enabled: false,
                     mermaid_enabled: true,
                     defer_mermaid: false,
+                    include_html: false,
                 },
             ))
             .expect("configuration change derives again");
-        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        assert_eq!(parse_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(derive_calls.load(Ordering::Relaxed), 2);
 
         engine
             .dispatch(command(
@@ -1285,10 +1438,38 @@ mod tests {
                     math_enabled: false,
                     mermaid_enabled: true,
                     defer_mermaid: true,
+                    include_html: false,
                 },
             ))
             .expect("deferred Mermaid is a separate cache entry");
-        assert_eq!(calls.load(Ordering::Relaxed), 3);
+        assert_eq!(parse_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(derive_calls.load(Ordering::Relaxed), 3);
+        let mermaid = engine
+            .dispatch(command(
+                "resolve-mermaid",
+                EditorCommand::ResolveMermaid {
+                    revision: 0,
+                    math_enabled: false,
+                },
+            ))
+            .expect("Mermaid resolution should reuse the parsed document");
+        assert_eq!(mermaid.patch.mermaid.expect("Mermaid patch").revision, 0);
+        assert!(mermaid.patch.derived.is_none());
+        assert_eq!(parse_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(derive_calls.load(Ordering::Relaxed), 3);
+        assert_eq!(resolve_calls.load(Ordering::Relaxed), 1);
+
+        engine
+            .dispatch(command(
+                "resolve-mermaid-again",
+                EditorCommand::ResolveMermaid {
+                    revision: 0,
+                    math_enabled: false,
+                },
+            ))
+            .expect("same revision should reuse the Mermaid resource patch");
+        assert_eq!(parse_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(derive_calls.load(Ordering::Relaxed), 3);
 
         engine
             .dispatch(replace(
@@ -1301,7 +1482,86 @@ mod tests {
         engine
             .dispatch(refresh(1))
             .expect("new revision derives again");
-        assert_eq!(calls.load(Ordering::Relaxed), 4);
+        assert_eq!(parse_calls.load(Ordering::Relaxed), 3);
+        assert_eq!(derive_calls.load(Ordering::Relaxed), 4);
+        assert_eq!(resolve_calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn deferred_mermaid_reuses_the_ast_and_resolved_resource_for_the_revision() {
+        let parse_calls = Arc::new(AtomicUsize::new(0));
+        let derive_calls = Arc::new(AtomicUsize::new(0));
+        let resolve_calls = Arc::new(AtomicUsize::new(0));
+        let mut engine = EditorEngine::create_with_markdown(
+            EngineCreateRequest {
+                schema_version: ENGINE_SCHEMA_VERSION,
+                document_id: "deferred-mermaid".to_owned(),
+                text: "```mermaid\nflowchart LR\nA --> B\n```\n".to_owned(),
+                selection: Selection { start: 0, end: 0 },
+                mode: EditorMode::Editable,
+            },
+            Box::new(CountingMarkdownPort {
+                parse_calls: Arc::clone(&parse_calls),
+                derive_calls: Arc::clone(&derive_calls),
+                resolve_calls: Arc::clone(&resolve_calls),
+            }),
+        )
+        .expect("engine with injected port should be valid");
+        let deferred = |request_id| {
+            command(
+                request_id,
+                EditorCommand::RefreshDerived {
+                    revision: 0,
+                    math_enabled: true,
+                    mermaid_enabled: true,
+                    defer_mermaid: true,
+                    include_html: false,
+                },
+            )
+        };
+
+        let placeholder = engine
+            .dispatch(deferred("deferred-plan"))
+            .expect("placeholder plan")
+            .patch
+            .derived
+            .expect("derived plan");
+        assert!(
+            placeholder
+                .native_render
+                .mermaid_diagrams
+                .iter()
+                .all(|diagram| diagram.is_placeholder)
+        );
+
+        for request_id in ["resolve-once", "resolve-cached"] {
+            engine
+                .dispatch(command(
+                    request_id,
+                    EditorCommand::ResolveMermaid {
+                        revision: 0,
+                        math_enabled: true,
+                    },
+                ))
+                .expect("Mermaid resource resolution");
+        }
+
+        let completed = engine
+            .dispatch(deferred("deferred-plan-cached"))
+            .expect("cached completed plan")
+            .patch
+            .derived
+            .expect("derived plan");
+        assert!(
+            completed
+                .native_render
+                .mermaid_diagrams
+                .iter()
+                .all(|diagram| !diagram.is_placeholder)
+        );
+        assert_eq!(parse_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(derive_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(resolve_calls.load(Ordering::Relaxed), 1);
     }
 
     #[test]
@@ -1716,23 +1976,26 @@ mod tests {
                     math_enabled: false,
                     mermaid_enabled: false,
                     defer_mermaid: false,
+                    include_html: true,
                 },
             ))
             .expect("disabled derive")
             .patch
             .derived
             .expect("derived");
-        assert!(!disabled.html_fragment.contains("<math"));
-        assert!(!disabled.html_fragment.contains("inflow-mermaid"));
+        let disabled_html = disabled.html_fragment.expect("requested HTML");
+        assert!(!disabled_html.contains("<math"));
+        assert!(!disabled_html.contains("inflow-mermaid"));
 
         let enabled = engine
-            .dispatch(refresh(0))
+            .dispatch(refresh_with_html(0))
             .expect("enabled derive")
             .patch
             .derived
             .expect("derived");
-        assert!(enabled.html_fragment.contains("<math"));
-        assert!(enabled.html_fragment.contains("mermaid-diagram"));
+        let enabled_html = enabled.html_fragment.expect("requested HTML");
+        assert!(enabled_html.contains("<math"));
+        assert!(enabled_html.contains("mermaid-diagram"));
     }
 
     #[test]

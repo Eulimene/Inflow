@@ -28,7 +28,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     var deferredMermaidResolver: (@Sendable (
         String,
         PreviewAppearanceConfiguration
-    ) async -> EditorEngineDerivedContent?)?
+    ) async -> EditorEngineMermaidResolution?)?
     private(set) var sourceAppearance = SourceEditorAppearance.default
     private var hasAppliedSourceAppearance = false
     private var syntaxHighlightingEnabled = false
@@ -676,12 +676,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             guard !Task.isCancelled,
                   generation == deferredMermaidGeneration,
                   let resolved,
-                  !resolved.mermaidDeferred,
-                  UTF8Text.isExactlyEqual(resolved.sourceSnapshot, source),
-                  UTF8Text.isExactlyEqual(textView.string, source)
+                  UTF8Text.isExactlyEqual(textView.string, source),
+                  let placeholderPlan = engineRenderedPlan,
+                  let resolvedPlan = placeholderPlan.resolvingMermaid(with: resolved)
             else { return }
-            installResolvedMermaidPlan(resolved.nativeRenderPlan, source: source)
-            resolvedMermaidPlanDidPublish?(resolved.nativeRenderPlan, source)
+            installResolvedMermaidPlan(resolvedPlan, source: source)
+            resolvedMermaidPlanDidPublish?(resolvedPlan, source)
         }
     }
 

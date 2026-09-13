@@ -45,8 +45,9 @@ enum MarkdownRenderer {
         guard let derived = EditorEngineDerivedContent.deriveSynchronously(
             source: markdown,
             configuration: configuration
-        ) else { throw MarkdownRenderError.coreFailure }
-        return derived.htmlFragment
+        ), let html = derived.htmlFragment
+        else { throw MarkdownRenderError.coreFailure }
+        return html
     }
 
     static func htmlDocument(
@@ -78,11 +79,12 @@ enum MarkdownRenderer {
         guard let derived = EditorEngineDerivedContent.deriveSynchronously(
             source: markdown,
             configuration: configuration
-        ) else {
+        ), let previewHTML = derived.previewHTMLFragment
+        else {
             return previewFailureDocument(configuration: configuration)
         }
         return previewDocument(
-            coreFragment: derived.previewHTMLFragment,
+            coreFragment: previewHTML,
             references: derived.references,
             documentDirectory: documentDirectory,
             projectRoot: projectRoot,

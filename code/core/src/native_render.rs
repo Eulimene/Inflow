@@ -154,6 +154,11 @@ pub struct NativeMermaidDiagram {
     pub is_placeholder: bool,
 }
 
+pub(crate) struct NativeMermaidResolution {
+    pub diagrams: Vec<NativeMermaidDiagram>,
+    pub failed_source_ranges: Vec<Range<usize>>,
+}
+
 #[derive(Clone)]
 struct Local {
     range: Range<usize>,
@@ -161,6 +166,55 @@ struct Local {
 }
 
 impl NativeRenderPlan {
+    pub(crate) fn apply_mermaid_resolution(
+        &mut self,
+        diagrams: &[NativeMermaidDiagram],
+        failed_source_ranges: &[Range<usize>],
+    ) -> bool {
+        let mut expected = self
+            .mermaid_diagrams
+            .iter()
+            .filter(|diagram| diagram.is_placeholder)
+            .map(|diagram| diagram.source_range.clone())
+            .collect::<Vec<_>>();
+        let mut received = diagrams
+            .iter()
+            .map(|diagram| diagram.source_range.clone())
+            .chain(failed_source_ranges.iter().cloned())
+            .collect::<Vec<_>>();
+        expected.sort_by_key(|range| (range.start, range.end));
+        received.sort_by_key(|range| (range.start, range.end));
+        if expected != received
+            || self
+                .mermaid_diagrams
+                .iter()
+                .any(|item| !item.is_placeholder)
+        {
+            return false;
+        }
+
+        self.mermaid_diagrams = diagrams.to_vec();
+        for failed in failed_source_ranges {
+            if let Some(local) = self
+                .local_source_blocks
+                .iter_mut()
+                .find(|local| local.source_range == *failed)
+            {
+                let mut reasons = local.reasons.iter().copied().collect::<BTreeSet<_>>();
+                reasons.insert(LocalSourceReason::Mermaid);
+                local.reasons = reasons.into_iter().collect();
+            } else {
+                self.local_source_blocks.push(NativeLocalSourceBlock {
+                    source_range: failed.clone(),
+                    reasons: vec![LocalSourceReason::Mermaid],
+                });
+            }
+        }
+        self.local_source_blocks
+            .sort_by_key(|local| (local.source_range.start, local.source_range.end));
+        true
+    }
+
     #[cfg(test)]
     #[allow(clippy::too_many_lines)]
     pub fn from_document(
@@ -382,6 +436,40 @@ impl NativeRenderPlan {
             tables,
             mermaid_diagrams: diagrams,
         }
+    }
+}
+
+pub(crate) fn resolve_mermaid_from_document(document: &DocumentIr) -> NativeMermaidResolution {
+    let rendered = MermaidRenderBatch::render(document);
+    let mut diagrams = Vec::new();
+    let mut failed_source_ranges = Vec::new();
+    for located in document.events() {
+        let Event::Start(Tag::CodeBlock(kind)) = &located.event else {
+            continue;
+        };
+        if !is_mermaid(kind) {
+            continue;
+        }
+        let source_range = located.source_range.clone();
+        let Some(Ok(figure)) = rendered.result(&source_range) else {
+            failed_source_ranges.push(source_range);
+            continue;
+        };
+        let Some((svg, intrinsic_width, intrinsic_height)) = extract_svg(figure) else {
+            failed_source_ranges.push(source_range);
+            continue;
+        };
+        diagrams.push(NativeMermaidDiagram {
+            source_range,
+            svg,
+            intrinsic_width,
+            intrinsic_height,
+            is_placeholder: false,
+        });
+    }
+    NativeMermaidResolution {
+        diagrams,
+        failed_source_ranges,
     }
 }
 
