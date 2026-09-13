@@ -7,6 +7,7 @@ use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, LinkType, Ta
 use serde::Serialize;
 
 use crate::markdown_ir::{DocumentIr, LocatedEvent};
+use crate::mermaid::MermaidRenderBatch;
 use crate::render_ir::{RenderBlockKind, RenderIr};
 use crate::{math, mermaid};
 
@@ -160,12 +161,32 @@ struct Local {
 }
 
 impl NativeRenderPlan {
+    #[cfg(test)]
     #[allow(clippy::too_many_lines)]
     pub fn from_document(
         document: &DocumentIr,
         render: &RenderIr,
         mermaid_enabled: bool,
         defer_mermaid: bool,
+    ) -> Self {
+        let mermaid =
+            (mermaid_enabled && !defer_mermaid).then(|| MermaidRenderBatch::render(document));
+        Self::from_document_with_mermaid(
+            document,
+            render,
+            mermaid_enabled,
+            defer_mermaid,
+            mermaid.as_ref(),
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn from_document_with_mermaid(
+        document: &DocumentIr,
+        render: &RenderIr,
+        mermaid_enabled: bool,
+        defer_mermaid: bool,
+        mermaid_renders: Option<&MermaidRenderBatch>,
     ) -> Self {
         let source = document.source();
         let events = document.events();
@@ -293,9 +314,11 @@ impl NativeRenderPlan {
                             diagrams.push(mermaid_placeholder(complete));
                             continue;
                         }
-                        match mermaid::svg_from_markdown(
-                            source.get(complete.clone()).unwrap_or_default(),
-                        ) {
+                        let rendered = mermaid_renders
+                            .and_then(|batch| batch.result(&complete))
+                            .cloned()
+                            .unwrap_or(Err(mermaid::MermaidError::InvalidSyntax));
+                        match rendered {
                             Ok(figure) => {
                                 if let Some((svg, intrinsic_width, intrinsic_height)) =
                                     extract_svg(&figure)

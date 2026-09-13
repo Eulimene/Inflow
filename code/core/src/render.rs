@@ -6,6 +6,7 @@ use std::ops::Range;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Tag, TagEnd, html};
 
 use crate::markdown_ir::{DocumentIr, dialect_options};
+use crate::mermaid::MermaidRenderBatch;
 use crate::render_ir::RenderIr;
 use crate::{code_highlight, math, mermaid};
 
@@ -41,7 +42,18 @@ pub fn html_fragment_from_document(
     document: &DocumentIr,
     configuration: RenderConfiguration,
 ) -> String {
-    let events = safe_events(document, configuration, false, false);
+    let mermaid = configuration
+        .mermaid_enabled
+        .then(|| MermaidRenderBatch::render(document));
+    html_fragment_from_document_with_mermaid(document, configuration, mermaid.as_ref())
+}
+
+pub(crate) fn html_fragment_from_document_with_mermaid(
+    document: &DocumentIr,
+    configuration: RenderConfiguration,
+    mermaid_renders: Option<&MermaidRenderBatch>,
+) -> String {
+    let events = safe_events(document, configuration, false, false, mermaid_renders);
     let mut output = String::with_capacity(document.source().len());
     html::push_html(&mut output, events.into_iter());
     output
@@ -50,11 +62,23 @@ pub fn html_fragment_from_document(
 /// Renders the in-app preview fragment while attaching parsed link targets at
 /// the same event boundary that creates each anchor. Platform hosts therefore
 /// never have to correlate rendered `<a>` tags with a second reference scan.
+#[cfg(test)]
 pub fn html_fragment_for_preview_from_document(
     document: &DocumentIr,
     configuration: RenderConfiguration,
 ) -> String {
-    let events = safe_events(document, configuration, false, true);
+    let mermaid = configuration
+        .mermaid_enabled
+        .then(|| MermaidRenderBatch::render(document));
+    html_fragment_for_preview_from_document_with_mermaid(document, configuration, mermaid.as_ref())
+}
+
+pub(crate) fn html_fragment_for_preview_from_document_with_mermaid(
+    document: &DocumentIr,
+    configuration: RenderConfiguration,
+    mermaid_renders: Option<&MermaidRenderBatch>,
+) -> String {
+    let events = safe_events(document, configuration, false, true, mermaid_renders);
     let mut output = String::with_capacity(document.source().len());
     html::push_html(&mut output, events.into_iter());
     annotate_blocks(output, document, configuration)
@@ -279,7 +303,10 @@ pub(crate) fn html_fragment_for_delivery_from_document(
     document: &DocumentIr,
     configuration: RenderConfiguration,
 ) -> String {
-    let events = safe_events(document, configuration, true, false);
+    let mermaid = configuration
+        .mermaid_enabled
+        .then(|| MermaidRenderBatch::render(document));
+    let events = safe_events(document, configuration, true, false, mermaid.as_ref());
     let mut output = String::with_capacity(document.source().len());
     html::push_html(&mut output, events.into_iter());
     output
@@ -291,6 +318,7 @@ fn safe_events(
     configuration: RenderConfiguration,
     neutralize_delivery_links: bool,
     annotate_preview_links: bool,
+    mermaid_renders: Option<&MermaidRenderBatch>,
 ) -> Vec<Event<'static>> {
     let mut parser = document
         .events()
@@ -354,7 +382,11 @@ fn safe_events(
                     _ => {}
                 }
             }
-            let diagram = mermaid::svg(source.trim_end()).unwrap_or_else(|error| {
+            let rendered = mermaid_renders
+                .and_then(|batch| batch.result(&event_range))
+                .cloned()
+                .unwrap_or(Err(mermaid::MermaidError::InvalidSyntax));
+            let diagram = rendered.unwrap_or_else(|error| {
                 if neutralize_delivery_links {
                     mermaid::fallback(source.trim_end(), &error)
                 } else {

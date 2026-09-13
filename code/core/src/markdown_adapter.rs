@@ -5,11 +5,13 @@ use crate::engine::{DerivedState, Revision};
 use crate::export::{ExportError, PreparedHtml, prepare_html_document_from_document};
 use crate::highlight::spans_from_document;
 use crate::markdown_ir::{DocumentIr, dialect_options};
+use crate::mermaid::MermaidRenderBatch;
 use crate::native_render::NativeRenderPlan;
 use crate::ports::MarkdownPort;
 use crate::reference::references_from_document;
 use crate::render::{
-    RenderConfiguration, html_fragment_for_preview_from_document, html_fragment_from_document,
+    RenderConfiguration, html_fragment_for_preview_from_document_with_mermaid,
+    html_fragment_from_document_with_mermaid,
 };
 use crate::render_ir::RenderIr;
 
@@ -27,12 +29,20 @@ impl MarkdownPort for CommonMarkAdapter {
     ) -> DerivedState {
         let document = DocumentIr::parse(source, dialect_options(math_enabled));
         let render = RenderIr::from_document(&document);
-        let native_render =
-            NativeRenderPlan::from_document(&document, &render, mermaid_enabled, defer_mermaid);
         let immediate_configuration = RenderConfiguration {
             math_enabled,
             mermaid_enabled: mermaid_enabled && !defer_mermaid,
         };
+        let mermaid = immediate_configuration
+            .mermaid_enabled
+            .then(|| MermaidRenderBatch::render(&document));
+        let native_render = NativeRenderPlan::from_document_with_mermaid(
+            &document,
+            &render,
+            mermaid_enabled,
+            defer_mermaid,
+            mermaid.as_ref(),
+        );
         DerivedState {
             revision,
             analysis: analyze_document(&document),
@@ -40,10 +50,15 @@ impl MarkdownPort for CommonMarkAdapter {
             references: references_from_document(&document),
             render,
             native_render,
-            html_fragment: html_fragment_from_document(&document, immediate_configuration),
-            preview_html_fragment: html_fragment_for_preview_from_document(
+            html_fragment: html_fragment_from_document_with_mermaid(
                 &document,
                 immediate_configuration,
+                mermaid.as_ref(),
+            ),
+            preview_html_fragment: html_fragment_for_preview_from_document_with_mermaid(
+                &document,
+                immediate_configuration,
+                mermaid.as_ref(),
             ),
             math_enabled,
             mermaid_enabled,

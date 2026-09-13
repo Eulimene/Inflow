@@ -5,11 +5,15 @@
 //! [`MermaidRenderer`] so it can be replaced without changing Render IR, FFI
 //! DTOs or platform clients.
 
+use std::collections::HashMap;
+use std::ops::Range;
+
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
+use crate::markdown_ir::DocumentIr;
 use crate::{mermaid_rs_adapter::MermaidRsRendererAdapter, render};
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MermaidError {
     UnsupportedType,
     InvalidSyntax,
@@ -19,10 +23,68 @@ pub(crate) trait MermaidRenderer {
     fn render_svg(&self, source: &str) -> Result<String, MermaidError>;
 }
 
+/// Revision-local Mermaid output shared by every presentation visitor.
+///
+/// A batch renders each unique diagram source once. Native `TextKit` plans,
+/// preview HTML and delivery HTML can then project the same safe SVG without
+/// invoking the concrete renderer again.
+pub(crate) struct MermaidRenderBatch {
+    by_source_range: HashMap<Range<usize>, Result<String, MermaidError>>,
+}
+
+impl MermaidRenderBatch {
+    pub(crate) fn render(document: &DocumentIr) -> Self {
+        Self::render_with(document, &MermaidRsRendererAdapter)
+    }
+
+    fn render_with(document: &DocumentIr, renderer: &dyn MermaidRenderer) -> Self {
+        let mut by_source = HashMap::<String, Result<String, MermaidError>>::new();
+        let mut by_source_range = HashMap::new();
+        for located in document.events() {
+            let Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) = &located.event else {
+                continue;
+            };
+            if !info
+                .split_ascii_whitespace()
+                .next()
+                .is_some_and(|name| name.eq_ignore_ascii_case("mermaid"))
+            {
+                continue;
+            }
+            let markdown = document
+                .source()
+                .get(located.source_range.clone())
+                .unwrap_or_default();
+            let result = match source_from_markdown(markdown) {
+                Ok(source) => by_source
+                    .entry(source.clone())
+                    .or_insert_with(|| render_with(renderer, &source))
+                    .clone(),
+                Err(error) => Err(error),
+            };
+            by_source_range.insert(located.source_range.clone(), result);
+        }
+        Self { by_source_range }
+    }
+
+    pub(crate) fn result(
+        &self,
+        source_range: &Range<usize>,
+    ) -> Option<&Result<String, MermaidError>> {
+        self.by_source_range.get(source_range)
+    }
+}
+
 /// Extracts one parser-validated Mermaid fence and renders its body. Keeping
 /// fence recognition here ensures export and native instant editing consume
 /// the same `CommonMark` event stream.
+#[cfg(test)]
 pub fn svg_from_markdown(markdown: &str) -> Result<String, MermaidError> {
+    let source = source_from_markdown(markdown)?;
+    render_with(&MermaidRsRendererAdapter, &source)
+}
+
+fn source_from_markdown(markdown: &str) -> Result<String, MermaidError> {
     let mut events = Parser::new_ext(markdown, render::options());
     let Some(Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))) = events.next() else {
         return Err(MermaidError::InvalidSyntax);
@@ -46,7 +108,7 @@ pub fn svg_from_markdown(markdown: &str) -> Result<String, MermaidError> {
     if events.any(|event| !matches!(event, Event::SoftBreak | Event::HardBreak)) {
         return Err(MermaidError::InvalidSyntax);
     }
-    svg(source.trim_end())
+    Ok(source.trim_end().to_owned())
 }
 
 pub fn svg(source: &str) -> Result<String, MermaidError> {
@@ -132,6 +194,16 @@ fn escape(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::markdown_ir::dialect_options;
+    use crate::native_render::NativeRenderPlan;
+    use crate::render::{
+        RenderConfiguration, html_fragment_for_preview_from_document_with_mermaid,
+        html_fragment_from_document_with_mermaid,
+    };
+    use crate::render_ir::RenderIr;
+
     use super::*;
 
     struct StubRenderer(Result<&'static str, MermaidError>);
@@ -148,6 +220,20 @@ mod tests {
         }
     }
 
+    struct CountingRenderer {
+        calls: AtomicUsize,
+    }
+
+    impl MermaidRenderer for CountingRenderer {
+        fn render_svg(&self, source: &str) -> Result<String, MermaidError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(format!(
+                "<svg viewBox=\"0 0 10 10\"><text>{}</text></svg>",
+                escape(source)
+            ))
+        }
+    }
+
     #[test]
     fn renderer_port_keeps_the_application_core_independent() {
         let output = render_with(
@@ -157,6 +243,67 @@ mod tests {
         .expect("adapter output");
         assert!(output.contains("class=\"mermaid-diagram\""));
         assert!(output.contains("viewBox"));
+    }
+
+    #[test]
+    fn one_batch_renders_once_and_feeds_every_document_projection() {
+        let source = "```mermaid\nflowchart LR\nA --> B\n```\n";
+        let document = DocumentIr::parse(source, dialect_options(true));
+        let render_ir = RenderIr::from_document(&document);
+        let renderer = CountingRenderer {
+            calls: AtomicUsize::new(0),
+        };
+        let batch = MermaidRenderBatch::render_with(&document, &renderer);
+        assert_eq!(renderer.calls.load(Ordering::Relaxed), 1);
+
+        let native = NativeRenderPlan::from_document_with_mermaid(
+            &document,
+            &render_ir,
+            true,
+            false,
+            Some(&batch),
+        );
+        let configuration = RenderConfiguration::default();
+        let html = html_fragment_from_document_with_mermaid(&document, configuration, Some(&batch));
+        let preview = html_fragment_for_preview_from_document_with_mermaid(
+            &document,
+            configuration,
+            Some(&batch),
+        );
+
+        assert_eq!(renderer.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(native.mermaid_diagrams.len(), 1);
+        assert!(html.contains("class=\"mermaid-diagram\""));
+        assert!(preview.contains("class=\"mermaid-diagram\""));
+    }
+
+    #[test]
+    fn batch_deduplicates_identical_diagram_sources() {
+        let source = concat!(
+            "```mermaid\nflowchart LR\nA --> B\n```\n\n",
+            "```mermaid\nflowchart LR\nA --> B\n```\n",
+        );
+        let document = DocumentIr::parse(source, dialect_options(true));
+        let renderer = CountingRenderer {
+            calls: AtomicUsize::new(0),
+        };
+
+        let batch = MermaidRenderBatch::render_with(&document, &renderer);
+
+        assert_eq!(renderer.calls.load(Ordering::Relaxed), 1);
+        let ranges = document.events().iter().filter_map(|located| {
+            matches!(
+                &located.event,
+                Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))
+                    if info.as_ref() == "mermaid"
+            )
+            .then_some(located.source_range.clone())
+        });
+        assert!(
+            ranges
+                .into_iter()
+                .all(|range| batch.result(&range).is_some())
+        );
     }
 
     #[test]
