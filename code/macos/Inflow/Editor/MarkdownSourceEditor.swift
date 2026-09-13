@@ -24,6 +24,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     fileprivate var pendingRestorationState: MarkdownRestorationState?
     var updateBoundText: ((String) -> Void)?
     var localTextProjectionDidPublish: ((String) -> Void)?
+    var resolvedMermaidPlanDidPublish: ((RenderedMarkdownPlan, String) -> Void)?
+    var deferredMermaidResolver: (@Sendable (
+        String,
+        PreviewAppearanceConfiguration
+    ) async -> EditorEngineDerivedContent?)?
     private(set) var sourceAppearance = SourceEditorAppearance.default
     private var hasAppliedSourceAppearance = false
     private var syntaxHighlightingEnabled = false
@@ -46,6 +51,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var renderedResourceContext = RenderedMarkdownResourceContext.unavailable
     private var renderedImageGeneration = 0
     private var renderedImageTask: Task<Void, Never>?
+    private var deferredMermaidGeneration = 0
+    private var deferredMermaidTask: Task<Void, Never>?
     private var renderedInteractionTask: Task<Void, Never>?
     private let lineNumberRuler: MarkdownLineNumberRulerView
     private let engineClient: EditorEngineClient
@@ -58,6 +65,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var configuredLineWrapping: Bool?
     private let role: MarkdownSourceEditorSessionRole
     private(set) var renderedPresentationPassCount = 0
+    private(set) var renderedMermaidPatchCount = 0
 
     override convenience init() {
         self.init(role: .document)
@@ -154,6 +162,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 _ = self.textView.consumeEngineEditGroupID()
             }
             self.invalidateSyntaxApplication()
+            self.cancelDeferredMermaidRendering()
             self.scheduleFormatInspection()
             self.lineNumberRuler.updateText(text)
             self.refreshWritingModePresentation()
@@ -243,10 +252,14 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         for source: String,
         configuration: PreviewAppearanceConfiguration
     ) async -> EditorEngineDerivedContent? {
+        cancelDeferredMermaidRendering()
+        deferredMermaidGeneration &+= 1
+        let mermaidGeneration = deferredMermaidGeneration
         guard let content = await engineClient.derive(
             text: source,
             selectionUTF16: textView.selectedRange(),
-            configuration: configuration
+            configuration: configuration,
+            deferMermaid: configuration.mermaidRenderingEnabled
         ) else { return nil }
         guard content.nativeRenderPlan.exactlyMatches(source) else { return nil }
         let planChanged = engineRenderedPlan != content.nativeRenderPlan
@@ -258,6 +271,15 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         {
             applyRenderedPresentation(source: source, force: planChanged)
         }
+        if content.mermaidDeferred,
+           content.nativeRenderPlan.mermaidDiagrams.contains(where: \.isPlaceholder)
+        {
+            scheduleDeferredMermaidRendering(
+                source: source,
+                configuration: configuration,
+                generation: mermaidGeneration
+            )
+        }
         return content
     }
 
@@ -265,6 +287,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     /// the current render pass. Export uses this instead of maintaining a
     /// separate HTML loading lifecycle.
     func waitForRenderedResources() async {
+        await deferredMermaidTask?.value
         await renderedImageTask?.value
         await Task.yield()
         textView.layoutSubtreeIfNeeded()
@@ -285,6 +308,18 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             return
         }
         guard plan.exactlyMatches(source) else { return }
+        if let currentPlan = engineRenderedPlan,
+           currentPlan.hasSameNonMermaidProjection(as: plan),
+           currentPlan.mermaidDiagrams.map(\.sourceRange)
+               == plan.mermaidDiagrams.map(\.sourceRange),
+           currentPlan.mermaidDiagrams.allSatisfy({ !$0.isPlaceholder }),
+           plan.mermaidDiagrams.contains(where: \.isPlaceholder)
+        {
+            // A fast placeholder snapshot can arrive after the detached renderer
+            // has already published the completed SVG. Never let delivery order
+            // downgrade a resolved projection back to its loading state.
+            return
+        }
         let planChanged = engineRenderedPlan != plan
         engineRenderedPlan = plan
         if role == .renderedProjection,
@@ -539,6 +574,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             renderedInteractionTask?.cancel()
             renderedInteractionTask = nil
             cancelRenderedImageLoading()
+            cancelDeferredMermaidRendering()
             renderedPlan = nil
             renderedEditingRange = nil
             textView.linkClickHandler = nil
@@ -579,6 +615,79 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                     || !renderedPresentationIsCurrent(source: source)
             )
         }
+    }
+
+    func installResolvedMermaidPlan(
+        _ plan: RenderedMarkdownPlan,
+        source: String
+    ) {
+        guard plan.exactlyMatches(source) else { return }
+        if role == .renderedProjection,
+           !UTF8Text.isExactlyEqual(textView.string, source)
+        {
+            // The detached renderer can finish before the store delivers the
+            // corresponding placeholder snapshot to the split preview. Install
+            // the completed snapshot directly; a later placeholder is rejected
+            // by installSharedRenderedPlan instead of causing a visible rewind.
+            installSharedRenderedPlan(plan, source: source)
+            return
+        }
+        guard UTF8Text.isExactlyEqual(textView.string, source) else { return }
+        let previousPlan = engineRenderedPlan
+        engineRenderedPlan = plan
+        guard presentation == .rendered,
+              !textView.hasMarkedText(),
+              let previousPlan,
+              previousPlan.hasSameNonMermaidProjection(as: plan),
+              previousPlan.mermaidDiagrams.map(\.sourceRange)
+                == plan.mermaidDiagrams.map(\.sourceRange),
+              previousPlan.mermaidDiagrams.allSatisfy(\.isPlaceholder),
+              plan.mermaidDiagrams.allSatisfy({ !$0.isPlaceholder })
+        else {
+            if presentation == .rendered {
+                applyRenderedPresentation(source: source, force: true)
+            }
+            return
+        }
+        applyResolvedMermaidOverlays(plan, source: source)
+    }
+
+    private func scheduleDeferredMermaidRendering(
+        source: String,
+        configuration: PreviewAppearanceConfiguration,
+        generation: Int
+    ) {
+        deferredMermaidTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if generation == deferredMermaidGeneration {
+                    deferredMermaidTask = nil
+                }
+            }
+            let resolved = if let deferredMermaidResolver {
+                await deferredMermaidResolver(source, configuration)
+            } else {
+                await engineClient.resolveDeferredMermaid(
+                    source: source,
+                    configuration: configuration
+                )
+            }
+            guard !Task.isCancelled,
+                  generation == deferredMermaidGeneration,
+                  let resolved,
+                  !resolved.mermaidDeferred,
+                  UTF8Text.isExactlyEqual(resolved.sourceSnapshot, source),
+                  UTF8Text.isExactlyEqual(textView.string, source)
+            else { return }
+            installResolvedMermaidPlan(resolved.nativeRenderPlan, source: source)
+            resolvedMermaidPlanDidPublish?(resolved.nativeRenderPlan, source)
+        }
+    }
+
+    private func cancelDeferredMermaidRendering() {
+        deferredMermaidGeneration &+= 1
+        deferredMermaidTask?.cancel()
+        deferredMermaidTask = nil
     }
 
     private func scheduleRenderedPresentation(for source: String) {
@@ -1411,6 +1520,46 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         image.size = NSSize(width: diagram.intrinsicWidth, height: diagram.intrinsicHeight)
         image.accessibilityDescription = "Mermaid 图表"
         return image
+    }
+
+    private func applyResolvedMermaidOverlays(
+        _ plan: RenderedMarkdownPlan,
+        source: String
+    ) {
+        guard let storage = textView.textStorage else { return }
+        let selection = textView.selectedRange()
+        let editingRange = currentRenderedEditingRange(source: source)
+        let undoManager = textView.undoManager
+        let restoresUndo = undoManager?.isUndoRegistrationEnabled == true
+        if restoresUndo { undoManager?.disableUndoRegistration() }
+        storage.beginEditing()
+        for diagram in plan.mermaidDiagrams {
+            guard let image = renderedMermaidImage(from: diagram) else { continue }
+            if rangesOverlap(diagram.sourceRange.utf16Range, editingRange) {
+                applyRenderedMermaidPreviewBelowSource(
+                    image,
+                    sourceRange: diagram.sourceRange.utf16Range,
+                    storage: storage
+                )
+            } else {
+                applyRenderedImage(
+                    image,
+                    alternative: "Mermaid 图表",
+                    sourceRange: diagram.sourceRange.utf16Range,
+                    fillsAvailableWidth: true,
+                    collapsesSourceLines: true,
+                    storage: storage
+                )
+            }
+        }
+        storage.endEditing()
+        if restoresUndo { undoManager?.enableUndoRegistration() }
+        renderedPlan = plan
+        renderedEditingRange = editingRange
+        renderedMermaidPatchCount &+= 1
+        textView.setSelectedRange(selection)
+        textView.layoutSubtreeIfNeeded()
+        textView.needsDisplay = true
     }
 
     private func applyRenderedAttributes(
@@ -2443,7 +2592,8 @@ enum RenderedMarkdownLinkActivation {
     ) -> Bool {
         guard preference == .singleClick else { return false }
         let modifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
-        return modifiers.isEmpty || modifiers == .command
+        let editingModifiers: NSEvent.ModifierFlags = [.control, .option, .shift]
+        return modifiers.intersection(editingModifiers).isEmpty
     }
 }
 
@@ -4174,7 +4324,10 @@ final class RenderedMarkdownTableCellTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        if linkActivation == .singleClick, let target = linkTarget(at: event) {
+        if RenderedMarkdownLinkActivation.shouldNavigate(
+            for: event.modifierFlags,
+            preference: linkActivation
+        ), let target = linkTarget(at: event) {
             onLinkClick?(target)
             return
         }

@@ -371,17 +371,34 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         session.scrollView.frame = NSRect(x: 0, y: 0, width: 700, height: 520)
         session.scrollView.layoutSubtreeIfNeeded()
         session.textView.string = source
+        let resolvedContent = try XCTUnwrap(
+            EditorEngineDerivedContent.deriveSynchronously(source: source)
+        )
+        session.deferredMermaidResolver = { _, _ in
+            try? await Task.sleep(for: .milliseconds(100))
+            return resolvedContent
+        }
         let derivedContent = await session.deriveContent(
             for: source,
             configuration: .default
         )
         let content = try XCTUnwrap(derivedContent)
+        XCTAssertTrue(content.mermaidDeferred)
+        XCTAssertTrue(content.nativeRenderPlan.mermaidDiagrams.allSatisfy(\.isPlaceholder))
+        XCTAssertFalse(content.htmlFragment.contains("mermaid-diagram"))
         session.textView.undoManager?.removeAllActions()
         session.setPresentation(
             .rendered,
             source: source,
             onLinkClick: { activatedTarget = $0 }
         )
+        let placeholder = try XCTUnwrap(content.nativeRenderPlan.mermaidDiagrams.first)
+        XCTAssertNotNil(
+            session.textView.renderedImage(
+                atUTF16Location: placeholder.sourceRange.utf16Range.location
+            )
+        )
+        XCTAssertEqual(session.renderedMermaidPatchCount, 0)
 
         let table = try XCTUnwrap(plan.tables.first)
         let tableView = try XCTUnwrap(
@@ -414,6 +431,15 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
         XCTAssertNil(activatedTarget)
 
+        let fullPresentationPasses = session.renderedPresentationPassCount
+        await session.waitForRenderedResources()
+        XCTAssertEqual(session.renderedPresentationPassCount, fullPresentationPasses)
+        XCTAssertEqual(
+            session.renderedMermaidPatchCount,
+            1,
+            "the completed SVG should patch only the Mermaid overlay"
+        )
+
         let diagram = try XCTUnwrap(plan.mermaidDiagrams.first)
         XCTAssertEqual(diagram.intrinsicWidth, 230)
         XCTAssertEqual(diagram.intrinsicHeight, 73)
@@ -439,13 +465,14 @@ final class RenderedMarkdownEditorTests: XCTestCase {
 
         let readOnlySession = MarkdownSourceEditorSession(role: .renderedProjection)
         readOnlySession.scrollView.frame = session.scrollView.frame
+        readOnlySession.scrollView.layoutSubtreeIfNeeded()
         readOnlySession.textView.isEditable = false
         readOnlySession.setPresentation(.rendered, source: "", onLinkClick: nil)
         XCTAssertEqual(readOnlySession.textView.string, "")
-        readOnlySession.installSharedRenderedPlan(content.nativeRenderPlan, source: source)
+        readOnlySession.installSharedRenderedPlan(plan, source: source)
         XCTAssertEqual(readOnlySession.textView.string, source)
         let initialProjectionPassCount = readOnlySession.renderedPresentationPassCount
-        readOnlySession.installSharedRenderedPlan(content.nativeRenderPlan, source: source)
+        readOnlySession.installSharedRenderedPlan(plan, source: source)
         XCTAssertEqual(
             readOnlySession.renderedPresentationPassCount,
             initialProjectionPassCount,
@@ -456,7 +483,13 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                 atUTF16Location: table.sourceRange.utf16Range.location
             )
         )
-        XCTAssertEqual(readOnlyTable.renderedSize, contextMenuTable.renderedSize)
+        XCTAssertEqual(
+            readOnlyTable.renderedSize.width,
+            contextMenuTable.renderedSize.width,
+            accuracy: 12,
+            "table width may differ only by the viewport's vertical scroller inset"
+        )
+        XCTAssertEqual(readOnlyTable.renderedSize.height, contextMenuTable.renderedSize.height)
         XCTAssertEqual(
             readOnlyTable.backgroundColor(forRow: 0),
             contextMenuTable.backgroundColor(forRow: 0)
@@ -505,6 +538,36 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertEqual(readOnlyQuote.lineHeightMultiple, editableQuote.lineHeightMultiple)
         XCTAssertEqual(readOnlyQuote.headIndent, editableQuote.headIndent)
         XCTAssertFalse(readOnlySession.textView.isEditable)
+
+        let raceSession = MarkdownSourceEditorSession(role: .renderedProjection)
+        raceSession.scrollView.frame = session.scrollView.frame
+        raceSession.textView.isEditable = false
+        raceSession.setPresentation(.rendered, source: "", onLinkClick: nil)
+        raceSession.installResolvedMermaidPlan(plan, source: source)
+        XCTAssertEqual(raceSession.textView.string, source)
+        let resolvedRaceSize = try XCTUnwrap(
+            raceSession.textView.renderedImageSize(
+                atUTF16Location: diagram.sourceRange.utf16Range.location
+            )
+        )
+        let resolvedRacePassCount = raceSession.renderedPresentationPassCount
+        raceSession.installSharedRenderedPlan(content.nativeRenderPlan, source: source)
+        XCTAssertEqual(raceSession.renderedPresentationPassCount, resolvedRacePassCount)
+        XCTAssertEqual(
+            raceSession.textView.renderedImageSize(
+                atUTF16Location: diagram.sourceRange.utf16Range.location
+            ),
+            resolvedRaceSize,
+            "a late placeholder plan must not replace an already resolved SVG"
+        )
+
+        session.textView.string = "newer revision"
+        session.installResolvedMermaidPlan(plan, source: source)
+        XCTAssertEqual(
+            session.renderedMermaidPatchCount,
+            1,
+            "a completed result for an obsolete source must be discarded"
+        )
     }
 
     @MainActor
@@ -936,6 +999,19 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertTrue(
             RenderedMarkdownLinkActivation.shouldNavigate(
                 for: [.command],
+                preference: .singleClick
+            )
+        )
+        XCTAssertTrue(
+            RenderedMarkdownLinkActivation.shouldNavigate(
+                for: [.capsLock, .numericPad],
+                preference: .singleClick
+            ),
+            "keyboard state unrelated to editing must not disable links"
+        )
+        XCTAssertFalse(
+            RenderedMarkdownLinkActivation.shouldNavigate(
+                for: [.option],
                 preference: .singleClick
             )
         )
@@ -1493,6 +1569,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         session.textView.string = source
         _ = await session.deriveContent(for: source, configuration: .default)
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        await session.waitForRenderedResources()
         let location = diagram.sourceRange.utf16Range.location
         let narrow = try XCTUnwrap(session.textView.renderedImageSize(atUTF16Location: location))
         XCTAssertLessThan(narrow.width, CGFloat(diagram.intrinsicWidth))
@@ -2055,7 +2132,12 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         window.contentView = session.scrollView
         session.textView.string = source
         _ = await session.deriveContent(for: source, configuration: .default)
-        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        var activatedTarget: String?
+        session.setPresentation(
+            .rendered,
+            source: source,
+            onLinkClick: { activatedTarget = $0 }
+        )
         session.textView.layoutManager?.ensureLayout(for: session.textView.textContainer!)
         let glyph = try XCTUnwrap(session.textView.layoutManager).glyphIndexForCharacter(
             at: link.textRange.utf16Range.location
@@ -2074,6 +2156,21 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             session.textView.cursorForRenderedContent(atLocalPoint: viewPoint)
                 === NSCursor.pointingHand
         )
+        let click = try XCTUnwrap(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: session.textView.convert(viewPoint, to: nil),
+                modifierFlags: [.capsLock],
+                timestamp: 0,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 1,
+                clickCount: 1,
+                pressure: 1
+            )
+        )
+        session.textView.mouseDown(with: click)
+        XCTAssertEqual(activatedTarget, "guide.md")
         XCTAssertEqual(
             (session.textView.layoutManager?.temporaryAttribute(
                 .underlineStyle,

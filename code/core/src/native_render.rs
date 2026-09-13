@@ -150,6 +150,7 @@ pub struct NativeMermaidDiagram {
     pub svg: String,
     pub intrinsic_width: usize,
     pub intrinsic_height: usize,
+    pub is_placeholder: bool,
 }
 
 #[derive(Clone)]
@@ -160,7 +161,12 @@ struct Local {
 
 impl NativeRenderPlan {
     #[allow(clippy::too_many_lines)]
-    pub fn from_document(document: &DocumentIr, render: &RenderIr) -> Self {
+    pub fn from_document(
+        document: &DocumentIr,
+        render: &RenderIr,
+        mermaid_enabled: bool,
+        defer_mermaid: bool,
+    ) -> Self {
         let source = document.source();
         let events = document.events();
         let mut markers = Vec::new();
@@ -279,6 +285,14 @@ impl NativeRenderPlan {
                 Event::Start(Tag::CodeBlock(kind)) => {
                     let complete = located.source_range.clone();
                     if is_mermaid(kind) {
+                        if !mermaid_enabled {
+                            add_local(&mut locals, complete, LocalSourceReason::Mermaid);
+                            continue;
+                        }
+                        if defer_mermaid {
+                            diagrams.push(mermaid_placeholder(complete));
+                            continue;
+                        }
                         match mermaid::svg_from_markdown(
                             source.get(complete.clone()).unwrap_or_default(),
                         ) {
@@ -291,6 +305,7 @@ impl NativeRenderPlan {
                                         svg,
                                         intrinsic_width,
                                         intrinsic_height,
+                                        is_placeholder: false,
                                     });
                                 }
                             }
@@ -344,6 +359,27 @@ impl NativeRenderPlan {
             tables,
             mermaid_diagrams: diagrams,
         }
+    }
+}
+
+fn mermaid_placeholder(source_range: Range<usize>) -> NativeMermaidDiagram {
+    NativeMermaidDiagram {
+        source_range,
+        svg: concat!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" role=\"img\" ",
+            "width=\"640\" height=\"72\" viewBox=\"0 0 640 72\" ",
+            "aria-label=\"正在渲染 Mermaid 图表\">",
+            "<rect x=\"0.5\" y=\"0.5\" width=\"639\" height=\"71\" rx=\"8\" ",
+            "fill=\"#f7f7f8\" stroke=\"#dfe3e8\"/>",
+            "<circle cx=\"28\" cy=\"36\" r=\"7\" fill=\"#8b72e8\"/>",
+            "<text x=\"48\" y=\"41\" fill=\"#737982\" font-size=\"14\" ",
+            "font-family=\"-apple-system, BlinkMacSystemFont, sans-serif\">",
+            "正在渲染 Mermaid 图表…</text></svg>"
+        )
+        .to_owned(),
+        intrinsic_width: 640,
+        intrinsic_height: 72,
+        is_placeholder: true,
     }
 }
 
@@ -1088,7 +1124,7 @@ mod tests {
     fn plan(source: &str) -> NativeRenderPlan {
         let document = DocumentIr::parse(source, dialect_options(true));
         let render = RenderIr::from_document(&document);
-        NativeRenderPlan::from_document(&document, &render)
+        NativeRenderPlan::from_document(&document, &render, true, false)
     }
     #[test]
     fn derives_native_plan_from_one_parse() {
@@ -1118,6 +1154,7 @@ mod tests {
         );
         assert_eq!(plan.tables[0].rows[1][0].text, "x");
         assert_eq!(plan.mermaid_diagrams.len(), 1);
+        assert!(!plan.mermaid_diagrams[0].is_placeholder);
         assert_eq!(plan.mermaid_diagrams[0].intrinsic_width, 185);
         assert_eq!(plan.mermaid_diagrams[0].intrinsic_height, 73);
         assert!(
@@ -1129,6 +1166,32 @@ mod tests {
             plan.local_source_blocks
                 .iter()
                 .any(|item| item.reasons.contains(&LocalSourceReason::RawHtml))
+        );
+    }
+
+    #[test]
+    fn defers_mermaid_as_a_fast_placeholder_and_respects_disabled_rendering() {
+        let source = "```mermaid\nflowchart LR\nA --> B\n```";
+        let document = DocumentIr::parse(source, dialect_options(true));
+        let render = RenderIr::from_document(&document);
+
+        let deferred = NativeRenderPlan::from_document(&document, &render, true, true);
+        assert_eq!(deferred.mermaid_diagrams.len(), 1);
+        assert!(deferred.mermaid_diagrams[0].is_placeholder);
+        assert!(
+            deferred.mermaid_diagrams[0]
+                .svg
+                .contains("正在渲染 Mermaid 图表")
+        );
+        assert!(deferred.local_source_blocks.is_empty());
+
+        let disabled = NativeRenderPlan::from_document(&document, &render, false, false);
+        assert!(disabled.mermaid_diagrams.is_empty());
+        assert!(
+            disabled
+                .local_source_blocks
+                .iter()
+                .any(|block| { block.reasons.contains(&LocalSourceReason::Mermaid) })
         );
     }
 

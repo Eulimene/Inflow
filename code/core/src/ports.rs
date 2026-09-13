@@ -15,6 +15,7 @@ pub trait MarkdownPort: Send + Sync {
         revision: Revision,
         math_enabled: bool,
         mermaid_enabled: bool,
+        defer_mermaid: bool,
     ) -> DerivedState;
 
     fn prepare_html_export(

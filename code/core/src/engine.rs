@@ -81,6 +81,8 @@ pub enum EditorCommand {
         math_enabled: bool,
         #[serde(default = "default_true")]
         mermaid_enabled: bool,
+        #[serde(default)]
+        defer_mermaid: bool,
     },
     Format {
         base_revision: Revision,
@@ -303,6 +305,7 @@ pub struct DerivedState {
     pub preview_html_fragment: String,
     pub math_enabled: bool,
     pub mermaid_enabled: bool,
+    pub mermaid_deferred: bool,
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize)]
@@ -412,7 +415,8 @@ impl EditorEngine {
                 revision,
                 math_enabled,
                 mermaid_enabled,
-            } => self.refresh_derived(revision, math_enabled, mermaid_enabled)?,
+                defer_mermaid,
+            } => self.refresh_derived(revision, math_enabled, mermaid_enabled, defer_mermaid)?,
             EditorCommand::Format {
                 base_revision,
                 selection,
@@ -520,6 +524,7 @@ impl EditorEngine {
         revision: Revision,
         math_enabled: bool,
         mermaid_enabled: bool,
+        defer_mermaid: bool,
     ) -> Result<StatePatch, EngineError> {
         if revision != self.revision {
             return Err(EngineError::RevisionConflict);
@@ -527,12 +532,17 @@ impl EditorEngine {
         let derived = if let Some(derived) = &self.derived
             && derived.math_enabled == math_enabled
             && derived.mermaid_enabled == mermaid_enabled
+            && derived.mermaid_deferred == defer_mermaid
         {
             derived.clone()
         } else {
-            let derived = self
-                .markdown
-                .derive(&self.text, revision, math_enabled, mermaid_enabled);
+            let derived = self.markdown.derive(
+                &self.text,
+                revision,
+                math_enabled,
+                mermaid_enabled,
+                defer_mermaid,
+            );
             self.derived = Some(derived.clone());
             derived
         };
@@ -1033,9 +1043,16 @@ mod tests {
             revision: Revision,
             math_enabled: bool,
             mermaid_enabled: bool,
+            defer_mermaid: bool,
         ) -> DerivedState {
             self.calls.fetch_add(1, Ordering::Relaxed);
-            CommonMarkAdapter.derive(source, revision, math_enabled, mermaid_enabled)
+            CommonMarkAdapter.derive(
+                source,
+                revision,
+                math_enabled,
+                mermaid_enabled,
+                defer_mermaid,
+            )
         }
 
         fn prepare_html_export(
@@ -1099,6 +1116,7 @@ mod tests {
                 revision,
                 math_enabled: true,
                 mermaid_enabled: true,
+                defer_mermaid: false,
             },
         }
     }
@@ -1253,10 +1271,24 @@ mod tests {
                     revision: 0,
                     math_enabled: false,
                     mermaid_enabled: true,
+                    defer_mermaid: false,
                 },
             ))
             .expect("configuration change derives again");
         assert_eq!(calls.load(Ordering::Relaxed), 2);
+
+        engine
+            .dispatch(command(
+                "deferred-mermaid",
+                EditorCommand::RefreshDerived {
+                    revision: 0,
+                    math_enabled: false,
+                    mermaid_enabled: true,
+                    defer_mermaid: true,
+                },
+            ))
+            .expect("deferred Mermaid is a separate cache entry");
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
 
         engine
             .dispatch(replace(
@@ -1269,7 +1301,7 @@ mod tests {
         engine
             .dispatch(refresh(1))
             .expect("new revision derives again");
-        assert_eq!(calls.load(Ordering::Relaxed), 3);
+        assert_eq!(calls.load(Ordering::Relaxed), 4);
     }
 
     #[test]
@@ -1683,6 +1715,7 @@ mod tests {
                     revision: 0,
                     math_enabled: false,
                     mermaid_enabled: false,
+                    defer_mermaid: false,
                 },
             ))
             .expect("disabled derive")

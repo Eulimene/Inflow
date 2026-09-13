@@ -275,6 +275,7 @@ struct RenderedMarkdownMermaidDiagram: Equatable, Sendable {
     let svg: String
     let intrinsicWidth: Int
     let intrinsicHeight: Int
+    let isPlaceholder: Bool
 }
 
 /// A display-only interpretation of one exact Markdown byte snapshot.
@@ -294,6 +295,16 @@ struct RenderedMarkdownPlan: Equatable, Sendable {
 
     func exactlyMatches(_ source: String) -> Bool {
         sourceUTF8 == Data(source.utf8)
+    }
+
+    func hasSameNonMermaidProjection(as other: Self) -> Bool {
+        sourceUTF8 == other.sourceUTF8
+            && markers == other.markers
+            && contentStyles == other.contentStyles
+            && localSourceBlocks == other.localSourceBlocks
+            && links == other.links
+            && images == other.images
+            && tables == other.tables
     }
 }
 

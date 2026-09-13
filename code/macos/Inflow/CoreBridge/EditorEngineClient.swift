@@ -125,7 +125,8 @@ extension EditorEngineDerivedContent {
                     type: "refresh_derived",
                     revision: 0,
                     mathEnabled: configuration.mathRenderingEnabled,
-                    mermaidEnabled: configuration.mermaidRenderingEnabled
+                    mermaidEnabled: configuration.mermaidRenderingEnabled,
+                    deferMermaid: false
                 )
             )
             let response = try dispatchTemporaryEditorEngine(envelope, to: handle)
@@ -449,7 +450,8 @@ final class EditorEngineClient {
     func derive(
         text: String,
         selectionUTF16: NSRange,
-        configuration: PreviewAppearanceConfiguration
+        configuration: PreviewAppearanceConfiguration,
+        deferMermaid: Bool = true
     ) async -> EditorEngineDerivedContent? {
         submit(text: text, selectionUTF16: selectionUTF16)
         await pending?.value
@@ -457,8 +459,21 @@ final class EditorEngineClient {
         return await client.derive(
             expectedText: text,
             mathEnabled: configuration.mathRenderingEnabled,
-            mermaidEnabled: configuration.mermaidRenderingEnabled
+            mermaidEnabled: configuration.mermaidRenderingEnabled,
+            deferMermaid: deferMermaid
         )
+    }
+
+    func resolveDeferredMermaid(
+        source: String,
+        configuration: PreviewAppearanceConfiguration
+    ) async -> EditorEngineDerivedContent? {
+        await Task.detached(priority: .utility) {
+            EditorEngineDerivedContent.deriveSynchronously(
+                source: source,
+                configuration: configuration
+            )
+        }.value
     }
 
     func format(
@@ -746,7 +761,8 @@ private actor EditorEngineTransport {
     func derive(
         expectedText: String,
         mathEnabled: Bool,
-        mermaidEnabled: Bool
+        mermaidEnabled: Bool,
+        deferMermaid: Bool
     ) -> EditorEngineDerivedContent? {
         do {
             guard projection.utf8.elementsEqual(expectedText.utf8) else {
@@ -760,7 +776,8 @@ private actor EditorEngineTransport {
                     type: "refresh_derived",
                     revision: revision,
                     mathEnabled: mathEnabled,
-                    mermaidEnabled: mermaidEnabled
+                    mermaidEnabled: mermaidEnabled,
+                    deferMermaid: deferMermaid
                 )
             )
             let response: EditorEngineDispatchResponse = try dispatch(envelope)
@@ -770,7 +787,8 @@ private actor EditorEngineTransport {
                   let raw = response.patch.derived,
                   raw.revision == revision,
                   raw.mathEnabled == mathEnabled,
-                  raw.mermaidEnabled == mermaidEnabled
+                  raw.mermaidEnabled == mermaidEnabled,
+                  raw.mermaidDeferred == deferMermaid
             else {
                 throw EditorEngineBridgeError.invalidResponse
             }
@@ -1635,12 +1653,14 @@ private struct EditorEngineRefreshCommand: Encodable {
     let revision: UInt64
     let mathEnabled: Bool
     let mermaidEnabled: Bool
+    let deferMermaid: Bool
 
     enum CodingKeys: String, CodingKey {
         case type
         case revision
         case mathEnabled = "math_enabled"
         case mermaidEnabled = "mermaid_enabled"
+        case deferMermaid = "defer_mermaid"
     }
 }
 
@@ -1853,6 +1873,7 @@ private struct EditorEngineDerivedState: Decodable {
     let previewHTMLFragment: String
     let mathEnabled: Bool
     let mermaidEnabled: Bool
+    let mermaidDeferred: Bool
 
     enum CodingKeys: String, CodingKey {
         case revision
@@ -1865,6 +1886,7 @@ private struct EditorEngineDerivedState: Decodable {
         case previewHTMLFragment = "preview_html_fragment"
         case mathEnabled = "math_enabled"
         case mermaidEnabled = "mermaid_enabled"
+        case mermaidDeferred = "mermaid_deferred"
     }
 
     func validated(source: String) throws -> EditorEngineDerivedContent {
@@ -1928,7 +1950,8 @@ private struct EditorEngineDerivedState: Decodable {
             syntaxHighlighting: syntax,
             references: validatedReferences,
             renderBlocks: blocks,
-            nativeRenderPlan: nativeRenderPlan
+            nativeRenderPlan: nativeRenderPlan,
+            mermaidDeferred: mermaidDeferred
         )
     }
 }
@@ -2115,11 +2138,13 @@ private struct EditorEngineRawNativeRenderPlan: Decodable {
         let svg: String
         let intrinsicWidth: Int
         let intrinsicHeight: Int
+        let isPlaceholder: Bool
         enum CodingKeys: String, CodingKey {
             case sourceRange = "source_range"
             case svg
             case intrinsicWidth = "intrinsic_width"
             case intrinsicHeight = "intrinsic_height"
+            case isPlaceholder = "is_placeholder"
         }
     }
 
@@ -2277,7 +2302,8 @@ private struct EditorEngineRawNativeRenderPlan: Decodable {
                 sourceRange: try mapped(item.sourceRange),
                 svg: item.svg,
                 intrinsicWidth: item.intrinsicWidth,
-                intrinsicHeight: item.intrinsicHeight
+                intrinsicHeight: item.intrinsicHeight,
+                isPlaceholder: item.isPlaceholder
             )
         }
         return RenderedMarkdownPlan(

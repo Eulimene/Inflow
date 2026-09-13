@@ -90,6 +90,10 @@ final class EditorStore: ObservableObject {
         sourceEditorSession.localTextProjectionDidPublish = { [weak self] sourceSnapshot in
             self?.state.renderedSurfacePhase = .optimistic(sourceSnapshot: sourceSnapshot)
         }
+        sourceEditorSession.resolvedMermaidPlanDidPublish = {
+            [weak renderedPreviewSession] plan, source in
+            renderedPreviewSession?.installResolvedMermaidPlan(plan, source: source)
+        }
     }
 
     deinit {

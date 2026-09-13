@@ -10,6 +10,7 @@ struct EditorEngineDerivedContent: Sendable {
     let references: [MarkdownReference]
     let renderBlocks: [EditorEngineRenderBlock]
     let nativeRenderPlan: RenderedMarkdownPlan
+    let mermaidDeferred: Bool
 }
 
 struct EditorEngineRenderBlock: Equatable, Sendable {

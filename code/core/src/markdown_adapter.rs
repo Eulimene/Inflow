@@ -23,14 +23,16 @@ impl MarkdownPort for CommonMarkAdapter {
         revision: Revision,
         math_enabled: bool,
         mermaid_enabled: bool,
+        defer_mermaid: bool,
     ) -> DerivedState {
         let document = DocumentIr::parse(source, dialect_options(math_enabled));
-        let configuration = RenderConfiguration {
-            math_enabled,
-            mermaid_enabled,
-        };
         let render = RenderIr::from_document(&document);
-        let native_render = NativeRenderPlan::from_document(&document, &render);
+        let native_render =
+            NativeRenderPlan::from_document(&document, &render, mermaid_enabled, defer_mermaid);
+        let immediate_configuration = RenderConfiguration {
+            math_enabled,
+            mermaid_enabled: mermaid_enabled && !defer_mermaid,
+        };
         DerivedState {
             revision,
             analysis: analyze_document(&document),
@@ -38,13 +40,14 @@ impl MarkdownPort for CommonMarkAdapter {
             references: references_from_document(&document),
             render,
             native_render,
-            html_fragment: html_fragment_from_document(&document, configuration),
+            html_fragment: html_fragment_from_document(&document, immediate_configuration),
             preview_html_fragment: html_fragment_for_preview_from_document(
                 &document,
-                configuration,
+                immediate_configuration,
             ),
             math_enabled,
             mermaid_enabled,
+            mermaid_deferred: defer_mermaid,
         }
     }
 
