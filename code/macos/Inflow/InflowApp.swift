@@ -467,13 +467,14 @@ enum ProjectDocumentTargetPolicy {
 }
 
 @MainActor
-final class ProjectDocumentSurface: Identifiable {
+final class ProjectDocumentSurface: ObservableObject, Identifiable {
     let id: ObjectIdentifier
     let nativeDocument: NSDocument
     let content: Binding<MarkdownDocument>
     let fileURL: URL
     let isEditable: Bool
     let sourceEditorSession = MarkdownSourceEditorSession()
+    @Published private(set) var isModified = false
 
     init(
         nativeDocument: NSDocument,
@@ -489,6 +490,11 @@ final class ProjectDocumentSurface: Identifiable {
     }
 
     var title: String { fileURL.lastPathComponent }
+
+    func setModified(_ modified: Bool) {
+        guard isModified != modified else { return }
+        isModified = modified
+    }
 }
 
 enum ProjectDocumentTabSelection {
@@ -1222,6 +1228,17 @@ final class LightweightProjectCoordinator: ObservableObject {
         }
     }
 
+    func setDocumentModified(_ document: NSDocument?, modified: Bool) {
+        guard let document,
+              let surface = documentSurfaces.first(where: {
+                  $0.nativeDocument === document
+              })
+        else { return }
+        guard surface.isModified != modified else { return }
+        objectWillChange.send()
+        surface.setModified(modified)
+    }
+
     func isProjectHostDocument(_ document: NSDocument?) -> Bool {
         guard let document else { return false }
         return document === activeProjectHost
@@ -1782,7 +1799,9 @@ private struct ProjectWorkspaceScene: View {
             ProjectWorkspaceWindowTitle(
                 title: projectCoordinator.activeDocumentSurface?.title
                     ?? folderBrowser.folderURL?.lastPathComponent
-                    ?? "Inflow"
+                    ?? "Inflow",
+                isModified: projectCoordinator.activeDocumentSurface?.isModified
+                    ?? false
             )
         )
     }
@@ -1935,6 +1954,12 @@ private struct ProjectDocumentTabBar: View {
                                     Image(systemName: "doc.text")
                                     Text(surface.title)
                                         .lineLimit(1)
+                                    if surface.isModified {
+                                        Circle()
+                                            .fill(Color.accentColor)
+                                            .frame(width: 6, height: 6)
+                                            .accessibilityHidden(true)
+                                    }
                                 }
                                 .padding(.leading, 10)
                                 .padding(.trailing, 4)
@@ -1965,7 +1990,11 @@ private struct ProjectDocumentTabBar: View {
                         )
                         .accessibilityElement(children: .contain)
                         .accessibilityLabel("打开的文档：\(surface.title)")
-                        .accessibilityValue(isActive ? "当前" : "后台")
+                        .accessibilityValue(
+                            [isActive ? "当前" : "后台", surface.isModified ? "已修改" : nil]
+                                .compactMap { $0 }
+                                .joined(separator: "，")
+                        )
                         .contextMenu {
                             Button("关闭当前文件") {
                                 projectCoordinator.closeDocumentSurfaces(
@@ -2030,6 +2059,7 @@ private struct ProjectDocumentTabBar: View {
 
 private struct ProjectWorkspaceWindowTitle: NSViewRepresentable {
     let title: String
+    let isModified: Bool
 
     func makeNSView(context _: Context) -> NSView {
         NSView(frame: .zero)
@@ -2038,20 +2068,19 @@ private struct ProjectWorkspaceWindowTitle: NSViewRepresentable {
     func updateNSView(_ view: NSView, context _: Context) {
         view.window?.title = title
         view.window?.representedURL = nil
+        view.window?.isDocumentEdited = isModified
     }
 }
 
 enum InflowTerminationPolicy {
     /// Inflow is a document editor with no useful windowless runtime. Closing
     /// the final document window therefore has the same lifecycle result as
-    /// choosing Quit (after AppKit has completed any save review).
+    /// choosing Quit after disposable draft sessions have been retired.
     static let terminatesAfterLastWindowClosed = true
 
-    /// AppKit invokes the application delegate only after its document
-    /// controller has completed the Save / Don't Save / Cancel review. Inflow
-    /// has no second termination transaction of its own, so it must never
-    /// silently turn that completed system review into a cancelled Quit.
-    static var replyAfterAppKitDocumentReview: NSApplication.TerminateReply {
+    /// The concrete document host has already approved each disposable draft
+    /// close. Inflow has no second termination transaction of its own.
+    static var replyAfterDocumentCloseApproval: NSApplication.TerminateReply {
         return .terminateNow
     }
 }
@@ -2201,10 +2230,9 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
-        // NSApplication has already asked NSDocumentController to review every
-        // edited document before invoking this callback. Project loading and
-        // other short-lived UI work must not make the Quit command a no-op.
-        return InflowTerminationPolicy.replyAfterAppKitDocumentReview
+        // Document hosts have already retired disposable draft sessions before
+        // this callback. Project loading must not turn Quit into a no-op.
+        return InflowTerminationPolicy.replyAfterDocumentCloseApproval
     }
 }
 

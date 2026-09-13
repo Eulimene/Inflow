@@ -31,7 +31,7 @@
 
 ### 2.1 入口、文档与轻量项目
 
-- InflowApp 使用原生文档生命周期创建未命名 Markdown。在允许编辑前，ManualSaveDocumentHostPolicy 将当前 DocumentGroup 宿主的就地自动保存、草稿自动保存和版本保留策略统一关闭，并将定时保存延迟设为 0；若宿主策略无法覆盖或复核，文档保持只读并记录本地错误，而不承受未确认写入。
+- InflowApp 使用原生文档生命周期创建未命名 Markdown。在允许编辑前，ManualSaveDocumentHostPolicy 将当前 DocumentGroup 宿主的就地自动保存、系统草稿自动保存和版本保留策略统一关闭，并安装应用私有暂存对应的直接关闭策略；若宿主策略无法覆盖或复核，文档保持只读并记录本地错误，而不承受未确认写入。
 - InflowLaunchPolicy 禁止 AppKit 自行弹出打开面板；应用委托在普通启动或 Finder 双击 App 且没有待处理外部目标时，显式创建并聚焦可编辑的未命名文档。带文件或文件夹目标的启动继续交给统一打开路由，不额外留下空白窗口。
 - RecentDocumentsController 当前用于统一应用内与外部目标的规范化、去重、空白窗口复用和多文件打开；recordsOpenedDocuments 为 false，因此不把它描述成 Inflow 管理的最近文档能力。
 - “打开项目…”把普通文件夹交给 LightweightProjectCoordinator 与 FolderBrowserController。项目不导入、不复制，也不创建私有项目文件。
@@ -102,7 +102,7 @@
 ### 2.6 手动保存、外部变化与轻量恢复
 
 - AppPreferences.applyAutosavePolicy 和应用委托都把 NSDocumentController.autosavingDelay 设为 0；ManualSaveDocumentHostPolicy 还在启用编辑前关闭具体文档宿主的 autosavesInPlace、autosavesDrafts 与 preservesVersions，并动态复核三个结果。
-- 关闭已修改标签、关闭窗口和退出应用继续由 AppKit 的原生 Save / Don't Save / Cancel 审查处理；`NSApplication` 在调用应用委托前已经完成退出审查，应用委托不会再次启动第二轮 `reviewUnsavedDocuments`。选择 Don't Save 后直接完成原退出事务；项目内切换标签不会触发写回或关闭确认。
+- 未保存正文按文档写入加密的应用私有暂存区；正常关闭同步写入关闭墓碑并直接批准关闭，不显示 Save / Don't Save / Cancel。下次启动会清理由正常关闭留下的暂存；异常退出留下的草稿仅自动认领一次并静默打开为未命名文档。成功保存会在字节校验后清除对应暂存。项目目录树、顶部标签和项目窗口标题栏共同消费同一个字节级修改投影；项目内切换标签不会触发写回或关闭确认。
 - 当前主 App 未安装自动保存开关。宿主策略兼容层只服务个人内部版；未经真实进程 UAT 不得推导为公开发布架构证据。
 - 已命名文档的保存动作经原生文档 API 完成。失败保留当前编辑，不显示成功。当前文件菜单只暴露保存与另存为；保存副本的底层路径仅作为后续延期实现保留，不属于个人首版界面能力。
 - 外部变化提示当前只承诺重新加载或暂不处理；本地也有未保存修改时，后续手动保存要求明确覆盖确认。
@@ -137,7 +137,7 @@
 
 判断当前能力时，以已批准的个人首版范围、实际安装的菜单和主流程、以及 UAT-PERSONAL-01 至 10 为准，而不是以某个源文件或测试名称是否存在为准。
 
-自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 410 个 XCTest method：304 个 `current-direct`、13 个依赖真实 `NSApplication` 菜单或生命周期的 `current-host`、88 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
+自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 419 个 XCTest method：298 个 `current-direct`、30 个依赖真实 `NSApplication` 菜单、生命周期或 WebKit/PDF 系统服务的 `current-host`、86 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
 
 ## 4. 人工 UAT 状态
 

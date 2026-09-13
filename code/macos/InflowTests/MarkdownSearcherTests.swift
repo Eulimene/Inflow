@@ -697,7 +697,9 @@ final class MarkdownSearcherTests: XCTestCase {
         XCTAssertEqual(model.text, " ")
 
         session.textView.undo(nil)
-        for _ in 0..<20 where model.text != source { await Task.yield() }
+        for _ in 0..<100 where model.text != source {
+            try await Task.sleep(for: .milliseconds(5))
+        }
         session.textView.isEditable = false
         let replacedReadOnly = await session.replaceCurrent(
             utf8Range: matches[0].utf8Range,

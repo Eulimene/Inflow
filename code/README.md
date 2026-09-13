@@ -23,15 +23,15 @@ Inflow 是一款本地优先的 Markdown 写作工作台。当前代码只为产
 ### 文档与轻量项目
 
 - 无待打开目标的普通启动，或在 Finder 中双击 Inflow App，均直接创建并聚焦一份可编辑的未命名 Markdown；不显示启动页，也不弹文件选择器。用户首次明确保存时才选择文件名和位置。
-- 正文只在用户执行保存、Command+S 或关闭确认中选择“保存”时写回用户文件；定时、草稿和就地自动保存在启用编辑前关闭。
-- 关闭最后一个文档窗口会在 AppKit 完成未保存内容复核后直接退出应用，不保留无窗口后台进程。
+- 正文只在用户执行保存或 Command+S 时写回用户文件；未保存正文只进入应用私有暂存区，不会自动覆盖原文件。
+- 关闭文档会直接放弃对应暂存内容且不弹保存确认；关闭最后一个文档窗口会直接退出应用，不保留无窗口后台进程。
 - 支持应用内打开一份或多份 .md / .markdown，以及打开普通文件夹项目；外部文件或文件夹请求沿同一去重与窗口复用路径处理。
 - 项目目录树递归展示普通项目项，默认排除隐藏项与越界符号链接；刷新由用户主动执行。
 - 新项目窗口采用左侧项目目录树、中间编辑区、右侧当前文档大纲的固定布局；产品首次默认显示目录树、折叠大纲，项目还没有当前文档时大纲不可操作。
 - 目录树和大纲把展开/折叠控件放在各自顶部；隐藏后面板宽度平滑归零，并在标签栏或编辑区顶部保留紧凑的恢复按钮。“显示”菜单与“设置 > 工作区”读写同一组永久偏好，窗口工具栏不再重复提供面板按钮。
 - 即时编辑对未支持的 Markdown 构造局部保留源码；成对三横线包裹的内容不会被误呈现为分隔线和 Setext 标题。
 - 项目树可在选定目录安全新建 .md / .markdown，使用不覆盖创建并在执行时重新检查项目边界。
-- 项目文档以顶部标签保持独立的内容、撤销与未保存状态；每个标签都有快捷关闭按钮，右键可关闭当前、其他、左侧或右侧文件，如有修改则使用原生“保存 / 不保存 / 取消”复核。
+- 项目文档以顶部标签保持独立的内容、撤销与未保存状态；目录树和标签以圆点标记修改，每个标签都有快捷关闭按钮，关闭时直接放弃对应暂存内容。
 
 ### 三种写作视图
 
@@ -123,7 +123,7 @@ ABI 3 只暴露 Engine create/dispatch/snapshot/free 和 owned-bytes free，其�
 
     scripts/verify-launch.sh --personal
 
-该配置只执行生成绑定校验、Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查；不创建归档或发布证据，也不执行固定设备/30 次性能协议、扩展生态合同、签名、公证或分发门禁。[`quality/personal-xctest-scope.tsv`](quality/personal-xctest-scope.tsv) 把当前 410 个 XCTest method 逐项分为 304 个 `current-direct`、13 个 `current-host`、88 个 `deferred` 和 5 个 `fixed-performance`。`--personal` 只执行 `current-direct`；其余三类不计为通过。13 个宿主用例保留为 App-host 专项验证或真实应用 UAT，后置与固定性能用例由 deferred profile 的全量测试保留。脚本会对重复、陈旧、未分类、非法分区和四类精确计数失败关闭；新增测试不能默认混入当前门禁。可用 `scripts/verify-launch.sh --describe-profile personal` 无副作用查看边界。
+该配置只执行生成绑定校验、Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查；不创建归档或发布证据，也不执行固定设备/30 次性能协议、扩展生态合同、签名、公证或分发门禁。[`quality/personal-xctest-scope.tsv`](quality/personal-xctest-scope.tsv) 把当前 419 个 XCTest method 逐项分为 298 个 `current-direct`、30 个 `current-host`、86 个 `deferred` 和 5 个 `fixed-performance`。`--personal` 只执行 `current-direct`；其余三类不计为通过。30 个宿主用例保留为 App-host 专项验证或真实应用 UAT，其中包括需要 WebKit/PDF 系统服务的导出用例；后置与固定性能用例由 deferred profile 的全量测试保留。脚本会对重复、陈旧、未分类、非法分区和四类精确计数失败关闭；新增测试不能默认混入当前门禁。可用 `scripts/verify-launch.sh --describe-profile personal` 无副作用查看边界。
 
 `--deferred-release-local`、`--deferred-signed-archive` 以及 `scripts/release-workflow.sh` 只为后续公共分发决策保留，不属于个人首版完成条件。
 

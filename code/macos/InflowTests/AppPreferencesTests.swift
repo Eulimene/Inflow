@@ -504,6 +504,16 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertTrue(
             ManualSaveDocumentHostPolicy.hasManualSaveFlags(type(of: document))
         )
+        XCTAssertTrue(
+            ManualSaveDocumentHostPolicy.hasDisposableDraftClosePolicy(type(of: document))
+        )
+
+        document.updateChangeCount(.changeDone)
+        var closeResult: Bool?
+        DocumentCloseAuthorization.request(for: document) { closeResult = $0 }
+        XCTAssertEqual(closeResult, true)
+        XCTAssertFalse(document.isDocumentEdited)
+        XCTAssertFalse(DocumentCloseAuthorization.hasPendingRequests)
 
         // Applying the policy again is an idempotent no-op for later windows
         // backed by the same concrete SwiftUI document host class.

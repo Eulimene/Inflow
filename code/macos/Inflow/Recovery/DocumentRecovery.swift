@@ -395,6 +395,7 @@ enum DocumentRecoveryReconcileOutcome: Equatable, Sendable {
     case stored
     case removedBecauseSaved
     case removedBecauseEmpty
+    case discardedBecauseClosed
 }
 
 struct DocumentRecoveryLoadResult: Equatable, Sendable {
@@ -757,9 +758,10 @@ private struct ClosedRecoverySessionMarker: Codable {
 }
 
 /// Serializes the only state transition that may retire a live recovery head.
-/// A clean close writes a durable tombstone but deliberately leaves the encrypted
-/// head in place. Reactivation durably removes the tombstone before it returns.
-/// Startup cleanup can therefore never observe "head deleted, replacement pending".
+/// A clean close writes a durable tombstone before deleting the encrypted head.
+/// Reconciliation and close share this lock, so a late write cannot recreate a
+/// discarded draft after close returns. Startup only has to consume the small
+/// tombstone left as crash-safe metadata.
 private final class DocumentRecoverySessionGate: @unchecked Sendable {
     private let rootURL: URL
     private let fileManager: FileManager
@@ -796,8 +798,16 @@ private final class DocumentRecoverySessionGate: @unchecked Sendable {
         values.isExcludedFromBackup = true
         var mutableURL = url
         try mutableURL.setResourceValues(values)
+        try DurableRecoveryWriter.removeIfPresent(at: headURL(id))
         activeGenerations.removeValue(forKey: id)
         return true
+    }
+
+    func performUnlessClosed<T>(_ id: UUID, _ body: () throws -> T) throws -> T? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard try readMarker(id) == nil else { return nil }
+        return try body()
     }
 
     /// Deletes a cleanly closed head in two durable stages. The tombstone is
@@ -857,6 +867,10 @@ private final class DocumentRecoverySessionGate: @unchecked Sendable {
 
     private func markerURL(_ id: UUID) -> URL {
         rootURL.appendingPathComponent(id.uuidString).appendingPathExtension("closed")
+    }
+
+    private func headURL(_ id: UUID) -> URL {
+        rootURL.appendingPathComponent(id.uuidString).appendingPathExtension("recovery")
     }
 
     private func ensureDirectory() throws {
@@ -935,7 +949,7 @@ actor DocumentRecoveryStore {
         try sessionGate.markActive(id, generation: generation)
     }
 
-    func markSessionClosed(_ id: UUID, generation: UInt64) throws -> Bool {
+    nonisolated func markSessionClosed(_ id: UUID, generation: UInt64) throws -> Bool {
         try sessionGate.markClosedIfCurrent(id, generation: generation)
     }
 
@@ -961,7 +975,11 @@ actor DocumentRecoveryStore {
             return .removedBecauseSaved
         }
 
-        try write(record, using: key, now: now)
+        guard try sessionGate.performUnlessClosed(record.id, {
+            try write(record, using: key, now: now)
+        }) != nil else {
+            return .discardedBecauseClosed
+        }
         if let source = record.transferSourceRecordID {
             try consumeTransferredSource(source, afterPersisting: record)
         }
@@ -1699,10 +1717,9 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     private let intervalNanoseconds: UInt64
     private var activeSessions: [UUID: ActiveSession] = [:]
     private var sessionGenerations: [UUID: UInt64] = [:]
-    private var pendingCloseTasks: [UUID: Task<Void, Never>] = [:]
     private var clearedContentIdentities: [UUID: Data] = [:]
     private var loadTask: Task<Void, Never>?
-    private var hasClaimedAutomaticPresentation = false
+    private var hasClaimedAutomaticRestoration = false
     private var isDegradedProtectionWarningDismissed = false
 
     init(
@@ -1758,7 +1775,6 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     }
 
     func update(_ record: DocumentRecoveryRecord) {
-        pendingCloseTasks.removeValue(forKey: record.id)?.cancel()
         if let clearedIdentity = clearedContentIdentities[record.id] {
             guard record.recoveryContentIdentity != clearedIdentity else { return }
             clearedContentIdentities.removeValue(forKey: record.id)
@@ -1835,44 +1851,18 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         guard let closedSession = activeSessions.removeValue(forKey: id) else { return }
         closedSession.task.cancel()
         clearedContentIdentities.removeValue(forKey: id)
-        pendingCloseTasks.removeValue(forKey: id)?.cancel()
         guard let store else {
             showDegradedProtectionWarning()
             return
         }
         let closingGeneration = closedSession.generation
-        pendingCloseTasks[id] = Task { @MainActor [weak self, store] in
-            await Task.yield()
-            guard let self,
-                  !Task.isCancelled,
-                  self.sessionGenerations[id] == closingGeneration,
-                  self.activeSessions[id] == nil
-            else {
+        do {
+            guard try store.markSessionClosed(id, generation: closingGeneration) else {
+                showDegradedProtectionWarning()
                 return
             }
-            let didMarkClosed: Bool
-            do {
-                didMarkClosed = try await store.markSessionClosed(
-                    id,
-                    generation: closingGeneration
-                )
-            } catch {
-                didMarkClosed = false
-                self.showDegradedProtectionWarning()
-            }
-
-            if let active = self.activeSessions[id], active.generation != closingGeneration {
-                return
-            }
-            guard self.sessionGenerations[id] == closingGeneration,
-                  self.activeSessions[id] == nil
-            else {
-                return
-            }
-            if !didMarkClosed {
-                self.showDegradedProtectionWarning()
-            }
-            self.pendingCloseTasks.removeValue(forKey: id)
+        } catch {
+            showDegradedProtectionWarning()
         }
     }
 
@@ -1894,9 +1884,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         let priorClearedContentIdentities = clearedContentIdentities
         let suspendedRecords = activeSessions.values.map(\.latestRecord)
         for session in activeSessions.values { session.task.cancel() }
-        for task in pendingCloseTasks.values { task.cancel() }
         activeSessions.removeAll()
-        pendingCloseTasks.removeAll()
         sessionGenerations.removeAll()
         for record in suspendedRecords {
             clearedContentIdentities[record.id] = record.recoveryContentIdentity
@@ -1909,7 +1897,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
             throw error
         }
         recoveredRecords.removeAll()
-        hasClaimedAutomaticPresentation = false
+        hasClaimedAutomaticRestoration = false
         isDegradedProtectionWarningDismissed = false
         protectionErrorMessage = nil
     }
@@ -1944,15 +1932,22 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         protectionErrorMessage = nil
     }
 
-    func claimAutomaticPresentation() -> Bool {
-        guard isLoaded,
-              !recoveredRecords.isEmpty,
-              !hasClaimedAutomaticPresentation
-        else {
-            return false
+    /// Claims every draft left by an abnormal termination exactly once per
+    /// launch. Callers open the returned documents directly; recovery is a
+    /// silent continuation of the interrupted workspace, not a modal decision.
+    func claimDraftsForAutomaticRestoration() async -> [MarkdownDocument] {
+        guard isLoaded, !hasClaimedAutomaticRestoration else { return [] }
+        hasClaimedAutomaticRestoration = true
+        let candidates = recoveredRecords
+        var restored: [MarkdownDocument] = []
+        for record in candidates {
+            do {
+                restored.append(try await claimForRestoration(record))
+            } catch {
+                showDegradedProtectionWarning()
+            }
         }
-        hasClaimedAutomaticPresentation = true
-        return true
+        return restored
     }
 
     private func loadRecords() async {

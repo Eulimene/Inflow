@@ -115,6 +115,7 @@ final class EditorEngineClientTests: XCTestCase {
     func testEditorStorePublishesOnlyTheLatestDerivedIntent() async throws {
         let session = MarkdownSourceEditorSession()
         let previewSession = MarkdownSourceEditorSession(role: .renderedProjection)
+        let previewBaseFontSize = try XCTUnwrap(previewSession.textView.font).pointSize
         session.textView.string = "# Old"
         previewSession.textView.string = "# Old"
         previewSession.textView.isEditable = false
@@ -162,7 +163,11 @@ final class EditorEngineClientTests: XCTestCase {
                 effectiveRange: nil
             ) as? NSFont
         )
-        XCTAssertEqual(previewHeadingFont.pointSize, 27, accuracy: 0.001)
+        XCTAssertEqual(
+            previewHeadingFont.pointSize,
+            previewBaseFontSize * MarkdownRenderMetrics.heading(level: 1).scale,
+            accuracy: 0.001
+        )
         XCTAssertFalse(previewSession.textView.isEditable)
 
         store.send(.suspendDerived(markdown: "# New\n\n[next](note.md)"))

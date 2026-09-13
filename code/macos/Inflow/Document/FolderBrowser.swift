@@ -878,6 +878,7 @@ final class FolderBrowserController: ObservableObject {
     @Published private(set) var files: [FolderMarkdownFile] = []
     @Published private(set) var state = FolderBrowserState.idle
     @Published private(set) var restorationWarning: String?
+    @Published private(set) var modifiedDocumentPaths = Set<String>()
     private let projectDocuments = NSHashTable<NSDocument>.weakObjects()
 
     private let persistence: FolderBrowserPersistence
@@ -1322,6 +1323,7 @@ final class FolderBrowserController: ObservableObject {
     func associateProjectWindow(with document: NSDocument?) {
         guard let document else {
             projectDocuments.removeAllObjects()
+            modifiedDocumentPaths.removeAll()
             return
         }
         projectDocuments.add(document)
@@ -1334,7 +1336,26 @@ final class FolderBrowserController: ObservableObject {
 
     func dissociateProjectWindow(_ document: NSDocument?) {
         guard let document else { return }
+        if let path = document.fileURL?.standardizedFileURL.path {
+            modifiedDocumentPaths.remove(path)
+        }
         projectDocuments.remove(document)
+    }
+
+    func setDocumentModified(_ document: NSDocument?, modified: Bool) {
+        guard let document,
+              isAssociatedProjectDocument(document),
+              let path = document.fileURL?.standardizedFileURL.path
+        else { return }
+        if modified {
+            modifiedDocumentPaths.insert(path)
+        } else {
+            modifiedDocumentPaths.remove(path)
+        }
+    }
+
+    func isDocumentModified(at url: URL) -> Bool {
+        modifiedDocumentPaths.contains(url.standardizedFileURL.path)
     }
 
     private func retainAccess(to directory: URL) {
@@ -1646,6 +1667,9 @@ struct FolderBrowserSidebar: View {
                     expandedDirectoryIDs: $expandedDirectoryIDs,
                     selectedItemID: $selectedItemID,
                     isCurrentDocument: isCurrentDocument,
+                    isModifiedDocument: { item in
+                        item.isMarkdown && controller.isDocumentModified(at: item.url)
+                    },
                     onActivate: { item in
                         selectedItemID = item.id
                         _ = activateItem(withID: item.id)
@@ -1848,6 +1872,7 @@ private struct FolderProjectTreeRows: View {
     @Binding var expandedDirectoryIDs: Set<String>
     @Binding var selectedItemID: String?
     let isCurrentDocument: (FolderProjectItem) -> Bool
+    let isModifiedDocument: (FolderProjectItem) -> Bool
     let onActivate: (FolderProjectItem) -> Void
     let onBeginCreation: (FolderProjectItem) -> Void
 
@@ -1862,6 +1887,7 @@ private struct FolderProjectTreeRows: View {
                         expandedDirectoryIDs: $expandedDirectoryIDs,
                         selectedItemID: $selectedItemID,
                         isCurrentDocument: isCurrentDocument,
+                        isModifiedDocument: isModifiedDocument,
                         onActivate: onActivate,
                         onBeginCreation: onBeginCreation
                     )
@@ -1880,6 +1906,7 @@ private struct FolderProjectTreeRows: View {
         FolderProjectItemRow(
             item: item,
             isCurrentDocument: isCurrentDocument(item),
+            isModified: isModifiedDocument(item),
             onActivate: { onActivate(item) }
         )
         .contentShape(Rectangle())
@@ -1914,6 +1941,7 @@ private struct FolderProjectTreeRows: View {
 private struct FolderProjectItemRow: View {
     let item: FolderProjectItem
     let isCurrentDocument: Bool
+    let isModified: Bool
     let onActivate: () -> Void
 
     @ViewBuilder
@@ -1935,6 +1963,12 @@ private struct FolderProjectItemRow: View {
             Text(item.displayName)
                 .lineLimit(1)
             Spacer(minLength: 2)
+            if isModified {
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 6, height: 6)
+                    .accessibilityHidden(true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 3)
@@ -1945,7 +1979,11 @@ private struct FolderProjectItemRow: View {
         )
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel)
-        .accessibilityValue(isCurrentDocument ? "当前文档" : "")
+        .accessibilityValue(
+            [isCurrentDocument ? "当前文档" : nil, isModified ? "已修改" : nil]
+                .compactMap { $0 }
+                .joined(separator: "，")
+        )
     }
 
     private var systemImage: String {

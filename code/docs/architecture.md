@@ -174,7 +174,7 @@ LightweightProjectCoordinator 负责单一项目外壳、后台原生文档会�
 - 宿主策略无法安装或复核时，该文档不启用编辑，而不是降级到可能隐式写回的路径；
 - 当前主 App 未安装自动保存开关；
 - 未命名文档首次保存前不绑定用户路径；
-- 已修改文档的普通关闭、项目切换与应用退出因此落回 AppKit 的 Save / Don't Save / Cancel 审查；`NSApplication` 在调用 `applicationShouldTerminate` 前已经完成退出审查，应用委托只核对 Inflow 自身的短期事务门禁，不得再嵌套第二次 `reviewUnsavedDocuments`；
+- 已修改文档的普通关闭、项目关闭与应用退出由具体 DocumentGroup 宿主上的 disposable-draft close policy 直接批准；关闭只退休应用私有暂存，不写回用户文件，也不嵌套 `reviewUnsavedDocuments`；
 - 保存失败保留当前编辑且不显示成功；
 - 另存前只提示相对引用可能变化，不搬移资源或重写引用。
 

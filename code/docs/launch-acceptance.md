@@ -21,7 +21,7 @@
 
 | UAT | 当前可检查的实现入口 | 必须由本人实际确认 | 当前人工状态 |
 | --- | --- | --- | --- |
-| UAT-PERSONAL-01 入口、新建、首次保存、编辑与关闭 | InflowApp、InflowLaunchPolicy、RecentDocuments、FolderBrowser、MarkdownDocument、ManualSaveDocumentHostPolicy、DocumentSaveCommands、AppPreferences、InflowSettingsView；相关 FolderBrowserTests、RecentDocumentsTests、MarkdownCodecTests、AppPreferencesTests | 普通启动和 Finder 双击 App 均不弹文件选择器、直接进入可编辑未命名文档；菜单与 Command+N；首次保存取消/成功；应用内多文件与项目；Finder“打开方式”与默认应用；拖到应用图标；去重和空白窗口复用；工作区偏好跨文件和应用重启保持；另存退出项目；关闭最后一个窗口在未保存复核完成后直接退出应用；临时文档退出时选择 Don't Save 后一次完成、不重复审查；保存失败；全程无自动保存 | **未执行** |
+| UAT-PERSONAL-01 入口、新建、首次保存、编辑与关闭 | InflowApp、InflowLaunchPolicy、RecentDocuments、FolderBrowser、MarkdownDocument、ManualSaveDocumentHostPolicy、DocumentSaveCommands、AppPreferences、InflowSettingsView；相关 FolderBrowserTests、RecentDocumentsTests、MarkdownCodecTests、AppPreferencesTests | 普通启动和 Finder 双击 App 均不弹文件选择器、直接进入可编辑未命名文档；菜单与 Command+N；首次保存取消/成功；应用内多文件与项目；Finder“打开方式”与默认应用；拖到应用图标；去重和空白窗口复用；工作区偏好跨文件和应用重启保持；另存退出项目；未保存正文进入私有暂存区，目录树和标签同步显示修改圆点；关闭文档直接删除对应暂存且不弹保存确认；异常退出后的草稿下次启动静默打开；关闭最后一个窗口直接退出；保存失败；全程不自动覆盖用户文件 | **未执行** |
 | UAT-PERSONAL-02 简单外部变化提示 | DocumentFileSafety、DocumentFileSafetyView、DocumentSaveCommands；相关 DocumentFileSafetyTests | 外部编辑器修改；重新加载或暂不处理；双方变化后手动保存的明确覆盖确认；取消时两边各自保持；无三版本比较或自动合并 | **未执行** |
 | UAT-PERSONAL-03 轻量单快照恢复 | DocumentRecovery、LightweightRecoveryPromptView；相关 DocumentRecoveryTests | 真实强制退出；每份文档只见一个最新快照；恢复为未命名文档或放弃；恢复前不覆盖原文件；手动保存后清理 | **未执行** |
 | UAT-PERSONAL-04 源码、分栏、查找格式与两类 Mermaid | MarkdownEditorView、DocumentOutlineView、OutlineCommands、MarkdownSourceEditor、MarkdownRenderer、MarkdownFormatter、查找组件；相关 EditorViewModeCommandsTests、MarkdownRendererTests、MarkdownFormatterTests、MarkdownInsertionTests | 源码与分栏共用正文；大纲默认折叠，顶部按钮可平滑展开或折叠且隐藏宽度为零；点击标题滚动正文、移动光标并聚焦编辑器，不显示查找高亮；查找替换与一次撤销；删除线、图片、CommonMark/GFM、带文字虚线且跨节点连线不穿模的 flowchart、stateDiagram-v2；即时编辑的普通文字与表格保持渲染态直接编辑，围栏代码与 Mermaid 在光标进入时局部显露源码并在移出或失焦后恢复渲染；成对三横线等不支持的构造完整保留源码；原始 HTML 安全；单图局部降级 | **未执行** |
@@ -55,7 +55,7 @@
 - 通过、失败、跳过与未执行数量；
 - 已知测试宿主或环境阻塞。
 
-仓库级当前自动检查的唯一配置是 `scripts/verify-launch.sh --personal`。它运行生成绑定校验、Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查，不生成归档或发布证据。`quality/personal-xctest-scope.tsv` 将当前 410 个 XCTest method 逐项分为 304 个 `current-direct`、13 个 `current-host`、88 个 `deferred` 与 5 个 `fixed-performance`；personal profile 只执行第一类，其他三类不计为通过。13 个宿主用例保留为 App-host 专项验证或真实应用 UAT；deferred profile 仍运行 macOS 全量测试。清单只要出现重复、陈旧、未分类、非法分区或计数变化，脚本就失败关闭。`--deferred-release-local`、`--deferred-signed-archive`、`scripts/release-workflow.sh`、固定性能协议和扩展合同均为显式后置门禁；即使单独通过，也不改变本表的人工状态。
+仓库级当前自动检查的唯一配置是 `scripts/verify-launch.sh --personal`。它运行生成绑定校验、Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查，不生成归档或发布证据。`quality/personal-xctest-scope.tsv` 将当前 419 个 XCTest method 逐项分为 298 个 `current-direct`、30 个 `current-host`、86 个 `deferred` 与 5 个 `fixed-performance`；personal profile 只执行第一类，其他三类不计为通过。30 个宿主用例保留为 App-host 专项验证或真实应用 UAT，其中包括需要 WebKit/PDF 系统服务的导出用例；deferred profile 仍运行 macOS 全量测试。清单只要出现重复、陈旧、未分类、非法分区或计数变化，脚本就失败关闭。`--deferred-release-local`、`--deferred-signed-archive`、`scripts/release-workflow.sh`、固定性能协议和扩展合同均为显式后置门禁；即使单独通过，也不改变本表的人工状态。
 
 可用 `scripts/verify-launch.sh --describe-profile personal` 查看当前配置，也可查看两个 deferred profile；描述命令不构建、不归档、不签名、不联网。
 

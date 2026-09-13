@@ -597,11 +597,15 @@ final class DocumentRecoveryTests: XCTestCase {
         let attributes = try FileManager.default.attributesOfItem(atPath: encryptedURL.path)
         let permissions = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber)
         XCTAssertEqual(permissions.intValue & 0o777, 0o600)
-        XCTAssertEqual(
-            try encryptedURL.resourceValues(forKeys: [.isExcludedFromBackupKey])
-                .isExcludedFromBackup,
-            true
-        )
+        let isExcludedFromBackup = try encryptedURL.resourceValues(
+            forKeys: [.isExcludedFromBackupKey]
+        ).isExcludedFromBackup == true
+        let systemTemporaryDirectory = FileManager.default.temporaryDirectory
+            .standardizedFileURL
+            .path
+        let isAlreadyOutsideBackupScope = encryptedURL.standardizedFileURL.path
+            .hasPrefix(systemTemporaryDirectory + "/")
+        XCTAssertTrue(isExcludedFromBackup || isAlreadyOutsideBackupScope)
         let loaded = try await store.load()
         XCTAssertEqual(loaded.records, [record])
     }
@@ -1078,7 +1082,7 @@ final class DocumentRecoveryTests: XCTestCase {
     }
 
     @MainActor
-    func testCleanCloseLeavesDurableHeadUntilStartupConsumesTombstone() async throws {
+    func testCleanCloseDeletesDraftImmediatelyAndStartupConsumesTombstone() async throws {
         let fixture = try RecoveryFixture()
         defer { fixture.remove() }
         let coordinator = DocumentRecoveryCoordinator(
@@ -1102,7 +1106,7 @@ final class DocumentRecoveryTests: XCTestCase {
 
         coordinator.close(record.id)
         try await waitForFile(at: markerURL)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: headURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: headURL.path))
 
         // A new store models relaunch immediately after the durable close marker.
         let relaunched = try await fixture.makeStore().load()
@@ -1112,7 +1116,7 @@ final class DocumentRecoveryTests: XCTestCase {
     }
 
     @MainActor
-    func testReactivationRemovesTombstoneBeforeNewHeadAndKeepsOldHeadRecoverable()
+    func testReactivationRemovesTombstoneWithoutRevivingDiscardedDraft()
         async throws
     {
         let fixture = try RecoveryFixture()
@@ -1138,7 +1142,7 @@ final class DocumentRecoveryTests: XCTestCase {
 
         coordinator.close(id)
         try await waitForFile(at: markerURL)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: headURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: headURL.path))
 
         let reactivated = DocumentRecoveryRecord(
             id: id,
@@ -1150,12 +1154,12 @@ final class DocumentRecoveryTests: XCTestCase {
         )
         coordinator.update(reactivated)
         XCTAssertFalse(FileManager.default.fileExists(atPath: markerURL.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: headURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: headURL.path))
 
         // Simulate a crash before the reactivated session performs its first write.
         let relaunched = try await fixture.makeStore().load()
-        XCTAssertEqual(relaunched.records.map(\.text), [original.text])
-        XCTAssertTrue(FileManager.default.fileExists(atPath: headURL.path))
+        XCTAssertTrue(relaunched.records.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: headURL.path))
         coordinator.close(id)
     }
 
@@ -1202,7 +1206,7 @@ final class DocumentRecoveryTests: XCTestCase {
     }
 
     @MainActor
-    func testCoordinatorLoadsPreviousRunOnceAndDiscardsExplicitly() async throws {
+    func testCoordinatorLoadsPreviousRunOnceAndRestoresSilently() async throws {
         let fixture = try RecoveryFixture()
         defer { fixture.remove() }
         let record = DocumentRecoveryRecord(
@@ -1223,12 +1227,15 @@ final class DocumentRecoveryTests: XCTestCase {
         await coordinator.loadIfNeeded()
 
         XCTAssertEqual(coordinator.recoveredRecords, [record])
-        XCTAssertTrue(coordinator.claimAutomaticPresentation())
-        XCTAssertFalse(coordinator.claimAutomaticPresentation())
-        await coordinator.discard(record)
+        let restored = await coordinator.claimDraftsForAutomaticRestoration()
+        XCTAssertEqual(restored.map(\.text), [record.text])
+        let secondAutomaticRestore = await coordinator.claimDraftsForAutomaticRestoration()
+        XCTAssertTrue(secondAutomaticRestore.isEmpty)
         XCTAssertTrue(coordinator.recoveredRecords.isEmpty)
-        let afterDiscard = try await store.load()
-        XCTAssertTrue(afterDiscard.records.isEmpty)
+        let transferred = try await store.load()
+        XCTAssertEqual(transferred.records.count, 1)
+        XCTAssertEqual(transferred.records.first?.transferTargetRecordID, restored.first?
+            .recoveryTransfer?.targetRecordID)
     }
 
     @MainActor

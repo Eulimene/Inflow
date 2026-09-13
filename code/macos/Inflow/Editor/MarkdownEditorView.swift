@@ -452,8 +452,10 @@ struct MarkdownEditorView: View {
             if let recoveryCoordinator {
                 Task {
                     await recoveryCoordinator.loadIfNeeded()
-                    if recoveryCoordinator.claimAutomaticPresentation() {
-                        isRecoveryCenterPresented = true
+                    let restoredDrafts = await recoveryCoordinator
+                        .claimDraftsForAutomaticRestoration()
+                    for restoredDraft in restoredDrafts {
+                        newDocument(restoredDraft)
                     }
                 }
             }
@@ -1416,6 +1418,9 @@ struct MarkdownEditorView: View {
     }
 
     private func updateRecoveryProtection(originalURL: URL? = nil) {
+        let isModified = MarkdownDocumentModificationProjection.isModified(document)
+        folderBrowser.setDocumentModified(nativeDocument, modified: isModified)
+        projectCoordinator?.setDocumentModified(nativeDocument, modified: isModified)
         guard let recoveryCoordinator else { return }
         recoveryCoordinator.update(
             DocumentRecoveryRecord(

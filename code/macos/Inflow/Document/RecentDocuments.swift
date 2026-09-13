@@ -693,8 +693,10 @@ struct OpenedDocumentResult {
     }
 }
 
-/// Uses AppKit's native Save / Don't Save / Cancel close review without closing
-/// the document until the caller has successfully opened its replacement.
+/// Serializes a document close decision without closing the document until the
+/// caller has successfully opened its replacement. Production document hosts
+/// approve disposable drafts directly; the delegate boundary remains useful
+/// for custom hosts and deterministic tests.
 @MainActor
 final class DocumentCloseAuthorization: NSObject {
     private static var pending: [ObjectIdentifier: DocumentCloseAuthorization] = [:]

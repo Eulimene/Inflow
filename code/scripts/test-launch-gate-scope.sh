@@ -12,10 +12,10 @@ CODE_ROOT="$(CDPATH= cd -- "${SCRIPT_DIRECTORY}/.." && pwd)"
 VERIFIER="${SCRIPT_DIRECTORY}/verify-launch.sh"
 RELEASE_WORKFLOW="${SCRIPT_DIRECTORY}/release-workflow.sh"
 SCOPE_MANIFEST="${CODE_ROOT}/quality/personal-xctest-scope.tsv"
-EXPECTED_SELECTOR_COUNT=410
-EXPECTED_CURRENT_DIRECT_COUNT=304
-EXPECTED_CURRENT_HOST_COUNT=13
-EXPECTED_DEFERRED_COUNT=88
+EXPECTED_SELECTOR_COUNT=419
+EXPECTED_CURRENT_DIRECT_COUNT=298
+EXPECTED_CURRENT_HOST_COUNT=30
+EXPECTED_DEFERRED_COUNT=86
 EXPECTED_FIXED_PERFORMANCE_COUNT=5
 
 TEST_ROOT="$(/usr/bin/mktemp -d -t inflow-launch-scope-test)"
@@ -46,9 +46,9 @@ assert_line "${PERSONAL_PLAN}" \
 assert_line "${PERSONAL_PLAN}" 'deferred_checks=none'
 assert_line "${PERSONAL_PLAN}" 'archive=none'
 assert_line "${PERSONAL_PLAN}" 'selector_manifest=quality/personal-xctest-scope.tsv'
-assert_line "${PERSONAL_PLAN}" 'current_direct_selectors=304'
-assert_line "${PERSONAL_PLAN}" 'current_host_selectors=13'
-assert_line "${PERSONAL_PLAN}" 'deferred_selectors=88'
+assert_line "${PERSONAL_PLAN}" 'current_direct_selectors=298'
+assert_line "${PERSONAL_PLAN}" 'current_host_selectors=30'
+assert_line "${PERSONAL_PLAN}" 'deferred_selectors=86'
 assert_line "${PERSONAL_PLAN}" 'fixed_performance_selectors=5'
 assert_line "${PERSONAL_PLAN}" 'completion=manual-uat-required'
 
@@ -113,12 +113,29 @@ EditorViewModeCommandsTests/testAppMenuExposesOneCommandForEachViewShortcut
 FolderBrowserTests/testLaunchDocumentKeepsFileActionsInTheMacOSMenuBar
 FolderBrowserTests/testLaunchFileMenuDoesNotExposeFutureFolderBrowser
 HTMLExporterTests/testFileMenuHasOnePDFExportCommandAndNoHTMLEntry
+HTMLExporterTests/testLongPDFPaginatesWithoutChangingPaperSize
+HTMLExporterTests/testPDFExportUsesA4PortraitTwentyMillimeterMarginsAndLatestSnapshot
+HTMLExporterTests/testPDFKeepsOnlySafeWebLinksClickable
+HTMLExporterTests/testPDFWrapsWideCodeAndTableContentInsidePrintableBounds
+HTMLExporterTests/testWriterAtomicallyReplacesConfirmedExistingTarget
+HTMLExporterTests/testWriterCreatesNewFileWithoutLeavingTemporaryArtifacts
 InflowHelpTests/testHelpMenuHasOneAlwaysEnabledOfflineEntry
+LaunchJourneyTests/testCurrentSnapshotProducesIndependentPDFWithoutChangingMarkdown
 MarkdownFormatterTests/testFormatMenuExposesPersonalCommandsAndHidesDeferredCommands
+MarkdownCodecTests/testMarkdownTypeCoversBothSupportedExtensions
 MarkdownInsertionTests/testInsertMenuExposesPersonalCommandsAndHidesDeferredCommands
+MarkdownInsertionTests/testSourceEditorAcceptsOneSupportedImageDropAtRequestedCaret
+MarkdownInsertionTests/testSourceEditorConsumesOnlyEditableImagePasteboardPayloads
+MarkdownRendererTests/testAppScrollWorksWhilePageContentJavaScriptIsDisabled
+MarkdownRendererTests/testMountedMermaidFailureRoutesOnlyClosedRecoveryActions
+MarkdownRendererTests/testMountedPreviewReportsExactLinkWhilePageScriptsRemainDisabled
+MarkdownRendererTests/testMountedRemoteImageUsesARestrictedNetworkImageElement
+MarkdownRendererTests/testPreviewCoordinatorRoutesHeadingAndManualScrollWithoutDocumentContent
 MarkdownSearcherTests/testAppMenuExposesOneDiscoverableCommandForEachFindShortcut
 PreviewZoomCommandsTests/testLaunchMenuDoesNotExposeGrowthZoomCommands
 RecentDocumentsTests/testFileMenuRoutesOpenWithoutInstallingManagedRecentDocuments
+RecentDocumentsTests/testUnsupportedEncodingCopyPreservesSourceAndExactOriginalBytes
+RecentDocumentsTests/testUnsupportedEncodingCopyRejectsSourceAndChangedTarget
 WritingModeTests/testLaunchMenuDoesNotExposeGrowthWritingModes
 EOF
 LC_ALL=C /usr/bin/sort -o "${EXPECTED_CURRENT_HOST_SELECTORS}" \

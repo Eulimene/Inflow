@@ -1,11 +1,53 @@
 import AppKit
 import Combine
 import Darwin
+import SwiftUI
 import XCTest
 @testable import Inflow
 
 @MainActor
 final class FolderBrowserTests: XCTestCase {
+    func testOneModificationProjectionFeedsProjectTreeAndTabState() throws {
+        let url = URL(fileURLWithPath: "/tmp/inflow-dirty-projection/note.md")
+        let nativeDocument = NSDocument()
+        nativeDocument.fileURL = url
+        let controller = FolderBrowserController(
+            persistence: TestFolderBrowserPersistence(),
+            restoresSavedFolder: false
+        )
+        controller.associateProjectWindow(with: nativeDocument)
+
+        var markdown = try MarkdownDocument(fileData: Data("saved\n".utf8))
+        XCTAssertFalse(MarkdownDocumentModificationProjection.isModified(markdown))
+        markdown.text = "changed\n"
+        let modified = MarkdownDocumentModificationProjection.isModified(markdown)
+        XCTAssertTrue(modified)
+
+        controller.setDocumentModified(nativeDocument, modified: modified)
+        XCTAssertTrue(controller.isDocumentModified(at: url))
+
+        let surface = ProjectDocumentSurface(
+            nativeDocument: nativeDocument,
+            content: Binding(get: { markdown }, set: { markdown = $0 }),
+            fileURL: url,
+            isEditable: true
+        )
+        surface.setModified(modified)
+        XCTAssertTrue(surface.isModified)
+
+        markdown.openedFileData = try markdown.encodedFileData()
+        let saved = MarkdownDocumentModificationProjection.isModified(markdown)
+        XCTAssertFalse(saved)
+        controller.setDocumentModified(nativeDocument, modified: saved)
+        surface.setModified(saved)
+        XCTAssertFalse(controller.isDocumentModified(at: url))
+        XCTAssertFalse(surface.isModified)
+
+        controller.setDocumentModified(nativeDocument, modified: true)
+        controller.dissociateProjectWindow(nativeDocument)
+        XCTAssertFalse(controller.isDocumentModified(at: url))
+    }
+
     func testClosingAnActiveTabSelectsItsNearestNeighbor() {
         let firstObject = NSObject()
         let secondObject = NSObject()

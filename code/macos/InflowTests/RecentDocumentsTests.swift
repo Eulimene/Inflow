@@ -6,11 +6,11 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class RecentDocumentsTests: XCTestCase {
-    func testTerminationDelegateNeverCancelsAnAppKitAuthorizedQuit() {
+    func testTerminationDelegateNeverCancelsAnApprovedDisposableDraftQuit() {
         XCTAssertEqual(
-            InflowTerminationPolicy.replyAfterAppKitDocumentReview,
+            InflowTerminationPolicy.replyAfterDocumentCloseApproval,
             .terminateNow,
-            "short-lived Inflow UI work must not turn the system Quit command into a no-op"
+            "short-lived Inflow UI work must not turn the approved Quit command into a no-op"
         )
         XCTAssertTrue(InflowTerminationPolicy.terminatesAfterLastWindowClosed)
         let delegate = InflowApplicationDelegate { _ in }

@@ -42,18 +42,17 @@ enum ManualSaveDocumentHostPolicyError: Error, LocalizedError {
     }
 }
 
-/// Applies the personal milestone's manual-save contract to the concrete
+/// Applies Inflow's explicit-save and disposable-draft contract to the concrete
 /// `NSDocument` class created by SwiftUI's `DocumentGroup`.
 ///
 /// `FileDocument` does not expose these AppKit class policies. Merely setting
 /// `NSDocumentController.autosavingDelay` to zero disables periodic autosaves,
 /// but AppKit will still silently autosave a named, edited document while it is
-/// closing when the host class opts into autosaving in place. The personal
-/// build therefore installs false implementations for the three *public*
-/// `NSDocument` class selectors on the concrete host class before editing is
-/// enabled. AppKit's standard Save / Don't Save / Cancel review then owns close
-/// and termination, while explicit Save continues through Inflow's guarded
-/// native save path.
+/// closing when the host class opts into autosaving in place. Inflow therefore
+/// disables those automatic-save policies and replaces only the inherited close
+/// review on the concrete host. Closing retires the encrypted draft and succeeds
+/// without a Save / Don't Save prompt. Explicit Save continues through Inflow's
+/// guarded native save path.
 ///
 /// This compatibility boundary is intentionally fail closed. If the host no
 /// longer supports the selectors or the runtime result cannot be verified, the
@@ -85,7 +84,10 @@ enum ManualSaveDocumentHostPolicy {
         case .failed:
             throw ManualSaveDocumentHostPolicyError.cannotOverrideFrameworkPolicy
         case let .configured(configuredID):
-            guard configuredID == classID, hasManualSaveFlags(documentClass) else {
+            guard configuredID == classID,
+                  hasManualSaveFlags(documentClass),
+                  hasDisposableDraftClosePolicy(documentClass)
+            else {
                 processState = .failed
                 throw ManualSaveDocumentHostPolicyError.cannotOverrideFrameworkPolicy
             }
@@ -109,7 +111,10 @@ enum ManualSaveDocumentHostPolicy {
                 throw ManualSaveDocumentHostPolicyError.unsupportedHost
             }
             try installManualSaveFlags(on: documentClass)
-            guard hasManualSaveFlags(documentClass) else {
+            try installDisposableDraftClosePolicy(on: documentClass)
+            guard hasManualSaveFlags(documentClass),
+                  hasDisposableDraftClosePolicy(documentClass)
+            else {
                 throw ManualSaveDocumentHostPolicyError.cannotOverrideFrameworkPolicy
             }
             processState = .configured(classID)
@@ -123,7 +128,9 @@ enum ManualSaveDocumentHostPolicy {
     /// the process-wide production state or depending on a private SwiftUI type.
     static func applyForTesting(to document: NSDocument) throws {
         let documentClass: NSDocument.Type = type(of: document)
-        if hasManualSaveFlags(documentClass) {
+        if hasManualSaveFlags(documentClass),
+           hasDisposableDraftClosePolicy(documentClass)
+        {
             return
         }
         guard ObjectIdentifier(documentClass) != ObjectIdentifier(NSDocument.self),
@@ -137,9 +144,29 @@ enum ManualSaveDocumentHostPolicy {
             throw ManualSaveDocumentHostPolicyError.unsupportedHost
         }
         try installManualSaveFlags(on: documentClass)
-        guard hasManualSaveFlags(documentClass) else {
+        try installDisposableDraftClosePolicy(on: documentClass)
+        guard hasManualSaveFlags(documentClass),
+              hasDisposableDraftClosePolicy(documentClass)
+        else {
             throw ManualSaveDocumentHostPolicyError.cannotOverrideFrameworkPolicy
         }
+    }
+
+    static func hasDisposableDraftClosePolicy(
+        _ documentClass: NSDocument.Type
+    ) -> Bool {
+        guard let hostMethod = class_getInstanceMethod(
+                  documentClass,
+                  #selector(NSDocument.canClose(withDelegate:shouldClose:contextInfo:))
+              ),
+              let baseMethod = class_getInstanceMethod(
+                  NSDocument.self,
+                  #selector(NSDocument.canClose(withDelegate:shouldClose:contextInfo:))
+              )
+        else {
+            return false
+        }
+        return method_getImplementation(hostMethod) != method_getImplementation(baseMethod)
     }
 
     private static func installManualSaveFlags(on documentClass: NSDocument.Type) throws {
@@ -155,6 +182,56 @@ enum ManualSaveDocumentHostPolicy {
             guard runtimeBooleanClassProperty(selector, on: documentClass) == false else {
                 throw ManualSaveDocumentHostPolicyError.cannotOverrideFrameworkPolicy
             }
+        }
+    }
+
+    private static func installDisposableDraftClosePolicy(
+        on documentClass: NSDocument.Type
+    ) throws {
+        let selector = #selector(
+            NSDocument.canClose(withDelegate:shouldClose:contextInfo:)
+        )
+        guard let targetMethod = class_getInstanceMethod(documentClass, selector),
+              let typeEncoding = method_getTypeEncoding(targetMethod)
+        else {
+            throw ManualSaveDocumentHostPolicyError.cannotOverrideFrameworkPolicy
+        }
+
+        let closeWithoutReview: @convention(block) (
+            NSDocument,
+            AnyObject,
+            Selector?,
+            UnsafeMutableRawPointer?
+        ) -> Void = { document, delegate, callbackSelector, contextInfo in
+            document.updateChangeCount(.changeCleared)
+            guard let callbackSelector,
+                  let callbackMethod = class_getInstanceMethod(
+                      type(of: delegate),
+                      callbackSelector
+                  )
+            else {
+                return
+            }
+            typealias Callback = @convention(c) (
+                AnyObject,
+                Selector,
+                NSDocument,
+                Bool,
+                UnsafeMutableRawPointer?
+            ) -> Void
+            let callback = unsafeBitCast(
+                method_getImplementation(callbackMethod),
+                to: Callback.self
+            )
+            callback(delegate, callbackSelector, document, true, contextInfo)
+        }
+        let implementation = imp_implementationWithBlock(closeWithoutReview)
+        guard class_addMethod(documentClass, selector, implementation, typeEncoding) else {
+            imp_removeBlock(implementation)
+            if !hasDisposableDraftClosePolicy(documentClass) {
+                throw ManualSaveDocumentHostPolicyError.cannotOverrideFrameworkPolicy
+            }
+            return
         }
     }
 
@@ -357,5 +434,14 @@ struct MarkdownDocument: FileDocument {
             proposedData: data
         )
         return FileWrapper(regularFileWithContents: data)
+    }
+}
+
+enum MarkdownDocumentModificationProjection {
+    /// A single byte-level definition feeds AppKit, project tabs and the folder
+    /// tree. `NSTextView.string` and individual views never invent dirty state.
+    static func isModified(_ document: MarkdownDocument) -> Bool {
+        guard let current = try? document.encodedFileData() else { return true }
+        return current != (document.openedFileData ?? Data())
     }
 }
