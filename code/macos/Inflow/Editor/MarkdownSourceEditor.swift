@@ -2464,17 +2464,18 @@ enum RenderedMarkdownCaretStyleResolver {
 enum RenderedMarkdownQuoteGeometry {
     static func barRect(
         lineFragment: NSRect,
-        usedRect: NSRect,
         textContainerOrigin: NSPoint,
-        font: NSFont
+        font: NSFont,
+        baselineOffset: CGFloat
     ) -> NSRect {
-        let textHeight = min(
-            usedRect.height,
-            max(1, ceil(font.ascender - font.descender + font.leading))
-        )
+        let textHeight = max(1, ceil(font.ascender - font.descender))
+        let fontBoxMinY = textContainerOrigin.y
+            + lineFragment.minY
+            + baselineOffset
+            - font.ascender
         return NSRect(
             x: textContainerOrigin.x + lineFragment.minX + 4,
-            y: textContainerOrigin.y + usedRect.midY - textHeight / 2,
+            y: fontBoxMinY,
             width: 3,
             height: textHeight
         )
@@ -3107,12 +3108,26 @@ final class WindowAwareTextView: NSTextView {
             )
             var blockBar = NSRect.null
             layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) {
-                lineRect, usedRect, _, _, _ in
+                lineRect, _, _, lineGlyphRange, _ in
+                guard lineGlyphRange.length > 0 else { return }
+                let lineCharacterRange = layoutManager.characterRange(
+                    forGlyphRange: lineGlyphRange,
+                    actualGlyphRange: nil
+                )
+                var visibleLocation = lineCharacterRange.location
+                while visibleLocation < NSMaxRange(lineCharacterRange),
+                      self.isRenderedCharacterSuppressed(at: visibleLocation)
+                {
+                    visibleLocation += 1
+                }
+                let baselineGlyph = visibleLocation < NSMaxRange(lineCharacterRange)
+                    ? layoutManager.glyphIndexForCharacter(at: visibleLocation)
+                    : lineGlyphRange.location
                 let bar = RenderedMarkdownQuoteGeometry.barRect(
                     lineFragment: lineRect,
-                    usedRect: usedRect,
                     textContainerOrigin: self.textContainerOrigin,
-                    font: self.renderedReplacementBaseFont
+                    font: self.renderedReplacementBaseFont,
+                    baselineOffset: layoutManager.location(forGlyphAt: baselineGlyph).y
                 )
                 blockBar = blockBar.union(bar)
             }

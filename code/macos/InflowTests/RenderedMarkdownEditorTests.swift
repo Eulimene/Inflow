@@ -1192,15 +1192,24 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         let font = try XCTUnwrap(
             storage.attribute(.font, at: contentLocation, effectiveRange: nil) as? NSFont
         )
-        let usedRect = NSRect(x: 0, y: 8, width: 80, height: 28)
+        let lineFragment = NSRect(x: 0, y: 6, width: 400, height: 32)
+        let baselineOffset = CGFloat(23)
         let bar = RenderedMarkdownQuoteGeometry.barRect(
-            lineFragment: NSRect(x: 0, y: 6, width: 400, height: 32),
-            usedRect: usedRect,
+            lineFragment: lineFragment,
             textContainerOrigin: NSPoint(x: 12, y: 14),
-            font: font
+            font: font,
+            baselineOffset: baselineOffset
         )
-        XCTAssertEqual(bar.midY, 14 + usedRect.midY, accuracy: 0.001)
-        XCTAssertLessThanOrEqual(bar.height, usedRect.height)
+        XCTAssertEqual(
+            bar.minY,
+            14 + lineFragment.minY + baselineOffset - font.ascender,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            bar.height,
+            ceil(font.ascender - font.descender),
+            accuracy: 0.001
+        )
 
         session.textView.appearance = try XCTUnwrap(NSAppearance(named: .darkAqua))
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
@@ -1560,6 +1569,59 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         ) as? NSColor
         XCTAssertEqual(proseBackground?.alphaComponent ?? 0, 0, accuracy: 0.001)
         XCTAssertEqual(session.textView.string, source)
+    }
+
+    @MainActor
+    func testSingleLineChineseBlockQuoteBarAlignsWithVisibleTextBaseline() async throws {
+        let source = "> 接手文件"
+        let session = MarkdownSourceEditorSession()
+        session.scrollView.frame = NSRect(x: 0, y: 0, width: 420, height: 120)
+        session.textView.frame = NSRect(x: 0, y: 0, width: 420, height: 120)
+        session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+
+        let storage = try XCTUnwrap(session.textView.textStorage)
+        let layoutManager = try XCTUnwrap(session.textView.layoutManager)
+        let contentLocation = (source as NSString).range(of: "接手文件").location
+        let font = try XCTUnwrap(
+            storage.attribute(.font, at: contentLocation, effectiveRange: nil) as? NSFont
+        )
+        let glyph = layoutManager.glyphIndexForCharacter(at: contentLocation)
+        layoutManager.ensureLayout(forCharacterRange: NSRange(location: 0, length: storage.length))
+        let lineFragment = layoutManager.lineFragmentRect(
+            forGlyphAt: glyph,
+            effectiveRange: nil,
+            withoutAdditionalLayout: true
+        )
+        let baselineOffset = layoutManager.location(forGlyphAt: glyph).y
+        let bar = RenderedMarkdownQuoteGeometry.barRect(
+            lineFragment: lineFragment,
+            textContainerOrigin: session.textView.textContainerOrigin,
+            font: font,
+            baselineOffset: baselineOffset
+        )
+        let expectedTextTop = session.textView.textContainerOrigin.y
+            + lineFragment.minY
+            + baselineOffset
+            - font.ascender
+
+        XCTAssertEqual(bar.minY, expectedTextTop, accuracy: 0.001)
+        XCTAssertEqual(
+            bar.maxY,
+            expectedTextTop + ceil(font.ascender - font.descender),
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            bar.minX,
+            session.textView.textContainerOrigin.x + lineFragment.minX + 4,
+            accuracy: 0.001
+        )
+        XCTAssertGreaterThan(bar.minY, session.textView.textContainerOrigin.y + lineFragment.minY)
+        XCTAssertLessThanOrEqual(
+            bar.maxY,
+            session.textView.textContainerOrigin.y + lineFragment.maxY + 1
+        )
     }
 
     @MainActor

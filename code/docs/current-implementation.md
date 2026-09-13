@@ -137,7 +137,7 @@
 
 判断当前能力时，以已批准的个人首版范围、实际安装的菜单和主流程、以及 UAT-PERSONAL-01 至 10 为准，而不是以某个源文件或测试名称是否存在为准。
 
-自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 419 个 XCTest method：303 个 `current-direct`、25 个依赖真实 `NSApplication` 菜单、生命周期或 AppKit 打印/PDF 系统服务的 `current-host`、86 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
+自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 420 个 XCTest method：304 个 `current-direct`、25 个依赖真实 `NSApplication` 菜单、生命周期或 AppKit 打印/PDF 系统服务的 `current-host`、86 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
 
 ## 4. 人工 UAT 状态
 
