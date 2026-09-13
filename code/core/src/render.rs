@@ -610,11 +610,11 @@ mod tests {
         assert!(html.contains("<p>After</p>"));
         assert!(!html.contains("<script"));
 
-        let markdown = "```mermaid\npie\ntitle Values\n```\n\nStill readable";
+        let markdown = "```mermaid\nflowchart LR\n-->\n```\n\nStill readable";
         let fallback = html_fragment(markdown);
         let diagram_end = markdown.find("\n\nStill readable").unwrap();
         assert!(fallback.contains("无法呈现这个图表"));
-        assert!(fallback.contains("pie"));
+        assert!(fallback.contains("--&gt;"));
         assert!(fallback.contains("data-inflow-source-start=\"0\""));
         assert!(fallback.contains(&format!("data-inflow-source-end=\"{diagram_end}\"")));
         assert!(fallback.contains("data-inflow-preview-error-action=\"locate\""));
@@ -646,7 +646,7 @@ mod tests {
     #[test]
     fn delivery_mermaid_failure_does_not_expose_editor_offsets_or_dead_actions() {
         let html = html_fragment_for_delivery(
-            "```mermaid\npie\ntitle Values\n```",
+            "```mermaid\nflowchart LR\n-->\n```",
             RenderConfiguration::default(),
         );
 

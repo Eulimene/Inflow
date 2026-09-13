@@ -1002,11 +1002,26 @@ fn extract_svg(figure: &str) -> Option<(String, usize, usize)> {
     let svg = &figure[start..end];
     let view_box = attribute(svg, "viewBox")?;
     let mut values = view_box.split_ascii_whitespace();
-    let _x = values.next()?.parse::<usize>().ok()?;
-    let _y = values.next()?.parse::<usize>().ok()?;
-    let width = values.next()?.parse::<usize>().ok()?;
-    let height = values.next()?.parse::<usize>().ok()?;
+    let _x = values.next()?.parse::<f64>().ok()?;
+    let _y = values.next()?.parse::<f64>().ok()?;
+    let width = svg_extent(values.next()?)?;
+    let height = svg_extent(values.next()?)?;
     Some((svg.to_owned(), width, height))
+}
+
+fn svg_extent(value: &str) -> Option<usize> {
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    let whole = whole.parse::<usize>().ok()?;
+    if whole == 0 && fraction.chars().all(|character| character == '0') {
+        return None;
+    }
+    if fraction.is_empty() || fraction.chars().all(|character| character == '0') {
+        Some(whole)
+    } else if fraction.chars().all(|character| character.is_ascii_digit()) {
+        whole.checked_add(1)
+    } else {
+        None
+    }
 }
 
 fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
@@ -1103,8 +1118,8 @@ mod tests {
         );
         assert_eq!(plan.tables[0].rows[1][0].text, "x");
         assert_eq!(plan.mermaid_diagrams.len(), 1);
-        assert_eq!(plan.mermaid_diagrams[0].intrinsic_width, 342);
-        assert_eq!(plan.mermaid_diagrams[0].intrinsic_height, 190);
+        assert_eq!(plan.mermaid_diagrams[0].intrinsic_width, 185);
+        assert_eq!(plan.mermaid_diagrams[0].intrinsic_height, 73);
         assert!(
             plan.local_source_blocks
                 .iter()

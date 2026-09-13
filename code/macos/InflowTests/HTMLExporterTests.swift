@@ -708,13 +708,13 @@ final class HTMLExporterTests: XCTestCase {
     func testExportedMermaidFallbackHasNoEditorOffsetsOrDeadActions() throws {
         let data = try HTMLExporter.generate(
             snapshot: HTMLExportSnapshot(
-                markdown: "```mermaid\npie\ntitle Values\n```"
+                markdown: "```mermaid\nflowchart LR\n-->\n```"
             )
         )
         let html = try XCTUnwrap(String(data: data, encoding: .utf8))
 
         XCTAssertTrue(html.contains("无法呈现这个图表"))
-        XCTAssertTrue(html.contains("pie"))
+        XCTAssertTrue(html.contains("flowchart LR"))
         XCTAssertFalse(html.contains("data-inflow-source-start"))
         XCTAssertFalse(html.contains("data-inflow-source-end"))
         XCTAssertFalse(html.contains("data-inflow-preview-error-action"))

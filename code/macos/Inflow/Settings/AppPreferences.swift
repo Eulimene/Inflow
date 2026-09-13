@@ -14,6 +14,7 @@ enum MarkdownRenderMetrics {
     static let bodyLineHeight = 1.48
     static let paragraphGap = CGFloat(9)
     static let unorderedListMarkerScale = CGFloat(1.22)
+    static let listMarkerExtraSpacing = CGFloat(6)
     static let editorHorizontalInset = CGFloat(28)
     static let editorVerticalInset = CGFloat(24)
     static let blockCornerRadius = CGFloat(8)
@@ -37,11 +38,11 @@ enum MarkdownRenderMetrics {
 struct MarkdownRenderPalette: Equatable, Sendable {
     static let light = Self(
         canvas: "#ffffff",
-        text: "#2b3038",
-        heading: "#1f2329",
-        secondaryText: "#697386",
+        text: "#34373d",
+        heading: "#24262b",
+        secondaryText: "#737982",
         accent: "#2f6fda",
-        border: "#d8dde5",
+        border: "#dfe3e8",
         quoteBar: "#c3cad5",
         subtleSurface: "#f7f8fa",
         mutedSurface: "#eef1f5",

@@ -426,6 +426,7 @@
 				"$(PROJECT_DIR)/core/src/math.rs",
 				"$(PROJECT_DIR)/core/src/markdown_ir.rs",
 				"$(PROJECT_DIR)/core/src/mermaid.rs",
+				"$(PROJECT_DIR)/core/src/mermaid_rs_adapter.rs",
 				"$(PROJECT_DIR)/core/src/native_render.rs",
 				"$(PROJECT_DIR)/core/src/ports.rs",
 				"$(PROJECT_DIR)/core/src/reference.rs",

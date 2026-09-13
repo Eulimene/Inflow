@@ -15,6 +15,7 @@ mod markdown_adapter;
 mod markdown_ir;
 mod math;
 mod mermaid;
+mod mermaid_rs_adapter;
 mod native_render;
 mod ports;
 mod reference;

@@ -175,6 +175,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             assertVisuallyHidden(quoteMarker.sourceRange.utf16Range, in: storage)
         }
         XCTAssertEqual(session.textView.renderedQuoteRanges.count, 1)
+        XCTAssertEqual(
+            session.textView.renderedHeadingDividerRanges.count,
+            4,
+            "H1 and H2 headings share the reference design's quiet divider"
+        )
         XCTAssertNotNil(
             plan.tables.first.flatMap {
                 session.textView.renderedTable(
@@ -410,8 +415,8 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertNil(activatedTarget)
 
         let diagram = try XCTUnwrap(plan.mermaidDiagrams.first)
-        XCTAssertEqual(diagram.intrinsicWidth, 342)
-        XCTAssertEqual(diagram.intrinsicHeight, 190)
+        XCTAssertEqual(diagram.intrinsicWidth, 230)
+        XCTAssertEqual(diagram.intrinsicHeight, 73)
         XCTAssertNotNil(
             session.textView.renderedImage(
                 atUTF16Location: diagram.sourceRange.utf16Range.location
@@ -680,11 +685,27 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
         assertVisuallyHidden(boldMarker.sourceRange.utf16Range, in: session.textView.textStorage)
-        XCTAssertNil(
+        XCTAssertNotNil(
             session.textView.renderedImage(
                 atUTF16Location: diagram.sourceRange.utf16Range.location
             ),
-            "the Mermaid overlay must not remain above the source being edited"
+            "editing Mermaid should retain a live diagram below its visible source"
+        )
+        let closingFenceLocation = (source as NSString).range(
+            of: "```",
+            options: .backwards
+        ).location
+        let closingParagraph = try XCTUnwrap(
+            storage.attribute(
+                .paragraphStyle,
+                at: closingFenceLocation,
+                effectiveRange: nil
+            ) as? NSParagraphStyle
+        )
+        XCTAssertGreaterThan(
+            closingParagraph.paragraphSpacing,
+            CGFloat(diagram.intrinsicHeight),
+            "the live diagram should reserve space after the editable Mermaid source"
         )
 
         session.textView.setSelectedRange(
@@ -705,7 +726,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     func testUnsupportedMermaidRemainsReadableLocalSource() {
-        let source = "```mermaid\npie\ntitle Values\n```"
+        let source = "```mermaid\nflowchart LR\n-->\n```"
         let plan = RenderedMarkdownEditor.plan(for: source)
 
         XCTAssertTrue(plan.mermaidDiagrams.isEmpty)
@@ -1082,7 +1103,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertTrue(window.makeFirstResponder(session.textView))
         session.textView.setSelectedRange(NSRange(location: body, length: 0))
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
-        XCTAssertTrue(session.textView.renderedCodeBlockRanges.isEmpty)
+        XCTAssertEqual(
+            session.textView.renderedCodeBlockRanges,
+            [plan.localSourceBlocks[0].sourceRange.utf16Range],
+            "an editable fence keeps the same neutral code-block surface"
+        )
         XCTAssertGreaterThan(
             try XCTUnwrap(storage.attribute(.font, at: opening, effectiveRange: nil) as? NSFont)
                 .pointSize,
@@ -1459,8 +1484,8 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         """
         let plan = RenderedMarkdownEditor.plan(for: source)
         let diagram = try XCTUnwrap(plan.mermaidDiagrams.first)
-        XCTAssertEqual(diagram.intrinsicWidth, 1_006)
-        XCTAssertEqual(diagram.intrinsicHeight, 190)
+        XCTAssertEqual(diagram.intrinsicWidth, 564)
+        XCTAssertEqual(diagram.intrinsicHeight, 73)
 
         let session = MarkdownSourceEditorSession()
         session.scrollView.frame = NSRect(x: 0, y: 0, width: 360, height: 280)
@@ -1487,6 +1512,19 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         let wide = try XCTUnwrap(session.textView.renderedImageSize(atUTF16Location: location))
         XCTAssertGreaterThan(wide.width, narrow.width)
         XCTAssertLessThanOrEqual(wide.width, session.scrollView.contentSize.width)
+        XCTAssertEqual(wide.width, CGFloat(diagram.intrinsicWidth), accuracy: 0.001)
+
+        session.scrollView.setFrameSize(NSSize(width: 1_200, height: 420))
+        session.scrollView.layoutSubtreeIfNeeded()
+        session.textView.setFrameSize(
+            NSSize(width: session.scrollView.contentSize.width, height: session.textView.frame.height)
+        )
+        await settleRenderedPresentation()
+        let fullWidth = try XCTUnwrap(
+            session.textView.renderedImageSize(atUTF16Location: location)
+        )
+        XCTAssertEqual(fullWidth.width, CGFloat(diagram.intrinsicWidth), accuracy: 0.001)
+        XCTAssertEqual(fullWidth.width, wide.width, accuracy: 0.001)
     }
 
     @MainActor
@@ -1677,6 +1715,19 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             orderedColor,
             MarkdownRenderPalette.resolved(for: session.textView.effectiveAppearance).textColor
         )
+        let orderedRange = (source as NSString).range(of: "1. ")
+        let orderedKern = try XCTUnwrap(
+            session.textView.textStorage?.attribute(
+                .kern,
+                at: NSMaxRange(orderedRange) - 1,
+                effectiveRange: nil
+            ) as? NSNumber
+        )
+        XCTAssertEqual(
+            CGFloat(truncating: orderedKern),
+            MarkdownRenderMetrics.listMarkerExtraSpacing,
+            accuracy: 0.001
+        )
         let bulletFont = RenderedMarkdownMarkerTypography.font(
             for: .unorderedList,
             baseFont: orderedFont
@@ -1684,6 +1735,39 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertEqual(
             bulletFont.pointSize,
             orderedFont.pointSize * MarkdownRenderMetrics.unorderedListMarkerScale,
+            accuracy: 0.001
+        )
+        let markerLine = NSRect(x: 0, y: 8, width: 400, height: 32)
+        let contentBaselineOffset = CGFloat(23)
+        let bulletOriginY = RenderedMarkdownMarkerTypography.originY(
+            for: .unorderedList,
+            font: bulletFont,
+            baseFont: orderedFont,
+            lineRect: markerLine,
+            baselineOffset: contentBaselineOffset
+        )
+        XCTAssertEqual(
+            bulletOriginY + bulletFont.ascender,
+            markerLine.minY + contentBaselineOffset,
+            accuracy: 0.001,
+            "the symbol baseline must match the following list text"
+        )
+        let unorderedMarker = try XCTUnwrap(
+            session.textView.renderedReplacementMarkers.first { $0.kind == .unorderedList }
+        )
+        let unorderedKern = try XCTUnwrap(
+            session.textView.textStorage?.attribute(
+                .kern,
+                at: unorderedMarker.sourceRange.utf16Range.location,
+                effectiveRange: nil
+            ) as? NSNumber
+        )
+        let bulletWidth = ceil(
+            ("• " as NSString).size(withAttributes: [.font: bulletFont]).width
+        )
+        XCTAssertEqual(
+            CGFloat(truncating: unorderedKern),
+            bulletWidth + MarkdownRenderMetrics.listMarkerExtraSpacing,
             accuracy: 0.001
         )
         XCTAssertEqual(

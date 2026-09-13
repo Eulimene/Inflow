@@ -2871,15 +2871,17 @@ mod tests {
         );
         assert!(edit.replacement.ends_with("```\n\n"));
         let formatted = replacing(source, edit.replace_range, &edit.replacement);
-        assert!(render::html_fragment(&formatted).contains("状态图"));
+        let html = render::html_fragment(&formatted);
+        assert!(html.contains("class=\"mermaid-diagram\""));
+        assert!(html.contains("Ready"));
 
-        for unsupported in [
-            "pie\ntitle Values",
-            "sequenceDiagram\nAlice->>Bob: Hi",
-            "classDiagram\nAnimal <|-- Duck",
+        for invalid in [
+            "flowchart LR\n-->",
+            "%%{init: nope}%%\nflowchart LR\nA-->B",
+            "unknownDiagram",
         ] {
             assert_eq!(
-                insert_mermaid(unsupported, 0..unsupported.len()),
+                insert_mermaid(invalid, 0..invalid.len()),
                 Err(FormatError::AmbiguousSelection)
             );
         }
