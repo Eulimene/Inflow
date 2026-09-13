@@ -147,7 +147,6 @@ enum MarkdownRenderer {
               color: var(--md-text);
               background: var(--md-canvas);
               overflow-wrap: break-word;
-              -webkit-font-smoothing: antialiased;
               text-rendering: optimizeLegibility;
             }
             body > :first-child { margin-top: 0 !important; }

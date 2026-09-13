@@ -15,8 +15,6 @@
 		A10000000000000000000006 /* MarkdownCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* MarkdownCodecTests.swift */; };
 		A10000000000000000000007 /* MarkdownRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C /* MarkdownRendererTests.swift */; };
 		A10000000000000000000008 /* MarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000D /* MarkdownRenderer.swift */; };
-		A10000000000000000000009 /* MarkdownPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000E /* MarkdownPreviewView.swift */; };
-		A1000000000000000000000A /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000F /* WebKit.framework */; };
 		A1000000000000000000000B /* MarkdownAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* MarkdownAnalyzer.swift */; };
 		A1000000000000000000000C /* MarkdownSourceEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* MarkdownSourceEditor.swift */; };
 		A1000000000000000000000D /* DocumentOutlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* DocumentOutlineView.swift */; };
@@ -108,8 +106,6 @@
 		A2000000000000000000000B /* InflowTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = InflowTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A2000000000000000000000C /* MarkdownRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRendererTests.swift; sourceTree = "<group>"; };
 		A2000000000000000000000D /* MarkdownRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preview/MarkdownRenderer.swift; sourceTree = "<group>"; };
-		A2000000000000000000000E /* MarkdownPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preview/MarkdownPreviewView.swift; sourceTree = "<group>"; };
-		A2000000000000000000000F /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		A20000000000000000000010 /* MarkdownAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/MarkdownAnalyzer.swift; sourceTree = "<group>"; };
 		A20000000000000000000011 /* MarkdownSourceEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownSourceEditor.swift; sourceTree = "<group>"; };
 		A20000000000000000000012 /* DocumentOutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Outline/DocumentOutlineView.swift; sourceTree = "<group>"; };
@@ -184,7 +180,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A1000000000000000000000A /* WebKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -245,7 +240,6 @@
 				A20000000000000000000007 /* MarkdownCodec.swift */,
 				A2000000000000000000000D /* MarkdownRenderer.swift */,
 				A20000000000000000000023 /* LocalImageResolver.swift */,
-				A2000000000000000000000E /* MarkdownPreviewView.swift */,
 				A20000000000000000000036 /* PreviewLinkNavigation.swift */,
 				A20000000000000000000037 /* MarkdownHighlighter.swift */,
 				A20000000000000000000010 /* MarkdownAnalyzer.swift */,
@@ -475,7 +469,6 @@
 				A10000000000000000000005 /* MarkdownCodec.swift in Sources */,
 				A10000000000000000000008 /* MarkdownRenderer.swift in Sources */,
 				A1000000000000000000001E /* LocalImageResolver.swift in Sources */,
-				A10000000000000000000009 /* MarkdownPreviewView.swift in Sources */,
 				A10000000000000000000031 /* PreviewLinkNavigation.swift in Sources */,
 				A10000000000000000000032 /* MarkdownHighlighter.swift in Sources */,
 				A1000000000000000000000B /* MarkdownAnalyzer.swift in Sources */,

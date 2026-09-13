@@ -77,6 +77,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.drawsBackground = true
         textView.isRichText = false
         textView.importsGraphics = false
+        textView.isEditable = role == .document
+        textView.isSelectable = true
         textView.allowsUndo = false
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
@@ -252,6 +254,15 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             applyRenderedPresentation(source: source, force: planChanged)
         }
         return content
+    }
+
+    /// Waits until the native surface has resolved the resources scheduled by
+    /// the current render pass. Export uses this instead of maintaining a
+    /// separate HTML loading lifecycle.
+    func waitForRenderedResources() async {
+        await renderedImageTask?.value
+        await Task.yield()
+        textView.layoutSubtreeIfNeeded()
     }
 
     /// Installs the already-derived native plan in another TextKit surface.
@@ -745,6 +756,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             ],
             range: fullRange
         )
+        applyCompactParagraphGaps(source: source, storage: storage)
         for style in plan.contentStyles {
             let range = style.sourceRange.utf16Range
             guard NSMaxRange(range) <= storage.length,
@@ -801,6 +813,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 )
                 let codeParagraph = NSMutableParagraphStyle()
                 codeParagraph.lineHeightMultiple = MarkdownRenderMetrics.codeBlockLineHeight
+                codeParagraph.lineBreakMode = .byCharWrapping
                 codeParagraph.firstLineHeadIndent = MarkdownRenderMetrics.tableCellHorizontalPadding
                 codeParagraph.headIndent = MarkdownRenderMetrics.tableCellHorizontalPadding
                 codeParagraph.tailIndent = -MarkdownRenderMetrics.tableCellHorizontalPadding
@@ -852,13 +865,22 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 continue
             }
             if marker.kind.remainsVisibleWhenInactive {
+                let markerFont: NSFont
+                let markerColor: NSColor
+                if marker.kind == .orderedList {
+                    markerFont = baseFont
+                    markerColor = palette.textColor
+                } else {
+                    markerFont = NSFont.monospacedSystemFont(
+                        ofSize: max(12, CGFloat(sourceAppearance.fontSize) - 2),
+                        weight: .regular
+                    )
+                    markerColor = palette.secondaryTextColor
+                }
                 storage.addAttributes(
                     [
-                        .font: NSFont.monospacedSystemFont(
-                            ofSize: max(12, CGFloat(sourceAppearance.fontSize) - 2),
-                            weight: .regular
-                        ),
-                        .foregroundColor: NSColor.tertiaryLabelColor,
+                        .font: markerFont,
+                        .foregroundColor: markerColor,
                         .backgroundColor: NSColor.clear,
                         .underlineStyle: 0,
                         .strikethroughStyle: 0,
@@ -1529,6 +1551,32 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         self.focusModeEnabled = focusModeEnabled
         self.typewriterModeEnabled = typewriterModeEnabled
         refreshWritingModePresentation()
+    }
+
+    private func applyCompactParagraphGaps(source: String, storage: NSTextStorage) {
+        let text = source as NSString
+        var location = 0
+        while location < text.length {
+            let paragraph = text.paragraphRange(for: NSRange(location: location, length: 0))
+            guard paragraph.length > 0 else { break }
+            let raw = text.substring(with: paragraph)
+            if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let style = NSMutableParagraphStyle()
+                style.minimumLineHeight = MarkdownRenderMetrics.paragraphGap
+                style.maximumLineHeight = MarkdownRenderMetrics.paragraphGap
+                style.paragraphSpacing = 0
+                style.paragraphSpacingBefore = 0
+                storage.addAttributes(
+                    [
+                        .font: NSFont.systemFont(ofSize: 0.1),
+                        .foregroundColor: NSColor.clear,
+                        .paragraphStyle: style,
+                    ],
+                    range: paragraph
+                )
+            }
+            location = NSMaxRange(paragraph)
+        }
     }
 
     private func refreshWritingModePresentation() {
@@ -2433,6 +2481,38 @@ enum RenderedMarkdownQuoteGeometry {
     }
 }
 
+enum RenderedMarkdownMarkerTypography {
+    static func font(for kind: RenderedMarkdownMarkerKind, baseFont: NSFont) -> NSFont {
+        if kind == .footnoteReference {
+            return .systemFont(
+                ofSize: max(9, baseFont.pointSize * 0.72),
+                weight: .medium
+            )
+        }
+        if kind == .unorderedList {
+            return .systemFont(
+                ofSize: baseFont.pointSize * MarkdownRenderMetrics.unorderedListMarkerScale,
+                weight: .semibold
+            )
+        }
+        return baseFont
+    }
+
+    static func originY(
+        for kind: RenderedMarkdownMarkerKind,
+        font: NSFont,
+        baseFont: NSFont,
+        lineRect: NSRect
+    ) -> CGFloat {
+        let baseHeight = ceil(baseFont.ascender - baseFont.descender + baseFont.leading)
+        let baseline = lineRect.minY
+            + max(0, (lineRect.height - baseHeight) / 2)
+            + baseFont.ascender
+        let footnoteLift = kind == .footnoteReference ? lineRect.height * 0.22 : 0
+        return baseline - font.ascender - footnoteLift
+    }
+}
+
 @MainActor
 final class WindowAwareTextView: NSTextView {
     private struct CompositionBaseline {
@@ -3094,12 +3174,10 @@ final class WindowAwareTextView: NSTextView {
                 forGlyphRange: NSRange(location: glyphIndex, length: 1),
                 in: textContainer
             )
-            let font = marker.kind == .footnoteReference
-                ? NSFont.systemFont(
-                    ofSize: max(9, renderedReplacementBaseFont.pointSize * 0.72),
-                    weight: .medium
-                )
-                : renderedReplacementBaseFont
+            let font = RenderedMarkdownMarkerTypography.font(
+                for: marker.kind,
+                baseFont: renderedReplacementBaseFont
+            )
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: font,
                 .foregroundColor: marker.kind == .footnoteReference
@@ -3107,11 +3185,14 @@ final class WindowAwareTextView: NSTextView {
                     : NSColor.labelColor,
             ]
             let size = (text as NSString).size(withAttributes: attributes)
-            let baselineLift = marker.kind == .footnoteReference ? lineRect.height * 0.22 : 0
             let point = NSPoint(
                 x: textContainerOrigin.x + glyphRect.minX,
-                y: textContainerOrigin.y + lineRect.minY
-                    + max(0, (lineRect.height - size.height) / 2) - baselineLift
+                y: textContainerOrigin.y + RenderedMarkdownMarkerTypography.originY(
+                    for: marker.kind,
+                    font: font,
+                    baseFont: renderedReplacementBaseFont,
+                    lineRect: lineRect
+                )
             )
             let drawRect = NSRect(origin: point, size: size)
             if drawRect.intersects(dirtyRect) {

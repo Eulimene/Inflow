@@ -271,14 +271,14 @@ run_contract_self_test() {
     verify_zero_collection_privacy_manifest "${privacy_extra}"
 
   verify_entitlement_contract "${entitlement_source}" local '' com.inflow.desktop
-  entitlement_missing_webkit_client="${TEMPORARY_ROOT}/entitlement-missing-webkit-client.plist"
-  /bin/cp -f "${entitlement_source}" "${entitlement_missing_webkit_client}"
+  entitlement_missing_network_client="${TEMPORARY_ROOT}/entitlement-missing-network-client.plist"
+  /bin/cp -f "${entitlement_source}" "${entitlement_missing_network_client}"
   /usr/bin/plutil -remove 'com\.apple\.security\.network\.client' \
-    "${entitlement_missing_webkit_client}"
+    "${entitlement_missing_network_client}"
   assert_contract_rejects \
-    'missing WebKit client entitlement' \
+    'missing remote image network client entitlement' \
     verify_entitlement_contract \
-      "${entitlement_missing_webkit_client}" local '' com.inflow.desktop
+      "${entitlement_missing_network_client}" local '' com.inflow.desktop
   for extra_entitlement in \
     'com\.apple\.security\.network\.server' \
     'com\.apple\.security\.application-groups' \

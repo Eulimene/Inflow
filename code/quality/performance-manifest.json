@@ -111,7 +111,7 @@
   "external_release_gates": [
     {
       "id": "full-input-chain",
-      "scope": "TextKit input, recovery persistence, WebKit mount, 20 local images totaling 16 MiB and first stable preview",
+      "scope": "TextKit input, recovery persistence, native read-only projection, 20 local images totaling 16 MiB and first stable preview",
       "status": "blocked-on-open-versioned-fixture"
     },
     {

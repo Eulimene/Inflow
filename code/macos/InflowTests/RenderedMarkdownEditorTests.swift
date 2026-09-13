@@ -605,6 +605,17 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         }
         let defaultStyle = try XCTUnwrap(session.textView.defaultParagraphStyle)
         XCTAssertEqual(defaultStyle.paragraphSpacing, 0, accuracy: 0.001)
+        let blankLineLocation = (source as NSString).range(of: "\n\n").location + 1
+        let blankStyle = try XCTUnwrap(
+            storage.attribute(.paragraphStyle, at: blankLineLocation, effectiveRange: nil)
+                as? NSParagraphStyle
+        )
+        XCTAssertEqual(
+            blankStyle.minimumLineHeight,
+            MarkdownRenderMetrics.paragraphGap,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(blankStyle.maximumLineHeight, MarkdownRenderMetrics.paragraphGap, accuracy: 0.001)
     }
 
     @MainActor
@@ -1587,7 +1598,32 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                 effectiveRange: nil
             ) as? NSFont
         )
-        XCTAssertGreaterThan(orderedFont.pointSize, 1, "ordered marker must remain visible")
+        XCTAssertEqual(
+            orderedFont.pointSize,
+            CGFloat(SourceEditorAppearance.default.fontSize),
+            accuracy: 0.001,
+            "ordered marker should use the body type size"
+        )
+        let orderedColor = try XCTUnwrap(
+            session.textView.textStorage?.attribute(
+                .foregroundColor,
+                at: orderedLocation,
+                effectiveRange: nil
+            ) as? NSColor
+        )
+        XCTAssertEqual(
+            orderedColor,
+            MarkdownRenderPalette.resolved(for: session.textView.effectiveAppearance).textColor
+        )
+        let bulletFont = RenderedMarkdownMarkerTypography.font(
+            for: .unorderedList,
+            baseFont: orderedFont
+        )
+        XCTAssertEqual(
+            bulletFont.pointSize,
+            orderedFont.pointSize * MarkdownRenderMetrics.unorderedListMarkerScale,
+            accuracy: 0.001
+        )
         XCTAssertEqual(
             session.textView.renderedReplacementMarkers.compactMap(\.replacementText),
             ["• ", "• ", "☑ "]

@@ -96,7 +96,7 @@ DERIVED_DATA="${OUTPUT_DIRECTORY}/DerivedData"
   ENABLE_TESTABILITY=YES \
   -parallel-testing-enabled NO \
   -only-testing:InflowTests/MarkdownRendererTests/testPerformanceManifestPinsTargetFixtureAndMeasurementProtocol \
-  -only-testing:InflowTests/MarkdownRendererTests/testExactMiBTextCanTraverseTextKitRecoveryAndMountedWebKit \
+  -only-testing:InflowTests/MarkdownRendererTests/testExactMiBTextCanTraverseRecoveryAndMountedNativeProjection \
   test
 
 SUMMARY_PATH="${OUTPUT_DIRECTORY}/Feasibility-summary.json"

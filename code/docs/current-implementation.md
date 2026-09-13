@@ -63,7 +63,7 @@
 - 兼容用 `MarkdownAnalyzer`/`MarkdownHighlighter` 也已改为消费短生命 Engine 的统一派生响应，macOS Swift 代码中不再存在 analyze/highlight 的独立 C ABI 调用。无定位 metadata 的普通 HTML 与自包含交付 HTML 也已收敛到 Engine 命令；Swift 不再直接调用旧 render/export C ABI。
 - Engine 预览 HTML 的标题 source range、块 ID 和链接 target metadata 都在 Rust 遍历同一份 IR 时直接附着；Swift 只执行本地图片槽的平台权限解析与整页外壳组装。图片槽使用严格的定界结构扫描器，Swift 不再用正则改写预览 HTML。
 - 交互式预览不再装载 HTML 或维护 DOM patch。Rust RenderIR 的稳定块 ID 与 source range 仍供定位和输出适配器使用，但屏幕上的最终布局统一由 `NativeRenderPlan` 和 TextKit 完成。
-- 可编辑 WKWebView 实验及 DOM→Markdown 转换路径已经删除；WKWebView 也退出只读交互预览，只保留在 PDF 等非交互输出适配器中。
+- DOM→Markdown 转换路径和浏览器渲染依赖已全部删除；PDF 也从冻结的 Markdown 快照派生同一份 `NativeRenderPlan` 后使用 AppKit 打印。
 - 即时编辑和分栏右侧分别挂载可编辑与只读的 MarkdownSourceEditor。两个 NSTextView 实例不能共享挂载关系，但它们安装同一个 revision-bound `NativeRenderPlan`，调用同一个 TextKit 呈现实现，除 `isEditable` 外没有渲染分支。
 - 文本修改由 NSTextView 发布回同一个绑定；生产会话的撤销与重做只走 Rust Engine 历史。AppKit UndoManager 仅保留给不创建 Engine 的隔离测试/工具会话；展示属性和 Engine patch 回写不登记正文 undo。
 - EditorViewMode 的历史内部 case 名 preview 现在对应用户可见的“即时编辑”。
@@ -72,7 +72,7 @@
 ### 2.3 即时编辑与分栏预览
 
 - 即时编辑始终挂载同一个 MarkdownSourceEditor。Rust Engine 从同一份 `DocumentIr` 一次生成 HTML、分析、高亮、引用、块 IR 与 `NativeRenderPlan`；Swift 已删除手写 Markdown planner，只把已验证的 UTF-8 DTO 范围映射为 TextKit 属性。普通文字、行内代码与引用在渲染态直接输入；Markdown 标记以透明和负字距折叠，不再用 0.1pt 字体改变行度量。CaretStyleResolver 从最近可见字符解析字体、字号和行高，并将插入光标在行框中居中。围栏代码平时隐藏围栏呈现代码，光标进入才局部显示源码；Mermaid 也使用同样的局部切换。保存内容和 undo 始终属于原始 Markdown。
-- 分栏右侧直接安装与即时编辑相同的 `NativeRenderPlan`，并把 NSTextView 设为只读。Mermaid `flowchart` 支持普通连线和仓库已有的 `-.文字.->` 带标签虚线；同一次 Engine 派生生成自包含 SVG，并由两种表面共用的原生覆盖层呈现，不存在 Mermaid 专用 C ABI 或 WebKit 预览分支。进入即时编辑中的 Mermaid 源码块时会先卸载图表覆视图，移出后再挂载；只读表面始终保持渲染态。
+- 分栏右侧直接安装与即时编辑相同的 `NativeRenderPlan`，并把 NSTextView 设为只读。Mermaid `flowchart` 支持普通连线和仓库已有的 `-.文字.->` 带标签虚线；同一次 Engine 派生生成自包含 SVG，并由两个 TextKit 表面共用的原生覆盖层呈现，不存在 Mermaid 专用 C ABI 或第二预览分支。进入即时编辑中的 Mermaid 源码块时会先卸载图表覆视图，移出后再挂载；只读表面始终保持渲染态。
 - 展示属性与 Engine patch 回写都不登记 AppKit 正文 undo；三种视图间切换时保持同一正文、修改状态、保存路径和 Rust 撤销历史。
 - 即时编辑中的链接默认单击执行导航，“设置 > 预览”可改为只从右键菜单打开，此时单击只定位光标；文本与表格中的链接共享 Hover 高亮反馈。表格使用 AdaptiveRenderedMarkdownTableLayoutStrategy 按内容测量列宽，再随编辑区扩张或压缩；单元格可编辑，右键提供行列增删和列对齐。链接导航、本地图片和失败降级继续受当前内容快照与封闭宿主消息约束。
 
@@ -137,7 +137,7 @@
 
 判断当前能力时，以已批准的个人首版范围、实际安装的菜单和主流程、以及 UAT-PERSONAL-01 至 10 为准，而不是以某个源文件或测试名称是否存在为准。
 
-自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 419 个 XCTest method：298 个 `current-direct`、30 个依赖真实 `NSApplication` 菜单、生命周期或 WebKit/PDF 系统服务的 `current-host`、86 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
+自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 419 个 XCTest method：303 个 `current-direct`、25 个依赖真实 `NSApplication` 菜单、生命周期或 AppKit 打印/PDF 系统服务的 `current-host`、86 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
 
 ## 4. 人工 UAT 状态
 
@@ -164,6 +164,6 @@
 - 当前 UAT 对照：[launch-acceptance.md](launch-acceptance.md)
 - 已废止旧记录：[launch-candidate-0.1.0-build-1.md](launch-candidate-0.1.0-build-1.md)
 - 即时编辑块级计划：[../macos/Inflow/Editor/RenderedMarkdownEditor.swift](../macos/Inflow/Editor/RenderedMarkdownEditor.swift)
-- 分栏预览宿主：[../macos/Inflow/Preview/MarkdownPreviewView.swift](../macos/Inflow/Preview/MarkdownPreviewView.swift)
+- 可编辑/只读原生渲染宿主：[../macos/Inflow/Editor/MarkdownSourceEditor.swift](../macos/Inflow/Editor/MarkdownSourceEditor.swift)
 - 三视图接线：[../macos/Inflow/Editor/MarkdownEditorView.swift](../macos/Inflow/Editor/MarkdownEditorView.swift)
 - 同一 NSTextView 宿主：[../macos/Inflow/Editor/MarkdownSourceEditor.swift](../macos/Inflow/Editor/MarkdownSourceEditor.swift)

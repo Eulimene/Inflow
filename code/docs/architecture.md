@@ -43,7 +43,7 @@ revision，正文修改后立即失效。macOS 已用该单次请求作为分析
 高亮、引用、Render IR、原生渲染计划、普通 HTML 与带块定位 metadata 的预览 HTML；Engine 只负责 revision 校验、
 缓存和命令顺序。该端口也是测试替身和未来解析策略演进的唯一接入点。
 旧 `MarkdownAnalyzer` 与 `MarkdownHighlighter` 公开外观仍用于现有单元测试，但内部也已创建短生命 Engine 并消费同一 `RefreshDerived`，Swift 不再直接调用 analyze/highlight 数组 ABI。无预览 metadata 的普通 HTML 也来自这次派生；自包含交付 HTML 通过 revision-bound `PrepareHtmlExport` 返回 `HtmlExportPrepared` HostEffect，不再绕过 Engine 调用旧 render/export FFI。
-预览链接目标、标题 source range 与块 ID 都直接来自同一份 Rust IR；Swift 不再把 HTML anchor、标题与引用列表做正则配对，也不再保留第二套 Markdown planner。交互式写作界面不消费 HTML：同一个 `NativeRenderPlan` 被安装到可编辑和只读的 `MarkdownSourceEditorSession`，表格、引用、Mermaid、链接、字体、颜色与行高因此只经过一套 TextKit 布局逻辑。HTML/WebKit 只保留为 PDF 等非交互输出适配器，不能重新成为屏幕预览实现。
+预览链接目标、标题 source range 与块 ID 都直接来自同一份 Rust IR；Swift 不再把 HTML anchor、标题与引用列表做正则配对，也不再保留第二套 Markdown planner。同一个 `NativeRenderPlan` 被安装到可编辑和只读的 `MarkdownSourceEditorSession`，表格、引用、Mermaid、链接、字体、颜色与行高只经过一套 TextKit 布局逻辑。PDF 也直接打印这个原生表面；HTML 仅是独立的文件导出序列化，不参与界面或 PDF 排版。
 当前菜单格式与图片、链接、表格等插入操作也只发送 selection 与 operation，由 Engine 生成
 revision-bound patch 后回写 NSTextView，不再由 View 调用一次性 formatter 规划。普通输入先由
 NSTextView 乐观显示，再串行提交 Engine 并逐字节对账。默认编辑会话关闭 AppKit 正文 undo
@@ -112,7 +112,7 @@ Swift String 的规范等价不能替代精确字节身份。Rust 返回 UTF-8 b
 
 ### 4.2 实时预览分栏
 
-分栏左侧仍是同一个持久源码 NSTextView，右侧是 `isEditable = false` 的 `MarkdownSourceEditor`。右侧不生成 HTML、不启动 WKWebView，也不进行第二次解析；它直接安装即时编辑所用的同一份 revision-bound `NativeRenderPlan`。本地与远程图片、链接、表格、引用和 Mermaid 都复用原生表面的资源与安全策略。派生失败不改变正文、保存或恢复。
+分栏左侧仍是同一个持久源码 NSTextView，右侧是 `isEditable = false` 的 `MarkdownSourceEditor`。右侧不生成 HTML、不启动第二渲染宿主，也不进行第二次解析；它直接安装即时编辑所用的同一份 revision-bound `NativeRenderPlan`。本地与远程图片、链接、表格、引用和 Mermaid 都复用原生表面的资源与安全策略。派生失败不改变正文、保存或恢复。
 
 ### 4.3 即时编辑
 

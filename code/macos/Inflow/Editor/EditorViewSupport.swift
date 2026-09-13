@@ -95,7 +95,7 @@ enum EditorViewMode: String, CaseIterable, Identifiable {
 
 /// The interactive rendered document has one final-layout implementation.
 /// Split preview and instant editing differ only in whether that TextKit
-/// surface accepts edits; HTML/WebKit remains an export adapter.
+/// surface accepts edits; HTML remains a file-export serialization only.
 enum MarkdownRenderedSurfaceEngine: Equatable {
     case textKit
 }

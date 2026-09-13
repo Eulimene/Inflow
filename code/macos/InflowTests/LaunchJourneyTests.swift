@@ -178,8 +178,9 @@ final class LaunchJourneyTests: XCTestCase {
     func testCurrentSnapshotProducesIndependentPDFWithoutChangingMarkdown() async throws {
         let source = "# PDF Journey\n\nLATEST-JOURNEY-MARKER **bold**\n"
         let sourceBeforeDelivery = source
-        let html = try HTMLExporter.generate(snapshot: HTMLExportSnapshot(markdown: source))
-        let pdfData = try await PDFExporter.generate(fromSelfContainedHTML: html)
+        let pdfData = try await PDFExporter.generate(
+            snapshot: HTMLExportSnapshot(markdown: source, appearance: .personalPDF)
+        )
         let pdf = try XCTUnwrap(PDFDocument(data: pdfData))
 
         XCTAssertEqual(source, sourceBeforeDelivery)

@@ -2,7 +2,6 @@ import AppKit
 import CoreGraphics
 import Foundation
 import PDFKit
-import WebKit
 
 enum PDFExportError: Error, LocalizedError, Equatable {
     case renderingFailed
@@ -30,196 +29,84 @@ enum PDFExporter {
         )
     }
 
-    static func generate(fromSelfContainedHTML html: Data) async throws -> Data {
+    /// Produces PDF from the same revision-bound native render plan used by the
+    /// editable and read-only editor surfaces. HTML is deliberately not an
+    /// input here: keeping PDF on the native path prevents an export-only
+    /// renderer from becoming a second interpretation of Markdown.
+    static func generate(snapshot: HTMLExportSnapshot) async throws -> Data {
         try Task.checkCancellation()
-        guard var htmlString = String(data: html, encoding: .utf8) else {
+        let markdown = String(decoding: snapshot.utf8, as: UTF8.self)
+        let session = MarkdownSourceEditorSession(role: .renderedProjection)
+        let appearance = snapshot.appearance.nativeRenderedAppearance(spellingEnabled: false)
+        session.textView.string = markdown
+        session.applySourceAppearance(appearance, force: true)
+        guard let derived = await session.deriveContent(
+            for: markdown,
+            configuration: snapshot.appearance
+        ) else {
             throw PDFExportError.renderingFailed
         }
-        htmlString = applyingPrintStyle(to: htmlString)
-
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
-        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
-        let webView = WKWebView(
-            frame: NSRect(origin: .zero, size: printableSize),
-            configuration: configuration
+        try Task.checkCancellation()
+        session.installSharedRenderedPlan(derived.nativeRenderPlan, source: markdown)
+        session.textView.appearance = snapshot.appearance.colorScheme.nativeAppearance
+        session.setPresentation(
+            .rendered,
+            source: markdown,
+            onLinkClick: nil,
+            resourceContext: RenderedMarkdownResourceContext(
+                documentDirectory: snapshot.documentDirectory,
+                projectRoot: snapshot.projectRoot,
+                expectedProjectRootIdentity: snapshot.expectedProjectRootIdentity,
+                requiresProjectBoundary: snapshot.requiresProjectBoundary
+            ),
+            theme: snapshot.appearance.theme
         )
-        let loader = PDFWebViewLoader()
-        webView.navigationDelegate = loader
-        try await loader.load(htmlString, in: webView)
+        await session.waitForRenderedResources()
         try Task.checkCancellation()
-        try await fitWideDisplayFormulae(in: webView)
-        try Task.checkCancellation()
+        let view = session.textView
+        view.frame = NSRect(origin: .zero, size: printableSize)
+        view.textContainer?.containerSize = NSSize(
+            width: printableSize.width,
+            height: .greatestFiniteMagnitude
+        )
+        view.layoutManager?.ensureLayout(for: view.textContainer!)
+        let usedHeight = view.layoutManager?.usedRect(for: view.textContainer!).height ?? 0
+        view.frame.size.height = max(printableSize.height, ceil(usedHeight + view.textContainerInset.height * 2))
+        view.layoutSubtreeIfNeeded()
 
-        let pageBackgroundColor = try await measuredPageBackgroundColor(in: webView)
-        try Task.checkCancellation()
-
-        let contentHeight = try await measuredContentHeight(in: webView)
-        try Task.checkCancellation()
-        var pageData: [Data] = []
+        var sourcePages: [Data] = []
         var pageOriginY = 0.0
         repeat {
-            let pageHeight = min(printableSize.height, max(1, contentHeight - pageOriginY))
-            let pdfConfiguration = WKPDFConfiguration()
-            pdfConfiguration.rect = CGRect(
-                x: 0,
-                y: pageOriginY,
-                width: printableSize.width,
-                height: pageHeight
+            let pageHeight = min(
+                printableSize.height,
+                max(1, view.bounds.height - pageOriginY)
             )
-            do {
-                pageData.append(try await webView.pdf(configuration: pdfConfiguration))
-            } catch {
-                throw PDFExportError.renderingFailed
-            }
-            try Task.checkCancellation()
+            sourcePages.append(
+                view.dataWithPDF(
+                    inside: NSRect(
+                        x: 0,
+                        y: pageOriginY,
+                        width: printableSize.width,
+                        height: pageHeight
+                    )
+                )
+            )
             pageOriginY += pageHeight
-        } while pageOriginY < contentHeight
+            try Task.checkCancellation()
+        } while pageOriginY < view.bounds.height
 
-        try Task.checkCancellation()
-        let data = try composeA4Document(
-            from: pageData,
-            pageBackgroundColor: pageBackgroundColor
+        let palette = MarkdownRenderPalette.resolved(for: view.effectiveAppearance)
+        let composed = try composeA4Document(
+            from: sourcePages,
+            pageBackgroundColor: palette.canvasColor.cgColor
         )
-        guard let document = PDFDocument(data: data), document.pageCount == pageData.count else {
-            throw PDFExportError.renderingFailed
-        }
-        for index in 0..<document.pageCount {
-            guard let page = document.page(at: index) else {
-                throw PDFExportError.invalidOutput
-            }
-            let bounds = page.bounds(for: .mediaBox)
-            guard abs(bounds.width - paperSize.width) < 1,
-                  abs(bounds.height - paperSize.height) < 1
-            else {
-                throw PDFExportError.invalidOutput
-            }
-        }
-        return try PDFContainerPrivacySanitizer.sanitize(data)
-    }
-
-    private static func fitWideDisplayFormulae(in webView: WKWebView) async throws {
-        let script = """
-        (() => {
-          for (const formula of document.querySelectorAll('math[display="block"]')) {
-            formula.style.transform = '';
-            const availableWidth = Math.min(
-              document.documentElement.clientWidth,
-              formula.parentElement ? formula.parentElement.clientWidth : Number.POSITIVE_INFINITY
-            );
-            const content = formula.firstElementChild;
-            const requiredWidth = Math.max(
-              formula.scrollWidth,
-              content ? content.getBoundingClientRect().width : 0
-            );
-            if (availableWidth <= 0 || requiredWidth <= availableWidth) continue;
-
-            const scale = availableWidth / requiredWidth * 0.98;
-            if (!Number.isFinite(scale) || scale <= 0) return false;
-            formula.style.transformOrigin = 'left top';
-            formula.style.transform = `scale(${scale})`;
-            formula.style.overflow = 'visible';
-
-            const fittedWidth = formula.getBoundingClientRect().width;
-            if (fittedWidth > availableWidth + 1) return false;
-          }
-          return true;
-        })()
-        """
-        let result: Any?
-        do {
-            result = try await webView.evaluateJavaScript(script)
-        } catch {
-            throw PDFExportError.renderingFailed
-        }
-        guard (result as? NSNumber)?.boolValue == true else {
-            throw PDFExportError.renderingFailed
-        }
-    }
-
-    private static func measuredContentHeight(in webView: WKWebView) async throws -> CGFloat {
-        let script = """
-        Math.ceil(Math.max(
-          document.body ? document.body.scrollHeight : 0,
-          document.documentElement ? document.documentElement.scrollHeight : 0
-        ))
-        """
-        let value: Any?
-        do {
-            value = try await webView.evaluateJavaScript(script)
-        } catch {
-            throw PDFExportError.renderingFailed
-        }
-        guard let number = value as? NSNumber,
-              number.doubleValue.isFinite,
-              number.doubleValue > 0
-        else {
-            throw PDFExportError.renderingFailed
-        }
-        return CGFloat(number.doubleValue)
-    }
-
-    private static func measuredPageBackgroundColor(in webView: WKWebView) async throws
-        -> CGColor
-    {
-        let value: Any?
-        do {
-            value = try await webView.evaluateJavaScript(
-                "getComputedStyle(document.body).backgroundColor"
-            )
-        } catch {
-            throw PDFExportError.renderingFailed
-        }
-        guard let cssColor = value as? String else {
-            throw PDFExportError.renderingFailed
-        }
-        return try pageBackgroundColor(fromCSS: cssColor)
-    }
-
-    static func pageBackgroundColor(fromCSS value: String) throws -> CGColor {
-        let normalized = value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        let prefix: String
-        if normalized.hasPrefix("rgba(") {
-            prefix = "rgba("
-        } else if normalized.hasPrefix("rgb(") {
-            prefix = "rgb("
-        } else {
-            throw PDFExportError.renderingFailed
-        }
-        guard normalized.hasSuffix(")") else {
-            throw PDFExportError.renderingFailed
-        }
-        let start = normalized.index(normalized.startIndex, offsetBy: prefix.count)
-        let end = normalized.index(before: normalized.endIndex)
-        let components = normalized[start..<end]
-            .split(separator: ",", omittingEmptySubsequences: false)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-        guard components.count == 3 || components.count == 4,
-              let red = Double(components[0]),
-              let green = Double(components[1]),
-              let blue = Double(components[2]),
-              (0 ... 255).contains(red),
-              (0 ... 255).contains(green),
-              (0 ... 255).contains(blue)
-        else {
-            throw PDFExportError.renderingFailed
-        }
-        if components.count == 4 {
-            guard let alpha = Double(components[3]), alpha >= 0.999, alpha <= 1 else {
-                throw PDFExportError.renderingFailed
-            }
-        }
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
-              let color = CGColor(
-                  colorSpace: colorSpace,
-                  components: [red / 255, green / 255, blue / 255, 1]
-              )
-        else {
-            throw PDFExportError.renderingFailed
-        }
-        return color
+        let output = try addingSafeLinkAnnotations(
+            to: composed,
+            links: derived.nativeRenderPlan.links,
+            in: view
+        )
+        try Task.checkCancellation()
+        return try PDFContainerPrivacySanitizer.sanitize(output)
     }
 
     private static func composeA4Document(
@@ -270,9 +157,7 @@ enum PDFExporter {
                 guard let action = annotation.action as? PDFActionURL,
                       let url = action.url,
                       isSafeWebURL(url)
-                else {
-                    continue
-                }
+                else { continue }
                 let translatedBounds = annotation.bounds.offsetBy(
                     dx: margin - sourceBox.minX,
                     dy: paperSize.height - margin - sourceBox.height - sourceBox.minY
@@ -280,18 +165,73 @@ enum PDFExporter {
                 guard translatedBounds.width > 0,
                       translatedBounds.height > 0,
                       mediaBox.contains(translatedBounds)
-                else {
-                    continue
-                }
+                else { continue }
                 context.setURL(url as CFURL, for: translatedBounds)
             }
             context.endPDFPage()
         }
         context.closePDF()
-        guard output.length > 0 else {
+        guard output.length > 0 else { throw PDFExportError.renderingFailed }
+        return output as Data
+    }
+
+    private static func addingSafeLinkAnnotations(
+        to data: Data,
+        links: [RenderedMarkdownLink],
+        in view: NSTextView
+    ) throws -> Data {
+        guard let document = PDFDocument(data: data),
+              let layoutManager = view.layoutManager,
+              let textContainer = view.textContainer
+        else { throw PDFExportError.invalidOutput }
+
+        for link in links {
+            guard let url = URL(string: link.target), isSafeWebURL(url) else { continue }
+            let characterRange = link.textRange.utf16Range
+            guard NSMaxRange(characterRange) <= (view.string as NSString).length else {
+                throw PDFExportError.invalidOutput
+            }
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: characterRange,
+                actualCharacterRange: nil
+            )
+            layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) {
+                _, _, _, lineGlyphRange, _ in
+                let intersection = NSIntersectionRange(glyphRange, lineGlyphRange)
+                guard intersection.length > 0 else { return }
+                let rect = layoutManager.boundingRect(
+                    forGlyphRange: intersection,
+                    in: textContainer
+                ).offsetBy(
+                    dx: view.textContainerOrigin.x,
+                    dy: view.textContainerOrigin.y
+                )
+                let pageIndex = max(0, Int(floor(rect.midY / printableSize.height)))
+                guard let page = document.page(at: pageIndex) else { return }
+                let localTop = rect.minY - CGFloat(pageIndex) * printableSize.height
+                let bounds = NSRect(
+                    x: margin + rect.minX,
+                    y: paperSize.height - margin - localTop - rect.height,
+                    width: rect.width,
+                    height: rect.height
+                )
+                guard bounds.width > 0,
+                      bounds.height > 0,
+                      page.bounds(for: .mediaBox).contains(bounds)
+                else { return }
+                let annotation = PDFAnnotation(
+                    bounds: bounds,
+                    forType: .link,
+                    withProperties: nil
+                )
+                annotation.action = PDFActionURL(url: url)
+                page.addAnnotation(annotation)
+            }
+        }
+        guard let annotated = document.dataRepresentation(), !annotated.isEmpty else {
             throw PDFExportError.renderingFailed
         }
-        return output as Data
+        return annotated
     }
 
     private static func isSafeWebURL(_ url: URL) -> Bool {
@@ -301,30 +241,8 @@ enum PDFExporter {
               components.host?.isEmpty == false,
               components.user == nil,
               components.password == nil
-        else {
-            return false
-        }
+        else { return false }
         return true
-    }
-
-    private static func applyingPrintStyle(to html: String) -> String {
-        let style = """
-        <style>
-          @page { size: A4 portrait; margin: 0; }
-          *, *::before, *::after { box-sizing: border-box; }
-          html, body { width: 100% !important; max-width: 100% !important; margin: 0 !important; padding: 0 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-          img, svg, table, pre, math { max-width: 100% !important; }
-          pre { white-space: pre-wrap !important; overflow: visible !important; overflow-wrap: anywhere; word-break: break-word; }
-          pre code { white-space: inherit !important; }
-          table { display: table !important; width: 100% !important; table-layout: fixed; overflow: visible !important; }
-          th, td { overflow-wrap: anywhere; word-break: break-word; }
-          .mermaid-diagram { overflow: visible !important; }
-          .mermaid-diagram svg { min-width: 0 !important; }
-          h1, h2, h3, h4, h5, h6 { break-after: avoid-page; }
-          pre, table, img, svg, math { break-inside: avoid-page; }
-        </style>
-        """
-        return html.replacingOccurrences(of: "</head>", with: "\(style)</head>")
     }
 }
 
@@ -766,41 +684,6 @@ private final class PDFObjectGraphScanner {
             && CharacterSet.letters.contains(scalars[0])
             && scalars[1].value == 0x3A
             && scalars[2].value == 0x2F
-    }
-}
-
-@MainActor
-private final class PDFWebViewLoader: NSObject, WKNavigationDelegate {
-    private var continuation: CheckedContinuation<Void, Error>?
-
-    func load(_ html: String, in webView: WKWebView) async throws {
-        try await withCheckedThrowingContinuation { continuation in
-            self.continuation = continuation
-            webView.loadHTMLString(html, baseURL: nil)
-        }
-    }
-
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        continuation?.resume()
-        continuation = nil
-    }
-
-    func webView(
-        _ webView: WKWebView,
-        didFail navigation: WKNavigation!,
-        withError error: any Error
-    ) {
-        continuation?.resume(throwing: PDFExportError.renderingFailed)
-        continuation = nil
-    }
-
-    func webView(
-        _ webView: WKWebView,
-        didFailProvisionalNavigation navigation: WKNavigation!,
-        withError error: any Error
-    ) {
-        continuation?.resume(throwing: PDFExportError.renderingFailed)
-        continuation = nil
     }
 }
 

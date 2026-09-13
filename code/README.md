@@ -61,7 +61,7 @@ Inflow 是一款本地优先的 Markdown 写作工作台。当前代码只为产
 ## 不属于当前能力
 
 - 自动保存，以及 Inflow 管理的最近文档或最近项目。
-- 使用 `contenteditable` WebKit 表面进行 DOM→Markdown 的完整 Typora 式结构化编辑。
+- 使用另一套 DOM→Markdown 转换器实现富文本式结构化编辑。
 - HTML 导出、深色或专业 PDF、打印合同和公共分发级交付后验。
 - 公式、脚注、其他 Mermaid 图形、完整原始 HTML 兼容和复杂格式矩阵。
 - 完整恢复中心、多快照、版本时间线和完整异常恢复矩阵。
@@ -123,7 +123,7 @@ ABI 3 只暴露 Engine create/dispatch/snapshot/free 和 owned-bytes free，其�
 
     scripts/verify-launch.sh --personal
 
-该配置只执行生成绑定校验、Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查；不创建归档或发布证据，也不执行固定设备/30 次性能协议、扩展生态合同、签名、公证或分发门禁。[`quality/personal-xctest-scope.tsv`](quality/personal-xctest-scope.tsv) 把当前 419 个 XCTest method 逐项分为 298 个 `current-direct`、30 个 `current-host`、86 个 `deferred` 和 5 个 `fixed-performance`。`--personal` 只执行 `current-direct`；其余三类不计为通过。30 个宿主用例保留为 App-host 专项验证或真实应用 UAT，其中包括需要 WebKit/PDF 系统服务的导出用例；后置与固定性能用例由 deferred profile 的全量测试保留。脚本会对重复、陈旧、未分类、非法分区和四类精确计数失败关闭；新增测试不能默认混入当前门禁。可用 `scripts/verify-launch.sh --describe-profile personal` 无副作用查看边界。
+该配置只执行生成绑定校验、Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查；不创建归档或发布证据，也不执行固定设备/30 次性能协议、扩展生态合同、签名、公证或分发门禁。[`quality/personal-xctest-scope.tsv`](quality/personal-xctest-scope.tsv) 把当前 419 个 XCTest method 逐项分为 303 个 `current-direct`、25 个 `current-host`、86 个 `deferred` 和 5 个 `fixed-performance`。`--personal` 只执行 `current-direct`；其余三类不计为通过。25 个宿主用例保留为 App-host 专项验证或真实应用 UAT，其中包括需要 AppKit 打印/PDF 系统服务的导出用例；后置与固定性能用例由 deferred profile 的全量测试保留。脚本会对重复、陈旧、未分类、非法分区和四类精确计数失败关闭；新增测试不能默认混入当前门禁。可用 `scripts/verify-launch.sh --describe-profile personal` 无副作用查看边界。
 
 `--deferred-release-local`、`--deferred-signed-archive` 以及 `scripts/release-workflow.sh` 只为后续公共分发决策保留，不属于个人首版完成条件。
 

@@ -85,7 +85,7 @@ final class HTMLExporterTests: XCTestCase {
         let task = Task { @MainActor in
             await Task.yield()
             return try await PDFExporter.generate(
-                fromSelfContainedHTML: Data("<!doctype html><p>cancel</p>".utf8)
+                snapshot: HTMLExportSnapshot(markdown: "cancel", appearance: .personalPDF)
             )
         }
         task.cancel()
@@ -360,12 +360,11 @@ final class HTMLExporterTests: XCTestCase {
     @MainActor
     func testPDFExportUsesA4PortraitTwentyMillimeterMarginsAndLatestSnapshot() async throws {
         XCTAssertEqual(PDFExporter.margin * 25.4 / 72.0, 20, accuracy: 0.01)
-        let html = try HTMLExporter.generate(
-            snapshot: HTMLExportSnapshot(
-                markdown: "# PDF 快照\n\n最新内容 **Bold**\n\n$x_1^2$"
-            )
+        let snapshot = HTMLExportSnapshot(
+            markdown: "# PDF 快照\n\n最新内容 **Bold**\n\n$x_1^2$",
+            appearance: .personalPDF
         )
-        let data = try await PDFExporter.generate(fromSelfContainedHTML: html)
+        let data = try await PDFExporter.generate(snapshot: snapshot)
         let document = try XCTUnwrap(PDFDocument(data: data))
         XCTAssertGreaterThan(document.pageCount, 0)
         let page = try XCTUnwrap(document.page(at: 0))
@@ -384,10 +383,12 @@ final class HTMLExporterTests: XCTestCase {
 
     @MainActor
     func testPDFExportRemovesHostVersionAndTimestampMetadata() async throws {
-        let html = try HTMLExporter.generate(
-            snapshot: HTMLExportSnapshot(markdown: "# Private metadata check")
+        let data = try await PDFExporter.generate(
+            snapshot: HTMLExportSnapshot(
+                markdown: "# Private metadata check",
+                appearance: .personalPDF
+            )
         )
-        let data = try await PDFExporter.generate(fromSelfContainedHTML: html)
         let document = try XCTUnwrap(PDFDocument(data: data))
         XCTAssertTrue((document.documentAttributes ?? [:]).isEmpty)
 
@@ -405,16 +406,16 @@ final class HTMLExporterTests: XCTestCase {
 
     @MainActor
     func testPDFKeepsOnlySafeWebLinksClickable() async throws {
-        let preparation = try HTMLExporter.prepare(
-            snapshot: HTMLExportSnapshot(
-                markdown: "[HTTPS](https://example.com/guide) [file](file:///Users/alice/private.md) [custom](inflow-script:run)"
-            )
+        let snapshot = HTMLExportSnapshot(
+            markdown: "[HTTPS](https://example.com/guide) [file](file:///Users/alice/private.md) [custom](inflow-script:run)",
+            appearance: .personalPDF
         )
+        let preparation = try HTMLExporter.prepare(snapshot: snapshot)
         XCTAssertEqual(
             preparation.warnings.map(\.rawValue),
             [HTMLExportIssue.localLink.rawValue, HTMLExportIssue.unsafeLink.rawValue]
         )
-        let data = try await PDFExporter.generate(fromSelfContainedHTML: preparation.data)
+        let data = try await PDFExporter.generate(snapshot: snapshot)
         let document = try XCTUnwrap(PDFDocument(data: data))
         let actions = (0..<document.pageCount).flatMap { index in
             document.page(at: index)?.annotations.compactMap {
@@ -436,13 +437,11 @@ final class HTMLExporterTests: XCTestCase {
             increasedContrast: false,
             reduceMotion: false
         )
-        let html = try HTMLExporter.generate(
-            snapshot: HTMLExportSnapshot(
-                markdown: "# Dark delivery\n\nThe page edge must use the selected theme.",
-                appearance: darkAppearance
-            )
+        let snapshot = HTMLExportSnapshot(
+            markdown: "# Dark delivery\n\nThe page edge must use the selected theme.",
+            appearance: darkAppearance
         )
-        let data = try await PDFExporter.generate(fromSelfContainedHTML: html)
+        let data = try await PDFExporter.generate(snapshot: snapshot)
         let page = try XCTUnwrap(PDFDocument(data: data)?.page(at: 0))
         let thumbnail = page.thumbnail(of: NSSize(width: 160, height: 226), for: .mediaBox)
         let tiff = try XCTUnwrap(thumbnail.tiffRepresentation)
@@ -463,16 +462,11 @@ final class HTMLExporterTests: XCTestCase {
     }
 
     @MainActor
-    func testPDFPageBackgroundParserRejectsTransparentOrNonRGBValues() throws {
-        let color = try PDFExporter.pageBackgroundColor(fromCSS: "rgb(16, 18, 20)")
-        let components = try XCTUnwrap(color.components)
-        XCTAssertEqual(components[0], CGFloat(16.0 / 255.0), accuracy: 0.001)
-        XCTAssertThrowsError(
-            try PDFExporter.pageBackgroundColor(fromCSS: "rgba(16, 18, 20, 0.5)")
-        )
-        XCTAssertThrowsError(
-            try PDFExporter.pageBackgroundColor(fromCSS: "transparent")
-        )
+    func testPDFPersonalAppearanceUsesTheNativeLightTheme() {
+        XCTAssertEqual(PreviewAppearanceConfiguration.personalPDF.colorScheme, .light)
+        XCTAssertEqual(PreviewAppearanceConfiguration.personalPDF.theme, .standard)
+        XCTAssertFalse(PreviewAppearanceConfiguration.personalPDF.mathRenderingEnabled)
+        XCTAssertTrue(PreviewAppearanceConfiguration.personalPDF.mermaidRenderingEnabled)
     }
 
     func testPDFMetadataSanitizerFailsClosedForUnknownContainer() {
@@ -542,17 +536,20 @@ final class HTMLExporterTests: XCTestCase {
 
     @MainActor
     func testPDFPostflightDoesNotTreatVisiblePageTextAsContainerMetadata() async throws {
-        let html = try HTMLExporter.generate(
-            snapshot: HTMLExportSnapshot(
-                markdown: "```text\n/OpenAction /AA /EmbeddedFiles /Metadata /Users/alice/draft.md\n```"
-            )
+        let snapshot = HTMLExportSnapshot(
+            markdown: "```text\n/OpenAction /AA /EmbeddedFiles /Metadata /Users/alice/draft.md\n```",
+            appearance: .personalPDF
         )
-        let data = try await PDFExporter.generate(fromSelfContainedHTML: html)
+        let data = try await PDFExporter.generate(snapshot: snapshot)
         try PDFDeliveryPostflight.validate(data)
 
         let text = try XCTUnwrap(PDFDocument(data: data)?.string)
-        XCTAssertTrue(text.contains("/OpenAction"))
-        XCTAssertTrue(text.contains("/Users/alice/draft.md"))
+        XCTAssertTrue(text.contains("/OpenAction"), text)
+        XCTAssertTrue(
+            text.replacingOccurrences(of: "\n", with: "")
+                .contains("/Users/alice/draft.md"),
+            text
+        )
     }
 
     func testExportDoesNotReportSuccessWhenTargetChangesAfterReplacement() throws {
@@ -590,8 +587,9 @@ final class HTMLExporterTests: XCTestCase {
     func testLongPDFPaginatesWithoutChangingPaperSize() async throws {
         let markdown = (1...180).map { "## Section \($0)\n\nParagraph \($0) with content." }
             .joined(separator: "\n\n")
-        let html = try HTMLExporter.generate(snapshot: HTMLExportSnapshot(markdown: markdown))
-        let data = try await PDFExporter.generate(fromSelfContainedHTML: html)
+        let data = try await PDFExporter.generate(
+            snapshot: HTMLExportSnapshot(markdown: markdown, appearance: .personalPDF)
+        )
         let document = try XCTUnwrap(PDFDocument(data: data))
         XCTAssertGreaterThan(document.pageCount, 1)
         for index in 0..<document.pageCount {
@@ -615,8 +613,9 @@ final class HTMLExporterTests: XCTestCase {
         | --- |
         | \(tablePrefix)TABLE-END |
         """
-        let html = try HTMLExporter.generate(snapshot: HTMLExportSnapshot(markdown: markdown))
-        let data = try await PDFExporter.generate(fromSelfContainedHTML: html)
+        let data = try await PDFExporter.generate(
+            snapshot: HTMLExportSnapshot(markdown: markdown, appearance: .personalPDF)
+        )
         let document = try XCTUnwrap(PDFDocument(data: data))
         let normalizedText = (document.string ?? "")
             .replacingOccurrences(of: "\n", with: "")
@@ -647,8 +646,9 @@ final class HTMLExporterTests: XCTestCase {
     func testPDFFitsWideDisplayFormulaInsidePrintableBounds() async throws {
         let formula = String(repeating: "x+", count: 160) + "FORMULAEND"
         let markdown = "$$\n\\text{\(formula)}\n$$\n"
-        let html = try HTMLExporter.generate(snapshot: HTMLExportSnapshot(markdown: markdown))
-        let data = try await PDFExporter.generate(fromSelfContainedHTML: html)
+        let data = try await PDFExporter.generate(
+            snapshot: HTMLExportSnapshot(markdown: markdown, appearance: .personalPDF)
+        )
         let document = try XCTUnwrap(PDFDocument(data: data))
         let selection = try XCTUnwrap(document.findString("FORMULAEND").first)
         let page = try XCTUnwrap(selection.pages.first)

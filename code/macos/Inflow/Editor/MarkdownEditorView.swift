@@ -2930,7 +2930,7 @@ struct MarkdownEditorView: View {
             let pdf: Data
             do {
                 pdf = try await PDFExporter.generate(
-                    fromSelfContainedHTML: pending.preparation.data
+                    snapshot: pending.request.snapshot
                 )
             } catch {
                 guard exportIsCurrent(generation) else { return }

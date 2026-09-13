@@ -11,7 +11,9 @@ struct MarkdownHeadingStyle: Equatable, Sendable {
 enum MarkdownRenderMetrics {
     static let readingWidth = 760.0
     static let bodyFontSize = 17.0
-    static let bodyLineHeight = 1.65
+    static let bodyLineHeight = 1.48
+    static let paragraphGap = CGFloat(9)
+    static let unorderedListMarkerScale = CGFloat(1.22)
     static let editorHorizontalInset = CGFloat(28)
     static let editorVerticalInset = CGFloat(24)
     static let blockCornerRadius = CGFloat(8)
@@ -22,12 +24,12 @@ enum MarkdownRenderMetrics {
 
     static func heading(level: Int) -> MarkdownHeadingStyle {
         switch level {
-        case 1: MarkdownHeadingStyle(scale: 1.82, spacingBefore: 0.92, spacingAfter: 0.34)
-        case 2: MarkdownHeadingStyle(scale: 1.46, spacingBefore: 0.86, spacingAfter: 0.32)
-        case 3: MarkdownHeadingStyle(scale: 1.24, spacingBefore: 0.78, spacingAfter: 0.28)
-        case 4: MarkdownHeadingStyle(scale: 1.10, spacingBefore: 0.70, spacingAfter: 0.24)
-        case 5: MarkdownHeadingStyle(scale: 1.00, spacingBefore: 0.64, spacingAfter: 0.20)
-        default: MarkdownHeadingStyle(scale: 0.92, spacingBefore: 0.60, spacingAfter: 0.18)
+        case 1: MarkdownHeadingStyle(scale: 1.82, spacingBefore: 0.56, spacingAfter: 0.18)
+        case 2: MarkdownHeadingStyle(scale: 1.46, spacingBefore: 0.50, spacingAfter: 0.16)
+        case 3: MarkdownHeadingStyle(scale: 1.24, spacingBefore: 0.44, spacingAfter: 0.14)
+        case 4: MarkdownHeadingStyle(scale: 1.10, spacingBefore: 0.38, spacingAfter: 0.12)
+        case 5: MarkdownHeadingStyle(scale: 1.00, spacingBefore: 0.34, spacingAfter: 0.10)
+        default: MarkdownHeadingStyle(scale: 0.92, spacingBefore: 0.30, spacingAfter: 0.08)
         }
     }
 }

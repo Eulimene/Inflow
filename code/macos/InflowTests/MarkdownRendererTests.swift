@@ -1,7 +1,6 @@
 import AppKit
 import CryptoKit
 import SwiftUI
-import WebKit
 import XCTest
 @testable import Inflow
 
@@ -174,7 +173,7 @@ final class MarkdownRendererTests: XCTestCase {
     }
 
     @MainActor
-    func testExactMiBTextCanTraverseTextKitRecoveryAndMountedWebKit() async throws {
+    func testExactMiBTextCanTraverseRecoveryAndMountedNativeProjection() async throws {
         let source = Self.largePerformanceFixture()
 
         let editor = MarkdownSourceEditorSession()
@@ -207,22 +206,14 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(recoveredText, source)
         try await recoveryStore.removeAll()
 
-        let configuration = WKWebViewConfiguration()
-        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
-        configuration.websiteDataStore = .nonPersistent()
-        let webView = WKWebView(
-            frame: NSRect(x: 0, y: 0, width: 900, height: 700),
-            configuration: configuration
-        )
-        let loaded = expectation(description: "exact MiB text preview mounted")
-        let delegate = PreviewTestLoadDelegate { loaded.fulfill() }
-        webView.navigationDelegate = delegate
-        webView.loadHTMLString(MarkdownRenderer.htmlDocument(for: source), baseURL: nil)
-        await fulfillment(of: [loaded], timeout: 20)
-        let containsMarker = try await webView.evaluateJavaScript(
-            "document.body.innerText.includes('FINAL-PREVIEW-MARKER')"
-        ) as? Bool
-        XCTAssertEqual(containsMarker, true)
+        let projection = MarkdownSourceEditorSession(role: .renderedProjection)
+        projection.textView.string = source
+        let candidate = await projection.deriveContent(for: source, configuration: .default)
+        let derived = try XCTUnwrap(candidate)
+        projection.installSharedRenderedPlan(derived.nativeRenderPlan, source: source)
+        projection.setPresentation(.rendered, source: source, onLinkClick: nil)
+        XCTAssertTrue(projection.textView.string.contains("FINAL-PREVIEW-MARKER"))
+        XCTAssertFalse(projection.textView.isEditable)
     }
 
     private static func largePerformanceFixture() -> String {
@@ -596,7 +587,7 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertTrue(html.contains(">Safe preview</h1>"))
     }
 
-    func testLocalStaticPNGIsInlinedWithoutGivingWebKitAFilePath() throws {
+    func testLocalStaticPNGIsInlinedWithoutExposingAFilePath() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let assets = directory.appendingPathComponent("assets", isDirectory: true)
@@ -870,147 +861,6 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertTrue(html.contains(
             "data-inflow-link-target-hex=\"\(hex("资料/说明.md"))\""
         ))
-    }
-
-    func testPreviewBridgeAcceptsOnlyClosedNavigationMessages() {
-        XCTAssertEqual(
-            PreviewNavigationMessage.decode([
-                "type": "heading",
-                "sourceUTF8Offset": NSNumber(value: 42),
-            ]),
-            .heading(sourceUTF8Offset: 42)
-        )
-        XCTAssertEqual(
-            PreviewNavigationMessage.decode(["type": "manualScroll"]),
-            .manualScroll
-        )
-        XCTAssertEqual(
-            PreviewNavigationMessage.decode([
-                "type": "previewIssue",
-                "action": "locate",
-                "sourceUTF8Offset": NSNumber(value: 19),
-            ]),
-            .previewIssue(action: .locate, sourceUTF8Offset: 19)
-        )
-        XCTAssertEqual(
-            PreviewNavigationMessage.decode([
-                "type": "imageIssue",
-                "action": "replace",
-                "sourceUTF8Offset": NSNumber(value: 23),
-                "targetHex": hex("assets/图.png"),
-            ]),
-            .imageIssue(
-                action: .replace,
-                sourceUTF8Offset: 23,
-                target: "assets/图.png"
-            )
-        )
-        XCTAssertEqual(
-            PreviewNavigationMessage.decode([
-                "type": "link",
-                "targetHex": hex("../资料/说明.md#标题"),
-            ]),
-            .link(target: "../资料/说明.md#标题")
-        )
-        XCTAssertNil(PreviewNavigationMessage.decode([
-            "type": "heading",
-            "sourceUTF8Offset": "private document text",
-        ]))
-        XCTAssertNil(PreviewNavigationMessage.decode([
-            "type": "heading",
-            "sourceUTF8Offset": NSNumber(value: true),
-        ]))
-        XCTAssertNil(PreviewNavigationMessage.decode([
-            "type": "heading",
-            "sourceUTF8Offset": NSNumber(value: 1.5),
-        ]))
-        XCTAssertNil(PreviewNavigationMessage.decode([
-            "type": "link",
-            "targetHex": "0g",
-        ]))
-        XCTAssertNil(PreviewNavigationMessage.decode([
-            "type": "link",
-            "targetHex": hex("https://example.com/\nprivate"),
-        ]))
-        XCTAssertNil(PreviewNavigationMessage.decode([
-            "type": "previewIssue",
-            "action": "open-private-path",
-            "sourceUTF8Offset": NSNumber(value: 0),
-        ]))
-        XCTAssertNil(PreviewNavigationMessage.decode([
-            "type": "imageIssue",
-            "action": "open-file",
-            "sourceUTF8Offset": NSNumber(value: 0),
-            "targetHex": hex("private.png"),
-        ]))
-        XCTAssertNil(PreviewNavigationMessage.decode([
-            "type": "imageIssue",
-            "action": "locate",
-            "sourceUTF8Offset": NSNumber(value: true),
-            "targetHex": hex("private.png"),
-        ]))
-        XCTAssertNil(PreviewNavigationMessage.decode([
-            "type": "unknown",
-            "document": "must not cross bridge",
-        ]))
-    }
-
-    @MainActor
-    func testPreviewCoordinatorRoutesHeadingAndManualScrollWithoutDocumentContent() {
-        XCTAssertTrue(
-            PreviewWebNavigationPolicy.allows(
-                navigationType: .other,
-                scheme: "applewebdata"
-            )
-        )
-        XCTAssertTrue(
-            PreviewWebNavigationPolicy.allows(navigationType: .other, scheme: "about")
-        )
-        XCTAssertFalse(
-            PreviewWebNavigationPolicy.allows(navigationType: .other, scheme: "https")
-        )
-        XCTAssertFalse(
-            PreviewWebNavigationPolicy.allows(
-                navigationType: .linkActivated,
-                scheme: "applewebdata"
-            )
-        )
-
-        let coordinator = MarkdownPreviewView.Coordinator()
-        let webView = WKWebView()
-        var selectedOffset: Int?
-        var selectedLink: String?
-        var selectedIssue: (PreviewIssueAction, Int)?
-        var selectedImageIssue: (PreviewImageIssueAction, Int, String)?
-        var manualScrollCount = 0
-        coordinator.update(
-            scrollRequest: PreviewScrollRequest(generation: 1, fraction: 0.5),
-            onHeadingActivated: { selectedOffset = $0 },
-            onLinkActivated: { selectedLink = $0 },
-            onPreviewIssueAction: { selectedIssue = ($0, $1) },
-            onImageIssueAction: { selectedImageIssue = ($0, $1, $2) },
-            onManualScroll: { manualScrollCount += 1 },
-            webView: webView
-        )
-
-        coordinator.handle(.heading(sourceUTF8Offset: 128))
-        coordinator.handle(.link(target: "https://example.com"))
-        coordinator.handle(.previewIssue(action: .retry, sourceUTF8Offset: 64))
-        coordinator.handle(.imageIssue(
-            action: .copyTarget,
-            sourceUTF8Offset: 72,
-            target: "https://example.com/image.png"
-        ))
-        coordinator.handle(.manualScroll)
-
-        XCTAssertEqual(selectedOffset, 128)
-        XCTAssertEqual(selectedLink, "https://example.com")
-        XCTAssertEqual(selectedIssue?.0, .retry)
-        XCTAssertEqual(selectedIssue?.1, 64)
-        XCTAssertEqual(selectedImageIssue?.0, .copyTarget)
-        XCTAssertEqual(selectedImageIssue?.1, 72)
-        XCTAssertEqual(selectedImageIssue?.2, "https://example.com/image.png")
-        XCTAssertEqual(manualScrollCount, 1)
     }
 
     func testPreviewIssueNavigationRejectsStaleAndInvalidUTF8Offsets() throws {
@@ -1638,216 +1488,113 @@ final class MarkdownRendererTests: XCTestCase {
     }
 
     @MainActor
-    func testAppScrollWorksWhilePageContentJavaScriptIsDisabled() async throws {
-        let configuration = WKWebViewConfiguration()
-        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
-        configuration.websiteDataStore = .nonPersistent()
-        let webView = WKWebView(
-            frame: NSRect(x: 0, y: 0, width: 500, height: 300),
-            configuration: configuration
-        )
-        let loaded = expectation(description: "preview loaded")
-        let delegate = PreviewTestLoadDelegate { loaded.fulfill() }
-        webView.navigationDelegate = delegate
-        webView.loadHTMLString(
-            "<html><body style=\"height: 5000px\">Long preview</body></html>",
-            baseURL: nil
-        )
-        await fulfillment(of: [loaded], timeout: 5)
+    func testNativeProjectionScrollUsesTextKitFraction() {
+        let session = MarkdownSourceEditorSession(role: .renderedProjection)
+        session.scrollView.frame = NSRect(x: 0, y: 0, width: 320, height: 200)
+        session.textView.frame = NSRect(x: 0, y: 0, width: 320, height: 1_000)
+        session.scrollView.layoutSubtreeIfNeeded()
 
-        let coordinator = MarkdownPreviewView.Coordinator()
-        coordinator.update(
-            scrollRequest: PreviewScrollRequest(generation: 7, fraction: 0.75),
-            onHeadingActivated: { _ in },
-            onLinkActivated: { _ in },
-            onPreviewIssueAction: { _, _ in },
-            onManualScroll: {},
-            webView: webView
-        )
-        coordinator.webView(webView, didFinish: nil)
+        session.scroll(toFraction: 0.75)
 
-        for _ in 0..<50 {
-            let value = try await webView.evaluateJavaScript("window.scrollY")
-            if let y = value as? Double, y > 1_000 {
-                XCTAssertLessThan(y, 5_000)
-                return
-            }
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-        XCTFail("isolated app script did not scroll the preview")
+        XCTAssertEqual(session.verticalScrollFraction, 0.75, accuracy: 0.01)
+        XCTAssertGreaterThan(session.verticalScrollOffset, 0)
     }
 
     @MainActor
-    func testMountedPreviewReportsExactLinkWhilePageScriptsRemainDisabled() async throws {
-        let received = expectation(description: "link reported")
-        var receivedTarget: String?
-        let markdown = "[打开](<https://example.com/a b?x=1&y=2>)"
-        let root = MarkdownPreviewView(
-            html: MarkdownRenderer.htmlDocument(for: markdown),
-            baseURL: nil,
-            onLinkActivated: { target in
-                receivedTarget = target
-                received.fulfill()
-            }
-        )
-        let hosting = NSHostingView(rootView: root)
-        hosting.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
-        let window = NSWindow(
-            contentRect: hosting.frame,
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
-        )
-        window.animationBehavior = .none
-        window.contentView = hosting
-        window.makeKeyAndOrderFront(nil)
-        defer { window.orderOut(nil) }
-        hosting.layoutSubtreeIfNeeded()
+    func testMountedNativeProjectionCarriesExactLinkTarget() async throws {
+        let source = "[打开](<https://example.com/a b?x=1&y=2>)"
+        let session = MarkdownSourceEditorSession(role: .renderedProjection)
+        session.textView.string = source
+        let candidate = await session.deriveContent(for: source, configuration: .default)
+        let derived = try XCTUnwrap(candidate)
+        session.installSharedRenderedPlan(derived.nativeRenderPlan, source: source)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
 
-        var webView: WKWebView?
-        var linkIsReady = false
-        for _ in 0..<100 {
-            webView = descendants(of: hosting).compactMap { $0 as? WKWebView }.first
-            if let candidate = webView,
-               candidate.isLoading == false,
-               let isReady = try? await candidate.callAsyncJavaScript(
-                   "return document.querySelector('a[data-inflow-link-target-hex]') !== null;",
-                   arguments: [:],
-                   in: nil,
-                   contentWorld: .defaultClient
-               ) as? Bool,
-               isReady
-            {
-                linkIsReady = true
-                break
-            }
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        let mounted = try XCTUnwrap(webView)
-        XCTAssertTrue(linkIsReady)
-        XCTAssertFalse(mounted.configuration.defaultWebpagePreferences.allowsContentJavaScript)
-        _ = try await mounted.callAsyncJavaScript(
-            "document.querySelector('a').click(); return true;",
-            arguments: [:],
-            in: nil,
-            contentWorld: .defaultClient
-        )
-        await fulfillment(of: [received], timeout: 5)
-        XCTAssertEqual(receivedTarget, "https://example.com/a b?x=1&y=2")
+        XCTAssertEqual(derived.nativeRenderPlan.links.map(\.target), [
+            "https://example.com/a b?x=1&y=2",
+        ])
+        XCTAssertFalse(session.textView.isEditable)
     }
 
     @MainActor
-    func testMountedMermaidFailureRoutesOnlyClosedRecoveryActions() async throws {
-        let received = expectation(description: "preview issue actions reported")
-        received.expectedFulfillmentCount = 2
-        var actions: [(PreviewIssueAction, Int)] = []
-        let markdown = "前文\n\n```mermaid\npie\ntitle Values\n```"
-        let marker = try XCTUnwrap(markdown.range(of: "```mermaid"))
-        let markerStart = try XCTUnwrap(marker.lowerBound.samePosition(in: markdown.utf8))
-        let expectedOffset = markdown.utf8.distance(
-            from: markdown.utf8.startIndex,
-            to: markerStart
-        )
-        let root = MarkdownPreviewView(
-            html: MarkdownRenderer.htmlDocument(for: markdown),
-            baseURL: nil,
-            onPreviewIssueAction: { action, offset in
-                actions.append((action, offset))
-                received.fulfill()
-            }
-        )
-        let hosting = NSHostingView(rootView: root)
-        hosting.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
-        let window = NSWindow(
-            contentRect: hosting.frame,
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
-        )
-        window.animationBehavior = .none
-        window.contentView = hosting
-        window.makeKeyAndOrderFront(nil)
-        defer { window.orderOut(nil) }
-        hosting.layoutSubtreeIfNeeded()
+    func testNativeProjectionMermaidUsesEngineProducedImage() async throws {
+        let source = "```mermaid\nflowchart LR\nA[Start] --> B[Done]\n```"
+        let session = MarkdownSourceEditorSession(role: .renderedProjection)
+        session.textView.string = source
+        let candidate = await session.deriveContent(for: source, configuration: .default)
+        let derived = try XCTUnwrap(candidate)
+        session.installSharedRenderedPlan(derived.nativeRenderPlan, source: source)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
 
-        var webView: WKWebView?
-        var actionsAreReady = false
-        for _ in 0..<100 {
-            webView = descendants(of: hosting).compactMap { $0 as? WKWebView }.first
-            if let candidate = webView,
-               candidate.isLoading == false,
-               let isReady = try? await candidate.callAsyncJavaScript(
-                   "return document.querySelectorAll('[data-inflow-preview-error-action]').length === 2;",
-                   arguments: [:],
-                   in: nil,
-                   contentWorld: .defaultClient
-               ) as? Bool,
-               isReady
-            {
-                actionsAreReady = true
-                break
-            }
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        let mounted = try XCTUnwrap(webView)
-        XCTAssertTrue(actionsAreReady)
-        XCTAssertFalse(mounted.configuration.defaultWebpagePreferences.allowsContentJavaScript)
-        for action in ["locate", "retry"] {
-            _ = try await mounted.callAsyncJavaScript(
-                "document.querySelector(`[data-inflow-preview-error-action='${action}']`).click(); return true;",
-                arguments: ["action": action],
-                in: nil,
-                contentWorld: .defaultClient
+        let diagram = try XCTUnwrap(derived.nativeRenderPlan.mermaidDiagrams.first)
+        XCTAssertTrue(diagram.svg.contains("<svg"))
+        XCTAssertNotNil(
+            session.textView.renderedImage(
+                atUTF16Location: diagram.sourceRange.utf16Range.location
             )
-        }
-        await fulfillment(of: [received], timeout: 5)
-        XCTAssertEqual(actions.map(\.0), [.locate, .retry])
-        XCTAssertEqual(actions.map(\.1), [expectedOffset, expectedOffset])
+        )
+    }
+
+    func testNativeRemoteImageResolutionAcceptsOnlyRestrictedWebTargets() {
+        XCTAssertEqual(
+            RenderedMarkdownImageTarget.resolve(
+                "https://private.example/image.png?token=secret",
+                documentDirectory: nil
+            ),
+            .remote(URL(string: "https://private.example/image.png?token=secret")!)
+        )
+        XCTAssertNil(
+            RenderedMarkdownImageTarget.resolve(
+                "https://user:secret@example.com/private.png",
+                documentDirectory: nil
+            )
+        )
+        XCTAssertNil(
+            RenderedMarkdownImageTarget.resolve(
+                "javascript:alert(1)",
+                documentDirectory: nil
+            )
+        )
+    }
+
+    func testNativeRenderPlanCarriesClosedNavigationMetadata() throws {
+        let source = "# 标题\n\n[资料](../资料/说明.md#章节)"
+        let derived = try XCTUnwrap(
+            EditorEngineDerivedContent.deriveSynchronously(
+                source: source,
+                configuration: .default
+            )
+        )
+
+        XCTAssertEqual(derived.analysis.headings.map(\.title), ["标题"])
+        XCTAssertEqual(
+            derived.nativeRenderPlan.links.map(\.target),
+            ["../资料/说明.md#章节"]
+        )
+        XCTAssertTrue(derived.nativeRenderPlan.exactlyMatches(source))
     }
 
     @MainActor
-    func testMountedRemoteImageUsesARestrictedNetworkImageElement() async throws {
-        let target = "https://private.example/图.png?token=secret"
-        let renderedTarget = try XCTUnwrap(URL(string: target)?.absoluteString)
-        let root = MarkdownPreviewView(
-            html: MarkdownRenderer.htmlDocument(for: "![图](\(target))"),
-            baseURL: nil
-        )
-        let hosting = NSHostingView(rootView: root)
-        hosting.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
-        let window = NSWindow(
-            contentRect: hosting.frame,
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
-        )
-        window.animationBehavior = .none
-        window.contentView = hosting
-        window.makeKeyAndOrderFront(nil)
-        defer { window.orderOut(nil) }
-        hosting.layoutSubtreeIfNeeded()
+    func testEditableAndReadOnlySurfacesInstallOneIdenticalNativePlan() async throws {
+        let source = "# 标题\n\n> 注意\n\n- 项目\n\n| A | B |\n| --- | --- |\n| 1 | 2 |"
+        let editable = MarkdownSourceEditorSession()
+        let readOnly = MarkdownSourceEditorSession(role: .renderedProjection)
+        editable.textView.string = source
+        readOnly.textView.string = source
+        let candidate = await editable.deriveContent(for: source, configuration: .default)
+        let derived = try XCTUnwrap(candidate)
 
-        var webView: WKWebView?
-        var imageIsReady = false
-        for _ in 0..<100 {
-            webView = descendants(of: hosting).compactMap { $0 as? WKWebView }.first
-            if let candidate = webView,
-               let isReady = try? await candidate.callAsyncJavaScript(
-                   "const image = document.querySelector('img.inflow-remote-image'); return image?.getAttribute('src') === target && image?.getAttribute('referrerpolicy') === 'no-referrer';",
-                   arguments: ["target": renderedTarget],
-                   in: nil,
-                   contentWorld: .defaultClient
-               ) as? Bool,
-               isReady
-            {
-                imageIsReady = true
-                break
-            }
-            try await Task.sleep(nanoseconds: 20_000_000)
+        for session in [editable, readOnly] {
+            session.installSharedRenderedPlan(derived.nativeRenderPlan, source: source)
+            session.setPresentation(.rendered, source: source, onLinkClick: nil)
         }
-        let mounted = try XCTUnwrap(webView)
-        XCTAssertTrue(imageIsReady)
-        XCTAssertFalse(mounted.configuration.defaultWebpagePreferences.allowsContentJavaScript)
+
+        XCTAssertEqual(
+            editable.textView.renderedReplacementMarkers,
+            readOnly.textView.renderedReplacementMarkers
+        )
+        XCTAssertEqual(editable.textView.renderedQuoteRanges, readOnly.textView.renderedQuoteRanges)
+        XCTAssertEqual(editable.textView.string, readOnly.textView.string)
     }
 
     private func temporaryDirectory() throws -> URL {
@@ -1891,21 +1638,4 @@ final class MarkdownRendererTests: XCTestCase {
         Data(value.utf8).map { String(format: "%02x", $0) }.joined()
     }
 
-    @MainActor
-    private func descendants(of view: NSView) -> [NSView] {
-        [view] + view.subviews.flatMap(descendants)
-    }
-}
-
-@MainActor
-private final class PreviewTestLoadDelegate: NSObject, WKNavigationDelegate {
-    private let onFinish: () -> Void
-
-    init(onFinish: @escaping () -> Void) {
-        self.onFinish = onFinish
-    }
-
-    func webView(_: WKWebView, didFinish _: WKNavigation?) {
-        onFinish()
-    }
 }

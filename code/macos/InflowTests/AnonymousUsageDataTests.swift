@@ -29,7 +29,7 @@ final class AnonymousUsageDataTests: XCTestCase {
         }
     }
 
-    func testLaunchInfoAndEntitlementsContainNoTelemetryAndOnlyWebKitClientCapability() throws {
+    func testLaunchInfoAndEntitlementsContainNoTelemetryAndOnlyNetworkClientCapability() throws {
         let info = try propertyList(at: "macos/Inflow/Resources/Info.plist")
         XCTAssertNil(info["InflowAnonymousUsageEndpoint"])
         XCTAssertEqual(info["NSSupportsAutomaticTermination"] as? Bool, false)

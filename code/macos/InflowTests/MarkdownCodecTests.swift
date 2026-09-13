@@ -1,7 +1,6 @@
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
-import WebKit
 import XCTest
 @testable import Inflow
 
@@ -198,13 +197,14 @@ final class MarkdownCodecTests: XCTestCase {
             contentView.bounds.height * 0.8,
             "The source editor should consume the available document height."
         )
-        let visiblePreviewWebViews = descendantWebViews(in: contentView).filter { webView in
-            !hasHiddenAncestor(webView)
-                && !webView.convert(webView.bounds, to: contentView)
+        let visibleReadOnlyEditors = descendantTextViews(in: contentView).filter { textView in
+            !textView.isEditable
+                && !hasHiddenAncestor(textView)
+                && !textView.convert(textView.bounds, to: contentView)
                     .intersection(contentView.bounds).isEmpty
         }
         XCTAssertTrue(
-            visiblePreviewWebViews.isEmpty,
+            visibleReadOnlyEditors.isEmpty,
             "A fresh untitled document must start in the source editor, not split preview"
         )
 
@@ -271,18 +271,6 @@ private func descendantTextViews(in view: NSView) -> [NSTextView] {
     }
     for subview in view.subviews {
         result.append(contentsOf: descendantTextViews(in: subview))
-    }
-    return result
-}
-
-@MainActor
-private func descendantWebViews(in view: NSView) -> [WKWebView] {
-    var result: [WKWebView] = []
-    if let webView = view as? WKWebView {
-        result.append(webView)
-    }
-    for subview in view.subviews {
-        result.append(contentsOf: descendantWebViews(in: subview))
     }
     return result
 }
