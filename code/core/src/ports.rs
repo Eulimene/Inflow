@@ -12,6 +12,8 @@ use crate::render::RenderConfiguration;
 pub trait MarkdownPort: Send + Sync {
     fn parse(&self, source: &str, math_enabled: bool) -> DocumentIr;
 
+    // These independent flags mirror the engine command and rendering policy.
+    #[allow(clippy::fn_params_excessive_bools)]
     fn derive(
         &self,
         document: &DocumentIr,

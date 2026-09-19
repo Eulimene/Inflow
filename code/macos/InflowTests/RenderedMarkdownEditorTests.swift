@@ -450,8 +450,8 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
 
         let diagram = try XCTUnwrap(plan.mermaidDiagrams.first)
-        XCTAssertEqual(diagram.intrinsicWidth, 230)
-        XCTAssertEqual(diagram.intrinsicHeight, 73)
+        XCTAssertEqual(diagram.intrinsicWidth, 175)
+        XCTAssertEqual(diagram.intrinsicHeight, 68)
         XCTAssertNotNil(
             session.textView.renderedImage(
                 atUTF16Location: diagram.sourceRange.utf16Range.location
@@ -1569,8 +1569,8 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         """
         let plan = RenderedMarkdownEditor.plan(for: source)
         let diagram = try XCTUnwrap(plan.mermaidDiagrams.first)
-        XCTAssertEqual(diagram.intrinsicWidth, 564)
-        XCTAssertEqual(diagram.intrinsicHeight, 73)
+        XCTAssertEqual(diagram.intrinsicWidth, 380)
+        XCTAssertEqual(diagram.intrinsicHeight, 68)
 
         let session = MarkdownSourceEditorSession()
         session.scrollView.frame = NSRect(x: 0, y: 0, width: 360, height: 280)

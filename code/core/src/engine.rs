@@ -558,6 +558,8 @@ impl EditorEngine {
         Ok(self.with_history_state(patch))
     }
 
+    // Mirrors the independent rendering flags in the engine command.
+    #[allow(clippy::fn_params_excessive_bools)]
     fn refresh_derived(
         &mut self,
         revision: Revision,
@@ -1151,14 +1153,14 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct CountingMarkdownPort {
-        parse_calls: Arc<AtomicUsize>,
-        derive_calls: Arc<AtomicUsize>,
-        resolve_calls: Arc<AtomicUsize>,
+        parses: Arc<AtomicUsize>,
+        derivations: Arc<AtomicUsize>,
+        resolutions: Arc<AtomicUsize>,
     }
 
     impl MarkdownPort for CountingMarkdownPort {
         fn parse(&self, source: &str, math_enabled: bool) -> DocumentIr {
-            self.parse_calls.fetch_add(1, Ordering::Relaxed);
+            self.parses.fetch_add(1, Ordering::Relaxed);
             CommonMarkAdapter.parse(source, math_enabled)
         }
 
@@ -1171,7 +1173,7 @@ mod tests {
             defer_mermaid: bool,
             include_html: bool,
         ) -> DerivedState {
-            self.derive_calls.fetch_add(1, Ordering::Relaxed);
+            self.derivations.fetch_add(1, Ordering::Relaxed);
             CommonMarkAdapter.derive(
                 document,
                 revision,
@@ -1183,7 +1185,7 @@ mod tests {
         }
 
         fn resolve_mermaid(&self, document: &DocumentIr, revision: Revision) -> MermaidPatch {
-            self.resolve_calls.fetch_add(1, Ordering::Relaxed);
+            self.resolutions.fetch_add(1, Ordering::Relaxed);
             CommonMarkAdapter.resolve_mermaid(document, revision)
         }
 
@@ -1403,9 +1405,9 @@ mod tests {
                 mode: EditorMode::Editable,
             },
             Box::new(CountingMarkdownPort {
-                parse_calls: Arc::clone(&parse_calls),
-                derive_calls: Arc::clone(&derive_calls),
-                resolve_calls: Arc::clone(&resolve_calls),
+                parses: Arc::clone(&parse_calls),
+                derivations: Arc::clone(&derive_calls),
+                resolutions: Arc::clone(&resolve_calls),
             }),
         )
         .expect("engine with injected port should be valid");
@@ -1501,9 +1503,9 @@ mod tests {
                 mode: EditorMode::Editable,
             },
             Box::new(CountingMarkdownPort {
-                parse_calls: Arc::clone(&parse_calls),
-                derive_calls: Arc::clone(&derive_calls),
-                resolve_calls: Arc::clone(&resolve_calls),
+                parses: Arc::clone(&parse_calls),
+                derivations: Arc::clone(&derive_calls),
+                resolutions: Arc::clone(&resolve_calls),
             }),
         )
         .expect("engine with injected port should be valid");

@@ -3954,9 +3954,9 @@ final class RenderedMarkdownImageView: NSImageView {
             return
         }
         let palette = MarkdownRenderPalette.resolved(for: effectiveAppearance)
-        layer?.borderWidth = 1
-        layer?.borderColor = palette.borderColor.cgColor
-        layer?.cornerRadius = 6
+        layer?.borderWidth = 0
+        layer?.borderColor = nil
+        layer?.cornerRadius = 0
         layer?.backgroundColor = palette.canvasColor.cgColor
     }
 

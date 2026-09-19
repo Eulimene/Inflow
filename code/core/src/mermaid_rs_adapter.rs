@@ -2,7 +2,7 @@
 //!
 //! This is the only module allowed to reference `mermaid-rs-renderer`.
 
-use mermaid_rs_renderer::{RenderOptions, Theme, render_strict};
+use mermaid_rs_renderer::{RenderOptions, render_strict};
 
 use crate::mermaid::{MermaidError, MermaidRenderer};
 
@@ -75,12 +75,10 @@ fn expanded_text_element(open: &str, body: &str) -> Option<String> {
         remaining = &remaining[span_close + "</tspan>".len()..];
     }
 
-    let multiline = spans.len() > 1;
     let mut output = String::with_capacity(open.len() * spans.len() + body.len());
-    for (index, (x, y, content, weight)) in spans.into_iter().enumerate() {
+    for (x, y, content, weight) in spans {
         let mut line_open = replacing_attribute(open, "x", x)?;
         line_open = replacing_attribute(&line_open, "y", &format!("{y:.2}"))?;
-        let weight = weight.or((multiline && index == 0).then_some("600"));
         if let Some(weight) = weight
             && attribute(&line_open, "font-weight").is_none()
         {
@@ -110,25 +108,21 @@ fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
 }
 
 fn options() -> RenderOptions {
-    let mut theme = Theme::modern();
-    "-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif"
-        .clone_into(&mut theme.font_family);
-    theme.font_size = 15.0;
-    "#f1efff".clone_into(&mut theme.primary_color);
-    "#34373d".clone_into(&mut theme.primary_text_color);
-    "#8b72e8".clone_into(&mut theme.primary_border_color);
-    "#737982".clone_into(&mut theme.line_color);
-    "#f7f7f8".clone_into(&mut theme.edge_label_background);
-    "#ffffff".clone_into(&mut theme.background);
-    "#34373d".clone_into(&mut theme.text_color);
-
-    let mut options = RenderOptions::modern()
-        .with_node_spacing(56.0)
-        .with_rank_spacing(68.0);
-    options.theme = theme;
-    options.layout.node_padding_x = 28.0;
-    options.layout.node_padding_y = 14.0;
-    options.layout.label_line_height = 1.35;
+    // Typora's light theme uses classic Mermaid colors and typography.
+    // Keep these in the SVG so AppKit, HTML and PDF use the same appearance.
+    let mut options = RenderOptions::mermaid_default()
+        .with_node_spacing(50.0)
+        .with_rank_spacing(50.0);
+    let theme = &mut options.theme;
+    "'trebuchet ms', verdana, arial, 'PingFang SC', sans-serif".clone_into(&mut theme.font_family);
+    "#9370DB".clone_into(&mut theme.primary_border_color);
+    "#333333".clone_into(&mut theme.line_color);
+    "#E8E8E8".clone_into(&mut theme.edge_label_background);
+    "#ECECFF".clone_into(&mut theme.sequence_actor_fill);
+    "#9370DB".clone_into(&mut theme.sequence_actor_border);
+    options.layout.node_padding_x = 15.0;
+    options.layout.node_padding_y = 10.0;
+    options.layout.label_line_height = 1.5;
     options.layout.max_label_width_chars = 28;
     options
 }
@@ -148,7 +142,8 @@ mod tests {
 
         assert!(raw.contains("<tspan"));
         assert!(!converted.contains("<tspan"));
-        assert!(converted.contains("font-weight=\"600\">接手</text>"));
+        assert!(converted.contains(">接手</text>"));
+        assert!(!converted.contains("font-weight=\"600\""));
         assert!(converted.contains(">打开文件</text>"));
         assert_eq!(attribute(&raw, "viewBox"), attribute(&converted, "viewBox"));
     }

@@ -1266,8 +1266,8 @@ mod tests {
         assert_eq!(plan.tables[0].rows[1][0].text, "x");
         assert_eq!(plan.mermaid_diagrams.len(), 1);
         assert!(!plan.mermaid_diagrams[0].is_placeholder);
-        assert_eq!(plan.mermaid_diagrams[0].intrinsic_width, 185);
-        assert_eq!(plan.mermaid_diagrams[0].intrinsic_height, 73);
+        assert_eq!(plan.mermaid_diagrams[0].intrinsic_width, 127);
+        assert_eq!(plan.mermaid_diagrams[0].intrinsic_height, 68);
         assert!(
             plan.local_source_blocks
                 .iter()

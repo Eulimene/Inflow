@@ -206,10 +206,8 @@ enum MarkdownRenderer {
             .math-error-actions { display: flex; gap: 8px; margin-top: 10px; }
             .math-error-inline .math-error-actions { display: inline-flex; margin-top: 0; }
             .math-error-actions button { font: inherit; color: inherit; border: 1px solid currentColor; border-radius: 6px; background: transparent; padding: 5px 9px; cursor: pointer; }
-            .mermaid-diagram { margin: 1.4em 0; overflow-x: auto; }
-            .mermaid-diagram svg { min-width: 420px; width: 100%; height: auto; color: currentColor; }
-            .mermaid-diagram .node rect { fill: var(--md-surface); stroke: var(--md-border); stroke-width: 1.5; }
-            .mermaid-diagram text { fill: currentColor; font: 14px -apple-system, BlinkMacSystemFont, sans-serif; }
+            .mermaid-diagram { margin: 1.4em 0; overflow-x: auto; text-align: center; }
+            .mermaid-diagram svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
             .mermaid-error { border: 1px solid var(--md-warning); border-radius: \(MarkdownRenderMetrics.blockCornerRadius)px; padding: 12px 14px; color: var(--md-warning); }
             .mermaid-error-actions { display: flex; gap: 8px; margin-top: 10px; }
             .mermaid-error-actions button { font: inherit; color: inherit; border: 1px solid currentColor; border-radius: 6px; background: transparent; padding: 5px 9px; cursor: pointer; }
