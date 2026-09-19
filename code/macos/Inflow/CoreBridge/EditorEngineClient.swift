@@ -126,7 +126,7 @@ extension EditorEngineDerivedContent {
                     revision: 0,
                     mathEnabled: configuration.mathRenderingEnabled,
                     mermaidEnabled: configuration.mermaidRenderingEnabled,
-                    deferMermaid: false,
+                    deferMermaid: true,
                     includeHTML: true
                 )
             )
@@ -471,9 +471,14 @@ final class EditorEngineClient {
     ) async -> EditorEngineMermaidResolution? {
         await pending?.value
         guard !Task.isCancelled else { return nil }
-        return await client.resolveMermaid(
+        guard let content = await client.derive(
             expectedText: source,
-            mathEnabled: configuration.mathRenderingEnabled
+            mathEnabled: configuration.mathRenderingEnabled,
+            mermaidEnabled: configuration.mermaidRenderingEnabled,
+            deferMermaid: true
+        ) else { return nil }
+        return await JavaScriptRenderService.shared.resolveDiagrams(
+            in: content.nativeRenderPlan, revision: content.revision
         )
     }
 
@@ -2144,6 +2149,7 @@ private struct EditorEngineRawNativeRenderPlan: Decodable {
     let images: [Image]
     let tables: [Table]
     let mermaidDiagrams: [Diagram]
+    let renderRequests: [RenderRequest]
 
     struct Marker: Decodable {
         let kind: String
@@ -2243,6 +2249,20 @@ private struct EditorEngineRawNativeRenderPlan: Decodable {
         }
     }
 
+    struct RenderRequest: Decodable {
+        let sourceRange: EditorEngineByteRange
+        let contentRange: EditorEngineByteRange
+        let kind: String
+        let language: String
+        let source: String
+        let display: Bool
+        enum CodingKeys: String, CodingKey {
+            case sourceRange = "source_range"
+            case contentRange = "content_range"
+            case kind, language, source, display
+        }
+    }
+
     struct Diagram: Decodable {
         let sourceRange: EditorEngineByteRange
         let svg: String
@@ -2266,6 +2286,7 @@ private struct EditorEngineRawNativeRenderPlan: Decodable {
         case images
         case tables
         case mermaidDiagrams = "mermaid_diagrams"
+        case renderRequests = "render_requests"
     }
 
     func validated(source: String) throws -> RenderedMarkdownPlan {
@@ -2425,7 +2446,14 @@ private struct EditorEngineRawNativeRenderPlan: Decodable {
             links: mappedLinks,
             images: mappedImages,
             tables: mappedTables,
-            mermaidDiagrams: mappedDiagrams
+            mermaidDiagrams: mappedDiagrams,
+            renderRequests: try renderRequests.map { item in
+                JavaScriptRenderRequest(
+                    sourceRange: try mapped(item.sourceRange),
+                    contentRange: try mapped(item.contentRange, permitsEmpty: true),
+                    kind: item.kind, language: item.language, source: item.source, display: item.display
+                )
+            }
         )
     }
 

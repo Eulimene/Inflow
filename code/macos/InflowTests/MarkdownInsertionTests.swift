@@ -1049,7 +1049,7 @@ final class MarkdownInsertionTests: XCTestCase {
         )
         XCTAssertEqual(inline.resultingSource, "Euler $e^{i\\pi}+1=0$ end")
         let inlineHTML = try MarkdownRenderer.htmlFragment(for: inline.resultingSource)
-        XCTAssertTrue(inlineHTML.contains("<math"))
+        XCTAssertTrue(inlineHTML.contains("data-inflow-render=\"math\""))
         XCTAssertTrue(inlineHTML.contains("display=\"inline\""))
         XCTAssertTrue(inlineHTML.contains("<msup>"))
 

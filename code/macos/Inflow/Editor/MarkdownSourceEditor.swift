@@ -53,6 +53,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var renderedImageTask: Task<Void, Never>?
     private var deferredMermaidGeneration = 0
     private var deferredMermaidTask: Task<Void, Never>?
+    private var javaScriptResourcesTask: Task<Void, Never>?
+    private var javaScriptResults: [String: JavaScriptRenderedOutput] = [:]
+    private var javaScriptFailures: Set<String> = []
+    private var javaScriptSnapshot = ""
+
     private var renderedInteractionTask: Task<Void, Never>?
     private let lineNumberRuler: MarkdownLineNumberRulerView
     private let engineClient: EditorEngineClient
@@ -280,6 +285,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 generation: mermaidGeneration
             )
         }
+        if presentation == .source, syntaxHighlightingEnabled {
+            scheduleJavaScriptResources(for: content.nativeRenderPlan)
+        }
         return content
     }
 
@@ -288,9 +296,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     /// separate HTML loading lifecycle.
     func waitForRenderedResources() async {
         await deferredMermaidTask?.value
+        await javaScriptResourcesTask?.value
         await renderedImageTask?.value
         await Task.yield()
         textView.layoutSubtreeIfNeeded()
+        textView.layoutRenderedImages()
     }
 
     /// Installs the already-derived native plan in another TextKit surface.
@@ -590,6 +600,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             textView.renderedAnchorSourceRanges = []
             textView.setAccessibilityLabel("Markdown 源码编辑器")
             applySourceAppearance(sourceAppearance, force: changed)
+            if syntaxHighlightingEnabled, let plan = engineRenderedPlan {
+                scheduleJavaScriptResources(for: plan)
+            }
         case .rendered:
             configureLineWrapping(true)
             textView.setAccessibilityLabel("Markdown 即时编辑器")
@@ -843,12 +856,22 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             rangesOverlap(diagram.sourceRange.utf16Range, editingRange)
                 ? nil : diagram.sourceRange.utf16Range
         }
+        let mathAnchors = plan.renderRequests.compactMap { request -> NSRange? in
+            guard request.kind == "math", javaScriptResults[request.cacheKey]?.svg != nil,
+                  !rangesOverlap(request.sourceRange.utf16Range, editingRange) else { return nil }
+            return request.sourceRange.utf16Range
+        }
         var collapsedRanges = plan.markers.compactMap { marker -> NSRange? in
+            if marker.kind == .mathDelimiter,
+               plan.renderRequests.contains(where: { request in
+                   request.kind == "math" && javaScriptResults[request.cacheKey]?.svg == nil
+                       && NSIntersectionRange(request.sourceRange.utf16Range, marker.sourceRange.utf16Range).length > 0
+               }) { return nil }
             guard !marker.kind.remainsVisibleWhenInactive,
                   !rangesOverlap(marker.sourceRange.utf16Range, editingRange)
             else { return nil }
             return marker.sourceRange.utf16Range
-        } + anchoredRanges
+        } + anchoredRanges + mathAnchors
         collapsedRanges += plan.localSourceBlocks.flatMap { block -> [NSRange] in
             guard block.reasons.contains(.fencedCode),
                   !rangesOverlap(block.sourceRange.utf16Range, editingRange),
@@ -980,6 +1003,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             )
         }
         for marker in plan.markers {
+            if marker.kind == .mathDelimiter,
+               plan.renderRequests.contains(where: { request in
+                   request.kind == "math" && javaScriptResults[request.cacheKey]?.svg == nil
+                       && NSIntersectionRange(request.sourceRange.utf16Range, marker.sourceRange.utf16Range).length > 0
+               }) { continue }
+
             let range = marker.sourceRange.utf16Range
             guard NSMaxRange(range) <= storage.length,
                   !plan.localSourceBlocks.contains(where: {
@@ -1094,9 +1123,10 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 storage: storage
             )
         }
+        applyJavaScriptResources(plan, editingRange: editingRange, storage: storage)
         textView.endRenderedOverlayUpdate()
         storage.endEditing()
-        textView.renderedAnchorSourceRanges = anchoredRanges
+        textView.renderedAnchorSourceRanges = anchoredRanges + mathAnchors
         textView.renderedCollapsedSourceRanges = collapsedRanges
         renderedAppliedAppearance = sourceAppearance
         renderedAppliedTheme = renderedTheme
@@ -1105,6 +1135,100 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         syncRenderedTypingAttributes()
         refreshWritingModePresentation()
         loadRenderedImages(for: plan)
+        scheduleJavaScriptResources(for: plan)
+    }
+
+    private func scheduleJavaScriptResources(for plan: RenderedMarkdownPlan) {
+        let source = plan.sourceSnapshot
+        if !UTF8Text.isExactlyEqual(javaScriptSnapshot, source) {
+            javaScriptResourcesTask?.cancel()
+            javaScriptSnapshot = source
+            let keys = Set(plan.renderRequests.map(\.cacheKey))
+            javaScriptResults = javaScriptResults.filter { keys.contains($0.key) }
+            javaScriptFailures.removeAll()
+        }
+        let requests = plan.renderRequests.filter {
+            ($0.kind != "math" || presentation == .rendered)
+                && javaScriptResults[$0.cacheKey] == nil && !javaScriptFailures.contains($0.cacheKey)
+        }
+        guard !requests.isEmpty else {
+            if presentation == .source { applyCodeMirrorTokens(plan, storage: textView.textStorage) }
+            return
+        }
+        javaScriptResourcesTask?.cancel()
+        javaScriptResourcesTask = Task { @MainActor [weak self] in
+            for request in requests {
+                do {
+                    let input = request.kind == "math" ? request : JavaScriptRenderRequest(
+                        sourceRange: request.sourceRange, contentRange: request.contentRange,
+                        kind: "code", language: request.language, source: request.source, display: true
+                    )
+                    let result = try await JavaScriptRenderService.shared.render(input)
+                    guard let self, !Task.isCancelled,
+                          UTF8Text.isExactlyEqual(self.textView.string, source) else { return }
+                    self.javaScriptResults[request.cacheKey] = result
+                } catch is CancellationError { return }
+                catch {
+                    guard let self, !Task.isCancelled,
+                          UTF8Text.isExactlyEqual(self.textView.string, source) else { return }
+                    self.javaScriptFailures.insert(request.cacheKey)
+                }
+            }
+            guard let self, !Task.isCancelled, !self.textView.hasMarkedText(),
+                  UTF8Text.isExactlyEqual(self.textView.string, source) else { return }
+            if self.presentation == .rendered {
+                self.applyRenderedPresentation(source: source, force: true)
+            } else {
+                self.applyCodeMirrorTokens(plan, storage: self.textView.textStorage)
+            }
+        }
+    }
+
+    private func applyCodeMirrorTokens(_ plan: RenderedMarkdownPlan, storage: NSTextStorage?) {
+        guard let storage, !textView.hasMarkedText() else { return }
+        let palette = MarkdownRenderPalette.resolved(for: textView.effectiveAppearance)
+        let undo = textView.undoManager
+        let undoEnabled = undo?.isUndoRegistrationEnabled == true
+        if undoEnabled { undo?.disableUndoRegistration() }
+        defer { if undoEnabled { undo?.enableUndoRegistration() } }
+        storage.beginEditing()
+        defer { storage.endEditing() }
+        for request in plan.renderRequests where request.kind != "math" {
+            if request.kind != "code", presentation == .rendered,
+               !rangesOverlap(request.sourceRange.utf16Range, currentRenderedEditingRange(source: plan.sourceSnapshot)) { continue }
+            guard let tokens = javaScriptResults[request.cacheKey]?.tokens else { continue }
+            for token in tokens {
+                guard token.start >= 0, token.end > token.start,
+                      token.end <= request.contentRange.utf16Range.length else { continue }
+                let range = NSRange(location: request.contentRange.utf16Range.location + token.start,
+                                    length: token.end - token.start)
+                guard NSMaxRange(range) <= storage.length else { continue }
+                let color: NSColor
+                switch token.kind {
+                case "keyword", "tag": color = palette.accentColor
+                case "string": color = NSColor.systemGreen
+                case "number", "literal": color = NSColor.systemOrange
+                case "comment": color = palette.secondaryTextColor
+                case "type", "attribute": color = NSColor.systemPurple
+                default: color = palette.textColor
+                }
+                storage.addAttribute(.foregroundColor, value: color, range: range)
+            }
+        }
+    }
+
+    private func applyJavaScriptResources(_ plan: RenderedMarkdownPlan, editingRange: NSRange?, storage: NSTextStorage) {
+        applyCodeMirrorTokens(plan, storage: storage)
+        for request in plan.renderRequests where request.kind == "math" {
+            guard !rangesOverlap(request.sourceRange.utf16Range, editingRange),
+                  let svg = javaScriptResults[request.cacheKey]?.svg,
+                  let image = NSImage(data: Data(svg.utf8)) else { continue }
+            image.isTemplate = true
+            applyRenderedImage(image, alternative: "数学公式：" + request.source,
+                               sourceRange: request.sourceRange.utf16Range,
+                               fillsAvailableWidth: request.display,
+                               collapsesSourceLines: request.display, storage: storage)
+        }
     }
 
     private func cancelRenderedImageLoading() {
@@ -1539,7 +1663,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     private func renderedMermaidImage(from diagram: RenderedMarkdownMermaidDiagram) -> NSImage? {
-        guard let image = NSImage(data: Data(diagram.svg.utf8)), image.isValid else { return nil }
+        guard let image = NSImage(data: diagram.pdfData ?? Data(diagram.svg.utf8)), image.isValid else { return nil }
         image.isTemplate = false
         image.size = NSSize(width: diagram.intrinsicWidth, height: diagram.intrinsicHeight)
         image.accessibilityDescription = "Mermaid 图表"
@@ -2032,6 +2156,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             else { return }
             self.syntaxApplicationIsComplete = true
             self.syntaxApplicationTask = nil
+            let plan = RenderedMarkdownEditor.plan(for: self.textView.string)
+            self.applyCodeMirrorTokens(plan, storage: self.textView.textStorage)
+            self.scheduleJavaScriptResources(for: plan)
         }
     }
 
@@ -3107,6 +3234,7 @@ final class WindowAwareTextView: NSTextView {
             )
         }
         imageView.image = image
+        imageView.contentTintColor = image.isTemplate ? .labelColor : nil
         imageView.presentsDiagram = alternative == "Mermaid 图表"
         imageView.setFrameSize(renderedSize)
         imageView.setAccessibilityLabel(alternative.isEmpty ? "图片" : alternative)
@@ -3220,7 +3348,7 @@ final class WindowAwareTextView: NSTextView {
         }
     }
 
-    private func layoutRenderedImages() {
+    fileprivate func layoutRenderedImages() {
         guard let layoutManager, let textContainer, !isUpdatingRenderedOverlayLayout else { return }
         isUpdatingRenderedOverlayLayout = true
         defer { isUpdatingRenderedOverlayLayout = false }

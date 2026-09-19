@@ -38,13 +38,13 @@ Inflow 是一款本地优先的 Markdown 写作工作台。当前代码只为产
 - 源码编辑、实时预览分栏和即时编辑都绑定同一 Markdown 文本与同一保存路径；即时编辑与分栏右侧还共享同一份 Rust `NativeRenderPlan` 和同一个 TextKit 最终布局实现，两者只以 `isEditable` 区分。
 - 即时编辑直接复用持久 NSTextView 与 Rust Core 的解析范围：普通文字、标题、行内代码、引用和列表在渲染态直接编辑。隐藏的 Markdown 标记保留所在文字的真实字号和行高，插入光标由可见字符的排版属性决定；只有围栏代码、Mermaid 等必须暴露结构的块才在光标进入时局部显示源码。
 - 光标移到另一块或编辑器失去焦点后，旧块立即恢复渲染；不再需要右上角“编辑源码/完成编辑”按钮，也不创建富文本副本。正文修改统一进入 Rust Engine 的撤销与重做历史。
-- 图片以不改写原文的布局覆盖呈现，加载前显示占位；表格保持带表头、对齐和网格线的原生渲染，宽度随编辑区自适应，单元格可直接编辑，右键菜单提供行列增删与列对齐；表格外的输入会复用既有表格视图。引用隐藏 `>` 并显示引用条。受支持的 Mermaid 由同一次 Rust Engine 派生为预览和原生计划生成 SVG，无专用 C ABI；编辑 Mermaid 块时图表覆盖层会先卸载。围栏代码非编辑时隐藏围栏并呈现代码内容，光标进入时切换为局部源码。
+- 图片以不改写原文的布局覆盖呈现，加载前显示占位；表格保持带表头、对齐和网格线的原生渲染，宽度随编辑区自适应，单元格可直接编辑，右键菜单提供行列增删与列对齐；表格外的输入会复用既有表格视图。引用隐藏 `>` 并显示引用条。图表由 Rust Engine 提供源码请求，经离线 JavaScript 适配层生成 SVG，无专用 C ABI；编辑 Mermaid 块时图表覆盖层会先卸载。围栏代码非编辑时隐藏围栏并呈现代码内容，光标进入时切换为局部源码。
 - 输入法存在 marked text 时保留现有展示；链接默认单击导航，也可在“设置 > 预览”中改为只允许从右键菜单打开。文本和表格链接在鼠标悬停时都显示 Hover 背景。
 - 当前格式菜单只暴露粗体、斜体、行内代码、H1–H6、引用和无序/有序/任务列表；链接与固定表格模板位于插入菜单。
 
 ### Markdown、资源与链接
 
-- 当前验收范围是 CommonMark/GFM 基础、flowchart 与 stateDiagram-v2；单个图表失败只降级该块。
+- 代码围栏支持 mermaid.js（`mermaid`）、flowchart.js（`flow`）和 js-sequence-diagrams（`sequence`）；CodeMirror 提供代码语法高亮，MathJax 提供行内与块级公式。单块失败保留原文。实现边界见 [JavaScript 渲染适配层](docs/javascript-rendering.md)，新增能力不代表已通过人工 UAT。
 - 原始 HTML 只作为可读源码或安全转义文本处理，不执行其中的脚本、样式、事件、表单、嵌入或网络动作。
 - 已保存文档可通过文件选择、拖入或剪贴板加入静态 PNG/JPEG；资源复制到同目录 assets，重名使用递增后缀。
 - 撤销图片插入只撤销 Markdown 引用，不删除已经写入 assets 的资源文件。
@@ -63,7 +63,7 @@ Inflow 是一款本地优先的 Markdown 写作工作台。当前代码只为产
 - 自动保存，以及 Inflow 管理的最近文档或最近项目。
 - 使用另一套 DOM→Markdown 转换器实现富文本式结构化编辑。
 - HTML 导出、深色或专业 PDF、打印合同和公共分发级交付后验。
-- 公式、脚注、其他 Mermaid 图形、完整原始 HTML 兼容和复杂格式矩阵。
+- 脚注、完整原始 HTML 兼容和复杂格式矩阵。
 - 完整恢复中心、多快照、版本时间线和完整异常恢复矩阵。
 - 项目搜索、快速打开、标签重排/拆分到窗口、项目内重命名/移动/删除和导航历史。
 - 公共版本号、Developer ID、Apple 公证、ZIP/DMG、下载来源、SHA-256、检查更新、回退、商业与公开支持。
@@ -123,7 +123,7 @@ ABI 3 只暴露 Engine create/dispatch/snapshot/free 和 owned-bytes free，其�
 
     scripts/verify-launch.sh --personal
 
-该配置只执行生成绑定校验、Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查；不创建归档或发布证据，也不执行固定设备/30 次性能协议、扩展生态合同、签名、公证或分发门禁。[`quality/personal-xctest-scope.tsv`](quality/personal-xctest-scope.tsv) 把当前 421 个 XCTest method 逐项分为 305 个 `current-direct`、25 个 `current-host`、86 个 `deferred` 和 5 个 `fixed-performance`。`--personal` 只执行 `current-direct`；其余三类不计为通过。25 个宿主用例保留为 App-host 专项验证或真实应用 UAT，其中包括需要 AppKit 打印/PDF 系统服务的导出用例；后置与固定性能用例由 deferred profile 的全量测试保留。脚本会对重复、陈旧、未分类、非法分区和四类精确计数失败关闭；新增测试不能默认混入当前门禁。可用 `scripts/verify-launch.sh --describe-profile personal` 无副作用查看边界。
+该配置只执行生成绑定校验、Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查；不创建归档或发布证据，也不执行固定设备/30 次性能协议、扩展生态合同、签名、公证或分发门禁。[`quality/personal-xctest-scope.tsv`](quality/personal-xctest-scope.tsv) 把当前 421 个 XCTest method 逐项分为 299 个 `current-direct`、31 个 `current-host`、86 个 `deferred` 和 5 个 `fixed-performance`。`--personal` 只执行 `current-direct`；其余三类不计为通过。31 个宿主用例保留为 App-host 专项验证或真实应用 UAT，其中包括需要 AppKit 打印/PDF 系统服务的导出用例；后置与固定性能用例由 deferred profile 的全量测试保留。脚本会对重复、陈旧、未分类、非法分区和四类精确计数失败关闭；新增测试不能默认混入当前门禁。可用 `scripts/verify-launch.sh --describe-profile personal` 无副作用查看边界。
 
 `--deferred-release-local`、`--deferred-signed-archive` 以及 `scripts/release-workflow.sh` 只为后续公共分发决策保留，不属于个人首版完成条件。
 

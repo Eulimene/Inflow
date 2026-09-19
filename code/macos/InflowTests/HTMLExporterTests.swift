@@ -661,16 +661,16 @@ final class HTMLExporterTests: XCTestCase {
         )
     }
 
-    func testExportRendersFormulaAsSelfContainedMathML() throws {
+    func testExportBundlesOfflineMathJax() throws {
         let data = try HTMLExporter.generate(
             snapshot: HTMLExportSnapshot(markdown: "Inline $x_1^2$\n\n$$\\frac{a}{b}$$\n")
         )
         let html = try XCTUnwrap(String(data: data, encoding: .utf8))
 
-        XCTAssertTrue(html.contains("<math xmlns=\"http://www.w3.org/1998/Math/MathML\""))
-        XCTAssertTrue(html.contains("<msubsup>"))
-        XCTAssertTrue(html.contains("<mfrac>"))
-        XCTAssertFalse(html.contains("<script"))
+        XCTAssertTrue(html.contains("data-inflow-render=\"math\""))
+        XCTAssertTrue(html.contains("x_1^2"))
+        XCTAssertTrue(html.contains("MathJax"))
+        XCTAssertTrue(html.contains("<script nonce="))
     }
 
     func testExportedFormulaFallbackHasNoEditorOffsetsOrDeadActions() throws {
@@ -681,16 +681,16 @@ final class HTMLExporterTests: XCTestCase {
         )
         let html = try XCTUnwrap(String(data: data, encoding: .utf8))
 
-        XCTAssertTrue(html.contains("无法呈现这个公式"))
+        XCTAssertTrue(html.contains("data-inflow-render=\"math\""))
         XCTAssertTrue(html.contains("\\unknown{&lt;script&gt;}"))
         XCTAssertFalse(html.contains("<script>"))
         XCTAssertFalse(html.contains("data-inflow-source-start"))
         XCTAssertFalse(html.contains("data-inflow-source-end"))
         XCTAssertFalse(html.contains("data-inflow-preview-error-action"))
-        XCTAssertFalse(html.contains("<button"))
+        XCTAssertFalse(html.contains("data-inflow-preview-error-action=\""))
     }
 
-    func testExportRendersMermaidAsSelfContainedSVG() throws {
+    func testExportBundlesOfflineDiagramAdapters() throws {
         let data = try HTMLExporter.generate(
             snapshot: HTMLExportSnapshot(
                 markdown: "```mermaid\nflowchart TD\nA[开始] --> B[结束]\n```"
@@ -699,10 +699,10 @@ final class HTMLExporterTests: XCTestCase {
         let html = try XCTUnwrap(String(data: data, encoding: .utf8))
 
         XCTAssertTrue(html.contains("class=\"mermaid-diagram\""))
-        XCTAssertTrue(html.contains("<svg"))
+        XCTAssertTrue(html.contains("InflowRender.renderDocument()"))
         XCTAssertTrue(html.contains("开始"))
-        XCTAssertFalse(html.contains("<script"))
-        XCTAssertFalse(html.contains("cdn"))
+        XCTAssertTrue(html.contains("<script nonce="))
+        XCTAssertFalse(html.contains("<script src="))
     }
 
     func testExportedMermaidFallbackHasNoEditorOffsetsOrDeadActions() throws {
@@ -713,12 +713,12 @@ final class HTMLExporterTests: XCTestCase {
         )
         let html = try XCTUnwrap(String(data: data, encoding: .utf8))
 
-        XCTAssertTrue(html.contains("无法呈现这个图表"))
+        XCTAssertTrue(html.contains("data-inflow-render=\"mermaid\""))
         XCTAssertTrue(html.contains("flowchart LR"))
         XCTAssertFalse(html.contains("data-inflow-source-start"))
         XCTAssertFalse(html.contains("data-inflow-source-end"))
         XCTAssertFalse(html.contains("data-inflow-preview-error-action"))
-        XCTAssertFalse(html.contains("<button"))
+        XCTAssertFalse(html.contains("data-inflow-preview-error-action=\""))
     }
 
     func testExportFreezesDisabledFormulaAndMermaidPresentation() throws {

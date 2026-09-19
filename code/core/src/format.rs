@@ -5,7 +5,7 @@ use std::ops::Range;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::{analysis, mermaid, render};
+use crate::{analysis, render};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InlineFormat {
@@ -867,7 +867,10 @@ pub fn insert_mermaid(
     } else {
         &source[requested_selection.clone()]
     };
-    mermaid::svg(content).map_err(|_| FormatError::AmbiguousSelection)?;
+    // Syntax validation belongs to mermaid.js. Insertion only requires nonempty source.
+    if content.trim().is_empty() {
+        return Err(FormatError::AmbiguousSelection);
+    }
     let prefix = if requested_selection.start > 0
         && source.as_bytes()[requested_selection.start - 1] != b'\n'
     {
@@ -2809,12 +2812,12 @@ mod tests {
             &source[start..end]
         );
         let formatted = replacing(source, inline.replace_range, &inline.replacement);
-        assert!(render::html_fragment(&formatted).contains("<math"));
+        assert!(render::html_fragment(&formatted).contains("data-inflow-render=\"math\""));
 
         let display = insert_math("", 0..0).unwrap();
         assert_eq!(display.replacement, "$$\n公式内容\n$$");
         assert_eq!(&display.replacement[display.selection_range], "公式内容");
-        assert!(render::html_fragment(&display.replacement).contains("display=\"block\""));
+        assert!(render::html_fragment(&display.replacement).contains("data-display=\"true\""));
     }
 
     #[test]
@@ -2825,7 +2828,7 @@ mod tests {
         let edit = insert_math(source, start..end).unwrap();
         assert_eq!(edit.replacement, "\n\n$$\na+b\nc+d\n$$\n\n");
         let formatted = replacing(source, edit.replace_range, &edit.replacement);
-        assert!(render::html_fragment(&formatted).contains("display=\"block\""));
+        assert!(render::html_fragment(&formatted).contains("data-display=\"true\""));
         assert_eq!(&formatted[edit.selection_range], "a+b\nc+d");
 
         assert_eq!(
@@ -2855,7 +2858,7 @@ mod tests {
         );
         let html = render::html_fragment(&edit.replacement);
         assert!(html.contains("class=\"mermaid-diagram\""));
-        assert!(html.contains("<svg"));
+        assert!(html.contains("data-inflow-render=\"mermaid\""));
         assert!(!html.contains("<script"));
     }
 
@@ -2875,16 +2878,9 @@ mod tests {
         assert!(html.contains("class=\"mermaid-diagram\""));
         assert!(html.contains("Ready"));
 
-        for invalid in [
-            "flowchart LR\n-->",
-            "%%{init: nope}%%\nflowchart LR\nA-->B",
-            "unknownDiagram",
-        ] {
-            assert_eq!(
-                insert_mermaid(invalid, 0..invalid.len()),
-                Err(FormatError::AmbiguousSelection)
-            );
-        }
+        // The JS parser owns diagram syntax; insertion preserves all nonempty source.
+        let invalid = "flowchart LR\n-->";
+        assert!(insert_mermaid(invalid, 0..invalid.len()).is_ok());
         assert_eq!(
             insert_mermaid("```mermaid\nflowchart TD\nA-->B\n```", 15..15),
             Err(FormatError::AmbiguousSelection)

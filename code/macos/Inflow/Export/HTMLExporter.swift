@@ -128,7 +128,7 @@ enum HTMLExporter {
             requiresProjectBoundary: snapshot.requiresProjectBoundary
         )
         let themed = PreviewAppearanceCSS.applying(snapshot.appearance, to: resolved.html)
-        let output = Data(themed.utf8)
+        let output = Data(try JavaScriptRenderAssets.installing(in: themed).utf8)
         guard output.count <= LocalImageValidator.maximumBytes else {
             throw HTMLExportError.outputTooLarge
         }

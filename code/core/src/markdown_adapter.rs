@@ -35,7 +35,7 @@ impl MarkdownPort for CommonMarkAdapter {
         let render = RenderIr::from_document(document);
         let immediate_configuration = RenderConfiguration {
             math_enabled,
-            mermaid_enabled: mermaid_enabled && !defer_mermaid,
+            mermaid_enabled,
         };
         let mermaid = immediate_configuration
             .mermaid_enabled

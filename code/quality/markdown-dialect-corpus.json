@@ -50,7 +50,7 @@
       "status": "verified",
       "operation": "render",
       "source": "before $\\unknown{<script>}$ after",
-      "contains": ["before", "after", "math-error", "无法呈现这个公式", "&lt;script&gt;"],
+      "contains": ["before", "after", "data-inflow-render=\"math\"", "&lt;script&gt;"],
       "excludes": ["<script>"]
     },
     {

@@ -1,0 +1,222 @@
+{
+  "files": [
+    {
+      "file": "codemirror-clike.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/mode/clike/clike.js",
+      "sha256": "25c92495700d1883b5f0e08f2e77d6fe0265f992e47b59199aa8746f66c4021b"
+    },
+    {
+      "file": "codemirror-css.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/mode/css/css.js",
+      "sha256": "60f0689e5c6af7f36c341e8e1341a4f10b4f0a04cebfb7341bcbedba9b572b32"
+    },
+    {
+      "file": "codemirror-go.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/mode/go/go.js",
+      "sha256": "a3402cad4f69a45992d8f22019f156c560c1d8f06c82d7cbbf4339f2745a6b0d"
+    },
+    {
+      "file": "codemirror-htmlmixed.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/mode/htmlmixed/htmlmixed.js",
+      "sha256": "fe5912e1d10f8fecb98bd31e2f957c0bbc9abf6b505d11b6dbcd27542d0fdcad"
+    },
+    {
+      "file": "codemirror-javascript.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/mode/javascript/javascript.js",
+      "sha256": "1311c73c66308ba6f78512b4c2e770a6900c80c3629683763329668ee6111163"
+    },
+    {
+      "file": "codemirror-markdown.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/mode/markdown/markdown.js",
+      "sha256": "8fe7b11848f79cc9119b2a239f38a00944f6f2bb764a00bc837ecf8d34cf7690"
+    },
+    {
+      "file": "codemirror-meta.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/mode/meta.js",
+      "sha256": "f95786f9c83e631225fe7866f39892f808aeb015e80ce9d8a58d5a1d4e9c4bb6"
+    },
+    {
+      "file": "codemirror-properties.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/mode/properties/properties.js",
+      "sha256": "3f85f36e32edf82eba526ad56edadf04c33864d72bf0cfae2592a490530a4966"
+    },
+    {
+      "file": "codemirror-python.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/mode/python/python.js",
+      "sha256": "19a59ca387addb04e95002c9adbe2b8c231427ce49369ac537107e3088a6947c"
+    },
+    {
+      "file": "codemirror-runmode.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/addon/runmode/runmode-standalone.js",
+      "sha256": "c1c9bc16a627699da49d9733f93d75963603175081a540b276f11c604739abc9"
+    },
+    {
+      "file": "codemirror-rust.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/mode/rust/rust.js",
+      "sha256": "797a9abcf8581f192bc49b11434346d3f8014763f4967ae260fbe31f25b2bdfb"
+    },
+    {
+      "file": "codemirror-shell.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/mode/shell/shell.js",
+      "sha256": "24f77cb162ea9d9e9fc79b95ba547a7cc10a0767e3a5a52c786d4c24253736fe"
+    },
+    {
+      "file": "codemirror-simple.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/addon/mode/simple.js",
+      "sha256": "400f49309b31197c0c4ec76519c93647b494ab80f59f96d7f051463e0aa37eb0"
+    },
+    {
+      "file": "codemirror-sql.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/mode/sql/sql.js",
+      "sha256": "d5edb6bd39caa6155cab6bcdeb380a29229264a8a26e5fddd21ca12f0ebf359f"
+    },
+    {
+      "file": "codemirror-stex.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/mode/stex/stex.js",
+      "sha256": "edc1f57c69920967a31defb66954aa29f5751fdb2f7ed8e52fa08978ff890e3b"
+    },
+    {
+      "file": "codemirror-swift.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/mode/swift/swift.js",
+      "sha256": "8966adf30abf408c6c611e1fa9070a0515d22cdfda468867e54baeb581d6d6d4"
+    },
+    {
+      "file": "codemirror-xml.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/mode/xml/xml.js",
+      "sha256": "dc7e44d410399326f802e2924573cbf6f942a79f647fd0b97f0b607973bc9a09"
+    },
+    {
+      "file": "codemirror-yaml.js",
+      "package": "CodeMirror",
+      "version": "5.65.20",
+      "url": "https://cdn.jsdelivr.net/npm/codemirror@5.65.20/mode/yaml/yaml.js",
+      "sha256": "7de73109e5bfb6951d53764f5210f00f7859b57525811fab6b6f843980a7726e"
+    },
+    {
+      "file": "flowchart.js",
+      "package": "flowchart.js",
+      "version": "1.18.0",
+      "url": "https://cdnjs.cloudflare.com/ajax/libs/flowchart/1.18.0/flowchart.min.js",
+      "sha256": "5b456e20b5c01d5c04d37747fb2aac3cf2364232e899ad84e7cd112b37571156"
+    },
+    {
+      "file": "mathjax-tex-svg.js",
+      "package": "MathJax",
+      "version": "3.2.2",
+      "url": "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg-full.js",
+      "sha256": "a4354ff94fd868aea0cc6eaaa79a57fda0588646fc46ee3700a349ee0a11cbe6"
+    },
+    {
+      "file": "mermaid.min.js",
+      "package": "mermaid",
+      "version": "11.12.2",
+      "url": "https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js",
+      "sha256": "d0830a6c05546e9edb8fe20a8f545f3e0dc7c4c3134d584bad9c13a99d7a71e0"
+    },
+    {
+      "file": "raphael.min.js",
+      "package": "raphael",
+      "version": "2.3.0",
+      "url": "https://cdn.jsdelivr.net/npm/raphael@2.3.0/raphael.min.js",
+      "sha256": "4da6e9aca75e3576d27ac0962ccadc6d6483cd486901d70d3dee50e77ae7f588"
+    },
+    {
+      "file": "sequence-diagram.min.js",
+      "package": "js-sequence-diagrams",
+      "version": "2.0.1",
+      "url": "https://cdn.jsdelivr.net/gh/bramp/js-sequence-diagrams@2.0.1/dist/sequence-diagram-min.js",
+      "sha256": "0d4a8864fa0ff8c5c081c0759507453e0b0d39279db0c0b62c9d9a7e8ebebc15"
+    },
+    {
+      "file": "snap.svg.min.js",
+      "package": "snapsvg",
+      "version": "0.5.1",
+      "url": "https://cdn.jsdelivr.net/npm/snapsvg@0.5.1/dist/snap.svg-min.js",
+      "sha256": "a08f9e973fac226fa3a67f05fea12ca4aa0abde4dce6e29e14734d55ec5ee9df"
+    },
+    {
+      "file": "underscore.min.js",
+      "package": "underscore",
+      "version": "1.13.7",
+      "url": "https://cdn.jsdelivr.net/npm/underscore@1.13.7/underscore-umd-min.js",
+      "sha256": "c12dae551a8773812f3c6b682e8e66ecf71c729bf7e83f295747c0773e76cabb"
+    },
+    {
+      "file": "webfontloader.js",
+      "package": "webfontloader",
+      "version": "1.6.28",
+      "url": "https://cdn.jsdelivr.net/npm/webfontloader@1.6.28/webfontloader.js",
+      "sha256": "e0ee294b5487df566aad23b603fd902535634cfa957be8e7620396515afb1047"
+    },
+    {
+      "file": "Licenses/codemirror.txt",
+      "sha256": "168a4becc968f5001e2ee2e0291b6e4daabafc1894a11ade1e11d56e96096e07"
+    },
+    {
+      "file": "Licenses/flowchart.txt",
+      "sha256": "a34a2022936202ae810939d3410e50387f5725ff56715ffb3abd93992fb500af"
+    },
+    {
+      "file": "Licenses/mathjax.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "file": "Licenses/mermaid.txt",
+      "sha256": "ec9fb67dcb25eccc416ed56e1aab819222c805a2a4bfe4cb19e7556bf2ffde80"
+    },
+    {
+      "file": "Licenses/raphael.txt",
+      "sha256": "4cafcc8112392ea76caa7e4362c7aa557bcc613b9730a897828b2c858e857f1f"
+    },
+    {
+      "file": "Licenses/sequence.txt",
+      "sha256": "02f2ac1a6842a1739a645cdcf4bd1cebe5afd9f85f17cf9044b46b72354d2579"
+    },
+    {
+      "file": "Licenses/snapsvg.txt",
+      "sha256": "277b9ae7fa1d2acd7f708b859f9f771cf71e785091b6f82caa473cac241853c4"
+    },
+    {
+      "file": "Licenses/underscore.txt",
+      "sha256": "92905fb54f5d168a27e6d5dc7c2197020add11842be4c70689d084bae3bfe37a"
+    },
+    {
+      "file": "Licenses/webfontloader.txt",
+      "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9"
+    }
+  ]
+}

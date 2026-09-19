@@ -23,12 +23,12 @@ describe_profile() {
     personal)
       cat <<'EOF'
 profile=personal
-current_checks=generated-bindings,rust-format,rust-clippy,rust-tests,macos-current-direct-xctest,analyze,diff-check
+current_checks=generated-bindings,javascript-resources,rust-format,rust-clippy,rust-tests,macos-current-direct-xctest,analyze,diff-check
 deferred_checks=none
 archive=none
 selector_manifest=quality/personal-xctest-scope.tsv
-current_direct_selectors=305
-current_host_selectors=25
+current_direct_selectors=299
+current_host_selectors=31
 deferred_selectors=86
 fixed_performance_selectors=5
 completion=manual-uat-required
@@ -37,7 +37,7 @@ EOF
     deferred-release-local)
       cat <<'EOF'
 profile=deferred-release-local
-current_checks=generated-bindings,rust-format,rust-clippy,rust-tests,macos-debug-tests,analyze,diff-check
+current_checks=generated-bindings,javascript-resources,rust-format,rust-clippy,rust-tests,macos-debug-tests,analyze,diff-check
 deferred_checks=release-evidence-contract,fixed-performance-contract,release-archive-contract,extension-contract,fixed-performance-smoke
 archive=unsigned-local
 completion=not-personal-uat
@@ -46,7 +46,7 @@ EOF
     deferred-signed-archive)
       cat <<'EOF'
 profile=deferred-signed-archive
-current_checks=generated-bindings,rust-format,rust-clippy,rust-tests,macos-debug-tests,analyze,diff-check
+current_checks=generated-bindings,javascript-resources,rust-format,rust-clippy,rust-tests,macos-debug-tests,analyze,diff-check
 deferred_checks=release-evidence-contract,fixed-performance-contract,release-archive-contract,extension-contract,fixed-performance-smoke,release-evidence
 archive=provided-signed
 completion=not-personal-uat
@@ -107,8 +107,8 @@ RELEASE_WORKFLOW="${SCRIPT_DIRECTORY}/release-workflow.sh"
 MINIMUM_MACOS_TEST_COUNT=300
 MINIMUM_RUST_TEST_COUNT=150
 PERSONAL_XCTEST_SELECTOR_COUNT=421
-PERSONAL_CURRENT_DIRECT_COUNT=305
-PERSONAL_CURRENT_HOST_COUNT=25
+PERSONAL_CURRENT_DIRECT_COUNT=299
+PERSONAL_CURRENT_HOST_COUNT=31
 PERSONAL_DEFERRED_COUNT=86
 PERSONAL_FIXED_PERFORMANCE_COUNT=5
 IS_DEFERRED_RELEASE=0
@@ -414,6 +414,8 @@ if [ "${IS_DEFERRED_RELEASE}" -eq 1 ]; then
   "${SCRIPT_DIRECTORY}/verify-release-archive.sh" --self-test
   "${SCRIPT_DIRECTORY}/verify-extension-contracts.sh"
 fi
+
+python3 "${SCRIPT_DIRECTORY}/verify-js-resources.py"
 
 if ! "${CARGO_BIN}" fmt --manifest-path core/Cargo.toml --check \
   >"${RUST_FORMAT_LOG}" 2>&1

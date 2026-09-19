@@ -28,7 +28,7 @@ Rust 核心负责不依赖平台的纯值逻辑，并正在通过版本化 Engin
 
 - UTF-8 Markdown 分析、标题、统计、查找与格式计划；
 - CommonMark/GFM 派生结果和安全的语法范围；
-- Mermaid 围栏识别、语法校验和可确定复现的 SVG 生成；
+- 图表围栏和数学公式识别、源码范围及离线 JS 渲染请求；
 - 可复用的 UTF-8 end-exclusive 范围与版本化 C ABI；
 - 不访问用户任意文件，不持有 AppKit 对象。
 
@@ -112,13 +112,13 @@ Swift String 的规范等价不能替代精确字节身份。Rust 返回 UTF-8 b
 
 ### 4.2 实时预览分栏
 
-分栏左侧仍是同一个持久源码 NSTextView，右侧是 `isEditable = false` 的 `MarkdownSourceEditor`。右侧不生成 HTML、不启动第二渲染宿主，也不进行第二次解析；它直接安装即时编辑所用的同一份 revision-bound `NativeRenderPlan`。本地与远程图片、链接、表格、引用和 Mermaid 都复用原生表面的资源与安全策略。派生失败不改变正文、保存或恢复。
+分栏左侧仍是同一个持久源码 NSTextView，右侧是 `isEditable = false` 的 `MarkdownSourceEditor`。右侧不生成整篇 HTML，也不进行第二次 Markdown 解析；它直接安装即时编辑所用的同一份 revision-bound `NativeRenderPlan`。本地与远程图片、链接、表格、引用和 Mermaid 都复用原生表面的资源与安全策略。派生失败不改变正文、保存或恢复。
 
 ### 4.3 即时编辑
 
 EditorViewMode 的内部历史 case 名 preview 对应用户可见的“即时编辑”。该模式始终挂载共享的 MarkdownSourceEditorSession。Rust Engine 从同一次 `DocumentIr` 产生 revision-bound `NativeRenderPlan`，Swift 只校验 UTF-8 范围并映射为 TextKit 属性，不再分析 Markdown。普通文字保持渲染属性直接编辑，选区变化时从当前可见字符同步 typing attributes，使光标高度、字号和基线与文字一致。
 
-只有围栏代码、Mermaid 和其他无法无损结构化编辑的块会在光标进入时局部恢复源码；普通文字和表格不进入该路径。Mermaid SVG 由同一次 Engine 派生直接进入 `NativeRenderPlan`，不再通过专用 C ABI 或 HTML 字符串截取。表格宽度计算委托给 RenderedMarkdownTableLayoutStrategy，默认策略按内容和当前 viewport 自适应，并复用已挂载视图。CaretStyleResolver 负责跳过透明标记和换行符选择排版属性；隐藏标记不再使用微小字体改变光标和行高。链接激活策略作为持久偏好传入文本与表格链接，两者共享 Hover 反馈。该过程不替换 NSTextView，不创建第二份内容事实，也不登记展示层 undo。
+只有围栏代码、Mermaid 和其他无法无损结构化编辑的块会在光标进入时局部恢复源码；普通文字和表格不进入该路径。图表由同一次 Engine 派生的 `render_requests` 交给离线 WKWebView 适配层生成 SVG，再按原始快照回填；CodeMirror 和 MathJax 共享此边界，详见 [JavaScript 渲染适配层](javascript-rendering.md)。表格宽度计算委托给 RenderedMarkdownTableLayoutStrategy，默认策略按内容和当前 viewport 自适应，并复用已挂载视图。CaretStyleResolver 负责跳过透明标记和换行符选择排版属性；隐藏标记不再使用微小字体改变光标和行高。链接激活策略作为持久偏好传入文本与表格链接，两者共享 Hover 反馈。该过程不替换 NSTextView，不创建第二份内容事实，也不登记展示层 undo。
 
 ## 5. 当前编辑命令边界
 
@@ -234,7 +234,7 @@ RecoveryCenterView 中保留的比较、批量操作、历史、多快照、迁�
 - Mermaid flowchart 与 stateDiagram-v2；
 - 原始 HTML 的可读源码或安全转义。
 
-公式、脚注、sequenceDiagram、classDiagram、其他 Mermaid 与完整原始 HTML 兼容均为后置范围。当前 Mermaid 渲染器只接受 flowchart 与 stateDiagram-v2；其他后续内部代码或历史材料的存在也不代表当前界面、PDF 或 UAT 承诺兼容。
+图表和公式的当前实现已扩展到 JavaScript 适配层支持的语法，见 [JavaScript 渲染适配层](javascript-rendering.md)。脚注和完整原始 HTML 兼容仍为后置范围；新增实现不等于已通过人工 UAT。
 
 ## 11. 基础浅色 PDF
 

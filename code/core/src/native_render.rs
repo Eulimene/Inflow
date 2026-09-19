@@ -7,9 +7,9 @@ use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, LinkType, Ta
 use serde::Serialize;
 
 use crate::markdown_ir::{DocumentIr, LocatedEvent};
+use crate::mermaid;
 use crate::mermaid::MermaidRenderBatch;
 use crate::render_ir::{RenderBlockKind, RenderIr};
-use crate::{math, mermaid};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct NativeRenderPlan {
@@ -20,6 +20,83 @@ pub struct NativeRenderPlan {
     pub images: Vec<NativeImage>,
     pub tables: Vec<NativeTable>,
     pub mermaid_diagrams: Vec<NativeMermaidDiagram>,
+    pub render_requests: Vec<NativeRenderRequest>,
+}
+
+/// Source-only work dispatched to the platform's offline JavaScript runtime.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NativeRenderRequest {
+    pub source_range: Range<usize>,
+    pub content_range: Range<usize>,
+    pub kind: String,
+    pub language: String,
+    pub source: String,
+    pub display: bool,
+}
+
+fn render_requests(document: &DocumentIr, diagrams_enabled: bool) -> Vec<NativeRenderRequest> {
+    let mut requests = Vec::new();
+    for (index, located) in document.events().iter().enumerate() {
+        let range = located.source_range.clone();
+        match &located.event {
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
+                let language = info
+                    .split_ascii_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let kind = if diagrams_enabled {
+                    mermaid::diagram_language(info).unwrap_or("code")
+                } else {
+                    "code"
+                };
+                let mut body = String::new();
+                let mut content = range.start..range.start;
+                for event in &document.events()[index + 1..] {
+                    match &event.event {
+                        Event::End(TagEnd::CodeBlock) => break,
+                        Event::Text(text) => {
+                            if body.is_empty() {
+                                content.start = event.source_range.start;
+                            }
+                            content.end = event.source_range.end;
+                            body.push_str(text);
+                        }
+                        _ => {}
+                    }
+                }
+                // CodeMirror offsets address the exact source slice, including indentation.
+                if kind == "code" {
+                    document.source()[content.clone()].clone_into(&mut body);
+                }
+                requests.push(NativeRenderRequest {
+                    source_range: range,
+                    content_range: content,
+                    kind: kind.to_owned(),
+                    language,
+                    source: body,
+                    display: true,
+                });
+            }
+            Event::InlineMath(tex) | Event::DisplayMath(tex) => {
+                let display = matches!(located.event, Event::DisplayMath(_));
+                let start = range.start
+                    + document.source()[range.clone()]
+                        .find(tex.as_ref())
+                        .unwrap_or(0);
+                requests.push(NativeRenderRequest {
+                    source_range: range,
+                    content_range: start..start + tex.len(),
+                    kind: "math".to_owned(),
+                    language: "tex".to_owned(),
+                    source: tex.to_string(),
+                    display,
+                });
+            }
+            _ => {}
+        }
+    }
+    requests
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -239,8 +316,8 @@ impl NativeRenderPlan {
         document: &DocumentIr,
         render: &RenderIr,
         mermaid_enabled: bool,
-        defer_mermaid: bool,
-        mermaid_renders: Option<&MermaidRenderBatch>,
+        _defer_mermaid: bool,
+        _mermaid_renders: Option<&MermaidRenderBatch>,
     ) -> Self {
         let source = document.source();
         let events = document.events();
@@ -364,30 +441,7 @@ impl NativeRenderPlan {
                             add_local(&mut locals, complete, LocalSourceReason::Mermaid);
                             continue;
                         }
-                        if defer_mermaid {
-                            diagrams.push(mermaid_placeholder(complete));
-                            continue;
-                        }
-                        let rendered = mermaid_renders
-                            .and_then(|batch| batch.result(&complete))
-                            .cloned()
-                            .unwrap_or(Err(mermaid::MermaidError::InvalidSyntax));
-                        match rendered {
-                            Ok(figure) => {
-                                if let Some((svg, intrinsic_width, intrinsic_height)) =
-                                    extract_svg(&figure)
-                                {
-                                    diagrams.push(NativeMermaidDiagram {
-                                        source_range: complete,
-                                        svg,
-                                        intrinsic_width,
-                                        intrinsic_height,
-                                        is_placeholder: false,
-                                    });
-                                }
-                            }
-                            Err(_) => add_local(&mut locals, complete, LocalSourceReason::Mermaid),
-                        }
+                        diagrams.push(mermaid_placeholder(complete));
                     } else {
                         add_local(&mut locals, complete, LocalSourceReason::FencedCode);
                     }
@@ -435,41 +489,26 @@ impl NativeRenderPlan {
             images,
             tables,
             mermaid_diagrams: diagrams,
+            render_requests: render_requests(document, mermaid_enabled),
         }
     }
 }
 
 pub(crate) fn resolve_mermaid_from_document(document: &DocumentIr) -> NativeMermaidResolution {
-    let rendered = MermaidRenderBatch::render(document);
-    let mut diagrams = Vec::new();
-    let mut failed_source_ranges = Vec::new();
-    for located in document.events() {
-        let Event::Start(Tag::CodeBlock(kind)) = &located.event else {
-            continue;
-        };
-        if !is_mermaid(kind) {
-            continue;
-        }
-        let source_range = located.source_range.clone();
-        let Some(Ok(figure)) = rendered.result(&source_range) else {
-            failed_source_ranges.push(source_range);
-            continue;
-        };
-        let Some((svg, intrinsic_width, intrinsic_height)) = extract_svg(figure) else {
-            failed_source_ranges.push(source_range);
-            continue;
-        };
-        diagrams.push(NativeMermaidDiagram {
-            source_range,
-            svg,
-            intrinsic_width,
-            intrinsic_height,
-            is_placeholder: false,
-        });
-    }
+    // Compatibility command: returns pending requests; JavaScript resolves them on the host.
+    let diagrams = document
+        .events()
+        .iter()
+        .filter_map(|located| match &located.event {
+            Event::Start(Tag::CodeBlock(kind)) if is_mermaid(kind) => {
+                Some(mermaid_placeholder(located.source_range.clone()))
+            }
+            _ => None,
+        })
+        .collect();
     NativeMermaidResolution {
         diagrams,
-        failed_source_ranges,
+        failed_source_ranges: Vec::new(),
     }
 }
 
@@ -479,13 +518,13 @@ fn mermaid_placeholder(source_range: Range<usize>) -> NativeMermaidDiagram {
         svg: concat!(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" role=\"img\" ",
             "width=\"640\" height=\"72\" viewBox=\"0 0 640 72\" ",
-            "aria-label=\"正在渲染 Mermaid 图表\">",
+            "aria-label=\"正在渲染图表\">",
             "<rect x=\"0.5\" y=\"0.5\" width=\"639\" height=\"71\" rx=\"8\" ",
             "fill=\"#f7f7f8\" stroke=\"#dfe3e8\"/>",
             "<circle cx=\"28\" cy=\"36\" r=\"7\" fill=\"#8b72e8\"/>",
             "<text x=\"48\" y=\"41\" fill=\"#737982\" font-size=\"14\" ",
             "font-family=\"-apple-system, BlinkMacSystemFont, sans-serif\">",
-            "正在渲染 Mermaid 图表…</text></svg>"
+            "正在渲染图表…</text></svg>"
         )
         .to_owned(),
         intrinsic_width: 640,
@@ -746,10 +785,6 @@ fn math_span(
     styles: &mut Vec<NativeContentStyle>,
     locals: &mut Vec<Local>,
 ) {
-    if math::mathml(value, display).is_err() {
-        add_local(locals, range, LocalSourceReason::UnsupportedSyntax);
-        return;
-    }
     let Some(local) = source.get(range.clone()) else {
         return;
     };
@@ -1141,41 +1176,7 @@ fn contains(outer: &Range<usize>, inner: &Range<usize>) -> bool {
     outer.start <= inner.start && inner.end <= outer.end
 }
 fn is_mermaid(kind: &CodeBlockKind<'_>) -> bool {
-    matches!(kind, CodeBlockKind::Fenced(info) if info.split_ascii_whitespace().next().is_some_and(|value| value.eq_ignore_ascii_case("mermaid")))
-}
-fn extract_svg(figure: &str) -> Option<(String, usize, usize)> {
-    let start = figure.find("<svg")?;
-    let end = start + figure[start..].find("</svg>")? + 6;
-    let svg = &figure[start..end];
-    let view_box = attribute(svg, "viewBox")?;
-    let mut values = view_box.split_ascii_whitespace();
-    let _x = values.next()?.parse::<f64>().ok()?;
-    let _y = values.next()?.parse::<f64>().ok()?;
-    let width = svg_extent(values.next()?)?;
-    let height = svg_extent(values.next()?)?;
-    Some((svg.to_owned(), width, height))
-}
-
-fn svg_extent(value: &str) -> Option<usize> {
-    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
-    let whole = whole.parse::<usize>().ok()?;
-    if whole == 0 && fraction.chars().all(|character| character == '0') {
-        return None;
-    }
-    if fraction.is_empty() || fraction.chars().all(|character| character == '0') {
-        Some(whole)
-    } else if fraction.chars().all(|character| character.is_ascii_digit()) {
-        whole.checked_add(1)
-    } else {
-        None
-    }
-}
-
-fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
-    let prefix = format!("{name}=\"");
-    let start = tag.find(&prefix)? + prefix.len();
-    let end = start + tag[start..].find('"')?;
-    Some(&tag[start..end])
+    matches!(kind, CodeBlockKind::Fenced(info) if mermaid::diagram_language(info).is_some())
 }
 fn level_number(level: HeadingLevel) -> u8 {
     match level {
@@ -1265,9 +1266,9 @@ mod tests {
         );
         assert_eq!(plan.tables[0].rows[1][0].text, "x");
         assert_eq!(plan.mermaid_diagrams.len(), 1);
-        assert!(!plan.mermaid_diagrams[0].is_placeholder);
-        assert_eq!(plan.mermaid_diagrams[0].intrinsic_width, 127);
-        assert_eq!(plan.mermaid_diagrams[0].intrinsic_height, 68);
+        assert!(plan.mermaid_diagrams[0].is_placeholder);
+        assert_eq!(plan.mermaid_diagrams[0].intrinsic_width, 640);
+        assert_eq!(plan.mermaid_diagrams[0].intrinsic_height, 72);
         assert!(
             plan.local_source_blocks
                 .iter()
@@ -1289,11 +1290,7 @@ mod tests {
         let deferred = NativeRenderPlan::from_document(&document, &render, true, true);
         assert_eq!(deferred.mermaid_diagrams.len(), 1);
         assert!(deferred.mermaid_diagrams[0].is_placeholder);
-        assert!(
-            deferred.mermaid_diagrams[0]
-                .svg
-                .contains("正在渲染 Mermaid 图表")
-        );
+        assert!(deferred.mermaid_diagrams[0].svg.contains("正在渲染图表"));
         assert!(deferred.local_source_blocks.is_empty());
 
         let disabled = NativeRenderPlan::from_document(&document, &render, false, false);
@@ -1357,34 +1354,19 @@ mod tests {
     }
 
     #[test]
-    fn valid_math_hides_only_delimiters_and_invalid_math_stays_source() {
-        let source = "$x_1^2$\n\n$$\n\\frac{x}{y}\n$$\n\n$\\unknown{x}$";
+    fn math_requests_preserve_tex_and_exact_source_ranges() {
+        let source = "Inline $x^2$ and $\\unknown{x}$\n\n$$\\frac{a}{b}$$";
         let plan = plan(source);
-
-        assert_eq!(
-            plan.content_styles
-                .iter()
-                .filter(|item| item.kind == ContentStyleKind::InlineMath)
-                .count(),
-            1
-        );
-        assert_eq!(
-            plan.content_styles
-                .iter()
-                .filter(|item| item.kind == ContentStyleKind::DisplayMath)
-                .count(),
-            1
-        );
-        assert_eq!(
-            plan.markers
-                .iter()
-                .filter(|item| item.kind == MarkerKind::MathDelimiter)
-                .count(),
-            4
-        );
-        assert!(plan.local_source_blocks.iter().any(|item| {
-            item.reasons.contains(&LocalSourceReason::UnsupportedSyntax)
-                && &source[item.source_range.clone()] == "$\\unknown{x}$"
-        }));
+        let math: Vec<_> = plan
+            .render_requests
+            .iter()
+            .filter(|r| r.kind == "math")
+            .collect();
+        assert_eq!(math.len(), 3);
+        assert_eq!(math[0].source, "x^2");
+        assert_eq!(math[1].source, "\\unknown{x}");
+        assert!(math[2].display);
+        assert_eq!(&source[math[0].source_range.clone()], "$x^2$");
+        assert_eq!(&source[math[0].content_range.clone()], "x^2");
     }
 }

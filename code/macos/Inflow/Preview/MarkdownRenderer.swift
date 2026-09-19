@@ -126,7 +126,7 @@ enum MarkdownRenderer {
         containing fragment: String,
         configuration: PreviewAppearanceConfiguration = .default
     ) -> String {
-        """
+        let html = """
         <!doctype html>
         <html lang="zh-Hans">
         <head>
@@ -206,6 +206,8 @@ enum MarkdownRenderer {
             .math-error-actions { display: flex; gap: 8px; margin-top: 10px; }
             .math-error-inline .math-error-actions { display: inline-flex; margin-top: 0; }
             .math-error-actions button { font: inherit; color: inherit; border: 1px solid currentColor; border-radius: 6px; background: transparent; padding: 5px 9px; cursor: pointer; }
+            .inflow-math svg { max-width: 100%; height: auto; }
+            div.inflow-math { margin: 1.2em 0; text-align: center; overflow-x: auto; }
             .mermaid-diagram { margin: 1.4em 0; overflow-x: auto; text-align: center; }
             .mermaid-diagram svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
             .mermaid-error { border: 1px solid var(--md-warning); border-radius: \(MarkdownRenderMetrics.blockCornerRadius)px; padding: 12px 14px; color: var(--md-warning); }
@@ -226,6 +228,7 @@ enum MarkdownRenderer {
         </body>
         </html>
         """
+        return (try? JavaScriptRenderAssets.installing(in: html)) ?? html
     }
 
     static func previewFailureDocument(

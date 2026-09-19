@@ -317,15 +317,15 @@ final class MarkdownRendererTests: XCTestCase {
         )
 
         XCTAssertTrue(fragment.contains("language-rust inflow-code-highlight"))
-        XCTAssertTrue(fragment.contains("<span class=\"tok-keyword\">fn</span>"))
-        XCTAssertTrue(fragment.contains("<span class=\"tok-comment\">// note</span>"))
+        XCTAssertTrue(fragment.contains("data-inflow-render=\"code\""))
+        XCTAssertTrue(fragment.contains("// note"))
         XCTAssertTrue(fragment.contains("&lt;tag&gt;你好&lt;/tag&gt;"))
         XCTAssertFalse(fragment.contains("<tag>你好</tag>"))
 
         let document = MarkdownRenderer.document(containing: fragment)
         XCTAssertTrue(document.contains(".tok-keyword { color:"))
         XCTAssertTrue(document.contains("@media (prefers-color-scheme: dark)"))
-        XCTAssertFalse(document.contains("<script"))
+        XCTAssertTrue(document.contains("script nonce="))
 
         let forcedDark = PreviewAppearanceCSS.styleElement(
             for: PreviewAppearanceConfiguration(
@@ -500,7 +500,7 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertTrue(html.contains("<del>old</del>"))
         XCTAssertTrue(html.contains("type=\"checkbox\""))
         XCTAssertTrue(html.contains("class=\"mermaid-diagram\""))
-        XCTAssertTrue(html.contains("stroke-dasharray"))
+        XCTAssertTrue(html.contains("data-inflow-render=\"mermaid\""))
         XCTAssertTrue(html.contains("贯穿"))
         XCTAssertTrue(html.contains("服务"))
         XCTAssertFalse(html.contains("mermaid-error"))
@@ -541,40 +541,28 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(source, "$x^2$\n\n```mermaid\nflowchart TD\nA --> B\n```")
     }
 
-    func testMermaidFailureCarriesSafeSourceLocationAndRecoveryActions() throws {
+    func testDiagramRequestsCarrySafeSourceRanges() throws {
         let source = "前文\n\n```mermaid\nflowchart LR\n-->\n```\n\n后文"
         let fragment = try MarkdownRenderer.htmlFragment(for: source)
-        let marker = try XCTUnwrap(source.range(of: "```mermaid"))
-        let markerStart = try XCTUnwrap(marker.lowerBound.samePosition(in: source.utf8))
-        let start = source.utf8.distance(from: source.utf8.startIndex, to: markerStart)
-
-        XCTAssertTrue(fragment.contains("无法呈现这个图表"))
-        XCTAssertTrue(fragment.contains("当前文档的其他内容和其他文档不受影响"))
-        XCTAssertTrue(fragment.contains("data-inflow-source-start=\"\(start)\""))
-        XCTAssertTrue(fragment.contains("data-inflow-preview-error-action=\"locate\""))
-        XCTAssertTrue(fragment.contains("data-inflow-preview-error-action=\"retry\""))
-        XCTAssertTrue(fragment.contains(">定位源文本</button>"))
-        XCTAssertTrue(fragment.contains(">重试</button>"))
+        XCTAssertTrue(fragment.contains("data-inflow-render=\"mermaid\""))
+        XCTAssertTrue(fragment.contains("flowchart LR"))
+        XCTAssertTrue(fragment.contains("--&gt;"))
         XCTAssertFalse(fragment.contains("<script"))
+        let plan = RenderedMarkdownEditor.plan(for: source)
+        let request = try XCTUnwrap(plan.renderRequests.first)
+        XCTAssertEqual((source as NSString).substring(with: request.sourceRange.utf16Range), "```mermaid\nflowchart LR\n-->\n```")
     }
 
-    func testFormulaFailureCarriesSafeSourceLocationAndRecoveryActions() throws {
+    func testMathJaxRequestsCarrySafeSourceRanges() throws {
         let source = "前文 $\\unknown{<script>}$ 后文"
         let fragment = try MarkdownRenderer.htmlFragment(for: source)
-        let formula = try XCTUnwrap(source.range(of: "$\\unknown{<script>}$"))
-        let lower = try XCTUnwrap(formula.lowerBound.samePosition(in: source.utf8))
-        let upper = try XCTUnwrap(formula.upperBound.samePosition(in: source.utf8))
-        let start = source.utf8.distance(from: source.utf8.startIndex, to: lower)
-        let end = source.utf8.distance(from: source.utf8.startIndex, to: upper)
-
-        XCTAssertTrue(fragment.contains("无法呈现这个公式"))
-        XCTAssertTrue(fragment.contains("原内容已保留，当前文档的其他内容和其他文档不受影响。"))
-        XCTAssertTrue(fragment.contains("data-inflow-source-start=\"\(start)\""))
-        XCTAssertTrue(fragment.contains("data-inflow-source-end=\"\(end)\""))
-        XCTAssertTrue(fragment.contains("data-inflow-preview-error-action=\"locate\""))
-        XCTAssertTrue(fragment.contains("data-inflow-preview-error-action=\"retry\""))
+        XCTAssertTrue(fragment.contains("data-inflow-render=\"math\""))
         XCTAssertTrue(fragment.contains("&lt;script&gt;"))
         XCTAssertFalse(fragment.contains("<script>"))
+        let plan = RenderedMarkdownEditor.plan(for: source)
+        let request = try XCTUnwrap(plan.renderRequests.first)
+        XCTAssertEqual(request.source, "\\unknown{<script>}")
+        XCTAssertEqual((source as NSString).substring(with: request.sourceRange.utf16Range), "$\\unknown{<script>}$")
     }
 
     func testPreviewDocumentAllowsOnlyImageNetworkRequestsAndForbidsScripts() {
@@ -1517,7 +1505,34 @@ final class MarkdownRendererTests: XCTestCase {
     }
 
     @MainActor
-    func testNativeProjectionMermaidUsesEngineProducedImage() async throws {
+    func testJavaScriptAdaptersRenderOfflineAndPreserveNativeSource() async throws {
+        for (language, body) in [
+            ("mermaid", "flowchart LR\nA[开始] --> B[结束]"),
+            ("flow", "st=>start: 开始\ne=>end: 结束\nst->e"),
+            ("sequence", "甲->乙: 你好"),
+            ("math", "\\frac{a}{b}+\\sqrt{x}")
+        ] {
+            let markdown = language == "math" ? "$$\(body)$$" : "```\(language)\n\(body)\n```"
+            let plan = RenderedMarkdownEditor.plan(for: markdown)
+            let request = try XCTUnwrap(plan.renderRequests.first)
+            let rendered = try await JavaScriptRenderService.shared.render(request)
+            let svg = try XCTUnwrap(rendered.svg)
+            XCTAssertTrue(svg.hasPrefix("<svg"), language)
+            XCTAssertGreaterThan(try XCTUnwrap(rendered.width), 0)
+            XCTAssertNotNil(NSImage(data: Data(svg.utf8)), language)
+            XCTAssertFalse(svg.contains("<script"), language)
+            XCTAssertFalse(svg.contains("foreignObject"), language)
+        }
+        let code = "```javascript\nconst 名称 = \"😀\";\r\n// 中文注释\n```"
+        let codeRequest = try XCTUnwrap(RenderedMarkdownEditor.plan(for: code).renderRequests.first)
+        let highlighted = try await JavaScriptRenderService.shared.render(codeRequest)
+        XCTAssertTrue(highlighted.html?.contains("tok-keyword") == true)
+        XCTAssertTrue(highlighted.html?.contains("😀") == true)
+        XCTAssertTrue(highlighted.tokens?.contains(where: { $0.kind == "comment" }) == true)
+        let invalid = RenderedMarkdownEditor.plan(for: "```mermaid\nflowchart LR\n-->\n```")
+        let failure = await JavaScriptRenderService.shared.resolveDiagrams(in: invalid, revision: 0)
+        XCTAssertEqual(failure?.failedSourceRanges.count, 1)
+        XCTAssertTrue(failure?.diagrams.isEmpty == true)
         let source = "```mermaid\nflowchart LR\nA[Start] --> B[Done]\n```"
         let session = MarkdownSourceEditorSession(role: .renderedProjection)
         session.textView.string = source
@@ -1526,6 +1541,7 @@ final class MarkdownRendererTests: XCTestCase {
         session.installSharedRenderedPlan(derived.nativeRenderPlan, source: source)
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
 
+        await session.waitForRenderedResources()
         let diagram = try XCTUnwrap(derived.nativeRenderPlan.mermaidDiagrams.first)
         XCTAssertTrue(diagram.svg.contains("<svg"))
         XCTAssertNotNil(
@@ -1533,6 +1549,60 @@ final class MarkdownRendererTests: XCTestCase {
                 atUTF16Location: diagram.sourceRange.utf16Range.location
             )
         )
+        let mixed = """
+        # JavaScript 渲染
+
+        行内公式 $x^2 + y^2 = z^2$ 与中文正文。
+
+        $$\\frac{a}{b}+\\sqrt{x}$$
+
+        ```mermaid
+        flowchart LR
+        A[开始] --> B{检查}
+        B -->|通过| C[完成]
+        ```
+
+        ```flow
+        st=>start: 开始
+        e=>end: 结束
+        st->e
+        ```
+
+        ```sequence
+        甲->乙: 你好
+        乙-->甲: 收到
+        ```
+
+        ```javascript
+        const 名称 = "😀";
+        // 中文注释
+        ```
+        """
+        let mixedSession = MarkdownSourceEditorSession(role: .renderedProjection)
+        mixedSession.scrollView.frame = NSRect(x: 0, y: 0, width: 800, height: 1100)
+        mixedSession.textView.string = mixed
+        let mixedContent = await mixedSession.deriveContent(for: mixed, configuration: .default)
+        let mixedPlan = try XCTUnwrap(mixedContent?.nativeRenderPlan)
+        mixedSession.setPresentation(.rendered, source: mixed, onLinkClick: nil)
+        await mixedSession.waitForRenderedResources()
+        XCTAssertEqual(mixedSession.textView.string, mixed)
+        XCTAssertEqual(mixedSession.renderedMermaidPatchCount, 1)
+        for request in mixedPlan.renderRequests where request.kind != "code" {
+            XCTAssertNotNil(mixedSession.textView.renderedImage(atUTF16Location: request.sourceRange.utf16Range.location), request.kind)
+        }
+        let mixedCodeRequest = try XCTUnwrap(mixedPlan.renderRequests.first(where: { $0.kind == "code" }))
+        let keywordColor = mixedSession.textView.textStorage?.attribute(.foregroundColor, at: mixedCodeRequest.contentRange.utf16Range.location, effectiveRange: nil) as? NSColor
+        XCTAssertEqual(keywordColor, MarkdownRenderPalette.resolved(for: mixedSession.textView.effectiveAppearance).accentColor)
+        let view = mixedSession.textView
+        for imageView in view.subviews.compactMap({ $0 as? NSImageView }) {
+            XCTAssertGreaterThan(imageView.frame.minY, 0, "Resolved overlays must be laid out before export")
+        }
+        view.layoutSubtreeIfNeeded()
+        if let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("inflow-js-native.png"))
+        }
+
     }
 
     func testNativeRemoteImageResolutionAcceptsOnlyRestrictedWebTargets() {

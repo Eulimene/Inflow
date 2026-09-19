@@ -276,6 +276,7 @@ struct RenderedMarkdownMermaidDiagram: Equatable, Sendable {
     let intrinsicWidth: Int
     let intrinsicHeight: Int
     let isPlaceholder: Bool
+    var pdfData: Data? = nil
 }
 
 /// A display-only interpretation of one exact Markdown byte snapshot.
@@ -292,6 +293,7 @@ struct RenderedMarkdownPlan: Equatable, Sendable {
     let images: [RenderedMarkdownImage]
     let tables: [RenderedMarkdownTable]
     let mermaidDiagrams: [RenderedMarkdownMermaidDiagram]
+    var renderRequests: [JavaScriptRenderRequest] = []
 
     func exactlyMatches(_ source: String) -> Bool {
         sourceUTF8 == Data(source.utf8)
@@ -357,7 +359,8 @@ struct RenderedMarkdownPlan: Equatable, Sendable {
             tables: tables,
             mermaidDiagrams: resolution.diagrams.sorted {
                 rangeOrder($0.sourceRange.utf8Range, $1.sourceRange.utf8Range)
-            }
+            },
+            renderRequests: renderRequests
         )
     }
 
@@ -424,6 +427,7 @@ enum RenderedMarkdownEditor {
 
         let replacementRanges = plan.localSourceBlocks.map(\.sourceRange.utf16Range)
             + plan.mermaidDiagrams.map(\.sourceRange.utf16Range)
+            + plan.renderRequests.filter { $0.kind == "math" }.map(\.sourceRange.utf16Range)
             + plan.markers.compactMap { marker in
                 marker.replacementText != nil || marker.kind == .rule
                     ? marker.sourceRange.utf16Range

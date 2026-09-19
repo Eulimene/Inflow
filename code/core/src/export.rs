@@ -154,14 +154,15 @@ const DOCUMENT_PREFIX: &str = r#"<!doctype html>
     tr:nth-child(even) { background: #f6f8fa; }
     hr { height: 1px; border: 0; background: #d8dee4; margin: 2em 0; }
     img { display: block; max-width: 100%; height: auto; margin: 1em 0; }
-    math { font-family: STIX Two Math, STIXGeneral, serif; }
+    .inflow-math svg { max-width: 100%; height: auto; }
+    div.inflow-math { margin: 1.2em 0; text-align: center; overflow-x: auto; }
     math[display="block"] { display: block; max-width: 100%; overflow-x: auto; margin: 1.2em 0; text-align: center; }
     .math-error { border: 1px solid #d4a72c; border-radius: 8px; padding: 12px 14px; color: #9a6700; }
     .math-error-inline { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: .35em; margin: 0 .15em; }
     .math-error pre { margin: 10px 0 0; }
     .math-error-inline code { max-width: 100%; overflow-wrap: anywhere; }
     .mermaid-diagram { margin: 1.4em 0; overflow-x: auto; }
-    .mermaid-diagram svg { min-width: 420px; width: 100%; height: auto; color: currentColor; }
+    .mermaid-diagram svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
     .mermaid-error { border: 1px solid #d4a72c; border-radius: 8px; padding: 12px 14px; color: #9a6700; }
     .task-list-item { list-style: none; } input[type="checkbox"] { margin: 0 .45em 0 -1.35em; }
     @media (prefers-color-scheme: dark) {
@@ -226,8 +227,8 @@ mod tests {
         let html = String::from_utf8(bytes).expect("export is UTF-8");
 
         assert!(html.contains("language-python inflow-code-highlight"));
-        assert!(html.contains("<span class=\"tok-keyword\">def</span>"));
-        assert!(html.contains("<span class=\"tok-keyword\">return</span>"));
+        assert!(html.contains("data-inflow-render=\"code\""));
+        assert!(html.contains("return f"));
         assert!(html.contains(".tok-keyword { color:"));
         assert!(html.contains("&lt;b&gt;{name}&lt;/b&gt;"));
         assert!(!html.contains("<b>{name}</b>"));
@@ -271,17 +272,13 @@ mod tests {
     }
 
     #[test]
-    fn exports_inline_and_display_formula_as_self_contained_mathml() {
-        let html = String::from_utf8(
-            html_document("Inline $x_1^2$\n\n$$\\frac{a}{b}$$\n").expect("formula is supported"),
-        )
-        .expect("export is UTF-8");
-
-        assert!(html.contains("<math xmlns=\"http://www.w3.org/1998/Math/MathML\""));
-        assert!(html.contains("<msubsup>"));
-        assert!(html.contains("<mfrac>"));
+    fn exports_inert_mathjax_requests_for_the_host_to_complete() {
+        let html = String::from_utf8(html_document("Inline $x_1^2$\n\n$$\\frac{a}{b}$$").unwrap())
+            .unwrap();
+        assert!(html.contains("data-inflow-render=\"math\""));
+        assert!(html.contains("x_1^2"));
+        assert!(html.contains("\\frac{a}{b}"));
         assert!(!html.contains("<script"));
-        assert!(!html.contains("https://"));
     }
 
     #[test]

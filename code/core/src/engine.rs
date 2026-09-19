@@ -1559,7 +1559,7 @@ mod tests {
                 .native_render
                 .mermaid_diagrams
                 .iter()
-                .all(|diagram| !diagram.is_placeholder)
+                .all(|diagram| diagram.is_placeholder)
         );
         assert_eq!(parse_calls.load(Ordering::Relaxed), 1);
         assert_eq!(derive_calls.load(Ordering::Relaxed), 1);
@@ -1996,7 +1996,7 @@ mod tests {
             .derived
             .expect("derived");
         let enabled_html = enabled.html_fragment.expect("requested HTML");
-        assert!(enabled_html.contains("<math"));
+        assert!(enabled_html.contains("data-inflow-render=\"math\""));
         assert!(enabled_html.contains("mermaid-diagram"));
     }
 

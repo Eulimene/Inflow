@@ -284,7 +284,7 @@ fn is_mermaid_code_block(kind: &CodeBlockKind<'_>) -> bool {
             if language
                 .split_ascii_whitespace()
                 .next()
-                .is_some_and(|name| name.eq_ignore_ascii_case("mermaid"))
+                .is_some_and(|name| mermaid::diagram_language(name).is_some())
     )
 }
 
@@ -368,7 +368,7 @@ fn safe_events(
                     if language
                         .split_ascii_whitespace()
                         .next()
-                        .is_some_and(|name| name.eq_ignore_ascii_case("mermaid"))
+                        .is_some_and(|name| mermaid::diagram_language(name).is_some())
             )
         {
             let mut source = String::new();
@@ -468,10 +468,9 @@ fn preview_href(destination: &str) -> String {
 fn render_math(
     source: &str,
     display: bool,
-    source_range: Option<&std::ops::Range<usize>>,
+    _source_range: Option<&std::ops::Range<usize>>,
 ) -> Event<'static> {
-    let markup = math::mathml(source, display)
-        .unwrap_or_else(|error| math::fallback(source, error, display, source_range));
+    let markup = math::placeholder(source, display);
     Event::InlineHtml(markup.into())
 }
 
@@ -572,7 +571,7 @@ mod tests {
     fn escapes_html_inside_code_blocks() {
         let html = html_fragment("```html\n<script>bad()</script>\n```\n");
 
-        assert!(html.contains("<pre><code class=\"language-html inflow-code-highlight\">"));
+        assert!(html.contains("<pre><code class=\"language-html inflow-code-highlight\""));
         assert!(html.contains("&lt;script&gt;"));
         assert!(html.contains("bad()"));
         assert!(html.contains("&lt;/script&gt;"));
@@ -585,8 +584,8 @@ mod tests {
             html_fragment("```swift\nlet greeting = \"<script>你好</script>\" // 注释\n```\n");
 
         assert!(html.contains("language-swift inflow-code-highlight"));
-        assert!(html.contains("<span class=\"tok-keyword\">let</span>"));
-        assert!(html.contains("<span class=\"tok-comment\">// 注释</span>"));
+        assert!(html.contains("data-inflow-render=\"code\""));
+        assert!(html.contains("// 注释"));
         assert!(html.contains("&lt;script&gt;你好&lt;/script&gt;"));
         assert!(!html.contains("<script>"));
     }
@@ -595,65 +594,44 @@ mod tests {
     fn leaves_unknown_language_blocks_readable_and_escaped() {
         let html = html_fragment("```unknown\n<unsafe>& text\n```\n");
 
-        assert!(html.contains("<pre><code class=\"language-unknown\">"));
+        assert!(html.contains("<pre><code class=\"language-unknown inflow-code-highlight\""));
         assert!(html.contains("&lt;unsafe&gt;&amp; text"));
-        assert!(!html.contains("inflow-code-highlight"));
+        assert!(html.contains("data-inflow-render=\"code\""));
     }
 
     #[test]
-    fn renders_inline_and_display_math_without_scripts() {
+    fn prepares_inline_and_display_math_for_mathjax() {
         let html = html_fragment("Inline $x_1^2$\n\n$$\\frac{a}{b}$$\n");
-
-        assert!(html.contains("<math xmlns=\"http://www.w3.org/1998/Math/MathML\""));
-        assert!(html.contains("display=\"inline\""));
-        assert!(html.contains("display=\"block\""));
-        assert!(html.contains("<msubsup>") || html.contains("<msup>"));
-        assert!(html.contains("<mfrac>"));
+        assert!(html.contains("data-inflow-render=\"math\""));
+        assert!(html.contains("data-display=\"false\""));
+        assert!(html.contains("data-display=\"true\""));
+        assert!(html.contains("x_1^2"));
+        assert!(html.contains("\\frac{a}{b}"));
         assert!(!html.contains("<script"));
     }
 
     #[test]
-    fn localizes_formula_failure_with_preview_actions_and_delivery_privacy() {
+    fn defers_tex_validation_to_mathjax_without_exposing_delivery_offsets() {
         let markdown = "Before $\\unknown{x}$ after";
         let preview = html_fragment(markdown);
-        let formula_start = markdown.find('$').unwrap();
-        let formula_end = markdown.rfind('$').unwrap() + 1;
-        assert!(preview.contains("无法呈现这个公式"));
-        assert!(preview.contains(&format!("data-inflow-source-start=\"{formula_start}\"")));
-        assert!(preview.contains(&format!("data-inflow-source-end=\"{formula_end}\"")));
-        assert!(preview.contains("data-inflow-preview-error-action=\"locate\""));
+        assert!(preview.contains("\\unknown{x}"));
+        assert!(preview.contains("data-inflow-render=\"math\""));
         assert!(preview.contains("<p>Before "));
         assert!(preview.contains(" after</p>"));
-
         let delivery = html_fragment_for_delivery(markdown, RenderConfiguration::default());
-        assert!(delivery.contains("无法呈现这个公式"));
-        assert!(!delivery.contains("data-inflow-source-start"));
+        assert!(!delivery.contains("data-inflow-source"));
         assert!(!delivery.contains("data-inflow-preview-error-action"));
-        assert!(!delivery.contains("<button"));
     }
 
     #[test]
-    fn renders_mermaid_offline_and_localizes_single_diagram_failure() {
-        let html =
-            html_fragment("Before\n\n```mermaid\nflowchart TD\nA[开始] --> B[结束]\n```\n\nAfter");
-        assert!(html.contains("class=\"mermaid-diagram\""));
-        assert!(html.contains("<svg"));
-        assert!(html.contains("开始"));
-        assert!(html.contains("<p>After</p>"));
-        assert!(!html.contains("<script"));
-
-        let markdown = "```mermaid\nflowchart LR\n-->\n```\n\nStill readable";
-        let fallback = html_fragment(markdown);
-        let diagram_end = markdown.find("\n\nStill readable").unwrap();
-        assert!(fallback.contains("无法呈现这个图表"));
-        assert!(fallback.contains("--&gt;"));
-        assert!(fallback.contains("data-inflow-source-start=\"0\""));
-        assert!(fallback.contains(&format!("data-inflow-source-end=\"{diagram_end}\"")));
-        assert!(fallback.contains("data-inflow-preview-error-action=\"locate\""));
-        assert!(fallback.contains("data-inflow-preview-error-action=\"retry\""));
-        assert!(fallback.contains("定位源文本"));
-        assert!(fallback.contains("重试"));
-        assert!(fallback.contains("<p>Still readable</p>"));
+    fn prepares_three_diagram_engines_without_interpreting_their_grammars() {
+        for language in ["mermaid", "flow", "sequence"] {
+            let html = html_fragment(&format!("Before\n\n```{language}\nA --> B\n```\n\nAfter"));
+            assert!(html.contains(&format!("data-inflow-render=\"{language}\"")));
+            assert!(html.contains("A --&gt; B"));
+            assert!(html.contains("Before"));
+            assert!(html.contains("After"));
+        }
     }
 
     #[test]
@@ -669,23 +647,22 @@ mod tests {
 
         assert!(html.contains("Inline $x^2$"));
         assert!(!html.contains("<math"));
-        assert!(html.contains("<pre><code class=\"language-mermaid\">"));
+        assert!(html.contains("<pre><code class=\"language-mermaid inflow-code-highlight\""));
         assert!(html.contains("flowchart TD"));
         assert!(!html.contains("class=\"mermaid-diagram\""));
         assert!(!html.contains("<svg"));
     }
 
     #[test]
-    fn delivery_mermaid_failure_does_not_expose_editor_offsets_or_dead_actions() {
+    fn delivery_diagram_requests_do_not_expose_editor_offsets() {
         let html = html_fragment_for_delivery(
             "```mermaid\nflowchart LR\n-->\n```",
             RenderConfiguration::default(),
         );
-
-        assert!(html.contains("无法呈现这个图表"));
-        assert!(!html.contains("data-inflow-source-start"));
+        assert!(html.contains("data-inflow-render=\"mermaid\""));
+        assert!(html.contains("--&gt;"));
+        assert!(!html.contains("data-inflow-source"));
         assert!(!html.contains("data-inflow-preview-error-action"));
-        assert!(!html.contains("<button"));
     }
 
     #[test]
@@ -698,7 +675,7 @@ mod tests {
                 mermaid_enabled: false,
             },
         );
-        assert!(math_only.contains("<math"));
+        assert!(math_only.contains("data-inflow-render=\"math\""));
         assert!(math_only.contains("language-mermaid"));
         assert!(!math_only.contains("mermaid-diagram"));
 

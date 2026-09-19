@@ -72,7 +72,7 @@
 ### 2.3 即时编辑与分栏预览
 
 - 即时编辑始终挂载同一个 MarkdownSourceEditor。Rust Engine 从同一份 `DocumentIr` 一次生成 HTML、分析、高亮、引用、块 IR 与 `NativeRenderPlan`；Swift 已删除手写 Markdown planner，只把已验证的 UTF-8 DTO 范围映射为 TextKit 属性。普通文字、行内代码与引用在渲染态直接输入；Markdown 标记以透明和负字距折叠，不再用 0.1pt 字体改变行度量。CaretStyleResolver 从最近可见字符解析字体、字号和行高，并将插入光标在行框中居中。围栏代码平时隐藏围栏呈现代码，光标进入才局部显示源码；Mermaid 也使用同样的局部切换。保存内容和 undo 始终属于原始 Markdown。
-- 分栏右侧直接安装与即时编辑相同的 `NativeRenderPlan`，并把 NSTextView 设为只读。Mermaid `flowchart` 支持普通连线和仓库已有的 `-.文字.->` 带标签虚线；同一次 Engine 派生生成自包含 SVG，并由两个 TextKit 表面共用的原生覆盖层呈现，不存在 Mermaid 专用 C ABI 或第二预览分支。进入即时编辑中的 Mermaid 源码块时会先卸载图表覆视图，移出后再挂载；只读表面始终保持渲染态。
+- 分栏右侧直接安装与即时编辑相同的 `NativeRenderPlan`，并把 NSTextView 设为只读。Mermaid `flowchart` 支持普通连线和仓库已有的 `-.文字.->` 带标签虚线；同一次 Engine 派生源码请求，再由离线 JavaScript 适配层生成自包含 SVG，并由两个 TextKit 表面共用的原生覆盖层呈现，不存在 Mermaid 专用 C ABI 或第二预览分支。进入即时编辑中的 Mermaid 源码块时会先卸载图表覆视图，移出后再挂载；只读表面始终保持渲染态。
 - 展示属性与 Engine patch 回写都不登记 AppKit 正文 undo；三种视图间切换时保持同一正文、修改状态、保存路径和 Rust 撤销历史。
 - 即时编辑中的链接默认单击执行导航，“设置 > 预览”可改为只从右键菜单打开，此时单击只定位光标；文本与表格中的链接共享 Hover 高亮反馈。表格使用 AdaptiveRenderedMarkdownTableLayoutStrategy 按内容测量列宽，再随编辑区扩张或压缩；单元格可编辑，右键提供行列增删和列对齐。链接导航、本地图片和失败降级继续受当前内容快照与封闭宿主消息约束。
 
@@ -85,7 +85,7 @@
 - 插入菜单只安装链接、图片和固定表格模板。删除线、围栏代码与图片内容仍可在源码中编辑并在预览中核对。
 - 当前产品合同只覆盖 CommonMark/GFM 基础、flowchart 和 stateDiagram-v2。
 - 原始 HTML 被转义或保留为可读源码，不执行其中的脚本、样式、事件、表单、嵌入、导航或网络动作。
-- 仓库仍保留公式、脚注等后续内部路径，历史材料也可能提到额外 Mermaid 类型；这些都不属于个人首版当前能力或 UAT 通过项。当前 Mermaid 渲染器只接受 flowchart 与 stateDiagram-v2。
+- 当前图表支持 `mermaid`、`flow`、`sequence` 围栏；代码高亮使用 CodeMirror，公式使用 MathJax，详见 [JavaScript 渲染适配层](javascript-rendering.md)。这些实现扩展尚未记录为人工 UAT 通过，脚注仍属后置范围。
 
 ### 2.5 图片与链接
 
@@ -137,7 +137,7 @@
 
 判断当前能力时，以已批准的个人首版范围、实际安装的菜单和主流程、以及 UAT-PERSONAL-01 至 10 为准，而不是以某个源文件或测试名称是否存在为准。
 
-自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 421 个 XCTest method：305 个 `current-direct`、25 个依赖真实 `NSApplication` 菜单、生命周期或 AppKit 打印/PDF 系统服务的 `current-host`、86 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
+自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 421 个 XCTest method：299 个 `current-direct`、31 个依赖真实 `NSApplication` 菜单、生命周期、WebKit 或 AppKit 打印/PDF 系统服务的 `current-host`、86 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
 
 ## 4. 人工 UAT 状态
 

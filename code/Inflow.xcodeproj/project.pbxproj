@@ -80,6 +80,8 @@
 		C10000000000000000000006 /* EditorExportSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000006 /* EditorExportSupport.swift */; };
 		C10000000000000000000007 /* EditorChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000007 /* EditorChrome.swift */; };
 		C10000000000000000000008 /* SourceEditorSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000008 /* SourceEditorSupport.swift */; };
+        D10000000000000000000001 /* JavaScriptRendering.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001; };
+        D10000000000000000000002 /* JavaScript in Resources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000002; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -173,6 +175,8 @@
 		C20000000000000000000006 /* EditorExportSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/EditorExportSupport.swift; sourceTree = "<group>"; };
 		C20000000000000000000007 /* EditorChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/EditorChrome.swift; sourceTree = "<group>"; };
 		C20000000000000000000008 /* SourceEditorSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/SourceEditorSupport.swift; sourceTree = "<group>"; };
+        D20000000000000000000001 /* JavaScriptRendering.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preview/JavaScriptRendering.swift; sourceTree = "<group>"; };
+        D20000000000000000000002 /* JavaScript */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/JavaScript; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -239,6 +243,8 @@
 				A20000000000000000000006 /* MarkdownDocument.swift */,
 				A20000000000000000000007 /* MarkdownCodec.swift */,
 				A2000000000000000000000D /* MarkdownRenderer.swift */,
+                D20000000000000000000001,
+                D20000000000000000000002,
 				A20000000000000000000023 /* LocalImageResolver.swift */,
 				A20000000000000000000036 /* PreviewLinkNavigation.swift */,
 				A20000000000000000000037 /* MarkdownHighlighter.swift */,
@@ -387,6 +393,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000000000000000000003D /* Assets.xcassets in Resources */,
+                D10000000000000000000002,
 				A1000000000000000000003E /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -426,7 +433,6 @@
 				"$(PROJECT_DIR)/core/src/math.rs",
 				"$(PROJECT_DIR)/core/src/markdown_ir.rs",
 				"$(PROJECT_DIR)/core/src/mermaid.rs",
-				"$(PROJECT_DIR)/core/src/mermaid_rs_adapter.rs",
 				"$(PROJECT_DIR)/core/src/native_render.rs",
 				"$(PROJECT_DIR)/core/src/ports.rs",
 				"$(PROJECT_DIR)/core/src/reference.rs",
@@ -469,6 +475,7 @@
 				A10000000000000000000004 /* MarkdownDocument.swift in Sources */,
 				A10000000000000000000005 /* MarkdownCodec.swift in Sources */,
 				A10000000000000000000008 /* MarkdownRenderer.swift in Sources */,
+                D10000000000000000000001,
 				A1000000000000000000001E /* LocalImageResolver.swift in Sources */,
 				A10000000000000000000031 /* PreviewLinkNavigation.swift in Sources */,
 				A10000000000000000000032 /* MarkdownHighlighter.swift in Sources */,
