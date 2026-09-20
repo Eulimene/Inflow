@@ -1178,7 +1178,8 @@ struct MarkdownEditorView: View {
             session: session,
             isEditable: isEditable,
             appearance: preferences.previewConfiguration.nativeRenderedAppearance(
-                spellingEnabled: preferences.sourceEditorAppearance.spellingEnabled
+                spellingEnabled: preferences.sourceEditorAppearance.spellingEnabled,
+                autoPairEnabled: preferences.autoPairEnabled
             ),
             presentation: .rendered,
             onPasteImage: pasteHandler,

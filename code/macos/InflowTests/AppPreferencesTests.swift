@@ -9,6 +9,11 @@ final class AppPreferencesTests: XCTestCase {
             let preferences = AppPreferences(defaults: defaults)
             preferences.applyAutosavePolicy()
 
+            XCTAssertTrue(preferences.autoPairEnabled)
+            preferences.autoPairEnabled = false
+            XCTAssertFalse(AppPreferences(defaults: defaults).autoPairEnabled)
+            XCTAssertFalse(preferences.sourceEditorAppearance.autoPairEnabled)
+            preferences.autoPairEnabled = true
             XCTAssertEqual(preferences.editorFontSize, 15)
             XCTAssertEqual(preferences.editorLineHeight, 1.6)
             XCTAssertTrue(preferences.syntaxHighlightingEnabled)

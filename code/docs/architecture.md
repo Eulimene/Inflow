@@ -281,3 +281,5 @@ LocalFailureLogController 只允许记录时间、应用版本、操作类别和
 - 可以写“存在实现/组件测试入口”；
 - 不得写“个人首版通过”“候选有效”“端到端闭环”或“发布就绪”；
 - 不得用旧候选、旧测试计数或旧归档代替当前人工记录。
+
+即时编辑的行内语法显隐消费 NativeRenderPlan 的范围。MarkdownWritingRules 只处理回车、退格、缩进与配对的编辑事务；Rust 计划识别的代码、公式、表格或回退块被排除。事务经 NSTextView 的 shouldChangeText / didChangeText 进入现有 Engine history，输入法组合期间禁用自动操作。链接在可编辑表面使用 ⌘+单击，在只读表面使用普通单击（“仅右键打开”偏好仍优先）。

@@ -174,19 +174,22 @@ struct SourceEditorAppearance: Equatable, Sendable {
     let spellingEnabled: Bool
     let wrapsLines: Bool
     let showsLineNumbers: Bool
+    let autoPairEnabled: Bool
 
     init(
         fontSize: Double,
         lineHeight: Double,
         spellingEnabled: Bool,
         wrapsLines: Bool = true,
-        showsLineNumbers: Bool = false
+        showsLineNumbers: Bool = false,
+        autoPairEnabled: Bool = true
     ) {
         self.fontSize = fontSize
         self.lineHeight = lineHeight
         self.spellingEnabled = spellingEnabled
         self.wrapsLines = wrapsLines
         self.showsLineNumbers = showsLineNumbers
+        self.autoPairEnabled = autoPairEnabled
     }
 }
 
@@ -241,7 +244,7 @@ enum LinkActivationPreference: String, CaseIterable, Identifiable, Sendable {
 
     var label: String {
         switch self {
-        case .singleClick: "单击打开"
+        case .singleClick: "预览单击打开，编辑时 ⌘+单击"
         case .contextMenu: "仅从右键菜单打开"
         }
     }
@@ -374,7 +377,7 @@ struct PreviewAppearanceConfiguration: Equatable, Sendable {
         self.mermaidRenderingEnabled = mermaidRenderingEnabled
     }
 
-    func nativeRenderedAppearance(spellingEnabled: Bool) -> SourceEditorAppearance {
+    func nativeRenderedAppearance(spellingEnabled: Bool, autoPairEnabled: Bool = true) -> SourceEditorAppearance {
         let lineHeight = switch theme {
         case .standard, .highContrast: MarkdownRenderMetrics.bodyLineHeight
         case .longform: 1.82
@@ -385,7 +388,8 @@ struct PreviewAppearanceConfiguration: Equatable, Sendable {
             lineHeight: lineHeight,
             spellingEnabled: spellingEnabled,
             wrapsLines: true,
-            showsLineNumbers: false
+            showsLineNumbers: false,
+            autoPairEnabled: autoPairEnabled
         )
     }
 
@@ -443,6 +447,7 @@ final class AppPreferences: ObservableObject {
     private enum Key {
         static let editorFontSize = "preferences.editor.fontSize"
         static let editorLineHeight = "preferences.editor.lineHeight"
+        static let autoPairEnabled = "preferences.editor.autoPairEnabled"
         static let syntaxHighlightingEnabled = "preferences.editor.syntaxHighlightingEnabled"
         static let spellingEnabled = "preferences.editor.spellingEnabled"
         static let wrapsLines = "preferences.editor.wrapsLines"
@@ -486,6 +491,7 @@ final class AppPreferences: ObservableObject {
             Key.editorFontSize,
             Key.editorLineHeight,
             Key.syntaxHighlightingEnabled,
+            Key.autoPairEnabled,
             Key.spellingEnabled,
             Key.wrapsLines,
             Key.showsLineNumbers,
@@ -630,6 +636,10 @@ final class AppPreferences: ObservableObject {
 
     @Published var spellingEnabled: Bool {
         didSet { persist(spellingEnabled, forKey: Key.spellingEnabled) }
+    }
+
+    @Published var autoPairEnabled: Bool {
+        didSet { persist(autoPairEnabled, forKey: Key.autoPairEnabled) }
     }
 
     @Published var syntaxHighlightingEnabled: Bool {
@@ -824,6 +834,7 @@ final class AppPreferences: ObservableObject {
             range: Limits.editorFontSize
         )
         editorLineHeight = LaunchFixed.editorLineHeight
+        autoPairEnabled = Self.bool(forKey: Key.autoPairEnabled, in: defaults, defaultValue: true)
         syntaxHighlightingEnabled = Self.bool(
             forKey: Key.syntaxHighlightingEnabled,
             in: defaults,
@@ -922,7 +933,8 @@ final class AppPreferences: ObservableObject {
             lineHeight: editorLineHeight,
             spellingEnabled: spellingEnabled,
             wrapsLines: wrapsLines,
-            showsLineNumbers: showsLineNumbers
+            showsLineNumbers: showsLineNumbers,
+            autoPairEnabled: autoPairEnabled
         )
     }
 
@@ -995,6 +1007,7 @@ final class AppPreferences: ObservableObject {
         editorFontSize = SourceEditorAppearance.default.fontSize
         editorLineHeight = SourceEditorAppearance.default.lineHeight
         syntaxHighlightingEnabled = true
+        autoPairEnabled = true
         spellingEnabled = SourceEditorAppearance.default.spellingEnabled
         wrapsLines = SourceEditorAppearance.default.wrapsLines
         showsLineNumbers = SourceEditorAppearance.default.showsLineNumbers
@@ -1017,6 +1030,7 @@ final class AppPreferences: ObservableObject {
                 Key.editorFontSize: editorFontSize,
                 Key.editorLineHeight: editorLineHeight,
                 Key.syntaxHighlightingEnabled: syntaxHighlightingEnabled,
+                Key.autoPairEnabled: autoPairEnabled,
                 Key.spellingEnabled: spellingEnabled,
                 Key.wrapsLines: wrapsLines,
                 Key.showsLineNumbers: showsLineNumbers,

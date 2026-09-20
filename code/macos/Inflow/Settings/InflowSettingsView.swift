@@ -219,6 +219,7 @@ struct InflowSettingsView: View {
                 valueText: "\(Int(preferences.editorFontSize.rounded())) 磅"
             )
             Toggle("Markdown 语法高亮", isOn: $preferences.syntaxHighlightingEnabled)
+            Toggle("即时编辑自动配对括号与反引号", isOn: $preferences.autoPairEnabled)
                 .help("只改变源码编辑器的视觉样式，不会修改 Markdown 正文。")
         }
         .formStyle(.grouped)

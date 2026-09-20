@@ -480,3 +480,167 @@ enum RenderedMarkdownEditor {
         )
     }
 }
+
+/// A single source transaction produced by a writing gesture. Offsets are UTF-16.
+struct MarkdownWritingEdit: Equatable {
+    let range: NSRange
+    let text: String
+    let selection: NSRange
+}
+
+enum MarkdownWritingAction { case newline, backwardDelete, indent, outdent }
+
+/// Lexical editing rules, not a Markdown renderer. The caller excludes code,
+/// formulas and unsupported blocks using the authoritative render plan.
+enum MarkdownWritingRules {
+    private static let prefix = try! NSRegularExpression(
+        pattern: #"^( *)((?:> ?)*)(?:([-+*]|\d{1,9}[.)]|#{1,6}) +(\[[ xX]\] +)?)?"#
+    )
+
+    static func edit(_ action: MarkdownWritingAction, source: String, selection: NSRange) -> MarkdownWritingEdit? {
+        let source = source as NSString
+        guard NSMaxRange(selection) <= source.length else { return nil }
+        if selection.length > 0 {
+            guard action == .indent || action == .outdent else { return nil }
+            // Exclude a following line when a selection ends exactly at its start.
+            let range = source.lineRange(for: NSRange(location: selection.location, length: selection.length - 1))
+            let original = source.substring(with: range) as NSString
+            var edits: [MarkdownWritingEdit] = []
+            var offset = 0
+            while offset < original.length {
+                let line = original.lineRange(for: NSRange(location: offset, length: 0))
+                if let change = edit(action, source: original.substring(with: line), selection: NSRange(location: 0, length: 0)) {
+                    edits.append(MarkdownWritingEdit(range: NSRange(location: offset + change.range.location, length: change.range.length),
+                        text: change.text, selection: change.selection))
+                }
+                offset = NSMaxRange(line)
+            }
+            guard !edits.isEmpty else { return nil }
+            let changed = NSMutableString(string: original)
+            for change in edits.reversed() { changed.replaceCharacters(in: change.range, with: change.text) }
+            return MarkdownWritingEdit(range: range, text: changed as String,
+                selection: NSRange(location: range.location, length: changed.length))
+        }
+        let line = source.lineRange(for: selection)
+        let raw = source.substring(with: line) as NSString
+        let body = (raw as String).trimmingCharacters(in: .newlines)
+        let offset = selection.location - line.location
+        guard let match = prefix.firstMatch(in: body, range: NSRange(location: 0, length: (body as NSString).length)) else { return nil }
+        guard match.range.length > 0, match.range(at: 2).length > 0 || match.range(at: 3).location != NSNotFound else { return nil }
+        let head = raw.substring(with: match.range)
+        let indent = raw.substring(with: match.range(at: 1))
+        let tail = (body as NSString).substring(from: match.range.length)
+        func replacing(_ range: NSRange, _ text: String, caret: Int? = nil) -> MarkdownWritingEdit {
+            MarkdownWritingEdit(range: range, text: text, selection: NSRange(location: caret ?? (range.location + text.utf16.count), length: 0))
+        }
+        switch action {
+        case .newline:
+            if match.range(at: 3).location != NSNotFound,
+               raw.substring(with: match.range(at: 3)).hasPrefix("#") { return nil }
+            guard offset >= match.range.length else { return nil }
+            if tail.trimmingCharacters(in: .whitespaces).isEmpty {
+                // Remove one nesting level at a time, preserving outer quotes.
+                if match.range(at: 3).location != NSNotFound {
+                    let start = match.range(at: 3).location
+                    return replacing(NSRange(location: line.location + start, length: match.range.length - start), "")
+                }
+                if let last = head.lastIndex(of: ">") {
+                    return replacing(NSRange(location: line.location + head[..<last].utf16.count, length: head[last...].utf16.count), "")
+                }
+                return replacing(NSRange(location: line.location, length: match.range.length), "")
+            }
+            var next = head
+            if match.range(at: 3).location != NSNotFound {
+                let marker = raw.substring(with: match.range(at: 3))
+                if let number = Int(marker.dropLast()), let suffix = marker.last {
+                    let replacement = String(number + 1) + String(suffix)
+                    next = (next as NSString).replacingCharacters(in: match.range(at: 3), with: replacement)
+                }
+                next = next.replacingOccurrences(of: "[x]", with: "[ ]").replacingOccurrences(of: "[X]", with: "[ ]")
+            }
+            let newline = (raw as String).hasSuffix("\r\n") ? "\r\n" : "\n"
+            return replacing(selection, newline + next)
+        case .backwardDelete:
+            guard offset == match.range.length else { return nil }
+            if !indent.isEmpty {
+                let count = min(2, indent.utf16.count)
+                return replacing(NSRange(location: line.location, length: count), "", caret: selection.location - count)
+            }
+            if match.range(at: 3).location != NSNotFound {
+                let start = match.range(at: 3).location
+                return replacing(NSRange(location: line.location + start, length: match.range.length - start), "")
+            }
+            if let last = head.lastIndex(of: ">") {
+                let start = line.location + head[..<last].utf16.count
+                return replacing(NSRange(location: start, length: head[last...].utf16.count), "")
+            }
+            return replacing(NSRange(location: line.location, length: match.range.length), "")
+        case .indent:
+            guard match.range(at: 3).location != NSNotFound,
+                  !raw.substring(with: match.range(at: 3)).hasPrefix("#") else { return nil }
+            return replacing(NSRange(location: line.location, length: 0), "  ", caret: selection.location + 2)
+        case .outdent:
+            guard match.range(at: 3).location != NSNotFound, !indent.isEmpty,
+                  !raw.substring(with: match.range(at: 3)).hasPrefix("#") else { return nil }
+            let count = min(2, indent.utf16.count)
+            return replacing(NSRange(location: line.location, length: count), "", caret: selection.location - min(offset, count))
+        }
+    }
+
+    static func pair(_ input: String, source: String, selection: NSRange) -> MarkdownWritingEdit? {
+        let text = source as NSString
+        guard NSMaxRange(selection) <= text.length,
+              let closing = ["(": ")", "[": "]", "{": "}", "`": "`", "*": "*", "_": "_", "~": "~"][input]
+        else { return nil }
+        if selection.location > 0, text.substring(with: NSRange(location: selection.location - 1, length: 1)) == "\\" { return nil }
+        let selected = text.substring(with: selection)
+        if selection.length == 0 {
+            if ["*", "_", "~"].contains(input) { return nil }
+            // Avoid changing words, list markers and existing closing delimiters.
+            let before = selection.location == 0 ? "" : text.substring(to: selection.location)
+            if input == "`", before.split(separator: "\n", omittingEmptySubsequences: false).last?.trimmingCharacters(in: .whitespaces) == "``" { return nil }
+            if ["*", "_", "~"].contains(input), before.last?.isLetter == true { return nil }
+            if selection.location < text.length {
+                let next = text.substring(from: selection.location).first
+                if next?.isLetter == true || next?.isNumber == true { return nil }
+            }
+        }
+        let opening = input == "~" ? "~~" : input
+        let ending = input == "~" ? "~~" : closing
+        return MarkdownWritingEdit(range: selection, text: opening + selected + ending,
+            selection: NSRange(location: selection.location + opening.utf16.count, length: selection.length))
+    }
+
+    static func revealedMarkers(plan: RenderedMarkdownPlan, selection: NSRange) -> [NSRange] {
+        func touches(_ range: NSRange) -> Bool {
+            selection.length == 0
+                ? selection.location >= range.location && selection.location <= NSMaxRange(range)
+                : NSIntersectionRange(selection, range).length > 0
+        }
+        var result: [NSRange] = []
+        for style in plan.contentStyles {
+            let kind: RenderedMarkdownMarkerKind
+            switch style.kind {
+            case .strong: kind = .strong
+            case .emphasis: kind = .emphasis
+            case .strikethrough: kind = .strikethrough
+            case .inlineCode: kind = .inlineCode
+            default: continue
+            }
+            let content = style.sourceRange.utf16Range
+            let adjacent = plan.markers.filter {
+                $0.kind == kind && (NSMaxRange($0.sourceRange.utf16Range) == content.location
+                    || $0.sourceRange.utf16Range.location == NSMaxRange(content))
+            }.map(\.sourceRange.utf16Range)
+            let full = adjacent.reduce(content) { NSUnionRange($0, $1) }
+            if touches(full) { result += adjacent }
+        }
+        for link in plan.links where touches(link.sourceRange.utf16Range) {
+            result += plan.markers.filter {
+                ($0.kind == .linkDelimiter || $0.kind == .linkDestination)
+                    && NSIntersectionRange($0.sourceRange.utf16Range, link.sourceRange.utf16Range).length > 0
+            }.map(\.sourceRange.utf16Range)
+        }
+        return result
+    }
+}

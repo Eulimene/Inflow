@@ -731,7 +731,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             NSRange(location: boldMarker.sourceRange.utf16Range.location, length: 0)
         )
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
-        assertVisuallyHidden(boldMarker.sourceRange.utf16Range, in: session.textView.textStorage)
+        XCTAssertFalse(session.textView.renderedCollapsedSourceRanges.contains(boldMarker.sourceRange.utf16Range))
         assertVisuallyHidden(italicMarker.sourceRange.utf16Range, in: session.textView.textStorage)
         XCTAssertNotNil(
             session.textView.renderedImage(
@@ -793,7 +793,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
         assertVisuallyHidden(boldMarker.sourceRange.utf16Range, in: session.textView.textStorage)
-        assertVisuallyHidden(italicMarker.sourceRange.utf16Range, in: session.textView.textStorage)
+        XCTAssertFalse(session.textView.renderedCollapsedSourceRanges.contains(italicMarker.sourceRange.utf16Range))
         XCTAssertNotNil(
             session.textView.renderedImage(
                 atUTF16Location: diagram.sourceRange.utf16Range.location
@@ -2250,7 +2250,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             NSEvent.mouseEvent(
                 with: .leftMouseDown,
                 location: session.textView.convert(viewPoint, to: nil),
-                modifierFlags: [.capsLock],
+                modifierFlags: [.capsLock, .command],
                 timestamp: 0,
                 windowNumber: window.windowNumber,
                 context: nil,
@@ -2397,5 +2397,150 @@ final class RenderedMarkdownEditorTests: XCTestCase {
 private extension NSRange {
     var nonEmptyLocation: Int? {
         location == NSNotFound || length == 0 ? nil : location
+    }
+}
+
+extension RenderedMarkdownEditorTests {
+    func testLiveWritingStructuralTransactions() throws {
+        for (source, action, expected) in [
+            ("- 项目", MarkdownWritingAction.newline, "- 项目\n- "),
+            ("09. 项目", .newline, "09. 项目\n10. "),
+            ("- [x] 完成", .newline, "- [x] 完成\n- [ ] "),
+            ("> 引用", .newline, "> 引用\n> "),
+            ("> - 项目", .newline, "> - 项目\n> - "),
+            ("> - ", .newline, "> "),
+            ("> > ", .newline, "> "),
+            ("- ", .newline, ""),
+            ("- ", .backwardDelete, ""),
+            ("## ", .backwardDelete, ""),
+            ("  - ", .backwardDelete, "- "),
+            ("- 项目", .indent, "  - 项目"),
+            ("  - 项目", .outdent, "- 项目")
+        ] {
+            let edit = try XCTUnwrap(MarkdownWritingRules.edit(action, source: source,
+                selection: NSRange(location: source.utf16.count, length: 0)), source)
+            XCTAssertEqual((source as NSString).replacingCharacters(in: edit.range, with: edit.text), expected)
+            XCTAssertLessThanOrEqual(NSMaxRange(edit.selection), expected.utf16.count)
+        }
+        let selected = "- 一\n- 二\n正文"
+        let indent = try XCTUnwrap(MarkdownWritingRules.edit(.indent, source: selected, selection: NSRange(location: 0, length: 8)))
+        XCTAssertEqual((selected as NSString).replacingCharacters(in: indent.range, with: indent.text), "  - 一\n  - 二\n正文")
+        XCTAssertNil(MarkdownWritingRules.edit(.newline, source: "正文", selection: NSRange(location: 2, length: 0)))
+        XCTAssertNil(MarkdownWritingRules.edit(.newline, source: "- 选区", selection: NSRange(location: 2, length: 2)))
+        let middle = try XCTUnwrap(MarkdownWritingRules.edit(.newline, source: "- 前后", selection: NSRange(location: 3, length: 0)))
+        XCTAssertEqual(("- 前后" as NSString).replacingCharacters(in: middle.range, with: middle.text), "- 前\n- 后")
+    }
+
+    @MainActor
+    func testLiveWritingPairsAndProtectedBlocks() throws {
+        let session = MarkdownSourceEditorSession()
+        let view = session.textView
+        view.string = ""
+        session.setPresentation(.rendered, source: "", onLinkClick: nil)
+        view.insertText("(", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(view.string, "()")
+        XCTAssertEqual(view.selectedRange().location, 1)
+        view.insertText("中文😀", replacementRange: view.selectedRange())
+        view.insertText(")", replacementRange: view.selectedRange())
+        XCTAssertEqual(view.string, "(中文😀)")
+        XCTAssertEqual(view.selectedRange().location, view.string.utf16.count)
+        view.string = "()"
+        view.setSelectedRange(NSRange(location: 1, length: 0))
+        view.deleteBackward(nil)
+        XCTAssertEqual(view.string, "")
+        view.string = "中文😀"
+        view.setSelectedRange(NSRange(location: 0, length: view.string.utf16.count))
+        view.insertText("*", replacementRange: view.selectedRange())
+        XCTAssertEqual(view.string, "*中文😀*")
+        XCTAssertEqual(view.selectedRange(), NSRange(location: 1, length: 4))
+        view.markdownAutoPairEnabled = false
+        view.string = ""
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        view.insertText("(", replacementRange: view.selectedRange())
+        XCTAssertEqual(view.string, "(")
+        view.markdownAutoPairEnabled = true
+        view.string = ""
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        for _ in 0..<3 { view.insertText("`", replacementRange: view.selectedRange()) }
+        XCTAssertEqual(view.string, "```", "Auto pairing must not interfere with opening a fenced block")
+        view.string = "```text\n- code\n```"
+        view.setSelectedRange(NSRange(location: 14, length: 0))
+        view.insertNewline(nil)
+        XCTAssertEqual(view.string, "```text\n- code\n\n```")
+        view.string = ""
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        view.setMarkedText("(", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(view.string, "(", "IME composition must not generate a closing delimiter")
+        view.insertText("（", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertEqual(view.string, "（")
+        session.setPresentation(.source, source: "- plain", onLinkClick: nil)
+        view.string = "- plain"
+        view.setSelectedRange(NSRange(location: 7, length: 0))
+        view.insertNewline(nil)
+        XCTAssertEqual(view.string, "- plain\n")
+        XCTAssertFalse(RenderedMarkdownLinkActivation.shouldNavigate(for: [], preference: .singleClick, isEditing: true))
+        XCTAssertTrue(RenderedMarkdownLinkActivation.shouldNavigate(for: [.command], preference: .singleClick, isEditing: true))
+        XCTAssertFalse(RenderedMarkdownLinkActivation.shouldNavigate(for: [.command], preference: .contextMenu, isEditing: true))
+    }
+
+    @MainActor
+    func testLiveWritingReturnUndoRestoresSourceAndCaret() async throws {
+        let session = MarkdownSourceEditorSession()
+        let source = "- 中文😀"
+        session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let caret = NSRange(location: source.utf16.count, length: 0)
+        session.textView.setSelectedRange(caret)
+        session.textView.insertNewline(nil)
+        let changed = source + "\n- "
+        XCTAssertEqual(session.textView.string, changed)
+        _ = await session.deriveContent(for: changed, configuration: .default)
+        session.textView.undo(nil)
+        for _ in 0..<100 where session.textView.string != source { await Task.yield() }
+        XCTAssertEqual(session.textView.string, source)
+        XCTAssertEqual(session.textView.selectedRange(), caret)
+        session.textView.redo(nil)
+        for _ in 0..<100 where session.textView.string != changed { await Task.yield() }
+        XCTAssertEqual(session.textView.string, changed)
+    }
+
+    @MainActor
+    func testLiveWritingRevealsOnlyFocusedInlineSyntax() async throws {
+        let source = "**加粗** 与 *斜体* [链接](target.md)\n"
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        let derived = await session.deriveContent(for: source, configuration: .default)
+        let plan = try XCTUnwrap(derived?.nativeRenderPlan)
+        let bold = (source as NSString).range(of: "加粗")
+        let markers = MarkdownWritingRules.revealedMarkers(plan: plan, selection: bold)
+        XCTAssertEqual(markers.count, 2)
+        XCTAssertEqual(markers.map { (source as NSString).substring(with: $0) }, ["**", "**"])
+        let link = try XCTUnwrap(plan.links.first)
+        let linkMarkers = MarkdownWritingRules.revealedMarkers(plan: plan, selection: link.textRange.utf16Range)
+        XCTAssertTrue(linkMarkers.contains { NSIntersectionRange($0, link.targetRange.utf16Range).length > 0 })
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = session.scrollView
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        window.makeFirstResponder(session.textView)
+        session.textView.setSelectedRange(bold)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        for marker in markers { XCTAssertFalse(session.textView.renderedCollapsedSourceRanges.contains(marker)) }
+        XCTAssertEqual(session.textView.string, source)
+        let italicMarker = try XCTUnwrap(plan.markers.first { $0.kind == .emphasis })
+        XCTAssertTrue(session.textView.renderedCollapsedSourceRanges.contains(italicMarker.sourceRange.utf16Range))
+        let tableSource = "| 链接 |\n| --- |\n| [打开](file.md) |"
+        let preview = MarkdownSourceEditorSession(role: .renderedProjection)
+        preview.textView.string = tableSource
+        let previewContent = await preview.deriveContent(for: tableSource, configuration: .default)
+        preview.setPresentation(.rendered, source: tableSource, onLinkClick: nil)
+        let tablePlan = try XCTUnwrap(previewContent?.nativeRenderPlan.tables.first)
+        let tableView = try XCTUnwrap(preview.textView.renderedTable(atUTF16Location: tablePlan.sourceRange.utf16Range.location))
+        let cells = tableView.subviews.compactMap { $0 as? NSTextView }
+        XCTAssertFalse(cells.isEmpty)
+        XCTAssertTrue(cells.allSatisfy { !$0.isEditable })
     }
 }

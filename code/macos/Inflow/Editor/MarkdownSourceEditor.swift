@@ -58,6 +58,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var javaScriptFailures: Set<String> = []
     private var javaScriptSnapshot = ""
 
+    private var renderedRevealedMarkers: [NSRange] = []
     private var renderedInteractionTask: Task<Void, Never>?
     private let lineNumberRuler: MarkdownLineNumberRulerView
     private let engineClient: EditorEngineClient
@@ -204,6 +205,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     func applySourceAppearance(_ appearance: SourceEditorAppearance, force: Bool = false) {
         guard force || !hasAppliedSourceAppearance || sourceAppearance != appearance else { return }
         sourceAppearance = appearance
+        textView.markdownAutoPairEnabled = appearance.autoPairEnabled
         hasAppliedSourceAppearance = true
         renderedAppliedAppearance = nil
 
@@ -574,6 +576,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         let linkActivationChanged = renderedLinkActivation != linkActivation
         let themeChanged = renderedTheme != theme
         self.presentation = presentation
+        textView.isLiveMarkdown = presentation == .rendered
         renderedLinkHandler = onLinkClick
         renderedLinkActivation = linkActivation
         renderedTheme = theme
@@ -586,6 +589,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             cancelRenderedImageLoading()
             cancelDeferredMermaidRendering()
             renderedPlan = nil
+            textView.writingPlan = nil
+            renderedRevealedMarkers = []
             renderedEditingRange = nil
             textView.linkClickHandler = nil
             textView.clickableLinkRanges = []
@@ -742,6 +747,13 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             && renderedAppliedAppearance == sourceAppearance
             && renderedAppliedTheme == renderedTheme
             && currentRenderedEditingRange(source: source) == renderedEditingRange
+            && activeRevealedMarkers() == renderedRevealedMarkers
+    }
+
+    private func activeRevealedMarkers() -> [NSRange] {
+        guard textView.isEditable, textView.window?.firstResponder === textView,
+              let plan = renderedPlan, plan.exactlyMatches(textView.string) else { return [] }
+        return MarkdownWritingRules.revealedMarkers(plan: plan, selection: textView.selectedRange())
     }
 
     private func currentRenderedEditingRange(source: String) -> NSRange? {
@@ -781,6 +793,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
               plan.exactlyMatches(source)
         else { return }
         renderedPlan = plan
+        textView.writingPlan = plan
+        renderedRevealedMarkers = activeRevealedMarkers()
         let editingRange: NSRange? = if textView.isEditable,
                                        textView.window?.firstResponder === textView
         {
@@ -795,7 +809,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         renderedEditingRange = editingRange
         textView.clickableLinkRanges = plan.links.compactMap { link in
             let range = link.textRange.utf16Range
-            return rangesOverlap(range, editingRange) ? nil : range
+            return range
         }
         textView.beginRenderedOverlayUpdate()
         textView.renderedQuoteRanges = plan.contentStyles.compactMap { style in
@@ -862,6 +876,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             return request.sourceRange.utf16Range
         }
         var collapsedRanges = plan.markers.compactMap { marker -> NSRange? in
+            if renderedRevealedMarkers.contains(marker.sourceRange.utf16Range) { return nil }
             if marker.kind == .mathDelimiter,
                plan.renderRequests.contains(where: { request in
                    request.kind == "math" && javaScriptResults[request.cacheKey]?.svg == nil
@@ -1003,6 +1018,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             )
         }
         for marker in plan.markers {
+            if renderedRevealedMarkers.contains(marker.sourceRange.utf16Range) { continue }
             if marker.kind == .mathDelimiter,
                plan.renderRequests.contains(where: { request in
                    request.kind == "math" && javaScriptResults[request.cacheKey]?.svg == nil
@@ -2745,12 +2761,14 @@ final class MarkdownLineNumberRulerView: NSRulerView {
 enum RenderedMarkdownLinkActivation {
     static func shouldNavigate(
         for modifierFlags: NSEvent.ModifierFlags,
-        preference: LinkActivationPreference
+        preference: LinkActivationPreference,
+        isEditing: Bool = false
     ) -> Bool {
         guard preference == .singleClick else { return false }
         let modifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
         let editingModifiers: NSEvent.ModifierFlags = [.control, .option, .shift]
         return modifiers.intersection(editingModifiers).isEmpty
+            && (!isEditing || modifiers.contains(.command))
     }
 }
 
@@ -3008,6 +3026,10 @@ final class WindowAwareTextView: NSTextView {
             if oldValue != renderedRuleRanges { needsDisplay = true }
         }
     }
+    var isLiveMarkdown = false
+    var markdownAutoPairEnabled = true
+    var writingPlan: RenderedMarkdownPlan?
+    private var insertedCloser: (location: Int, text: String)?
     var renderedAnchorSourceRanges: [NSRange] = []
     var renderedCollapsedSourceRanges: [NSRange] = []
     var renderedReplacementBaseFont = NSFont.systemFont(ofSize: 15)
@@ -3295,6 +3317,7 @@ final class WindowAwareTextView: NSTextView {
                 existing.tableView.applyPalette(
                     MarkdownRenderPalette.resolved(for: effectiveAppearance)
                 )
+                existing.tableView.setEditingEnabled(isEditable)
                 existing.tableView.update(table: table, onEdit: onEdit)
                 existing.tableView.updateMaximumWidth(maximumWidth)
                 return existing.tableView.renderedSize
@@ -3310,6 +3333,7 @@ final class WindowAwareTextView: NSTextView {
             reusable.value.tableView.applyPalette(
                 MarkdownRenderPalette.resolved(for: effectiveAppearance)
             )
+            reusable.value.tableView.setEditingEnabled(isEditable)
             reusable.value.tableView.update(table: table, onEdit: onEdit)
             reusable.value.tableView.updateMaximumWidth(maximumWidth)
             renderedTableViews[key] = RenderedTableViewState(
@@ -3329,6 +3353,7 @@ final class WindowAwareTextView: NSTextView {
             onLinkClick: onLinkClick,
             onEdit: onEdit
         )
+        tableView.setEditingEnabled(isEditable)
         addSubview(tableView)
         renderedTableViews[key] = RenderedTableViewState(
             sourceRange: table.sourceRange.utf16Range,
@@ -3805,6 +3830,27 @@ final class WindowAwareTextView: NSTextView {
         let effectiveRange = replacementRange.location == NSNotFound
             ? selectedRange()
             : replacementRange
+        if !wasComposing, !suppressesAutomaticEngineGrouping, isLiveMarkdown, isEditable,
+           markdownAutoPairEnabled, let input = Self.plainText(from: insertString), input.count == 1 {
+            if let closer = insertedCloser, effectiveRange.length == 0,
+               effectiveRange.location == closer.location, input == closer.text,
+               closer.location + input.utf16.count <= string.utf16.count,
+               (string as NSString).substring(with: NSRange(location: closer.location, length: input.utf16.count)) == input {
+                setSelectedRange(NSRange(location: closer.location + input.utf16.count, length: 0))
+                insertedCloser = nil
+                breakEngineTypingGroup()
+                return
+            }
+            if ["(", "[", "{", "`", "*", "_", "~"].contains(input),
+               canUseWritingRules, let edit = MarkdownWritingRules.pair(input, source: string, selection: effectiveRange) {
+                if applyWritingEdit(edit) {
+                    insertedCloser = (NSMaxRange(edit.selection), String(edit.text.suffix(1)))
+                    return
+                }
+            }
+        }
+        let previousCloser = insertedCloser
+        insertedCloser = nil
         if !wasComposing,
            !suppressesAutomaticEngineGrouping,
            effectiveRange.length == 0,
@@ -3817,12 +3863,30 @@ final class WindowAwareTextView: NSTextView {
             breakEngineTypingGroup()
         }
         super.insertText(insertString, replacementRange: replacementRange)
+        if !wasComposing, let previousCloser, effectiveRange.length == 0,
+           effectiveRange.location == previousCloser.location,
+           let inserted = Self.plainText(from: insertString), !inserted.contains(where: \.isNewline) {
+            insertedCloser = (previousCloser.location + inserted.utf16.count, previousCloser.text)
+        }
         if wasComposing, !hasMarkedText() {
             finishCompositionIfNeeded()
         }
     }
 
     override func deleteBackward(_ sender: Any?) {
+        if canUseWritingRules {
+            let selection = selectedRange()
+            if markdownAutoPairEnabled, selection.length == 0, selection.location > 0,
+               selection.location < string.utf16.count {
+                let text = string as NSString
+                let left = text.substring(with: NSRange(location: selection.location - 1, length: 1))
+                let right = text.substring(with: NSRange(location: selection.location, length: 1))
+                if ["(": ")", "[": "]", "{": "}", "`": "`" ][left] == right,
+                   applyWritingEdit(MarkdownWritingEdit(range: NSRange(location: selection.location - 1, length: 2),
+                       text: "", selection: NSRange(location: selection.location - 1, length: 0))) { return }
+            }
+            if handleWritingAction(.backwardDelete) { return }
+        }
         if !suppressesAutomaticEngineGrouping, selectedRange().length == 0 {
             prepareEngineTypingGroup(.backwardDeletion)
         } else {
@@ -3841,8 +3905,73 @@ final class WindowAwareTextView: NSTextView {
     }
 
     override func insertNewline(_ sender: Any?) {
+        if handleWritingAction(.newline) { return }
         breakEngineTypingGroup()
         super.insertNewline(sender)
+    }
+
+    private var canUseWritingRules: Bool {
+        guard isLiveMarkdown, isEditable, !hasMarkedText(), compositionBaseline == nil,
+              !suppressesAutomaticEngineGrouping else { return false }
+        // Refresh only for an explicit editing gesture when async derivation is stale.
+        // Syntax interpretation remains in Rust, including unfinished fenced blocks.
+        let plan = writingPlan?.exactlyMatches(string) == true ? writingPlan! : RenderedMarkdownEditor.plan(for: string)
+        let selection = selectedRange()
+        return !(plan.localSourceBlocks.map(\.sourceRange.utf16Range)
+            + plan.renderRequests.filter { $0.kind == "math" }.map(\.sourceRange.utf16Range)
+            + plan.tables.map(\.sourceRange.utf16Range)
+            + plan.contentStyles.filter { $0.kind == .inlineCode || $0.kind == .inlineMath }.map(\.sourceRange.utf16Range)).contains {
+                (selection.location >= $0.location && selection.location < NSMaxRange($0))
+                    || NSIntersectionRange(selection, $0).length > 0
+            }
+    }
+
+    @discardableResult
+    private func applyWritingEdit(_ edit: MarkdownWritingEdit) -> Bool {
+        guard NSMaxRange(edit.range) <= string.utf16.count,
+              shouldChangeText(in: edit.range, replacementString: edit.text), let storage = textStorage else { return false }
+        breakEngineTypingGroup()
+        insertedCloser = nil
+        storage.replaceCharacters(in: edit.range, with: edit.text)
+        setSelectedRange(edit.selection)
+        didChangeText()
+        scrollRangeToVisible(edit.selection)
+        return true
+    }
+
+    private func handleWritingAction(_ action: MarkdownWritingAction) -> Bool {
+        guard canUseWritingRules,
+              let edit = MarkdownWritingRules.edit(action, source: string, selection: selectedRange()) else { return false }
+        return applyWritingEdit(edit)
+    }
+
+    private func movePastHiddenMarker(forward: Bool) {
+        guard isLiveMarkdown, isEditable, !hasMarkedText(), selectedRange().length == 0 else { return }
+        let location = selectedRange().location
+        guard let hidden = renderedCollapsedSourceRanges.first(where: {
+            location > $0.location && location < NSMaxRange($0)
+        }), !renderedAnchorSourceRanges.contains(hidden) else { return }
+        setSelectedRange(NSRange(location: forward ? NSMaxRange(hidden) : hidden.location, length: 0))
+    }
+
+    override func moveLeft(_ sender: Any?) {
+        super.moveLeft(sender)
+        movePastHiddenMarker(forward: false)
+    }
+
+    override func moveRight(_ sender: Any?) {
+        super.moveRight(sender)
+        movePastHiddenMarker(forward: true)
+    }
+
+    override func insertTab(_ sender: Any?) {
+        if handleWritingAction(.indent) { return }
+        super.insertTab(sender)
+    }
+
+    override func insertBacktab(_ sender: Any?) {
+        if handleWritingAction(.outdent) { return }
+        super.insertBacktab(sender)
     }
 
     func consumeEngineEditGroupID() -> String? {
@@ -3905,7 +4034,8 @@ final class WindowAwareTextView: NSTextView {
         let localPoint = localPoint(forWindowPoint: event.locationInWindow)
         if RenderedMarkdownLinkActivation.shouldNavigate(
             for: event.modifierFlags,
-            preference: linkActivation
+            preference: linkActivation,
+            isEditing: isEditable
         ),
            let location = clickableLinkLocation(at: localPoint),
            linkClickHandler?(location) == true
@@ -4285,6 +4415,10 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
+    func setEditingEnabled(_ enabled: Bool) {
+        for cell in cells { cell.textView.isEditable = enabled }
+    }
+
     func hasSameRenderedContent(as other: RenderedMarkdownTable) -> Bool {
         table.alignments == other.alignments
             && table.rows.map { $0.map(\.text) } == other.rows.map { $0.map(\.text) }
@@ -4577,9 +4711,17 @@ final class RenderedMarkdownTableCellTextView: NSTextView {
     override func mouseDown(with event: NSEvent) {
         if RenderedMarkdownLinkActivation.shouldNavigate(
             for: event.modifierFlags,
-            preference: linkActivation
+            preference: linkActivation,
+            isEditing: isEditable
         ), let target = linkTarget(at: event) {
             onLinkClick?(target)
+            return
+        }
+        if isEditable, let link = link(at: event) {
+            window?.makeFirstResponder(self)
+            let point = convert(event.locationInWindow, from: nil)
+            let location = characterIndexForInsertion(at: point)
+            setSelectedRange(NSRange(location: min(max(location, link.range.location), NSMaxRange(link.range)), length: 0))
             return
         }
         super.mouseDown(with: event)
