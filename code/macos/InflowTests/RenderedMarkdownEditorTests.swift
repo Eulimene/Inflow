@@ -697,10 +697,10 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
         XCTAssertEqual(
             blankStyle.minimumLineHeight,
-            MarkdownRenderMetrics.paragraphGap,
+            MarkdownRenderMetrics.paragraphGap * (session.textView.font!.pointSize / MarkdownRenderMetrics.bodyFontSize),
             accuracy: 0.001
         )
-        XCTAssertEqual(blankStyle.maximumLineHeight, MarkdownRenderMetrics.paragraphGap, accuracy: 0.001)
+        XCTAssertEqual(blankStyle.maximumLineHeight, blankStyle.minimumLineHeight, accuracy: 0.001)
     }
 
     @MainActor
@@ -1325,7 +1325,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
         XCTAssertEqual(
             bar.height,
-            ceil(font.ascender - font.descender),
+            font.ascender - font.descender,
             accuracy: 0.001
         )
 
@@ -1515,7 +1515,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             CGFloat(19 * MarkdownRenderMetrics.heading(level: 1).scale),
             accuracy: 0.001
         )
-        XCTAssertEqual(paragraphStyle.lineHeightMultiple, 1.8, accuracy: 0.001)
+        XCTAssertEqual(paragraphStyle.minimumLineHeight, reappliedFont.pointSize * MarkdownRenderMetrics.headingLineHeight(level: 1), accuracy: 0.001)
 
         session.setPresentation(
             .rendered,
@@ -1814,7 +1814,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertEqual(bar.minY, expectedTextTop, accuracy: 0.001)
         XCTAssertEqual(
             bar.maxY,
-            expectedTextTop + ceil(font.ascender - font.descender),
+            expectedTextTop + font.ascender - font.descender,
             accuracy: 0.001
         )
         XCTAssertEqual(

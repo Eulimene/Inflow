@@ -136,7 +136,7 @@ enum MarkdownRenderer {
           <style>
             :root {
               color-scheme: light dark;
-              font: \(MarkdownRenderMetrics.bodyFontSize)px/\(MarkdownRenderMetrics.bodyLineHeight) -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif;
+              font: \(MarkdownRenderMetrics.bodyFontSize)px/\(MarkdownRenderMetrics.bodyLineHeight) \(MarkdownRenderMetrics.bodyFontFamilyCSS);
               \(MarkdownRenderPalette.light.cssVariables)
             }
             *, *::before, *::after { box-sizing: border-box; }
@@ -153,21 +153,22 @@ enum MarkdownRenderer {
             }
             body > :first-child { margin-top: 0 !important; }
             body > :last-child { margin-bottom: 0 !important; }
-            p { margin: .72em 0; }
+            p { margin: .8em 0; }
             strong { color: var(--md-heading); font-weight: 650; }
             h1, h2, h3, h4, h5, h6 {
               color: var(--md-heading);
-              line-height: 1.28;
-              letter-spacing: -.012em;
+              line-height: 1.4;
+              letter-spacing: normal;
+              font-weight: bold;
             }
             h1[data-inflow-source-start], h2[data-inflow-source-start], h3[data-inflow-source-start], h4[data-inflow-source-start], h5[data-inflow-source-start], h6[data-inflow-source-start] { cursor: pointer; }
             h1, h2 { border-bottom: 1px solid var(--md-border); padding-bottom: .24em; }
-            h1 { font-size: \(MarkdownRenderMetrics.heading(level: 1).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 1).spacingBefore)em 0 \(MarkdownRenderMetrics.heading(level: 1).spacingAfter)em; }
-            h2 { font-size: \(MarkdownRenderMetrics.heading(level: 2).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 2).spacingBefore)em 0 \(MarkdownRenderMetrics.heading(level: 2).spacingAfter)em; }
-            h3 { font-size: \(MarkdownRenderMetrics.heading(level: 3).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 3).spacingBefore)em 0 \(MarkdownRenderMetrics.heading(level: 3).spacingAfter)em; }
-            h4 { font-size: \(MarkdownRenderMetrics.heading(level: 4).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 4).spacingBefore)em 0 \(MarkdownRenderMetrics.heading(level: 4).spacingAfter)em; }
-            h5 { font-size: \(MarkdownRenderMetrics.heading(level: 5).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 5).spacingBefore)em 0 \(MarkdownRenderMetrics.heading(level: 5).spacingAfter)em; }
-            h6 { font-size: \(MarkdownRenderMetrics.heading(level: 6).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 6).spacingBefore)em 0 \(MarkdownRenderMetrics.heading(level: 6).spacingAfter)em; color: var(--md-secondary); }
+            h1 { line-height: \(MarkdownRenderMetrics.headingLineHeight(level: 1)); font-size: \(MarkdownRenderMetrics.heading(level: 1).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 1).spacingBefore)rem 0 \(MarkdownRenderMetrics.heading(level: 1).spacingAfter)rem; }
+            h2 { line-height: \(MarkdownRenderMetrics.headingLineHeight(level: 2)); font-size: \(MarkdownRenderMetrics.heading(level: 2).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 2).spacingBefore)rem 0 \(MarkdownRenderMetrics.heading(level: 2).spacingAfter)rem; }
+            h3 { line-height: \(MarkdownRenderMetrics.headingLineHeight(level: 3)); font-size: \(MarkdownRenderMetrics.heading(level: 3).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 3).spacingBefore)rem 0 \(MarkdownRenderMetrics.heading(level: 3).spacingAfter)rem; }
+            h4 { line-height: \(MarkdownRenderMetrics.headingLineHeight(level: 4)); font-size: \(MarkdownRenderMetrics.heading(level: 4).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 4).spacingBefore)rem 0 \(MarkdownRenderMetrics.heading(level: 4).spacingAfter)rem; }
+            h5 { line-height: \(MarkdownRenderMetrics.headingLineHeight(level: 5)); font-size: \(MarkdownRenderMetrics.heading(level: 5).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 5).spacingBefore)rem 0 \(MarkdownRenderMetrics.heading(level: 5).spacingAfter)rem; }
+            h6 { line-height: \(MarkdownRenderMetrics.headingLineHeight(level: 6)); font-size: \(MarkdownRenderMetrics.heading(level: 6).scale)em; margin: \(MarkdownRenderMetrics.heading(level: 6).spacingBefore)rem 0 \(MarkdownRenderMetrics.heading(level: 6).spacingAfter)rem; color: var(--md-secondary); }
             a { color: var(--md-accent); text-decoration: none; text-underline-offset: .16em; cursor: pointer; }
             a:hover { text-decoration: underline; background: transparent; }
             a:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--md-accent); outline-offset: 3px; }

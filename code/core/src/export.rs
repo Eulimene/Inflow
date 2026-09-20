@@ -132,16 +132,18 @@ const DOCUMENT_PREFIX: &str = r#"<!doctype html>
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; media-src 'none'; connect-src 'none'; object-src 'none'; frame-src 'none'; script-src 'none'; form-action 'none'; base-uri 'none'">
   <title>Markdown 文档</title>
   <style>
-    :root { color-scheme: light dark; font: 17px/1.65 -apple-system, BlinkMacSystemFont, sans-serif; }
+    :root { color-scheme: light dark; font: 16px/1.6 "Open Sans", "Helvetica Neue", Helvetica, Arial, "PingFang SC", sans-serif; }
     * { box-sizing: border-box; }
-    body { max-width: 760px; margin: 0 auto; padding: 32px 36px 72px; color: #24292f; background: #fff; overflow-wrap: break-word; }
-    h1, h2, h3, h4, h5, h6 { line-height: 1.28; margin: 1.45em 0 .55em; }
+    body { max-width: 760px; margin: 0 auto; padding: 32px 36px 72px; color: #333; background: #fff; overflow-wrap: break-word; }
+    h1, h2, h3, h4, h5, h6 { line-height: 1.4; margin: 1rem 0; font-weight: bold; }
     h1, h2 { border-bottom: 1px solid #d8dee4; padding-bottom: .28em; }
-    h1 { font-size: 2em; } h2 { font-size: 1.5em; } h3 { font-size: 1.25em; }
+    h1 { font-size: 2.25em; line-height: 1.2; } h2 { font-size: 1.75em; line-height: 1.225; } h3 { font-size: 1.5em; line-height: 1.43; }
+    h4 { font-size: 1.25em; } h5, h6 { font-size: 1em; } h6 { color: #777; }
+    p, ul, ol, table { margin: .8em 0; }
     a { color: #0969da; text-decoration: none; } a:hover { text-decoration: underline; }
     blockquote { margin: 1em 0; padding: .15em 1em; color: #57606a; border-left: 4px solid #d0d7de; }
     code { font: .88em/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: #afb8c133; border-radius: 5px; padding: .16em .34em; }
-    pre { overflow: auto; padding: 16px; background: #f6f8fa; border-radius: 8px; }
+    pre { overflow: auto; padding: 16px; background: #f8f8f8; border-radius: 4px; }
     pre code { padding: 0; background: transparent; }
     .tok-keyword { color: #cf222e; font-weight: 600; }
     .tok-type { color: #8250df; }

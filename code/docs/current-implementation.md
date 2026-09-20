@@ -169,3 +169,5 @@
 - 可编辑/只读原生渲染宿主：[../macos/Inflow/Editor/MarkdownSourceEditor.swift](../macos/Inflow/Editor/MarkdownSourceEditor.swift)
 - 三视图接线：[../macos/Inflow/Editor/MarkdownEditorView.swift](../macos/Inflow/Editor/MarkdownEditorView.swift)
 - 同一 NSTextView 宿主：[../macos/Inflow/Editor/MarkdownSourceEditor.swift](../macos/Inflow/Editor/MarkdownSourceEditor.swift)
+
+渲染排版参考 Typora GitHub 主题：正文 16pt、目标行高 1.6，段落空行 0.8em，H1–H6 为 36/28/24/20/16/16pt。默认正文字体优先选择本机 Open Sans，其次 Helvetica Neue，中文由系统回退；不复制或依赖 Typora 的字体资源。原生标题保留独立行高和 1em 段前段后间距，HTML 预览与导出采用相同字号层级。源码编辑器的字体设置保持独立。

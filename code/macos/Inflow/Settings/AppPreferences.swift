@@ -10,14 +10,14 @@ struct MarkdownHeadingStyle: Equatable, Sendable {
 
 enum MarkdownRenderMetrics {
     static let readingWidth = 760.0
-    static let bodyFontSize = 17.0
-    static let bodyLineHeight = 1.48
-    static let paragraphGap = CGFloat(9)
+    static let bodyFontSize = 16.0
+    static let bodyLineHeight = 1.6
+    static let paragraphGap = CGFloat(12.8)
     static let unorderedListMarkerScale = CGFloat(1.22)
     static let listMarkerExtraSpacing = CGFloat(6)
     static let editorHorizontalInset = CGFloat(28)
-    static let editorVerticalInset = CGFloat(24)
-    static let blockCornerRadius = CGFloat(8)
+    static let editorVerticalInset = CGFloat(30)
+    static let blockCornerRadius = CGFloat(4)
     static let inlineCodeScale = 0.88
     static let inlineCodeHorizontalPadding = CGFloat(4)
     static let inlineCodeVerticalPadding = CGFloat(2)
@@ -26,28 +26,45 @@ enum MarkdownRenderMetrics {
     static let tableCellHorizontalPadding = CGFloat(12)
     static let tableCellVerticalPadding = CGFloat(8)
 
-    static func heading(level: Int) -> MarkdownHeadingStyle {
+    static let bodyFontFamilyCSS = "\"Open Sans\", \"Helvetica Neue\", Helvetica, Arial, \"PingFang SC\", sans-serif"
+
+    static func bodyFont(size: CGFloat) -> NSFont {
+        NSFont(name: "OpenSans", size: size)
+            ?? NSFont(name: "Helvetica Neue", size: size)
+            ?? NSFont.systemFont(ofSize: size)
+    }
+
+    static func headingLineHeight(level: Int) -> Double {
         switch level {
-        case 1: MarkdownHeadingStyle(scale: 1.82, spacingBefore: 0.56, spacingAfter: 0.18)
-        case 2: MarkdownHeadingStyle(scale: 1.46, spacingBefore: 0.50, spacingAfter: 0.16)
-        case 3: MarkdownHeadingStyle(scale: 1.24, spacingBefore: 0.44, spacingAfter: 0.14)
-        case 4: MarkdownHeadingStyle(scale: 1.10, spacingBefore: 0.38, spacingAfter: 0.12)
-        case 5: MarkdownHeadingStyle(scale: 1.00, spacingBefore: 0.34, spacingAfter: 0.10)
-        default: MarkdownHeadingStyle(scale: 0.92, spacingBefore: 0.30, spacingAfter: 0.08)
+        case 1: 1.2
+        case 2: 1.225
+        case 3: 1.43
+        default: 1.4
         }
+    }
+
+    static func heading(level: Int) -> MarkdownHeadingStyle {
+        let scale: Double = switch level {
+        case 1: 2.25
+        case 2: 1.75
+        case 3: 1.5
+        case 4: 1.25
+        default: 1.0
+        }
+        return MarkdownHeadingStyle(scale: scale, spacingBefore: 1, spacingAfter: 1)
     }
 }
 
 struct MarkdownRenderPalette: Equatable, Sendable {
     static let light = Self(
         canvas: "#ffffff",
-        text: "#34373d",
-        heading: "#24262b",
+        text: "#333333",
+        heading: "#333333",
         secondaryText: "#737982",
         accent: "#2f6fda",
         border: "#dfe3e8",
         quoteBar: "#c3cad5",
-        subtleSurface: "#f7f8fa",
+        subtleSurface: "#f8f8f8",
         mutedSurface: "#eef1f5",
         tableStripe: "#fafbfc",
         inlineCode: "#edf0f4",

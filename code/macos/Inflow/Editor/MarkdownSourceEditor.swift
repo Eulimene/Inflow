@@ -880,7 +880,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             return [parts.opening, parts.closing].filter { $0.length > 0 }
         }
         let baseParagraph = NSMutableParagraphStyle()
-        baseParagraph.lineHeightMultiple = CGFloat(sourceAppearance.lineHeight)
+        baseParagraph.minimumLineHeight = baseFont.pointSize * CGFloat(sourceAppearance.lineHeight)
         baseParagraph.paragraphSpacing = 0
         let palette = MarkdownRenderPalette.resolved(for: textView.effectiveAppearance)
         textView.font = baseFont
@@ -1735,6 +1735,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
                     as? NSParagraphStyle
             )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+            paragraph.minimumLineHeight = baseFont.pointSize * CGFloat(metrics.scale * MarkdownRenderMetrics.headingLineHeight(level: level))
+            paragraph.maximumLineHeight = paragraph.minimumLineHeight
+            paragraph.lineHeightMultiple = 1
             paragraph.paragraphSpacingBefore = baseFont.pointSize * CGFloat(metrics.spacingBefore)
             paragraph.paragraphSpacing = baseFont.pointSize * CGFloat(metrics.spacingAfter)
             storage.addAttribute(
@@ -1744,9 +1747,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             )
             storage.addAttributes(
                 [
-                    .font: NSFont.systemFont(
-                        ofSize: baseFont.pointSize * CGFloat(metrics.scale),
-                        weight: level <= 2 ? .bold : (level <= 5 ? .semibold : .medium)
+                    .font: NSFontManager.shared.convert(
+                        NSFont(descriptor: baseFont.fontDescriptor, size: baseFont.pointSize * CGFloat(metrics.scale)) ?? baseFont,
+                        toHaveTrait: .boldFontMask
                     ),
                     .foregroundColor: level == 6
                         ? palette.secondaryTextColor
@@ -1868,7 +1871,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             }
             return NSFont(descriptor: descriptor, size: size) ?? fallback
         case .standard, .highContrast:
-            return NSFont.systemFont(ofSize: size)
+            return MarkdownRenderMetrics.bodyFont(size: size)
         }
     }
 
@@ -1926,8 +1929,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             let raw = text.substring(with: paragraph)
             if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 let style = NSMutableParagraphStyle()
-                style.minimumLineHeight = MarkdownRenderMetrics.paragraphGap
-                style.maximumLineHeight = MarkdownRenderMetrics.paragraphGap
+                style.minimumLineHeight = MarkdownRenderMetrics.paragraphGap * CGFloat(sourceAppearance.fontSize / MarkdownRenderMetrics.bodyFontSize)
+                style.maximumLineHeight = style.minimumLineHeight
                 style.paragraphSpacing = 0
                 style.paragraphSpacingBefore = 0
                 storage.addAttributes(
@@ -2837,7 +2840,7 @@ enum RenderedMarkdownQuoteGeometry {
         font: NSFont,
         baselineOffset: CGFloat
     ) -> NSRect {
-        let textHeight = max(1, ceil(font.ascender - font.descender))
+        let textHeight = max(1, font.ascender - font.descender)
         let fontBoxMinY = textContainerOrigin.y
             + lineFragment.minY
             + baselineOffset
