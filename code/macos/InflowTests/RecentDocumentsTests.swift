@@ -39,6 +39,45 @@ final class RecentDocumentsTests: XCTestCase {
         window.orderOut(nil)
     }
 
+    func testDocumentWindowZoomPreservesMinimizeAndRestore() async throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 100, y: 100, width: 640, height: 480),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.collectionBehavior = [.fullScreenPrimary, .managed]
+        let controls = DocumentWindowControls.WindowView()
+        window.contentView = controls
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        XCTAssertTrue(window.collectionBehavior.contains(.fullScreenNone))
+        XCTAssertFalse(window.collectionBehavior.contains(.fullScreenPrimary))
+        XCTAssertTrue(window.collectionBehavior.contains(.managed))
+        let minimize = try XCTUnwrap(window.standardWindowButton(.miniaturizeButton))
+        let zoom = try XCTUnwrap(window.standardWindowButton(.zoomButton))
+        XCTAssertTrue(zoom.isEnabled)
+        let originalFrame = window.frame
+        zoom.performClick(nil)
+        XCTAssertFalse(window.styleMask.contains(.fullScreen))
+        XCTAssertNotEqual(window.frame, originalFrame)
+        XCTAssertTrue(minimize.isEnabled)
+        let minimized = expectation(forNotification: NSWindow.didMiniaturizeNotification, object: window)
+        minimize.performClick(nil)
+        await fulfillment(of: [minimized], timeout: 5)
+        XCTAssertTrue(window.isMiniaturized)
+        let restored = expectation(forNotification: NSWindow.didDeminiaturizeNotification, object: window)
+        window.deminiaturize(nil)
+        await fulfillment(of: [restored], timeout: 5)
+        XCTAssertFalse(window.isMiniaturized)
+        XCTAssertTrue(minimize.isEnabled)
+        zoom.performClick(nil)
+        XCTAssertEqual(window.frame, originalFrame)
+        // Repeated SwiftUI updates must preserve the same window policy.
+        controls.configureWindow()
+        XCTAssertTrue(minimize.isEnabled)
+    }
+
     func testProjectDocumentsReuseTheSelectedFolderSecurityScope() {
         XCTAssertFalse(
             DocumentSecurityScopePolicy.shouldStartFileScopedAccess(

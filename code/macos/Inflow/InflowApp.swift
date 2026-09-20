@@ -2338,6 +2338,7 @@ struct InflowApp: App {
                     projectCoordinator: applicationDelegate.projectCoordinator
                 )
             }
+            .background(DocumentWindowControls())
             .frame(
                 minWidth: EditorWorkspaceMetrics.minimumWindowWidth,
                 minHeight: EditorWorkspaceMetrics.minimumWindowHeight

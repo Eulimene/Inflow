@@ -132,3 +132,29 @@ struct MarkdownEditorNativeDocumentResolver: NSViewRepresentable {
         }
     }
 }
+
+/// Keep document zoom on the current desktop. Native full-screen creates a
+/// separate Space whose system-provided minimize button is unavailable.
+struct DocumentWindowControls: NSViewRepresentable {
+    func makeNSView(context _: Context) -> WindowView { WindowView() }
+
+    func updateNSView(_ view: WindowView, context _: Context) {
+        view.configureWindow()
+    }
+
+    final class WindowView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            configureWindow()
+        }
+
+        func configureWindow() {
+            guard let window else { return }
+            window.styleMask.insert(.miniaturizable)
+            var behavior = window.collectionBehavior
+            behavior.remove([.fullScreenPrimary, .fullScreenAuxiliary])
+            behavior.insert(.fullScreenNone)
+            window.collectionBehavior = behavior
+        }
+    }
+}
