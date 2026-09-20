@@ -1523,6 +1523,36 @@ final class MarkdownRendererTests: XCTestCase {
             XCTAssertFalse(svg.contains("<script"), language)
             XCTAssertFalse(svg.contains("foreignObject"), language)
         }
+        // The same adapter is bundled into HTML exports. Labels must become separate
+        // SVG text lines before native SVG/PDF conversion, without changing the source.
+        for (language, body) in [
+            ("mermaid", "flowchart LR\r\nA[第一行\\n第二行] --> B[结束]"),
+            ("mermaid", "flowchart LR\nA[\"第一行\n第二行\"] --> B[结束]"),
+            ("mermaid", "flowchart LR\nA[第一行<br/>第二行] --> B[结束]"),
+            ("mermaid", "flowchart LR\nA[\"`第一行\n第二行`\"] --> B[结束]"),
+            ("mermaid", "flowchart LR\n%% 注释中未配对的 [ \\n\nA -->|第一行\\n第二行| B"),
+            ("mermaid", "flowchart LR\nA[\"`第一行\\n第二行`\"] --> B[结束]"),
+            ("mermaid", "sequenceDiagram\n甲->>乙: 第一行\\n第二行"),
+            ("mermaid", "sequenceDiagram\nNote over 甲: 第一行\\n第二行"),
+            ("flow", "st=>start: 第一行\\n第二行\ne=>end: 结束\nst->e"),
+            ("flow", "st=>start: 第一行<br/>第二行\ne=>end: 结束\nst->e"),
+            ("flow", "st=>start: 第一行\n第二行\ne=>end: 结束\nst->e"),
+            ("sequence", "甲->乙: 第一行\\n第二行")
+        ] {
+            let source = "```\(language)\n\(body)\n```"
+            let request = try XCTUnwrap(RenderedMarkdownEditor.plan(for: source).renderRequests.first)
+            let original = request.source
+            let result = try await JavaScriptRenderService.shared.render(request)
+            let svg = try XCTUnwrap(result.svg)
+            let document = try XMLDocument(xmlString: svg)
+            let lines = try document.nodes(forXPath: "//*[local-name()='text']")
+            let first = try XCTUnwrap(lines.first { $0.stringValue == "第一行" } as? XMLElement, body)
+            let second = try XCTUnwrap(lines.first { $0.stringValue == "第二行" } as? XMLElement, body)
+            XCTAssertNotEqual(first.attribute(forName: "y")?.stringValue,
+                              second.attribute(forName: "y")?.stringValue, body)
+            XCTAssertEqual(request.source, original)
+            XCTAssertFalse(svg.contains("第一行\\n第二行"))
+        }
         let code = "```javascript\nconst 名称 = \"😀\";\r\n// 中文注释\n```"
         let codeRequest = try XCTUnwrap(RenderedMarkdownEditor.plan(for: code).renderRequests.first)
         let highlighted = try await JavaScriptRenderService.shared.render(codeRequest)

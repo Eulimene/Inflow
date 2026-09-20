@@ -22,6 +22,17 @@ CodeMirror 仅提供语法模式和 token 范围，保留原生 NSTextView 的�
 
 HTML 预览和 HTML 导出包含相同的离线适配器，以 nonce 限定可信内联脚本。导出文件无需 CDN，保留未解析源码，在打开后完成渲染；不再声称导出时已经生成静态 SVG 或 MathML。PDF 等待原生异步资源完成后生成。
 
+## 标签换行
+
+换行兼容放在 JS 图表适配器内，原始 Markdown、源码范围和 CodeMirror token 均不做替换。交给图表解析器前统一 CRLF/CR 为 LF；不会把整段源码中的字面量 `\n` 全局展开为语法行。
+
+- Mermaid flowchart/graph 的节点、引号标签及 `|边标签|` 支持 `\n` 和实际换行，转换为 `<br/>`；Markdown 字符串保留原生换行。已有 `<br/>` 继续有效。注释、配置、样式和链接指令保持原样。
+- Mermaid sequenceDiagram 的消息和 note 支持 `\n`，转换为 `<br/>`。
+- flow 在解析后只对 symbol.text 展开 `\n` 和 `<br/>`，不改变节点标识、连线或链接。
+- sequence 由 js-sequence-diagrams 原生解释消息和注释里的 `\n`。
+
+例如 `A[第一行\n第二行]`、`st=>start: 第一行\n第二行` 和 `甲->乙: 第一行\n第二行` 均可生成两行文字。其他 Mermaid 图表类型遵循各自的原生语法。
+
 ## 边界与故障
 
 Mermaid 使用 strict 安全级别和 SVG 标签；MathJax 只启用已打包的 TeX 扩展，不动态加载扩展或字体。宿主 CSP 禁止网络连接、外部脚本、框架和表单。SVG 回填去除脚本、事件、外部资源引用、foreignObject 和动画，且不安装 Mermaid 的链接回调。输入、SVG 尺寸和执行时间均有上限。

@@ -47,6 +47,54 @@
       return {html, tokens};
     }
   };
+  // Decode label escapes only at the renderer boundary. Never rewrite Markdown or
+  // turn a label's escaped newline into a new DSL statement.
+  function labelBreaks(text, separator) {
+    return text.replace(/\\\\|\\n|<br\s*\/?\s*>/gi, token =>
+      token === "\\\\" ? token : separator);
+  }
+  function mermaidLabelBreaks(source) {
+    if (/^\s*sequenceDiagram\b/m.test(source)) {
+      return source.split("\n").map(line => {
+        if (/^\s*(?:%%|title\b|accTitle\b|accDescr\b)/.test(line)) return line;
+        const colon = line.indexOf(":");
+        if (colon >= 0 && (/->|-->|<<|>>/.test(line.slice(0, colon)) || /^\s*note\b/i.test(line))) {
+          return line.slice(0, colon + 1) + labelBreaks(line.slice(colon + 1), "<br/>");
+        }
+        return line;
+      }).join("\n");
+    }
+    if (!/^\s*(?:flowchart|graph)\s+(?:TB|TD|BT|RL|LR)\b/m.test(source)) return source;
+    let output = "", quote = false, markdown = false, edge = false;
+    const stack = [];
+    for (let i = 0; i < source.length; i++) {
+      // Configuration, comments, styling and links are not label text.
+      if ((i === 0 || source[i - 1] === "\n") && !quote && !stack.length && !edge) {
+        const rest = source.slice(i);
+        const skipped = rest.match(/^(?:[ \t]*%%[^\n]*|[ \t]*(?:style|classDef|class|click|linkStyle)\b[^\n]*|---\n[\s\S]*?\n---)(?:\n|$)/);
+        if (skipped) { output += skipped[0]; i += skipped[0].length - 1; continue; }
+      }
+      const ch = source[i];
+      if (ch === '"') {
+        quote = !quote;
+        markdown = quote && source[i + 1] === "`";
+      } else if (!quote) {
+        if ("[({".includes(ch)) stack.push(ch);
+        else if ("])}".includes(ch)) stack.pop();
+        else if (ch === "|") edge = !edge;
+      }
+      const inLabel = quote || stack.length > 0 || edge;
+      if (inLabel && ch === "\\" && source[i + 1] === "\\") {
+        output += "\\\\"; i++; continue;
+      }
+      if (inLabel && ch === "\\" && source[i + 1] === "n") {
+        output += markdown ? "\n" : "<br/>"; i++; continue;
+      }
+      if (inLabel && ch === "\n" && !markdown) { output += "<br/>"; continue; }
+      output += ch;
+    }
+    return output;
+  }
   const MermaidAdapter = {
     async render(source, host, id) {
       mermaid.initialize({startOnLoad:false, securityLevel:"strict", theme:"default", htmlLabels:false,
@@ -54,13 +102,17 @@
         flowchart:{htmlLabels:false, curve:"linear", useMaxWidth:false},
         secure:["securityLevel", "startOnLoad", "htmlLabels", "flowchart", "maxTextSize", "maxEdges"],
         maxTextSize:100000, maxEdges:1000});
-      const result = await mermaid.render(id, source, host);
+      const result = await mermaid.render(id, mermaidLabelBreaks(source), host);
       host.innerHTML = result.svg;
     }
   };
   const FlowchartAdapter = {
     async render(source, host) {
-      flowchart.parse(source).drawSVG(host, {"line-width":1.5, "font-size":16, "font-family":"Arial, PingFang SC, sans-serif", "line-color":"#333", "element-color":"#9370DB", fill:"#ECECFF", "font-color":"#333"});
+      const diagram = flowchart.parse(source);
+      for (const symbol of Object.values(diagram.symbols)) {
+        if (typeof symbol.text === "string") symbol.text = labelBreaks(symbol.text, "\n");
+      }
+      diagram.drawSVG(host, {"line-width":1.5, "font-size":16, "font-family":"Arial, PingFang SC, sans-serif", "line-color":"#333", "element-color":"#9370DB", fill:"#ECECFF", "font-color":"#333"});
     }
   };
   const SequenceAdapter = {
@@ -174,7 +226,7 @@
     host.style.cssText = "display:table;color:#333;font-size:16px;background:white";
     document.body.append(host);
     try {
-      await adapter.render(request.source, host, "inflow-svg-" + nextID, !!request.display);
+      await adapter.render(request.source.replace(/\r\n?/g, "\n"), host, "inflow-svg-" + nextID, !!request.display);
       return standaloneSVG(host, request.kind);
     } finally { host.remove(); }
   }
