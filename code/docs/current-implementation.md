@@ -73,8 +73,8 @@
 
 ### 2.3 即时编辑与分栏预览
 
-- 即时编辑始终挂载同一个 MarkdownSourceEditor。Rust Engine 从同一份 `DocumentIr` 一次生成 HTML、分析、高亮、引用、块 IR 与 `NativeRenderPlan`；Swift 已删除手写 Markdown planner，只把已验证的 UTF-8 DTO 范围映射为 TextKit 属性。普通文字、行内代码与引用在渲染态直接输入；Markdown 标记以透明和负字距折叠，不再用 0.1pt 字体改变行度量。CaretStyleResolver 从最近可见字符解析字体、字号和行高，并将插入光标在行框中居中。围栏代码平时隐藏围栏呈现代码，光标进入才局部显示源码；Mermaid 也使用同样的局部切换。保存内容和 undo 始终属于原始 Markdown。
-- 分栏右侧直接安装与即时编辑相同的 `NativeRenderPlan`，并把 NSTextView 设为只读。Mermaid `flowchart` 支持普通连线和仓库已有的 `-.文字.->` 带标签虚线；同一次 Engine 派生源码请求，再由离线 JavaScript 适配层生成自包含 SVG，并由两个 TextKit 表面共用的原生覆盖层呈现，不存在 Mermaid 专用 C ABI 或第二预览分支。进入即时编辑中的 Mermaid 源码块时会先卸载图表覆视图，移出后再挂载；只读表面始终保持渲染态。
+- 即时编辑始终挂载同一个 MarkdownSourceEditor。Rust Engine 从同一份 `DocumentIr` 一次生成 HTML、分析、高亮、引用、块 IR 与 `NativeRenderPlan`；Swift 已删除手写 Markdown planner，只把已验证的 UTF-8 DTO 范围映射为 TextKit 属性。普通文字、行内代码与引用在渲染态直接输入；Markdown 标记以透明和负字距折叠，不再用 0.1pt 字体改变行度量。CaretStyleResolver 从最近可见字符解析字体、字号和行高，并将插入光标在行框中居中。围栏代码正文可直接编辑并保持等宽样式，进入围栏行才显示完整源码；图表编辑时显示源码和下方预览。保存内容和 undo 始终属于原始 Markdown。
+- 分栏右侧直接安装与即时编辑相同的 `NativeRenderPlan`，并把 NSTextView 设为只读。Mermaid `flowchart` 支持普通连线和仓库已有的 `-.文字.->` 带标签虚线；同一次 Engine 派生源码请求，再由离线 JavaScript 适配层生成自包含 SVG，并由两个 TextKit 表面共用的原生覆盖层呈现，不存在 Mermaid 专用 C ABI 或第二预览分支。进入即时编辑中的 Mermaid 源码块时将预览放在源码下方，移出后恢复图表呈现；只读表面始终保持渲染态。
 - 展示属性与 Engine patch 回写都不登记 AppKit 正文 undo；三种视图间切换时保持同一正文、修改状态、保存路径和 Rust 撤销历史。
 - 即时编辑中的链接默认单击定位并编辑，⌘+单击执行导航；只读预览默认单击导航，“设置 > 预览”可改为只从右键菜单打开，此时单击只定位光标；文本与表格中的链接共享 Hover 高亮反馈。表格使用 AdaptiveRenderedMarkdownTableLayoutStrategy 按内容测量列宽，再随编辑区扩张或压缩；单元格可编辑，右键提供行列增删和列对齐。链接导航、本地图片和失败降级继续受当前内容快照与封闭宿主消息约束。
 
@@ -86,7 +86,9 @@
 
 编辑设置中新增自动配对开关，默认开启并持久化。括号、单反引号支持补齐、越过本次生成的结束符和空配对删除；选中文字后输入强调符或括号可包裹选区。强调符在空选区下保留原始输入，避免与列表、连续标记冲突。输入法组合和粘贴不触发自动配对。每个结构化动作只提交一次正文变化，沿用 Engine 撤销历史。
 
-代码块专用编辑器、公式/图表双区域编辑、表格完整键盘导航及局部增量排版仍属于后续阶段。
+即时编辑第二阶段：代码正文保持等宽字体及 CodeMirror 高亮，Enter 继承当前缩进，Tab / Shift+Tab 支持多行缩进；右键“编辑代码语言…”定位围栏信息行，Esc 移出块。MathJax 公式在编辑时保留源码并在下方显示预览，失败时保留可编辑源码并以红色下划线和提示标记。
+
+表格单元格修改立即写回 Markdown，Tab / Shift+Tab 按单元格导航，末格 Tab 新增一行并恢复焦点，Enter / Esc 移出表格。单元格撤销/重做转交文档历史；只读表格不启用编辑动作。表格后的换行保留。跨单元格矩形选区、单元格内软换行和局部增量排版尚未实现。
 
 ### 2.4 查找、格式和 Markdown 呈现
 

@@ -1236,10 +1236,21 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private func applyJavaScriptResources(_ plan: RenderedMarkdownPlan, editingRange: NSRange?, storage: NSTextStorage) {
         applyCodeMirrorTokens(plan, storage: storage)
         for request in plan.renderRequests where request.kind == "math" {
-            guard !rangesOverlap(request.sourceRange.utf16Range, editingRange),
-                  let svg = javaScriptResults[request.cacheKey]?.svg,
-                  let image = NSImage(data: Data(svg.utf8)) else { continue }
+            guard let svg = javaScriptResults[request.cacheKey]?.svg,
+                  let image = NSImage(data: Data(svg.utf8)) else {
+                if javaScriptFailures.contains(request.cacheKey) {
+                    storage.addAttributes([.toolTip: "公式渲染失败，请检查 TeX 语法。", .underlineStyle: NSUnderlineStyle.single.rawValue,
+                        .underlineColor: NSColor.systemRed], range: request.sourceRange.utf16Range)
+                }
+                continue
+            }
             image.isTemplate = true
+            if rangesOverlap(request.sourceRange.utf16Range, editingRange) {
+                let size = textView.setRenderedImage(image, alternative: "数学公式预览",
+                    sourceRange: request.sourceRange.utf16Range, fillsAvailableWidth: request.display, placement: .belowSource)
+                reserveSpaceBelowRenderedSource(sourceRange: request.sourceRange.utf16Range, size: size, storage: storage)
+                continue
+            }
             applyRenderedImage(image, alternative: "数学公式：" + request.source,
                                sourceRange: request.sourceRange.utf16Range,
                                fillsAvailableWidth: request.display,
@@ -1524,6 +1535,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         else { return nil }
         let openingEnd = NSMaxRange(firstNewline)
         let closingStart = NSMaxRange(lastNewline)
+        let openingLine = block.substring(to: firstNewline.location).trimmingCharacters(in: .whitespacesAndNewlines)
+        let closingLine = block.substring(from: closingStart).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let marker = openingLine.first, marker == "`" || marker == "~" else { return nil }
+        let fenceLength = openingLine.prefix { $0 == marker }.count
+        guard fenceLength >= 3, closingLine.count >= fenceLength,
+              closingLine.allSatisfy({ $0 == marker }) else { return nil }
         return (
             NSRange(location: range.location, length: openingEnd),
             NSRange(
@@ -1668,13 +1685,18 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     ) {
         guard presentation == .rendered,
               textView.isEditable,
+              let currentTable = RenderedMarkdownEditor.plan(for: textView.string).tables.first(where: {
+                  $0.sourceRange.utf16Range.location == table.sourceRange.utf16Range.location
+              }),
               let replacement = RenderedMarkdownTableEditing.replacement(
-                  for: table,
+                  for: currentTable,
                   applying: edit
               ),
               NSMaxRange(table.sourceRange.utf16Range) <= (textView.string as NSString).length
         else { return }
-        textView.insertText(replacement, replacementRange: table.sourceRange.utf16Range)
+        let original = (textView.string as NSString).substring(with: currentTable.sourceRange.utf16Range)
+        let ending = original.hasSuffix("\r\n") ? "\r\n" : (original.hasSuffix("\n") ? "\n" : "")
+        textView.insertText(replacement + ending, replacementRange: currentTable.sourceRange.utf16Range)
         textView.undoManager?.setActionName("编辑表格")
     }
 
@@ -3035,6 +3057,7 @@ final class WindowAwareTextView: NSTextView {
     var renderedReplacementBaseFont = NSFont.systemFont(ofSize: 15)
     private var renderedImageViews: [Int: RenderedImageViewState] = [:]
     private var renderedTableViews: [Int: RenderedTableViewState] = [:]
+    var pendingTableFocus: (location: Int, row: Int, column: Int)?
     private var retainedRenderedOverlayKeys: Set<Int>?
     private var renderedImageLayoutTask: Task<Void, Never>?
     private var isUpdatingRenderedOverlayLayout = false
@@ -3306,6 +3329,16 @@ final class WindowAwareTextView: NSTextView {
         onEdit: @escaping (RenderedMarkdownTableEdit) -> Void
     ) -> NSSize {
         let key = table.sourceRange.utf16Range.location
+        let previousFocus = renderedTableViews[key]?.tableView.focusedCell
+        defer {
+            if let pending = pendingTableFocus, pending.location == key,
+               renderedTableViews[key]?.tableView.focusCell(row: pending.row, column: pending.column) == true {
+                pendingTableFocus = nil
+            } else if let previousFocus,
+                      renderedTableViews[key]?.tableView.focusedCell == nil {
+                _ = renderedTableViews[key]?.tableView.focusCell(row: previousFocus.row, column: previousFocus.column, selection: previousFocus.selection)
+            }
+        }
         retainedRenderedOverlayKeys?.insert(key)
         if let existing = renderedTableViews[key],
            existing.sourceRange == table.sourceRange.utf16Range,
@@ -3905,9 +3938,43 @@ final class WindowAwareTextView: NSTextView {
     }
 
     override func insertNewline(_ sender: Any?) {
+        if let code = editableCodeRequest(), selectedRange().length == 0 {
+            let source = string as NSString
+            let line = source.lineRange(for: selectedRange())
+            let before = source.substring(with: NSRange(location: line.location, length: selectedRange().location - line.location))
+            let indent = String(before.prefix { $0 == " " || $0 == "\t" })
+            let newline = source.substring(with: line).hasSuffix("\r\n") ? "\r\n" : "\n"
+            if selectedRange().location >= code.contentRange.utf16Range.location,
+               applyWritingEdit(MarkdownWritingEdit(range: selectedRange(), text: newline + indent,
+                    selection: NSRange(location: selectedRange().location + newline.utf16.count + indent.utf16.count, length: 0))) { return }
+        }
         if handleWritingAction(.newline) { return }
         breakEngineTypingGroup()
         super.insertNewline(sender)
+    }
+
+    private func editableCodeRequest(at location: Int? = nil) -> JavaScriptRenderRequest? {
+        guard isLiveMarkdown, isEditable, !hasMarkedText(), compositionBaseline == nil else { return nil }
+        let plan = writingPlan?.exactlyMatches(string) == true ? writingPlan! : RenderedMarkdownEditor.plan(for: string)
+        let selection = location.map { NSRange(location: $0, length: 0) } ?? selectedRange()
+        return plan.renderRequests.first {
+            $0.kind == "code" && selection.location >= $0.contentRange.utf16Range.location
+                && NSMaxRange(selection) <= NSMaxRange($0.contentRange.utf16Range)
+                && selection.location < NSMaxRange($0.contentRange.utf16Range)
+        }
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        guard isLiveMarkdown, isEditable, !hasMarkedText(),
+              let request = RenderedMarkdownEditor.plan(for: string).renderRequests.first(where: {
+                  NSLocationInRange(selectedRange().location, $0.sourceRange.utf16Range)
+              }) else { super.cancelOperation(sender); return }
+        let end = NSMaxRange(request.sourceRange.utf16Range)
+        setSelectedRange(NSRange(location: end, length: 0))
+        if end == string.utf16.count {
+            _ = applyWritingEdit(MarkdownWritingEdit(range: selectedRange(), text: "\n\n",
+                selection: NSRange(location: end + 2, length: 0)))
+        }
     }
 
     private var canUseWritingRules: Bool {
@@ -3964,13 +4031,45 @@ final class WindowAwareTextView: NSTextView {
         movePastHiddenMarker(forward: true)
     }
 
+    private func indentCode(backwards: Bool) -> Bool {
+        guard let request = editableCodeRequest() else { return false }
+        let selection = selectedRange()
+        if !backwards && selection.length == 0 {
+            return applyWritingEdit(MarkdownWritingEdit(range: selection, text: "    ",
+                selection: NSRange(location: selection.location + 4, length: 0)))
+        }
+        let source = string as NSString
+        let lines = source.lineRange(for: NSRange(location: selection.location, length: max(0, selection.length - 1)))
+        let range = NSIntersectionRange(lines, request.contentRange.utf16Range)
+        let result = NSMutableString(string: source.substring(with: range))
+        var offset = 0
+        var changes: [(Int, Int)] = []
+        while offset < range.length {
+            let line = source.lineRange(for: NSRange(location: range.location + offset, length: 0))
+            let text = source.substring(with: NSIntersectionRange(line, range))
+            let removed = backwards ? (text.hasPrefix("\t") ? 1 : min(4, text.prefix { $0 == " " }.count)) : 0
+            changes.append((offset, removed))
+            offset = NSMaxRange(line) - range.location
+        }
+        for (offset, removed) in changes.reversed() {
+            result.replaceCharacters(in: NSRange(location: offset, length: removed), with: backwards ? "" : "    ")
+        }
+        let target: NSRange
+        if selection.length == 0 {
+            target = NSRange(location: max(range.location, selection.location - (changes.first?.1 ?? 0)), length: 0)
+        } else {
+            target = NSRange(location: range.location, length: result.length)
+        }
+        return applyWritingEdit(MarkdownWritingEdit(range: range, text: result as String, selection: target))
+    }
+
     override func insertTab(_ sender: Any?) {
-        if handleWritingAction(.indent) { return }
+        if indentCode(backwards: false) || handleWritingAction(.indent) { return }
         super.insertTab(sender)
     }
 
     override func insertBacktab(_ sender: Any?) {
-        if handleWritingAction(.outdent) { return }
+        if indentCode(backwards: true) || handleWritingAction(.outdent) { return }
         super.insertBacktab(sender)
     }
 
@@ -4047,6 +4146,15 @@ final class WindowAwareTextView: NSTextView {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let localPoint = localPoint(forWindowPoint: event.locationInWindow)
+        if let request = editableCodeRequest(at: characterIndexForInsertion(at: localPoint)) {
+            let menu = super.menu(for: event) ?? NSMenu()
+            menu.addItem(.separator())
+            let item = NSMenuItem(title: "编辑代码语言…", action: #selector(editCodeLanguage(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = request
+            menu.addItem(item)
+            return menu
+        }
         guard let location = clickableLinkLocation(at: localPoint) else {
             return super.menu(for: event)
         }
@@ -4060,6 +4168,21 @@ final class WindowAwareTextView: NSTextView {
         item.representedObject = location
         menu.addItem(item)
         return menu
+    }
+
+    @objc private func editCodeLanguage(_ sender: NSMenuItem) {
+        guard let old = sender.representedObject as? JavaScriptRenderRequest,
+              let request = RenderedMarkdownEditor.plan(for: string).renderRequests.first(where: {
+                  $0.kind == "code" && $0.sourceRange == old.sourceRange && $0.source == old.source
+              }) else { return }
+        let source = string as NSString
+        let opening = source.lineRange(for: NSRange(location: request.sourceRange.utf16Range.location, length: 0))
+        let line = source.substring(with: opening) as NSString
+        guard let regex = try? NSRegularExpression(pattern: "[`~]{3,}([^\r\n]*)"),
+              let match = regex.firstMatch(in: line as String, range: NSRange(location: 0, length: line.length)) else { return }
+        window?.makeFirstResponder(self)
+        setSelectedRange(NSRange(location: opening.location + match.range(at: 1).location, length: match.range(at: 1).length))
+        focusDidChangeHandler?()
     }
 
     @objc
@@ -4368,6 +4491,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
                 }
                 let textView = RenderedMarkdownTableCellTextView()
                 textView.isEditable = true
+                textView.allowsUndo = false
                 textView.isSelectable = true
                 textView.isRichText = true
                 textView.drawsBackground = false
@@ -4402,6 +4526,14 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
             layout.textView.delegate = self
             layout.textView.linkActivation = linkActivation
             layout.textView.onLinkClick = onLinkClick
+            layout.textView.navigationHandler = { [weak self, weak textView = layout.textView] backwards, exit in
+                guard let self, let textView else { return }
+                self.navigate(from: textView, backwards: backwards, exit: exit)
+            }
+            layout.textView.historyHandler = { [weak self] redo in
+                guard let self, let owner = self.documentTextView else { return }
+                if redo { owner.redo(nil) } else { owner.undo(nil) }
+            }
             layout.textView.contextMenuProvider = { [weak self, weak textView = layout.textView]
                 event in
                 guard let self, let textView else { return nil }
@@ -4583,12 +4715,69 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         return true
     }
 
-    func textDidEndEditing(_ notification: Notification) {
-        guard let textView = notification.object as? NSTextView,
-              let cell = cells.first(where: { $0.textView === textView }),
-              textView.string != cell.originalText
-        else { return }
+    private var documentTextView: WindowAwareTextView? {
+        var view = superview
+        while let candidate = view {
+            if let editor = candidate as? WindowAwareTextView { return editor }
+            view = candidate.superview
+        }
+        return nil
+    }
+
+    var focusedCell: (row: Int, column: Int, selection: NSRange)? {
+        guard let cell = cells.first(where: { $0.textView === window?.firstResponder }) else { return nil }
+        return (cell.row, cell.column, cell.textView.selectedRange())
+    }
+
+    @discardableResult
+    func focusCell(row: Int, column: Int, selection: NSRange? = nil) -> Bool {
+        guard let cell = cells.first(where: { $0.row == row && $0.column == column }),
+              cell.textView.isEditable, window?.makeFirstResponder(cell.textView) == true else { return false }
+        let length = cell.textView.string.utf16.count
+        let range = selection ?? NSRange(location: 0, length: length)
+        cell.textView.setSelectedRange(NSRange(location: min(range.location, length), length: min(range.length, max(0, length - range.location))))
+        cell.textView.scrollRangeToVisible(cell.textView.selectedRange())
+        return true
+    }
+
+    private func commit(_ textView: NSTextView) {
+        guard textView.isEditable, !textView.hasMarkedText(),
+              let cell = cells.first(where: { $0.textView === textView }), textView.string != cell.originalText else { return }
+        cell.originalText = textView.string
         onEdit(.updateCell(row: cell.row, column: cell.column, text: textView.string))
+    }
+
+    func textDidChange(_ notification: Notification) {
+        if let textView = notification.object as? NSTextView { commit(textView) }
+    }
+
+    func textDidEndEditing(_ notification: Notification) {
+        if let textView = notification.object as? NSTextView { commit(textView) }
+    }
+
+    private func navigate(from textView: NSTextView, backwards: Bool, exit: Bool) {
+        guard textView.isEditable, !textView.hasMarkedText(),
+              let index = cells.firstIndex(where: { $0.textView === textView }) else { return }
+        commit(textView)
+        let next = backwards ? index - 1 : index + 1
+        if exit || next < 0 {
+            guard let owner = documentTextView else { return }
+            owner.pendingTableFocus = nil
+            window?.makeFirstResponder(owner)
+            let current = RenderedMarkdownEditor.plan(for: owner.string).tables.first {
+                $0.sourceRange.utf16Range.location == table.sourceRange.utf16Range.location
+            } ?? table
+            let location = backwards ? current.sourceRange.utf16Range.location : NSMaxRange(current.sourceRange.utf16Range)
+            owner.setSelectedRange(NSRange(location: min(location, owner.string.utf16.count), length: 0))
+            if !backwards, location == owner.string.utf16.count { owner.insertText("\n\n", replacementRange: owner.selectedRange()) }
+            return
+        }
+        if next < cells.count {
+            _ = focusCell(row: cells[next].row, column: cells[next].column)
+        } else {
+            documentTextView?.pendingTableFocus = (table.sourceRange.utf16Range.location, table.rows.count, 0)
+            onEdit(.insertRow(at: table.rows.count))
+        }
     }
 
     private func tableMenu(
@@ -4677,6 +4866,24 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
 
 @MainActor
 final class RenderedMarkdownTableCellTextView: NSTextView {
+    var navigationHandler: ((_ backwards: Bool, _ exit: Bool) -> Void)?
+    var historyHandler: ((_ redo: Bool) -> Void)?
+
+    override func insertTab(_ sender: Any?) {
+        guard !hasMarkedText() else { super.insertTab(sender); return }
+        navigationHandler?(false, false)
+    }
+    override func insertBacktab(_ sender: Any?) {
+        guard !hasMarkedText() else { super.insertBacktab(sender); return }
+        navigationHandler?(true, false)
+    }
+    override func insertNewline(_ sender: Any?) {
+        guard !hasMarkedText() else { super.insertNewline(sender); return }
+        navigationHandler?(false, true)
+    }
+    override func cancelOperation(_ sender: Any?) { navigationHandler?(false, true) }
+    @objc func undo(_ sender: Any?) { historyHandler?(false) }
+    @objc func redo(_ sender: Any?) { historyHandler?(true) }
     var contextMenuProvider: ((NSEvent) -> NSMenu?)?
     var linkActivation = LinkActivationPreference.singleClick
     var onLinkClick: ((String) -> Void)?

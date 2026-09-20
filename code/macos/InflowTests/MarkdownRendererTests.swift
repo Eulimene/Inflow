@@ -1620,6 +1620,21 @@ final class MarkdownRendererTests: XCTestCase {
         for request in mixedPlan.renderRequests where request.kind != "code" {
             XCTAssertNotNil(mixedSession.textView.renderedImage(atUTF16Location: request.sourceRange.utf16Range.location), request.kind)
         }
+        let mathSource = "$$\\frac{a}{b}$$"
+        let mathSession = MarkdownSourceEditorSession()
+        mathSession.textView.string = mathSource
+        let mathContent = await mathSession.deriveContent(for: mathSource, configuration: .default)
+        let mathRequest = try XCTUnwrap(mathContent?.nativeRenderPlan.renderRequests.first)
+        let mathWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        mathWindow.contentView = mathSession.scrollView
+        defer { mathWindow.makeFirstResponder(nil); mathWindow.contentView = nil }
+        XCTAssertTrue(mathWindow.makeFirstResponder(mathSession.textView))
+        mathSession.textView.setSelectedRange(NSRange(location: 4, length: 0))
+        mathSession.setPresentation(.rendered, source: mathSource, onLinkClick: nil)
+        await mathSession.waitForRenderedResources()
+        XCTAssertNotNil(mathSession.textView.renderedImage(atUTF16Location: mathRequest.sourceRange.utf16Range.location))
+        XCTAssertFalse(mathSession.textView.renderedCollapsedSourceRanges.contains(mathRequest.sourceRange.utf16Range))
+        XCTAssertEqual(mathSession.textView.string, mathSource)
         let mixedCodeRequest = try XCTUnwrap(mixedPlan.renderRequests.first(where: { $0.kind == "code" }))
         let keywordColor = mixedSession.textView.textStorage?.attribute(.foregroundColor, at: mixedCodeRequest.contentRange.utf16Range.location, effectiveRange: nil) as? NSColor
         XCTAssertEqual(keywordColor, MarkdownRenderPalette.resolved(for: mixedSession.textView.effectiveAppearance).accentColor)

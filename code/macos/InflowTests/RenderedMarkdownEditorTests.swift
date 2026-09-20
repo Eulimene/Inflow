@@ -1196,16 +1196,13 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertTrue(window.makeFirstResponder(session.textView))
         session.textView.setSelectedRange(NSRange(location: body, length: 0))
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
-        XCTAssertEqual(
-            session.textView.renderedCodeBlockRanges,
-            [plan.localSourceBlocks[0].sourceRange.utf16Range],
-            "an editable fence keeps the same neutral code-block surface"
-        )
-        XCTAssertGreaterThan(
-            try XCTUnwrap(storage.attribute(.font, at: opening, effectiveRange: nil) as? NSFont)
-                .pointSize,
-            1
-        )
+        XCTAssertEqual(session.textView.renderedCodeBlockRanges.count, 1)
+        XCTAssertTrue(NSLocationInRange(body, try XCTUnwrap(session.textView.renderedCodeBlockRanges.first)))
+        XCTAssertLessThan(try XCTUnwrap(storage.attribute(.font, at: opening, effectiveRange: nil) as? NSFont).pointSize, 1)
+        session.textView.setSelectedRange(NSRange(location: opening + 3, length: 0))
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        XCTAssertEqual(session.textView.renderedCodeBlockRanges, [plan.localSourceBlocks[0].sourceRange.utf16Range])
+        XCTAssertGreaterThan(try XCTUnwrap(storage.attribute(.font, at: opening, effectiveRange: nil) as? NSFont).pointSize, 1)
     }
 
     @MainActor
@@ -2463,6 +2460,18 @@ extension RenderedMarkdownEditorTests {
         view.setSelectedRange(NSRange(location: 0, length: 0))
         for _ in 0..<3 { view.insertText("`", replacementRange: view.selectedRange()) }
         XCTAssertEqual(view.string, "```", "Auto pairing must not interfere with opening a fenced block")
+        view.string = "```swift\n  first\n  second\n```"
+        let body = (view.string as NSString).range(of: "  first\n  second\n")
+        let plan = RenderedMarkdownEditor.plan(for: view.string)
+        XCTAssertNil(RenderedMarkdownEditor.sourceEditingBlockRange(containingUTF16Location: body.location + 2, source: view.string, plan: plan))
+        view.setSelectedRange(body)
+        view.insertTab(nil)
+        XCTAssertEqual(view.string, "```swift\n      first\n      second\n```")
+        view.insertBacktab(nil)
+        XCTAssertEqual(view.string, "```swift\n  first\n  second\n```")
+        view.setSelectedRange(NSRange(location: body.location + 7, length: 0))
+        view.insertNewline(nil)
+        XCTAssertEqual(view.string, "```swift\n  first\n  \n  second\n```")
         view.string = "```text\n- code\n```"
         view.setSelectedRange(NSRange(location: 14, length: 0))
         view.insertNewline(nil)
@@ -2542,5 +2551,35 @@ extension RenderedMarkdownEditorTests {
         let cells = tableView.subviews.compactMap { $0 as? NSTextView }
         XCTAssertFalse(cells.isEmpty)
         XCTAssertTrue(cells.allSatisfy { !$0.isEditable })
+
+        let editing = MarkdownSourceEditorSession()
+        let editableSource = "| A | B |\n| --- | --- |\n| 1 | 2 |\n\nAfter"
+        editing.textView.string = editableSource
+        _ = await editing.deriveContent(for: editableSource, configuration: .default)
+        window.contentView = editing.scrollView
+        editing.setPresentation(.rendered, source: editableSource, onLinkClick: nil)
+        let grid = try XCTUnwrap(editing.textView.renderedTable(atUTF16Location: 0))
+        XCTAssertTrue(grid.focusCell(row: 0, column: 0))
+        (window.firstResponder as? NSTextView)?.insertTab(nil)
+        XCTAssertEqual(grid.focusedCell?.column, 1)
+        (window.firstResponder as? NSTextView)?.insertBacktab(nil)
+        XCTAssertEqual(grid.focusedCell?.column, 0)
+        let first = try XCTUnwrap(window.firstResponder as? NSTextView)
+        first.insertText("Changed", replacementRange: first.selectedRange())
+        XCTAssertTrue(editing.textView.string.contains("Changed"))
+        XCTAssertTrue(editing.textView.string.hasSuffix("\n\nAfter"))
+        XCTAssertTrue(grid.focusCell(row: 1, column: 1))
+        (window.firstResponder as? NSTextView)?.insertTab(nil)
+        let changedSource = editing.textView.string
+        let changedPlan = RenderedMarkdownEditor.plan(for: changedSource)
+        XCTAssertEqual(changedPlan.tables.first?.rows.count, 3)
+        _ = await editing.deriveContent(for: changedSource, configuration: .default)
+        editing.setPresentation(.rendered, source: changedSource, onLinkClick: nil)
+        let updatedGrid = try XCTUnwrap(editing.textView.renderedTable(atUTF16Location: 0))
+        XCTAssertEqual(updatedGrid.focusedCell?.row, 2)
+        XCTAssertEqual(updatedGrid.focusedCell?.column, 0)
+        (window.firstResponder as? NSTextView)?.cancelOperation(nil)
+        XCTAssertTrue(window.firstResponder === editing.textView)
+
     }
 }

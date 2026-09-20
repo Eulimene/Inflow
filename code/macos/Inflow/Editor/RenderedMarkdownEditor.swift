@@ -425,7 +425,14 @@ enum RenderedMarkdownEditor {
         let sourceLength = (source as NSString).length
         guard location >= 0, location <= sourceLength, !source.isEmpty else { return nil }
 
-        let replacementRanges = plan.localSourceBlocks.map(\.sourceRange.utf16Range)
+        // Ordinary fenced code remains rendered while editing its body. Only
+        // the language/fence lines need the literal-source presentation.
+        let bodyCode = plan.renderRequests.first {
+            $0.kind == "code" && containsCaret(location, in: $0.contentRange.utf16Range, sourceLength: sourceLength)
+        }
+        let replacementRanges = plan.localSourceBlocks.filter {
+            !($0.reasons == [.fencedCode] && $0.sourceRange == bodyCode?.sourceRange)
+        }.map(\.sourceRange.utf16Range)
             + plan.mermaidDiagrams.map(\.sourceRange.utf16Range)
             + plan.renderRequests.filter { $0.kind == "math" }.map(\.sourceRange.utf16Range)
             + plan.markers.compactMap { marker in
