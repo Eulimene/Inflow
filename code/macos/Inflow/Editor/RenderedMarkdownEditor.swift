@@ -187,6 +187,7 @@ struct AdaptiveRenderedMarkdownTableLayoutStrategy: RenderedMarkdownTableLayoutS
 
 enum RenderedMarkdownTableEdit: Equatable, Sendable {
     case updateCell(row: Int, column: Int, text: String)
+    case updateCells(row: Int, column: Int, texts: [[String]])
     case insertRow(at: Int)
     case deleteRow(Int)
     case insertColumn(at: Int)
@@ -216,6 +217,20 @@ enum RenderedMarkdownTableEditing {
         case let .updateCell(row, column, text):
             guard rows.indices.contains(row), rows[row].indices.contains(column) else { return nil }
             rows[row][column] = escapedCell(text)
+        case let .updateCells(row, column, texts):
+            guard row >= 0, column >= 0, !texts.isEmpty,
+                  texts.allSatisfy({ !$0.isEmpty }), row <= rows.count, column < columnCount else { return nil }
+            let newColumnCount = max(columnCount, column + (texts.map(\.count).max() ?? 0))
+            if newColumnCount > columnCount {
+                rows = rows.map { $0 + Array(repeating: "", count: newColumnCount - columnCount) }
+                alignments += Array(repeating: .leading, count: newColumnCount - columnCount)
+            }
+            while rows.count < row + texts.count { rows.append(Array(repeating: "", count: newColumnCount)) }
+            for (r, values) in texts.enumerated() {
+                for (c, value) in values.enumerated() {
+                    rows[row + r][column + c] = escapedCell(value)
+                }
+            }
         case let .insertRow(index):
             guard (0...rows.count).contains(index) else { return nil }
             rows.insert(Array(repeating: "", count: columnCount), at: index)
@@ -262,9 +277,9 @@ enum RenderedMarkdownTableEditing {
         text
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "|", with: "\\|")
-            .replacingOccurrences(of: "\r\n", with: " ")
-            .replacingOccurrences(of: "\n", with: " ")
-            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\n", with: "<br>")
+            .replacingOccurrences(of: "\r", with: "<br>")
             .trimmingCharacters(in: .whitespaces)
     }
 }
@@ -649,5 +664,60 @@ enum MarkdownWritingRules {
             }.map(\.sourceRange.utf16Range)
         }
         return result
+    }
+}
+
+/// Attribute projection is computed off-screen. Only changed runs invalidate TextKit layout.
+enum RenderedAttributePatch {
+    @discardableResult
+    static func apply(_ projection: NSAttributedString, to storage: NSTextStorage) -> [NSRange] {
+        guard UTF8Text.isExactlyEqual(projection.string, storage.string) else { return [] }
+        var changes: [(NSRange, [NSAttributedString.Key: Any])] = []
+        var offset = 0
+        while offset < storage.length {
+            var oldRange = NSRange(), newRange = NSRange()
+            let old = storage.attributes(at: offset, effectiveRange: &oldRange)
+            let new = projection.attributes(at: offset, effectiveRange: &newRange)
+            let end = min(NSMaxRange(oldRange), NSMaxRange(newRange))
+            let range = NSRange(location: offset, length: end - offset)
+            if !NSDictionary(dictionary: old).isEqual(to: new) { changes.append((range, new)) }
+            offset = end
+        }
+        storage.beginEditing()
+        for (range, attributes) in changes { storage.setAttributes(attributes, range: range) }
+        storage.endEditing()
+        return changes.map(\.0)
+    }
+}
+
+/// Quoted TSV preserves tabs and line breaks inside cells when copying to spreadsheets.
+enum TableClipboard {
+    static func encode(_ rows: [[String]]) -> String {
+        rows.map { row in
+            row.map { value in
+                value.contains(where: { "\t\n\r\"".contains($0) })
+                    ? "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : value
+            }.joined(separator: "\t")
+        }.joined(separator: "\n")
+    }
+
+    static func decode(_ text: String) -> [[String]] {
+        let characters = Array(text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n"))
+        var rows: [[String]] = [], row: [String] = [], value = ""
+        var quoted = false, index = 0
+        while index < characters.count {
+            let character = characters[index]
+            if character == "\"", quoted {
+                if index + 1 < characters.count, characters[index + 1] == "\"" {
+                    value.append("\""); index += 1
+                } else { quoted = false }
+            } else if character == "\"", value.isEmpty { quoted = true }
+            else if character == "\t", !quoted { row.append(value); value = "" }
+            else if character == "\n", !quoted { row.append(value); rows.append(row); row = []; value = "" }
+            else { value.append(character) }
+            index += 1
+        }
+        if !row.isEmpty || !value.isEmpty || rows.isEmpty { row.append(value); rows.append(row) }
+        return rows
     }
 }

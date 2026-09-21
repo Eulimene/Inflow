@@ -326,7 +326,13 @@ fn safe_events(
         .map(|located| (located.event.clone(), located.source_range.clone()));
     let mut events = Vec::new();
     let mut neutralized_link_depth = 0_u32;
+    let mut table_depth = 0_u32;
     while let Some((event, event_range)) = parser.next() {
+        match &event {
+            Event::Start(Tag::Table(_)) => table_depth += 1,
+            Event::End(TagEnd::Table) => table_depth = table_depth.saturating_sub(1),
+            _ => {}
+        }
         if neutralize_delivery_links
             && matches!(&event, Event::Start(Tag::Link { dest_url, .. }) if !is_portable_link(dest_url))
         {
@@ -423,6 +429,10 @@ fn safe_events(
                 true,
                 (!neutralize_delivery_links).then_some(&event_range),
             ));
+        } else if table_depth > 0
+            && matches!(&event, Event::InlineHtml(html) if is_safe_line_break(html))
+        {
+            events.push(Event::InlineHtml("<br>".into()));
         } else {
             events.push(sanitize_event(event));
         }
@@ -511,6 +521,13 @@ fn options_with_configuration(configuration: RenderConfiguration) -> Options {
     dialect_options(configuration.math_enabled)
 }
 
+pub(crate) fn is_safe_line_break(html: &str) -> bool {
+    matches!(
+        html.trim().to_ascii_lowercase().as_str(),
+        "<br>" | "<br/>" | "<br />"
+    )
+}
+
 fn sanitize_event(event: Event<'_>) -> Event<'_> {
     match event {
         Event::Html(raw_html) | Event::InlineHtml(raw_html) => Event::Text(raw_html),
@@ -565,6 +582,11 @@ mod tests {
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
         assert!(html.contains("alert('no')"));
+        let table =
+            html_fragment("| A |\n| --- |\n| first<br>second<BR />third<br onclick=evil()>last | ");
+        assert!(table.contains("first<br>second<br>third"));
+        assert!(table.contains("&lt;br onclick=evil()&gt;"));
+        assert!(html_fragment("first<br>second").contains("first&lt;br&gt;second"));
     }
 
     #[test]

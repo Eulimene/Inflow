@@ -101,6 +101,16 @@ impl RenderIr {
                 Event::End(tag) if is_block_end(*tag) => {
                     active_blocks.pop();
                 }
+                Event::InlineHtml(text)
+                    if crate::render::is_safe_line_break(text)
+                        && active_blocks
+                            .iter()
+                            .any(|index| blocks[*index].kind == RenderBlockKind::TableCell) =>
+                {
+                    for index in &active_blocks {
+                        blocks[*index].visible_text.push('\n');
+                    }
+                }
                 Event::Text(text)
                 | Event::Code(text)
                 | Event::InlineMath(text)

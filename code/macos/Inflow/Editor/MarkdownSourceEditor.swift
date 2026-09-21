@@ -71,6 +71,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var configuredLineWrapping: Bool?
     private let role: MarkdownSourceEditorSessionRole
     private(set) var renderedPresentationPassCount = 0
+    private(set) var renderedAttributePatchRanges: [NSRange] = []
     private(set) var renderedMermaidPatchCount = 0
 
     override convenience init() {
@@ -898,7 +899,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         baseParagraph.minimumLineHeight = baseFont.pointSize * CGFloat(sourceAppearance.lineHeight)
         baseParagraph.paragraphSpacing = 0
         let palette = MarkdownRenderPalette.resolved(for: textView.effectiveAppearance)
-        textView.font = baseFont
+        if textView.string.isEmpty { textView.font = baseFont }
         textView.defaultParagraphStyle = baseParagraph
         textView.linkTextAttributes = MarkdownLinkVisualStyle.restingAttributes(
             foregroundColor: palette.accentColor
@@ -909,7 +910,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             .paragraphStyle: baseParagraph,
         ]
 
-        guard let storage = textView.textStorage else { return }
+        guard let liveStorage = textView.textStorage else { return }
+        let storage = NSTextStorage(string: source)
         let fullRange = NSRange(location: 0, length: storage.length)
         let undoManager = textView.undoManager
         let restoreUndoRegistration = undoManager?.isUndoRegistrationEnabled == true
@@ -1142,6 +1144,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         applyJavaScriptResources(plan, editingRange: editingRange, storage: storage)
         textView.endRenderedOverlayUpdate()
         storage.endEditing()
+        renderedAttributePatchRanges = RenderedAttributePatch.apply(storage, to: liveStorage)
         textView.renderedAnchorSourceRanges = anchoredRanges + mathAnchors
         textView.renderedCollapsedSourceRanges = collapsedRanges
         renderedAppliedAppearance = sourceAppearance
@@ -3330,7 +3333,12 @@ final class WindowAwareTextView: NSTextView {
     ) -> NSSize {
         let key = table.sourceRange.utf16Range.location
         let previousFocus = renderedTableViews[key]?.tableView.focusedCell
+        let previousAnchor = renderedTableViews[key]?.tableView.selectionAnchor
+        let previousEnd = renderedTableViews[key]?.tableView.selectionEnd
         defer {
+            if let anchor = previousAnchor, let end = previousEnd {
+                renderedTableViews[key]?.tableView.selectCells(from: anchor, to: end)
+            }
             if let pending = pendingTableFocus, pending.location == key,
                renderedTableViews[key]?.tableView.focusCell(row: pending.row, column: pending.column) == true {
                 pendingTableFocus = nil
@@ -4522,6 +4530,8 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         layer?.masksToBounds = true
         setAccessibilityElement(true)
         setAccessibilityRole(.table)
+        toolTip = "Tab 切换单元格；Shift+Enter 换行；Shift+方向键或 Shift+点击选择多个单元格；Enter / Esc 退出表格。"
+        setAccessibilityHelp(toolTip)
         for layout in cells {
             layout.textView.delegate = self
             layout.textView.linkActivation = linkActivation
@@ -4530,6 +4540,31 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
                 guard let self, let textView else { return }
                 self.navigate(from: textView, backwards: backwards, exit: exit)
             }
+            layout.textView.selectionClickHandler = { [weak self] extend in
+                guard let self else { return false }
+                if extend {
+                    let anchor = self.selectionAnchor ?? self.focusedCell.map { ($0.row, $0.column) } ?? (layout.row, layout.column)
+                    self.selectCells(from: anchor, to: (layout.row, layout.column))
+                    return true
+                }
+                self.clearCellSelection()
+                return false
+            }
+            layout.textView.extendSelectionHandler = { [weak self] row, column in
+                self?.extendCellSelection(row: row, column: column)
+            }
+            layout.textView.replaceCellSelectionHandler = { [weak self] text in
+                guard let self, let selected = self.selectedCellTexts,
+                      let a = self.selectionAnchor, let b = self.selectionEnd else { return false }
+                var values = selected.map { $0.map { _ in "" } }
+                values[0][0] = text
+                self.clearCellSelection()
+                self.applyCellValues(values, row: min(a.0, b.0), column: min(a.1, b.1))
+                _ = self.focusCell(row: min(a.0, b.0), column: min(a.1, b.1),
+                    selection: NSRange(location: text.utf16.count, length: 0))
+                return true
+            }
+            layout.textView.clipboardHandler = { [weak self] action in self?.handleCellClipboard(action) ?? false }
             layout.textView.historyHandler = { [weak self] redo in
                 guard let self, let owner = self.documentTextView else { return }
                 if redo { owner.redo(nil) } else { owner.undo(nil) }
@@ -4609,7 +4644,8 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
             font: baseFont,
             availableWidth: width
         )
-        guard widths != columnWidths || maximumWidth != width else { return false }
+        let heights = Self.rowHeights(for: table, widths: widths, baseFont: baseFont)
+        guard widths != columnWidths || maximumWidth != width || heights != rowHeights else { return false }
         maximumWidth = width
         columnWidths = widths
         rowHeights = Self.rowHeights(for: table, widths: widths, baseFont: baseFont)
@@ -4740,6 +4776,86 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         return true
     }
 
+    private(set) var selectionAnchor: (Int, Int)?
+    private(set) var selectionEnd: (Int, Int)?
+
+    func clearCellSelection() {
+        selectionAnchor = nil
+        selectionEnd = nil
+        for cell in cells { cell.textView.drawsBackground = false }
+    }
+
+    func selectCells(from anchor: (Int, Int), to end: (Int, Int)) {
+        guard (window?.firstResponder as? NSTextView)?.hasMarkedText() != true else { return }
+        guard table.rows.indices.contains(anchor.0), table.rows[anchor.0].indices.contains(anchor.1),
+              table.rows.indices.contains(end.0), table.rows[end.0].indices.contains(end.1) else { return }
+        selectionAnchor = anchor
+        selectionEnd = end
+        _ = focusCell(row: end.0, column: end.1, selection: NSRange(location: 0, length: 0))
+        for cell in cells {
+            cell.textView.drawsBackground = (min(anchor.0, end.0)...max(anchor.0, end.0)).contains(cell.row)
+                && (min(anchor.1, end.1)...max(anchor.1, end.1)).contains(cell.column)
+            cell.textView.backgroundColor = NSColor.selectedTextBackgroundColor.withAlphaComponent(0.3)
+        }
+    }
+
+    func extendCellSelection(row: Int, column: Int) {
+        guard let focus = focusedCell else { return }
+        let anchor = selectionAnchor ?? (focus.row, focus.column)
+        let end = selectionEnd ?? (focus.row, focus.column)
+        let nextRow = min(max(0, end.0 + row), table.rows.count - 1)
+        let nextColumn = min(max(0, end.1 + column), table.rows[nextRow].count - 1)
+        selectCells(from: anchor, to: (nextRow, nextColumn))
+    }
+
+    var selectedCellTexts: [[String]]? {
+        guard let a = selectionAnchor, let b = selectionEnd else { return nil }
+        return (min(a.0, b.0)...max(a.0, b.0)).map { row in
+            (min(a.1, b.1)...max(a.1, b.1)).map { column in
+                cells.first { $0.row == row && $0.column == column }?.textView.string ?? ""
+            }
+        }
+    }
+
+    @discardableResult
+    func handleCellClipboard(_ action: String) -> Bool {
+        guard let focus = focusedCell else { return false }
+        let selected = selectedCellTexts
+        let editable = cells.first { $0.row == focus.row && $0.column == focus.column }?.textView.isEditable == true
+        let row = min(selectionAnchor?.0 ?? focus.row, selectionEnd?.0 ?? focus.row)
+        let column = min(selectionAnchor?.1 ?? focus.column, selectionEnd?.1 ?? focus.column)
+        if action == "paste" {
+            guard editable, let text = NSPasteboard.general.string(forType: .string) else { return false }
+            let values = TableClipboard.decode(text)
+            guard selected != nil || values.count > 1 || (values.first?.count ?? 0) > 1 else { return false }
+            clearCellSelection()
+            applyCellValues(values, row: row, column: column)
+            return true
+        }
+        guard let selected else { return false }
+        if action == "copy" || action == "cut" {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(TableClipboard.encode(selected), forType: .string)
+        }
+        if action == "delete" || action == "cut", editable {
+            clearCellSelection()
+            applyCellValues(selected.map { $0.map { _ in "" } }, row: row, column: column)
+        }
+        return true
+    }
+
+    private func applyCellValues(_ values: [[String]], row: Int, column: Int) {
+        // Keep active cells current while the async engine projection catches up.
+        // Otherwise a subsequent keystroke could overwrite a just-pasted cell.
+        for cell in cells where values.indices.contains(cell.row - row) {
+            let values = values[cell.row - row]
+            guard values.indices.contains(cell.column - column) else { continue }
+            cell.originalText = values[cell.column - column]
+            cell.textView.string = cell.originalText
+        }
+        onEdit(.updateCells(row: row, column: column, texts: values))
+    }
+
     private func commit(_ textView: NSTextView) {
         guard textView.isEditable, !textView.hasMarkedText(),
               let cell = cells.first(where: { $0.textView === textView }), textView.string != cell.originalText else { return }
@@ -4759,6 +4875,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         guard textView.isEditable, !textView.hasMarkedText(),
               let index = cells.firstIndex(where: { $0.textView === textView }) else { return }
         commit(textView)
+        clearCellSelection()
         let next = backwards ? index - 1 : index + 1
         if exit || next < 0 {
             guard let owner = documentTextView else { return }
@@ -4866,7 +4983,42 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
 
 @MainActor
 final class RenderedMarkdownTableCellTextView: NSTextView {
+    var selectionClickHandler: ((Bool) -> Bool)?
+    var extendSelectionHandler: ((Int, Int) -> Void)?
+    var clipboardHandler: ((String) -> Bool)?
+    var replaceCellSelectionHandler: ((String) -> Bool)?
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        let value = (insertString as? String) ?? (insertString as? NSAttributedString)?.string
+        if isEditable, !hasMarkedText(), let value, replaceCellSelectionHandler?(value) == true { return }
+        super.insertText(insertString, replacementRange: replacementRange)
+    }
+    override func deleteForward(_ sender: Any?) { if clipboardHandler?("delete") != true { super.deleteForward(sender) } }
+
     var navigationHandler: ((_ backwards: Bool, _ exit: Bool) -> Void)?
+
+    override func insertLineBreak(_ sender: Any?) {
+        guard isEditable, !hasMarkedText() else { super.insertLineBreak(sender); return }
+        insertText("\n", replacementRange: selectedRange())
+    }
+    override func keyDown(with event: NSEvent) {
+        if !hasMarkedText(), event.modifierFlags.intersection([.shift, .command, .option, .control]) == [.shift] {
+            if event.keyCode == 36 || event.keyCode == 76 { insertLineBreak(nil); return }
+            let delta: (Int, Int)? = switch event.keyCode {
+            case 123: (0, -1)
+            case 124: (0, 1)
+            case 125: (1, 0)
+            case 126: (-1, 0)
+            default: nil
+            }
+            if let delta { extendSelectionHandler?(delta.0, delta.1); return }
+        }
+        super.keyDown(with: event)
+    }
+    override func copy(_ sender: Any?) { if clipboardHandler?("copy") != true { super.copy(sender) } }
+    override func cut(_ sender: Any?) { if clipboardHandler?("cut") != true { super.cut(sender) } }
+    override func paste(_ sender: Any?) { if clipboardHandler?("paste") != true { super.paste(sender) } }
+    override func deleteBackward(_ sender: Any?) { if clipboardHandler?("delete") != true { super.deleteBackward(sender) } }
+
     var historyHandler: ((_ redo: Bool) -> Void)?
 
     override func insertTab(_ sender: Any?) {
@@ -4916,6 +5068,7 @@ final class RenderedMarkdownTableCellTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if selectionClickHandler?(event.modifierFlags.contains(.shift)) == true { return }
         if RenderedMarkdownLinkActivation.shouldNavigate(
             for: event.modifierFlags,
             preference: linkActivation,

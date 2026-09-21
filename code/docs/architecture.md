@@ -118,7 +118,9 @@ Swift String 的规范等价不能替代精确字节身份。Rust 返回 UTF-8 b
 
 EditorViewMode 的内部历史 case 名 preview 对应用户可见的“即时编辑”。该模式始终挂载共享的 MarkdownSourceEditorSession。Rust Engine 从同一次 `DocumentIr` 产生 revision-bound `NativeRenderPlan`，Swift 只校验 UTF-8 范围并映射为 TextKit 属性，不再分析 Markdown。普通文字保持渲染属性直接编辑，选区变化时从当前可见字符同步 typing attributes，使光标高度、字号和基线与文字一致。
 
-只有围栏代码、Mermaid 和其他无法无损结构化编辑的块会在光标进入时局部恢复源码；普通文字和表格不进入该路径。图表由同一次 Engine 派生的 `render_requests` 交给离线 WKWebView 适配层生成 SVG，再按原始快照回填；CodeMirror 和 MathJax 共享此边界，详见 [JavaScript 渲染适配层](javascript-rendering.md)。表格宽度计算委托给 RenderedMarkdownTableLayoutStrategy，默认策略按内容和当前 viewport 自适应，并复用已挂载视图。CaretStyleResolver 负责跳过透明标记和换行符选择排版属性；隐藏标记不再使用微小字体改变光标和行高。链接激活策略作为持久偏好传入文本与表格链接，两者共享 Hover 反馈。该过程不替换 NSTextView，不创建第二份内容事实，也不登记展示层 undo。
+代码正文保持渲染样式编辑，进入围栏信息行才恢复完整源码；公式与图表在编辑时同时显示源码和下方预览。普通文字和表格不进入整块源码回退路径。图表由同一次 Engine 派生的 `render_requests` 交给离线 WKWebView 适配层生成 SVG，再按原始快照回填；CodeMirror 和 MathJax 共享此边界，详见 [JavaScript 渲染适配层](javascript-rendering.md)。表格宽度计算委托给 RenderedMarkdownTableLayoutStrategy，默认策略按内容和当前 viewport 自适应，并复用已挂载视图。CaretStyleResolver 负责跳过透明标记和换行符选择排版属性；隐藏标记不再使用微小字体改变光标和行高。链接激活策略作为持久偏好传入文本与表格链接，两者共享 Hover 反馈。该过程不替换 NSTextView，不创建第二份内容事实，也不登记展示层 undo。
+
+展示层先在离屏 `NSTextStorage` 生成最终属性，`RenderedAttributePatch` 对比现有存储，只提交不同的属性区间。文本、选区、Engine 历史不被替换；完整语法计划仍负责跨块依赖正确性。表格矩形选区、TSV 粘贴和软换行通过源文事务提交，`<br>` 的无属性白名单由 Rust 负责统一解析和导出；表格视图重用时重新测量行高以容纳换行。
 
 ## 5. 当前编辑命令边界
 

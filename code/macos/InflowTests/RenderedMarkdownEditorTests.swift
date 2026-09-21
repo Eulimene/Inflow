@@ -1076,6 +1076,23 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             "| Name | Score |\n| :---: | ---: |\n| Alice | 9 |"
         )
 
+        let values = [["中文😀\n下一行", "a\tb"], ["quote\"here", "A|B"]]
+        XCTAssertEqual(TableClipboard.decode(TableClipboard.encode(values)), values)
+        let updated = try XCTUnwrap(RenderedMarkdownTableEditing.replacement(for: table,
+            applying: .updateCells(row: 1, column: 0, texts: values)))
+        let updatedTable = try XCTUnwrap(RenderedMarkdownEditor.plan(for: updated).tables.first)
+        XCTAssertEqual(updatedTable.rows.count, 3)
+        XCTAssertEqual(updatedTable.rows[1][0].text, "中文😀\n下一行")
+        XCTAssertEqual(updatedTable.rows[2][1].text, "A|B")
+        XCTAssertTrue(updated.contains("<br>"))
+        let expanded = try XCTUnwrap(RenderedMarkdownTableEditing.replacement(for: table,
+            applying: .updateCells(row: 1, column: 1, texts: [["a", "b", "c"], ["d", "e", "f"]])))
+        let expandedTable = try XCTUnwrap(RenderedMarkdownEditor.plan(for: expanded).tables.first)
+        XCTAssertEqual(expandedTable.rows.count, 3)
+        XCTAssertEqual(expandedTable.rows[0].count, 4)
+        XCTAssertEqual(expandedTable.rows[2][3].text, "f")
+
+
         let richSource = "| **Name** | Docs |\n| --- | --- |\n| Alice | [Open](guide.md) |"
         let richTable = try XCTUnwrap(RenderedMarkdownEditor.plan(for: richSource).tables.first)
         XCTAssertEqual(
@@ -1089,6 +1106,13 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     func testAdaptiveTableLayoutFillsAndRespondsToTheViewport() throws {
+        let storage = NSTextStorage(string: "first\nunchanged", attributes: [.font: NSFont.systemFont(ofSize: 16)])
+        let projection = NSMutableAttributedString(attributedString: storage)
+        projection.addAttribute(.foregroundColor, value: NSColor.red, range: NSRange(location: 0, length: 5))
+        XCTAssertEqual(RenderedAttributePatch.apply(projection, to: storage), [NSRange(location: 0, length: 5)])
+        XCTAssertTrue(RenderedAttributePatch.apply(projection, to: storage).isEmpty)
+        XCTAssertNil(storage.attribute(.foregroundColor, at: 6, effectiveRange: nil))
+
         let source = "| A much longer heading | B |\n| --- | ---: |\n| value | 1 |"
         let table = try XCTUnwrap(RenderedMarkdownEditor.plan(for: source).tables.first)
         let strategy = AdaptiveRenderedMarkdownTableLayoutStrategy()
@@ -1144,6 +1168,9 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
 
         XCTAssertTrue(mounted === retained, "unrelated typing must not rebuild the table overlay")
+        XCTAssertTrue(session.renderedAttributePatchRanges.allSatisfy { NSMaxRange($0) <= 7 },
+            "Typing in the first paragraph must not rewrite the unchanged table's attributes")
+
     }
 
     @MainActor
@@ -2580,6 +2607,61 @@ extension RenderedMarkdownEditorTests {
         XCTAssertEqual(updatedGrid.focusedCell?.column, 0)
         (window.firstResponder as? NSTextView)?.cancelOperation(nil)
         XCTAssertTrue(window.firstResponder === editing.textView)
+        XCTAssertTrue(updatedGrid.focusCell(row: 0, column: 0))
+        updatedGrid.extendCellSelection(row: 1, column: 1)
+        XCTAssertEqual(updatedGrid.selectedCellTexts, [["Changed", "B"], ["1", "2"]])
+        let pasteboardBefore = (NSPasteboard.general.pasteboardItems ?? []).map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types { if let data = item.data(forType: type) { copy.setData(data, forType: type) } }
+            return copy
+        }
+        defer {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.writeObjects(pasteboardBefore)
+        }
+        XCTAssertTrue(updatedGrid.handleCellClipboard("copy"))
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "Changed\tB\n1\t2")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("X\tY\nZ\tW", forType: .string)
+        XCTAssertTrue(updatedGrid.handleCellClipboard("paste"))
+        let pasted = editing.textView.string
+        XCTAssertTrue(pasted.contains("| X | Y |"))
+        XCTAssertTrue(pasted.contains("| Z | W |"))
+        _ = await editing.deriveContent(for: pasted, configuration: .default)
+        editing.setPresentation(.rendered, source: pasted, onLinkClick: nil)
+        let pastedGrid = try XCTUnwrap(editing.textView.renderedTable(atUTF16Location: 0))
+        XCTAssertTrue(pastedGrid.focusCell(row: 1, column: 0, selection: NSRange(location: 1, length: 0)))
+        let shiftReturn = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: [.shift], timestamp: 0, windowNumber: window.windowNumber,
+            context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        (window.firstResponder as? NSTextView)?.keyDown(with: shiftReturn)
+        XCTAssertTrue(editing.textView.string.contains("Z<br>"))
+        let softBreakSource = editing.textView.string
+        _ = await editing.deriveContent(for: softBreakSource, configuration: .default)
+        editing.setPresentation(.rendered, source: softBreakSource, onLinkClick: nil)
+        XCTAssertEqual(RenderedMarkdownEditor.plan(for: softBreakSource).tables.first?.rows[1][0].text, "Z\n")
+        let softGrid = try XCTUnwrap(editing.textView.renderedTable(atUTF16Location: 0))
+        XCTAssertTrue(softGrid.focusCell(row: 1, column: 0))
+        (window.firstResponder as? RenderedMarkdownTableCellTextView)?.undo(nil)
+        for _ in 0..<100 where editing.textView.string != pasted { await Task.yield() }
+        XCTAssertEqual(editing.textView.string, pasted, "A soft break must undo as one document transaction")
+        editing.textView.redo(nil)
+        for _ in 0..<100 where editing.textView.string != softBreakSource { await Task.yield() }
+        XCTAssertEqual(editing.textView.string, softBreakSource)
+        _ = await editing.deriveContent(for: softBreakSource, configuration: .default)
+        editing.setPresentation(.rendered, source: softBreakSource, onLinkClick: nil)
+        let replacementGrid = try XCTUnwrap(editing.textView.renderedTable(atUTF16Location: 0))
+        replacementGrid.selectCells(from: (0, 0), to: (1, 1))
+        let replacementCell = try XCTUnwrap(window.firstResponder as? NSTextView)
+        replacementCell.insertText("替换", replacementRange: replacementCell.selectedRange())
+        XCTAssertEqual(replacementGrid.focusedCell?.row, 0)
+        XCTAssertEqual(replacementGrid.focusedCell?.column, 0)
+        let continuingCell = try XCTUnwrap(window.firstResponder as? NSTextView)
+        continuingCell.insertText("继续", replacementRange: continuingCell.selectedRange())
+        XCTAssertEqual(RenderedMarkdownEditor.plan(for: editing.textView.string).tables.first?.rows[0][0].text, "替换继续")
+        XCTAssertEqual(RenderedMarkdownEditor.plan(for: editing.textView.string).tables.first?.rows[1][1].text, "")
+
+
 
     }
 }

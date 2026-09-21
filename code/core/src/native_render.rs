@@ -1261,6 +1261,11 @@ mod tests {
     }
     #[test]
     fn derives_tables_diagrams_and_fallbacks() {
+        let multiline = plan("| A |\n| --- |\n| 中文😀<br>second<br/>third<BR />fourth | ");
+        assert_eq!(
+            multiline.tables[0].rows[1][0].text,
+            "中文😀\nsecond\nthird\nfourth"
+        );
         let plan = plan(
             "| A | B |\n| :- | -: |\n| [x](y) | z |\n\n```mermaid\nflowchart LR\nA --> B\n```\n\n```swift\nprint(1)\n```\n\n<div>raw</div>",
         );
