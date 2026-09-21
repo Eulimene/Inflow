@@ -1282,7 +1282,34 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             font: font,
             baselineY: 50
         )
-        XCTAssertEqual(baselineRect.minY, 50 - font.ascender, accuracy: 0.001)
+        XCTAssertGreaterThanOrEqual(baselineRect.minY, 10)
+        XCTAssertLessThanOrEqual(baselineRect.maxY, 50)
+
+        for initial in ["正文", "# 标题", "> 引用", "- 列表", "- [ ] 任务", "**粗体**", "`代码`", "$$x$$"] {
+            let editor = MarkdownSourceEditorSession()
+            editor.scrollView.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+            editor.textView.string = initial
+            _ = await editor.deriveContent(for: initial, configuration: .default)
+            editor.setPresentation(.rendered, source: initial, onLinkClick: nil)
+            editor.textView.setSelectedRange(NSRange(location: initial.utf16.count, length: 0))
+            editor.textView.insertNewline(nil)
+            let changed = editor.textView.string
+            XCTAssertEqual(editor.textView.selectedRange().location, changed.utf16.count)
+            _ = await editor.deriveContent(for: changed, configuration: .default)
+            editor.setPresentation(.rendered, source: changed, onLinkClick: nil)
+            let manager = try XCTUnwrap(editor.textView.layoutManager)
+            let container = try XCTUnwrap(editor.textView.textContainer)
+            manager.ensureLayout(for: container)
+            let nativeLine = changed.hasSuffix("\n") ? manager.extraLineFragmentRect
+                : manager.lineFragmentRect(forGlyphAt: manager.glyphIndexForCharacter(at: changed.utf16.count - 1), effectiveRange: nil)
+            let nativeCaret = NSRect(x: nativeLine.minX + editor.textView.textContainerOrigin.x,
+                y: nativeLine.minY + editor.textView.textContainerOrigin.y, width: 1, height: nativeLine.height)
+            let drawn = editor.textView.renderedInsertionRect(nativeCaret)
+            XCTAssertGreaterThanOrEqual(drawn.minY, nativeCaret.minY, initial)
+            XCTAssertLessThanOrEqual(drawn.maxY, nativeCaret.maxY, initial)
+            XCTAssertGreaterThan(nativeLine.minY, 0, initial)
+            XCTAssertEqual(editor.textView.selectedRange().location, changed.utf16.count)
+        }
     }
 
     @MainActor
@@ -1643,6 +1670,23 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
         XCTAssertEqual(fullWidth.width, CGFloat(diagram.intrinsicWidth), accuracy: 0.001)
         XCTAssertGreaterThanOrEqual(fullWidth.width, wide.width)
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = session.scrollView
+        defer { window.makeFirstResponder(nil); window.contentView = nil }
+        XCTAssertTrue(window.makeFirstResponder(session.textView))
+        session.textView.setSelectedRange(NSRange(location: 20, length: 0))
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        await settleRenderedPresentation()
+        let imageView = try XCTUnwrap(session.textView.subviews.compactMap { $0 as? NSImageView }.first)
+        let manager = try XCTUnwrap(session.textView.layoutManager)
+        let anchor = source.utf16.count - 1
+        let glyph = manager.glyphIndexForCharacter(at: anchor)
+        let line = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        let font = try XCTUnwrap(session.textView.textStorage?.attribute(.font, at: anchor, effectiveRange: nil) as? NSFont)
+        let textBottom = session.textView.textContainerOrigin.y + line.minY + manager.location(forGlyphAt: glyph).y - font.descender
+        XCTAssertEqual(imageView.frame.minY - textBottom, 10, accuracy: 1,
+            "Preview starts below the visible closing fence, excluding reserved paragraph spacing")
     }
 
     @MainActor
@@ -2660,6 +2704,31 @@ extension RenderedMarkdownEditorTests {
         continuingCell.insertText("继续", replacementRange: continuingCell.selectedRange())
         XCTAssertEqual(RenderedMarkdownEditor.plan(for: editing.textView.string).tables.first?.rows[0][0].text, "替换继续")
         XCTAssertEqual(RenderedMarkdownEditor.plan(for: editing.textView.string).tables.first?.rows[1][1].text, "")
+
+        let scrolling = MarkdownSourceEditorSession()
+        let prefix = String(repeating: "正文\n\n", count: 40)
+        scrolling.textView.string = prefix + "| A | B |\n| --- | --- |\n| 1 | 2 |\n\n结束"
+        window.contentView = scrolling.scrollView
+        _ = await scrolling.deriveContent(for: scrolling.textView.string, configuration: .default)
+        scrolling.setPresentation(.rendered, source: scrolling.textView.string, onLinkClick: nil)
+        for row in 1...3 {
+            let grid = try XCTUnwrap(scrolling.textView.renderedTable(atUTF16Location: prefix.utf16.count))
+            XCTAssertTrue(grid.focusCell(row: row, column: 1))
+            let before = scrolling.scrollView.contentView.bounds.origin.y
+            (window.firstResponder as? NSTextView)?.insertTab(nil)
+            XCTAssertEqual(scrolling.scrollView.contentView.bounds.origin.y, before, accuracy: 1,
+                "Submitting a table edit must not scroll to its backing Markdown")
+            let updated = scrolling.textView.string
+            _ = await scrolling.deriveContent(for: updated, configuration: .default)
+            scrolling.setPresentation(.rendered, source: updated, onLinkClick: nil)
+            await settleRenderedPresentation()
+            let next = try XCTUnwrap(scrolling.textView.renderedTable(atUTF16Location: prefix.utf16.count))
+            XCTAssertEqual(next.focusedCell?.row, row + 1)
+            XCTAssertEqual(next.focusedCell?.column, 0)
+            XCTAssertLessThanOrEqual(abs(scrolling.scrollView.contentView.bounds.origin.y - before), 80,
+                "Appending one visible row must not jump to another part of the document")
+        }
+
 
 
 

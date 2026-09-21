@@ -1145,6 +1145,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.endRenderedOverlayUpdate()
         storage.endEditing()
         renderedAttributePatchRanges = RenderedAttributePatch.apply(storage, to: liveStorage)
+        textView.layoutRenderedImages()
         textView.renderedAnchorSourceRanges = anchoredRanges + mathAnchors
         textView.renderedCollapsedSourceRanges = collapsedRanges
         renderedAppliedAppearance = sourceAppearance
@@ -1376,7 +1377,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             storage.attribute(.paragraphStyle, at: anchor, effectiveRange: nil)
                 as? NSParagraphStyle
         )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
-        paragraph.paragraphSpacing = max(paragraph.paragraphSpacing, size.height + 18)
+        paragraph.paragraphSpacing = size.height + 18
         storage.addAttribute(.paragraphStyle, value: paragraph, range: paragraphRange)
     }
 
@@ -1699,7 +1700,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         else { return }
         let original = (textView.string as NSString).substring(with: currentTable.sourceRange.utf16Range)
         let ending = original.hasSuffix("\r\n") ? "\r\n" : (original.hasSuffix("\n") ? "\n" : "")
-        textView.insertText(replacement + ending, replacementRange: currentTable.sourceRange.utf16Range)
+        textView.replaceRenderedTableSource(replacement + ending, range: currentTable.sourceRange.utf16Range)
         textView.undoManager?.setActionName("编辑表格")
     }
 
@@ -2017,7 +2018,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
 
     private func centerSelectionForTypewriterMode() {
         guard typewriterModeEnabled,
-              textView.window != nil,
+              textView.window?.firstResponder === textView,
               let layoutManager = textView.layoutManager,
               let textContainer = textView.textContainer
         else {
@@ -2837,7 +2838,9 @@ enum RenderedMarkdownCaretStyleResolver {
         guard let font else { return rect }
         let fontHeight = ceil(font.ascender - font.descender + font.leading)
         let height = min(rect.height, max(1, fontHeight))
-        let originY = baselineY.map { $0 - font.ascender } ?? (rect.midY - height / 2)
+        let proposedY = baselineY.map { $0 - font.ascender } ?? (rect.midY - height / 2)
+        // Font attributes may be inherited from another line; caret geometry may not.
+        let originY = min(max(rect.minY, proposedY), max(rect.minY, rect.maxY - height))
         return NSRect(
             x: rect.origin.x,
             y: originY,
@@ -3061,6 +3064,8 @@ final class WindowAwareTextView: NSTextView {
     private var renderedImageViews: [Int: RenderedImageViewState] = [:]
     private var renderedTableViews: [Int: RenderedTableViewState] = [:]
     var pendingTableFocus: (location: Int, row: Int, column: Int)?
+    private var tableFocusRestorations: [Int: (row: Int, column: Int, selection: NSRange)] = [:]
+    private var tableSelectionRestorations: [Int: (anchor: (Int, Int), end: (Int, Int))] = [:]
     private var retainedRenderedOverlayKeys: Set<Int>?
     private var renderedImageLayoutTask: Task<Void, Never>?
     private var isUpdatingRenderedOverlayLayout = false
@@ -3083,14 +3088,16 @@ final class WindowAwareTextView: NSTextView {
     ) {
         let font = renderedCaretFont() ?? typingAttributes[.font] as? NSFont
         super.drawInsertionPoint(
-            in: RenderedMarkdownCaretStyleResolver.adjustedInsertionRect(
-                rect,
-                font: font,
-                baselineY: renderedCaretBaselineY()
-            ),
+            in: renderedInsertionRect(rect, font: font),
             color: color,
             turnedOn: flag
         )
+    }
+
+    func renderedInsertionRect(_ rect: NSRect, font: NSFont? = nil) -> NSRect {
+        RenderedMarkdownCaretStyleResolver.adjustedInsertionRect(rect,
+            font: font ?? renderedCaretFont() ?? typingAttributes[.font] as? NSFont,
+            baselineY: renderedCaretBaselineY(in: rect))
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -3116,7 +3123,7 @@ final class WindowAwareTextView: NSTextView {
         return storage.attribute(.font, at: location, effectiveRange: nil) as? NSFont
     }
 
-    private func renderedCaretBaselineY() -> CGFloat? {
+    private func renderedCaretBaselineY(in insertionRect: NSRect) -> CGFloat? {
         guard let layoutManager, !string.isEmpty else { return nil }
         let location = RenderedMarkdownCaretStyleResolver.visibleAttributeLocation(
             forInsertionLocation: selectedRange().location,
@@ -3130,7 +3137,9 @@ final class WindowAwareTextView: NSTextView {
             effectiveRange: nil,
             withoutAdditionalLayout: true
         )
-        return textContainerOrigin.y + line.minY + layoutManager.location(forGlyphAt: glyph).y
+        let baseline = textContainerOrigin.y + line.minY + layoutManager.location(forGlyphAt: glyph).y
+        guard baseline >= insertionRect.minY, baseline <= insertionRect.maxY else { return nil }
+        return baseline
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -3337,15 +3346,9 @@ final class WindowAwareTextView: NSTextView {
         let previousEnd = renderedTableViews[key]?.tableView.selectionEnd
         defer {
             if let anchor = previousAnchor, let end = previousEnd {
-                renderedTableViews[key]?.tableView.selectCells(from: anchor, to: end)
+                tableSelectionRestorations[key] = (anchor, end)
             }
-            if let pending = pendingTableFocus, pending.location == key,
-               renderedTableViews[key]?.tableView.focusCell(row: pending.row, column: pending.column) == true {
-                pendingTableFocus = nil
-            } else if let previousFocus,
-                      renderedTableViews[key]?.tableView.focusedCell == nil {
-                _ = renderedTableViews[key]?.tableView.focusCell(row: previousFocus.row, column: previousFocus.column, selection: previousFocus.selection)
-            }
+            if let previousFocus { tableFocusRestorations[key] = previousFocus }
         }
         retainedRenderedOverlayKeys?.insert(key)
         if let existing = renderedTableViews[key],
@@ -3481,7 +3484,7 @@ final class WindowAwareTextView: NSTextView {
                             storage.attribute(.paragraphStyle, at: anchor, effectiveRange: nil)
                                 as? NSParagraphStyle
                         )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
-                        paragraph.paragraphSpacing = max(paragraph.paragraphSpacing, size.height + 18)
+                        paragraph.paragraphSpacing = size.height + 18
                         storage.addAttribute(
                             .paragraphStyle,
                             value: paragraph,
@@ -3548,7 +3551,8 @@ final class WindowAwareTextView: NSTextView {
                     ? textContainerOrigin.x + lineRect.minX
                     : textContainerOrigin.x + glyphRect.minX,
                 y: state.placement == .belowSource
-                    ? textContainerOrigin.y + lineRect.maxY + 10
+                    ? textContainerOrigin.y + lineRect.minY + layoutManager.location(forGlyphAt: glyphIndex).y
+                        - ((textStorage?.attribute(.font, at: anchorLocation, effectiveRange: nil) as? NSFont)?.descender ?? 0) + 10
                     : textContainerOrigin.y + lineRect.minY + 5,
                 width: state.renderedSize.width,
                 height: state.renderedSize.height
@@ -3581,6 +3585,20 @@ final class WindowAwareTextView: NSTextView {
                 height: state.tableView.renderedSize.height
             )
             state.tableView.isHidden = false
+        }
+        for (key, focus) in tableFocusRestorations {
+            if let table = renderedTableViews[key]?.tableView, table.focusedCell == nil {
+                _ = table.focusCell(row: focus.row, column: focus.column, selection: focus.selection, scroll: false)
+            }
+        }
+        tableFocusRestorations.removeAll()
+        for (key, selection) in tableSelectionRestorations {
+            renderedTableViews[key]?.tableView.selectCells(from: selection.anchor, to: selection.end, scroll: false)
+        }
+        tableSelectionRestorations.removeAll()
+        if let pending = pendingTableFocus,
+           renderedTableViews[pending.location]?.tableView.focusCell(row: pending.row, column: pending.column) == true {
+            pendingTableFocus = nil
         }
     }
 
@@ -4012,6 +4030,16 @@ final class WindowAwareTextView: NSTextView {
         didChangeText()
         scrollRangeToVisible(edit.selection)
         return true
+    }
+
+    func replaceRenderedTableSource(_ replacement: String, range: NSRange) {
+        guard isEditable, !hasMarkedText(), let storage = textStorage,
+              NSMaxRange(range) <= storage.length,
+              shouldChangeText(in: range, replacementString: replacement) else { return }
+        breakEngineTypingGroup()
+        storage.replaceCharacters(in: range, with: replacement)
+        setSelectedRange(NSRange(location: range.location, length: 0))
+        didChangeText()
     }
 
     private func handleWritingAction(_ action: MarkdownWritingAction) -> Bool {
@@ -4766,13 +4794,13 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
     }
 
     @discardableResult
-    func focusCell(row: Int, column: Int, selection: NSRange? = nil) -> Bool {
+    func focusCell(row: Int, column: Int, selection: NSRange? = nil, scroll: Bool = true) -> Bool {
         guard let cell = cells.first(where: { $0.row == row && $0.column == column }),
               cell.textView.isEditable, window?.makeFirstResponder(cell.textView) == true else { return false }
         let length = cell.textView.string.utf16.count
         let range = selection ?? NSRange(location: 0, length: length)
         cell.textView.setSelectedRange(NSRange(location: min(range.location, length), length: min(range.length, max(0, length - range.location))))
-        cell.textView.scrollRangeToVisible(cell.textView.selectedRange())
+        if scroll { cell.textView.scrollRangeToVisible(cell.textView.selectedRange()) }
         return true
     }
 
@@ -4785,13 +4813,13 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         for cell in cells { cell.textView.drawsBackground = false }
     }
 
-    func selectCells(from anchor: (Int, Int), to end: (Int, Int)) {
+    func selectCells(from anchor: (Int, Int), to end: (Int, Int), scroll: Bool = true) {
         guard (window?.firstResponder as? NSTextView)?.hasMarkedText() != true else { return }
         guard table.rows.indices.contains(anchor.0), table.rows[anchor.0].indices.contains(anchor.1),
               table.rows.indices.contains(end.0), table.rows[end.0].indices.contains(end.1) else { return }
         selectionAnchor = anchor
         selectionEnd = end
-        _ = focusCell(row: end.0, column: end.1, selection: NSRange(location: 0, length: 0))
+        _ = focusCell(row: end.0, column: end.1, selection: NSRange(location: 0, length: 0), scroll: scroll)
         for cell in cells {
             cell.textView.drawsBackground = (min(anchor.0, end.0)...max(anchor.0, end.0)).contains(cell.row)
                 && (min(anchor.1, end.1)...max(anchor.1, end.1)).contains(cell.column)
@@ -4892,6 +4920,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         if next < cells.count {
             _ = focusCell(row: cells[next].row, column: cells[next].column)
         } else {
+            guard documentTextView?.pendingTableFocus == nil else { return }
             documentTextView?.pendingTableFocus = (table.sourceRange.utf16Range.location, table.rows.count, 0)
             onEdit(.insertRow(at: table.rows.count))
         }
