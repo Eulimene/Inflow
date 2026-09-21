@@ -697,10 +697,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
         XCTAssertEqual(
             blankStyle.minimumLineHeight,
-            MarkdownRenderMetrics.paragraphGap * (session.textView.font!.pointSize / MarkdownRenderMetrics.bodyFontSize),
+            CGFloat(session.sourceAppearance.fontSize * session.sourceAppearance.lineHeight),
             accuracy: 0.001
         )
-        XCTAssertEqual(blankStyle.maximumLineHeight, blankStyle.minimumLineHeight, accuracy: 0.001)
+        XCTAssertEqual(blankStyle.maximumLineHeight, 0)
+        XCTAssertGreaterThan(try XCTUnwrap(storage.attribute(.font, at: blankLineLocation, effectiveRange: nil) as? NSFont).pointSize, 1)
     }
 
     @MainActor
@@ -1309,6 +1310,24 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             XCTAssertLessThanOrEqual(drawn.maxY, nativeCaret.maxY, initial)
             XCTAssertGreaterThan(nativeLine.minY, 0, initial)
             XCTAssertEqual(editor.textView.selectedRange().location, changed.utf16.count)
+        }
+        for initial in ["正文", "# 标题"] {
+            let editor = MarkdownSourceEditorSession()
+            editor.textView.string = initial + "\n\n后续段落"
+            _ = await editor.deriveContent(for: editor.textView.string, configuration: .default)
+            editor.setPresentation(.rendered, source: editor.textView.string, onLinkClick: nil)
+            editor.textView.setSelectedRange(NSRange(location: initial.utf16.count, length: 0))
+            for _ in 0..<3 {
+                editor.textView.insertNewline(nil)
+                let caret = editor.textView.selectedRange()
+                _ = await editor.deriveContent(for: editor.textView.string, configuration: .default)
+                editor.setPresentation(.rendered, source: editor.textView.string, onLinkClick: nil)
+                let typingFont = try XCTUnwrap(editor.textView.typingAttributes[.font] as? NSFont)
+                XCTAssertEqual(typingFont.pointSize, CGFloat(editor.sourceAppearance.fontSize), accuracy: 0.1)
+                let paragraph = try XCTUnwrap(editor.textView.textStorage?.attribute(.paragraphStyle, at: caret.location, effectiveRange: nil) as? NSParagraphStyle)
+                XCTAssertGreaterThanOrEqual(paragraph.minimumLineHeight, typingFont.pointSize * 1.5)
+                XCTAssertEqual(editor.textView.selectedRange(), caret)
+            }
         }
     }
 
@@ -2716,18 +2735,28 @@ extension RenderedMarkdownEditorTests {
             XCTAssertTrue(grid.focusCell(row: row, column: 1))
             let before = scrolling.scrollView.contentView.bounds.origin.y
             (window.firstResponder as? NSTextView)?.insertTab(nil)
-            XCTAssertEqual(scrolling.scrollView.contentView.bounds.origin.y, before, accuracy: 1,
-                "Submitting a table edit must not scroll to its backing Markdown")
+            XCTAssertEqual(grid.focusedCell?.row, row + 1, "Tab must focus the added row before returning, without an async derivation")
+            XCTAssertEqual(grid.focusedCell?.column, 0)
+            XCTAssertLessThanOrEqual(abs(scrolling.scrollView.contentView.bounds.origin.y - before), 80)
             let updated = scrolling.textView.string
             _ = await scrolling.deriveContent(for: updated, configuration: .default)
             scrolling.setPresentation(.rendered, source: updated, onLinkClick: nil)
             await settleRenderedPresentation()
             let next = try XCTUnwrap(scrolling.textView.renderedTable(atUTF16Location: prefix.utf16.count))
+            XCTAssertTrue(next === grid, "Appending a row must retain the table and its active cell editors")
             XCTAssertEqual(next.focusedCell?.row, row + 1)
             XCTAssertEqual(next.focusedCell?.column, 0)
             XCTAssertLessThanOrEqual(abs(scrolling.scrollView.contentView.bounds.origin.y - before), 80,
                 "Appending one visible row must not jump to another part of the document")
         }
+        let persistentGrid = try XCTUnwrap(scrolling.textView.renderedTable(atUTF16Location: prefix.utf16.count))
+        let existingCells = persistentGrid.subviews.compactMap { $0 as? NSTextView }
+        for _ in 0..<6 { (window.firstResponder as? NSTextView)?.insertTab(nil) }
+        XCTAssertTrue(scrolling.textView.renderedTable(atUTF16Location: prefix.utf16.count) === persistentGrid)
+        XCTAssertEqual(persistentGrid.focusedCell?.row, 7)
+        XCTAssertEqual(persistentGrid.focusedCell?.column, 0)
+        XCTAssertTrue(existingCells.allSatisfy { $0.superview === persistentGrid })
+
 
 
 
