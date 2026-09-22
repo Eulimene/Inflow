@@ -512,6 +512,89 @@ struct MarkdownWritingEdit: Equatable {
 
 enum MarkdownWritingAction { case newline, backwardDelete, indent, outdent }
 
+/// Interpret a gesture before touching TextKit. The resulting source and selection
+/// are committed together, so rendering never decides where an edit should land.
+enum MarkdownEditingIntent { case paragraphBreak, lineBreak, mergeBackward }
+
+enum MarkdownEditingTransaction {
+    static func plan(_ intent: MarkdownEditingIntent, source: String, selection: NSRange,
+                     renderPlan: RenderedMarkdownPlan) -> MarkdownWritingEdit? {
+        let text = source as NSString
+        guard selection.location != NSNotFound, NSMaxRange(selection) <= text.length else { return nil }
+        let line = text.lineRange(for: NSRange(location: selection.location, length: 0))
+        let raw = text.substring(with: line).trimmingCharacters(in: .newlines)
+        let before = text.substring(with: NSRange(location: line.location, length: selection.location - line.location))
+        let newline = source.contains("\r\n") ? "\r\n" : "\n"
+        func replace(_ range: NSRange, _ value: String, caret: Int? = nil) -> MarkdownWritingEdit {
+            MarkdownWritingEdit(range: range, text: value,
+                selection: NSRange(location: caret ?? range.location + value.utf16.count, length: 0))
+        }
+        let request = renderPlan.renderRequests.first {
+            selection.location >= $0.sourceRange.utf16Range.location
+                && selection.location < NSMaxRange($0.sourceRange.utf16Range)
+        }
+        let protected = renderPlan.localSourceBlocks.contains {
+            selection.location >= $0.sourceRange.utf16Range.location
+                && selection.location < NSMaxRange($0.sourceRange.utf16Range)
+        }
+        if intent != .mergeBackward {
+            // Complete a newly typed fence in a single undoable transaction.
+            if intent == .paragraphBreak, selection.length == 0, before == raw,
+               let match = raw.range(of: #"^(`{3,}|~{3,})[A-Za-z0-9_+.#-]*$"#, options: .regularExpression),
+               match == raw.startIndex..<raw.endIndex,
+               !renderPlan.renderRequests.contains(where: {
+                   $0.sourceRange.utf16Range.location < line.location && NSMaxRange($0.sourceRange.utf16Range) >= line.location
+               }),
+               request == nil || request?.contentRange.utf16Range.length == 0 {
+                let fence = String(raw.prefix { $0 == raw.first! })
+                return replace(selection, newline + newline + fence, caret: selection.location + newline.utf16.count)
+            }
+            if intent == .paragraphBreak, selection.length == 0, raw == "$$", before == raw, request == nil {
+                return replace(selection, newline + newline + "$$", caret: selection.location + newline.utf16.count)
+            }
+            if request != nil || protected {
+                return replace(selection, newline + String(before.prefix { $0 == " " || $0 == "\t" }))
+            }
+            let head = prefix(raw)
+            if intent == .lineBreak {
+                // A continuation belongs to the same quote/list item. Do not copy
+                // its bullet or task marker and accidentally create another item.
+                let continuation = head.quote + (head.list.isEmpty ? head.indent : head.indent + String(repeating: " ", count: head.list.utf16.count))
+                return replace(selection, newline + continuation)
+            }
+            if selection.length == 0,
+               let structural = MarkdownWritingRules.edit(.newline, source: source, selection: selection) {
+                if !head.list.isEmpty || raw.trimmingCharacters(in: .whitespaces) == head.quote.trimmingCharacters(in: .whitespaces) {
+                    return structural
+                }
+            }
+            if !head.quote.isEmpty {
+                return replace(selection, newline + head.quote.trimmingCharacters(in: .whitespaces) + newline + head.quote + head.indent)
+            }
+            return replace(selection, raw.trimmingCharacters(in: .whitespaces).isEmpty ? newline : newline + newline)
+        }
+        guard selection.length == 0, request == nil, !protected else { return nil }
+        if let structural = MarkdownWritingRules.edit(.backwardDelete, source: source, selection: selection) { return structural }
+        if selection.location == line.location, selection.location >= newline.utf16.count * 2 {
+            let range = NSRange(location: selection.location - newline.utf16.count * 2, length: newline.utf16.count * 2)
+            if text.substring(with: range) == newline + newline {
+                return replace(range, "")
+            }
+        }
+        return nil
+    }
+
+    private static func prefix(_ line: String) -> (quote: String, indent: String, list: String) {
+        let expression = try! NSRegularExpression(pattern: #"^((?: *> ?)*)( *)(?:(?:[-+*]|\d{1,9}[.)]) +(?:\[[ xX]\] +)?)?"#)
+        let text = line as NSString
+        guard let match = expression.firstMatch(in: line, range: NSRange(location: 0, length: text.length)) else { return ("", "", "") }
+        let quote = text.substring(with: match.range(at: 1))
+        let indent = text.substring(with: match.range(at: 2))
+        let listStart = NSMaxRange(match.range(at: 2))
+        return (quote, indent, text.substring(with: NSRange(location: listStart, length: NSMaxRange(match.range) - listStart)))
+    }
+}
+
 /// Lexical editing rules, not a Markdown renderer. The caller excludes code,
 /// formulas and unsupported blocks using the authoritative render plan.
 enum MarkdownWritingRules {

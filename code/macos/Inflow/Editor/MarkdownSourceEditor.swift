@@ -4071,7 +4071,7 @@ final class WindowAwareTextView: NSTextView {
                    applyWritingEdit(MarkdownWritingEdit(range: NSRange(location: selection.location - 1, length: 2),
                        text: "", selection: NSRange(location: selection.location - 1, length: 0))) { return }
             }
-            if handleWritingAction(.backwardDelete) { return }
+            if performEditingIntent(.mergeBackward) { return }
         }
         if !suppressesAutomaticEngineGrouping, selectedRange().length == 0 {
             prepareEngineTypingGroup(.backwardDeletion)
@@ -4091,20 +4091,23 @@ final class WindowAwareTextView: NSTextView {
     }
 
     override func insertNewline(_ sender: Any?) {
-        if let code = editableCodeRequest(), selectedRange().length == 0 {
-            let source = string as NSString
-            let line = source.lineRange(for: selectedRange())
-            let before = source.substring(with: NSRange(location: line.location, length: selectedRange().location - line.location))
-            let indent = String(before.prefix { $0 == " " || $0 == "\t" })
-            let newline = source.substring(with: line).hasSuffix("\r\n") ? "\r\n" : "\n"
-            if selectedRange().location >= code.contentRange.utf16Range.location,
-               applyWritingEdit(MarkdownWritingEdit(range: selectedRange(), text: newline + indent,
-                    selection: NSRange(location: selectedRange().location + newline.utf16.count + indent.utf16.count, length: 0))) { return }
-        }
-        if handleWritingAction(.newline) { normalizeInsertedLine(); return }
+        if performEditingIntent(.paragraphBreak) { normalizeInsertedLine(); return }
         breakEngineTypingGroup()
         super.insertNewline(sender)
         normalizeInsertedLine()
+    }
+
+    override func insertLineBreak(_ sender: Any?) {
+        if performEditingIntent(.lineBreak) { normalizeInsertedLine(); return }
+        super.insertLineBreak(sender)
+    }
+
+    @discardableResult
+    private func performEditingIntent(_ intent: MarkdownEditingIntent) -> Bool {
+        guard isLiveMarkdown, isEditable, !hasActiveComposition else { return false }
+        let plan = writingPlan?.exactlyMatches(string) == true ? writingPlan! : RenderedMarkdownEditor.plan(for: string)
+        guard let edit = MarkdownEditingTransaction.plan(intent, source: string, selection: selectedRange(), renderPlan: plan) else { return false }
+        return applyWritingEdit(edit)
     }
 
     private func normalizeInsertedLine() {
@@ -4127,7 +4130,7 @@ final class WindowAwareTextView: NSTextView {
         let plan = writingPlan?.exactlyMatches(string) == true ? writingPlan! : RenderedMarkdownEditor.plan(for: string)
         let selection = location.map { NSRange(location: $0, length: 0) } ?? selectedRange()
         return plan.renderRequests.first {
-            $0.kind == "code" && selection.location >= $0.contentRange.utf16Range.location
+            $0.kind != "math" && selection.location >= $0.contentRange.utf16Range.location
                 && NSMaxRange(selection) <= NSMaxRange($0.contentRange.utf16Range)
                 && selection.location < NSMaxRange($0.contentRange.utf16Range)
         }
@@ -4211,6 +4214,32 @@ final class WindowAwareTextView: NSTextView {
     override func moveRight(_ sender: Any?) {
         super.moveRight(sender)
         movePastHiddenMarker(forward: true)
+    }
+
+    override func moveUp(_ sender: Any?) {
+        super.moveUp(sender)
+        movePastHiddenMarker(forward: true)
+    }
+
+    override func moveDown(_ sender: Any?) {
+        super.moveDown(sender)
+        movePastHiddenMarker(forward: true)
+    }
+
+    override func moveToBeginningOfLine(_ sender: Any?) {
+        super.moveToBeginningOfLine(sender)
+        guard isLiveMarkdown, !hasActiveComposition,
+              let marker = renderedCollapsedSourceRanges.first(where: { $0.location == selectedRange().location }),
+              !renderedAnchorSourceRanges.contains(marker) else { return }
+        setSelectedRange(NSRange(location: NSMaxRange(marker), length: 0))
+    }
+
+    override func selectAll(_ sender: Any?) {
+        if let request = editableCodeRequest(), selectedRange() != request.contentRange.utf16Range {
+            setSelectedRange(request.contentRange.utf16Range)
+            return
+        }
+        super.selectAll(sender)
     }
 
     private func indentCode(backwards: Bool) -> Bool {

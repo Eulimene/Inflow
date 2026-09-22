@@ -2575,6 +2575,45 @@ private extension NSRange {
 }
 
 extension RenderedMarkdownEditorTests {
+    @MainActor
+    func testSemanticParagraphAndLineBreakTransactions() async throws {
+        let examples: [(String, Int, MarkdownEditingIntent, String, Int)] = [
+            ("前后", 1, .paragraphBreak, "前\n\n后", 3),
+            ("前后", 1, .lineBreak, "前\n后", 2),
+            ("# 标题", 4, .paragraphBreak, "# 标题\n\n", 6),
+            ("> 引用", 4, .paragraphBreak, "> 引用\n>\n> ", 9),
+            ("> 引用", 4, .lineBreak, "> 引用\n> ", 7),
+            ("> > ", 4, .paragraphBreak, "> ", 2),
+            ("- 项目", 4, .lineBreak, "- 项目\n  ", 7),
+            ("- [x] 项目", 8, .paragraphBreak, "- [x] 项目\n- [ ] ", 15),
+            ("第一段\n\n第二段", 5, .mergeBackward, "第一段第二段", 3),
+            ("```swift", 8, .paragraphBreak, "```swift\n\n```", 9),
+            ("$$", 2, .paragraphBreak, "$$\n\n$$", 3),
+            ("```swift\ncode\n```", 17, .paragraphBreak, "```swift\ncode\n```\n\n", 19),
+        ]
+        for (source, location, intent, expected, caret) in examples {
+            let edit = try XCTUnwrap(MarkdownEditingTransaction.plan(intent, source: source,
+                selection: NSRange(location: location, length: 0), renderPlan: RenderedMarkdownEditor.plan(for: source)), source)
+            XCTAssertEqual((source as NSString).replacingCharacters(in: edit.range, with: edit.text), expected, source)
+            XCTAssertEqual(edit.selection.location, caret, source)
+        }
+        let session = MarkdownSourceEditorSession()
+        let source = "中文😀"
+        session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        session.textView.setSelectedRange(NSRange(location: source.utf16.count, length: 0))
+        session.textView.insertNewline(nil)
+        XCTAssertEqual(session.textView.string, source + "\n\n")
+        _ = await session.deriveContent(for: session.textView.string, configuration: .default)
+        session.textView.undo(nil)
+        for _ in 0..<100 where session.textView.string != source { await Task.yield() }
+        XCTAssertEqual(session.textView.string, source)
+        XCTAssertEqual(session.textView.selectedRange().location, source.utf16.count)
+        session.textView.insertLineBreak(nil)
+        XCTAssertEqual(session.textView.string, source + "\n")
+    }
+
     func testLiveWritingStructuralTransactions() throws {
         for (source, action, expected) in [
             ("- 项目", MarkdownWritingAction.newline, "- 项目\n- "),
