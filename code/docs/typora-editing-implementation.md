@@ -103,4 +103,3 @@
 - 100 次同步原生 Tab 命令此次 P50 约 0.29ms、P95 约 5.06ms；仅代表命令执行，不代表端到端绘制或真实输入法延迟。
 - 77 项集成用例覆盖部分 current-host 与 deferred 用例；其余应用菜单、真实生命周期和辅助功能宿主验收仍未执行。
 - 可供解锁后实机复验的本次 Debug 构建位于 `/private/tmp/inflow-typora-verification/Build/Products/Debug/Inflow.app`。没有替换正在运行的旧应用进程。
-
