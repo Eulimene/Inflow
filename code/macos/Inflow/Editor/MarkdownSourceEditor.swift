@@ -67,6 +67,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var formatInspectionTask: Task<Void, Never>?
     private var isApplyingEngineMutation = false
     private var pendingOptimisticText: String?
+    private var deferredCompositionSnapshot: EditorEngineDocumentSnapshot?
     private var focusModeEnabled = false
     private var typewriterModeEnabled = false
     private var configuredLineWrapping: Bool?
@@ -152,14 +153,23 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         engineClient.onAuthoritativeSnapshot = { [weak self] snapshot in
             self?.applyAuthoritativeSnapshot(snapshot)
         }
-        textView.compositionDidCommitHandler = { [weak self] text, selection in
+        textView.compositionDidEndHandler = { [weak self] text, selection, changed in
             guard let self, self.role == .document else { return }
-            self.pendingOptimisticText = text
-            self.engineClient.submit(text: text, selectionUTF16: selection)
+            if changed || self.pendingOptimisticText != nil {
+                self.pendingOptimisticText = text
+                self.engineClient.submit(text: text, selectionUTF16: selection)
+            }
+            let deferred = self.deferredCompositionSnapshot
+            self.deferredCompositionSnapshot = nil
+            if let deferred, UTF8Text.isExactlyEqual(deferred.text, text) {
+                self.applyAuthoritativeSnapshot(deferred)
+            }
+            self.syncRenderedTypingAttributes()
+            self.scheduleRenderedPresentation(for: text)
         }
         textView.textDidChangeHandler = { [weak self] text in
             guard let self, self.role == .document else { return }
-            if !self.isApplyingEngineMutation, !self.textView.hasMarkedText() {
+            if !self.isApplyingEngineMutation, !self.textView.hasActiveComposition {
                 self.pendingOptimisticText = text
                 self.engineClient.submit(
                     text: text,
@@ -205,6 +215,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     func applySourceAppearance(_ appearance: SourceEditorAppearance, force: Bool = false) {
+        guard !textView.hasActiveComposition else { return }
         guard force || !hasAppliedSourceAppearance || sourceAppearance != appearance else { return }
         sourceAppearance = appearance
         textView.markdownAutoPairEnabled = appearance.autoPairEnabled
@@ -275,7 +286,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         engineRenderedPlan = content.nativeRenderPlan
         if presentation == .rendered,
            UTF8Text.isExactlyEqual(textView.string, source),
-           !textView.hasMarkedText(),
+           !textView.hasActiveComposition,
            planChanged || !renderedPresentationIsCurrent(source: source)
         {
             applyRenderedPresentation(source: source, force: planChanged)
@@ -352,7 +363,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
         guard presentation == .rendered,
               UTF8Text.isExactlyEqual(textView.string, source),
-              !textView.hasMarkedText()
+              !textView.hasActiveComposition
         else { return }
         guard planChanged || !renderedPresentationIsCurrent(source: source) else { return }
         applyRenderedPresentation(source: source, force: planChanged)
@@ -366,7 +377,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         actionName: String
     ) async -> Bool {
         guard textView.isEditable,
-              !textView.hasMarkedText(),
+              !textView.hasActiveComposition,
               UTF8Text.isExactlyEqual(textView.string, expectedText)
         else { return false }
         guard let mutation = await engineClient.format(
@@ -390,7 +401,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     private func performEngineHistory(_ action: EngineHistoryAction) {
-        guard !textView.hasMarkedText(), !isApplyingEngineMutation else { return }
+        guard !textView.hasActiveComposition, !isApplyingEngineMutation else { return }
         let source = textView.string
         let selection = textView.selectedRange()
         Task { @MainActor [weak self] in
@@ -420,7 +431,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         actionName _: String?
     ) -> Bool {
         guard textView.isEditable,
-              !textView.hasMarkedText(),
+              !textView.hasActiveComposition,
               UTF8Text.isExactlyEqual(textView.string, mutation.sourceSnapshot),
               let replacementTarget = MarkdownSourceRange.navigationTarget(
                   forUTF8Range: mutation.replaceUTF8Range,
@@ -464,9 +475,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     private func applyAuthoritativeSnapshot(_ snapshot: EditorEngineDocumentSnapshot) {
-        guard !isApplyingEngineMutation,
-              !textView.hasMarkedText(),
-              let selection = MarkdownSourceRange.navigationTarget(
+        guard !isApplyingEngineMutation else { return }
+        if textView.hasActiveComposition {
+            deferredCompositionSnapshot = snapshot
+            return
+        }
+        guard let selection = MarkdownSourceRange.navigationTarget(
                   forUTF8Range: snapshot.selectionUTF8Range,
                   in: snapshot.text
               )
@@ -499,7 +513,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     func authoritativeSnapshot() async -> EditorEngineDocumentSnapshot? {
-        guard !textView.hasMarkedText() else { return nil }
+        guard !textView.hasActiveComposition else { return nil }
         return await engineClient.authoritativeSnapshot(
             matching: textView.string,
             selectionUTF16: textView.selectedRange()
@@ -511,7 +525,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         query: String,
         caseSensitive: Bool
     ) async -> DocumentSearchOutcome? {
-        guard !textView.hasMarkedText(), !Task.isCancelled else { return nil }
+        guard !textView.hasActiveComposition, !Task.isCancelled else { return nil }
         guard let result = await engineClient.search(
             text: source,
             selectionUTF16: textView.selectedRange(),
@@ -537,7 +551,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             textView.unmarkText()
             await Task.yield()
         }
-        guard !textView.hasMarkedText() else { return nil }
+        guard !textView.hasActiveComposition else { return nil }
         return await engineClient.prepareSave(
             text: textView.string,
             selectionUTF16: textView.selectedRange()
@@ -557,7 +571,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             textView.unmarkText()
             await Task.yield()
         }
-        guard !textView.hasMarkedText() else { return false }
+        guard !textView.hasActiveComposition else { return false }
         return await engineClient.setMode(
             mode,
             text: textView.string,
@@ -573,6 +587,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         linkActivation: LinkActivationPreference = .singleClick,
         theme: PreviewTheme = .standard
     ) {
+        guard !textView.hasActiveComposition else { return }
         let changed = self.presentation != presentation
         let resourceContextChanged = renderedResourceContext != resourceContext
         let linkActivationChanged = renderedLinkActivation != linkActivation
@@ -657,7 +672,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         let previousPlan = engineRenderedPlan
         engineRenderedPlan = plan
         guard presentation == .rendered,
-              !textView.hasMarkedText(),
+              !textView.hasActiveComposition,
               let previousPlan,
               previousPlan.hasSameNonMermaidProjection(as: plan),
               previousPlan.mermaidDiagrams.map(\.sourceRange)
@@ -777,7 +792,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private func applyRenderedPresentation(source: String, force: Bool) {
         guard presentation == .rendered,
               UTF8Text.isExactlyEqual(textView.string, source),
-              !textView.hasMarkedText()
+              !textView.hasActiveComposition
         else {
             return
         }
@@ -1196,7 +1211,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                     self.javaScriptFailures.insert(request.cacheKey)
                 }
             }
-            guard let self, !Task.isCancelled, !self.textView.hasMarkedText(),
+            guard let self, !Task.isCancelled, !self.textView.hasActiveComposition,
                   UTF8Text.isExactlyEqual(self.textView.string, source) else { return }
             if self.presentation == .rendered {
                 self.applyRenderedPresentation(source: source, force: true)
@@ -1207,7 +1222,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     private func applyCodeMirrorTokens(_ plan: RenderedMarkdownPlan, storage: NSTextStorage?) {
-        guard let storage, !textView.hasMarkedText() else { return }
+        guard let storage, !textView.hasActiveComposition else { return }
         let palette = MarkdownRenderPalette.resolved(for: textView.effectiveAppearance)
         let undo = textView.undoManager
         let undoEnabled = undo?.isUndoRegistrationEnabled == true
@@ -1561,7 +1576,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     private func syncRenderedTypingAttributes() {
-        guard presentation == .rendered,
+        guard !textView.hasActiveComposition, presentation == .rendered,
               let storage = textView.textStorage,
               storage.length > 0
         else { return }
@@ -2124,7 +2139,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         syntaxHighlightingSource = source
         syntaxHighlightingSourceUTF8 = Data(source.utf8)
         syntaxHighlightingSpans = enabled ? spans : []
-        guard UTF8Text.isExactlyEqual(textView.string, source) else { return false }
+        guard !textView.hasActiveComposition,
+              UTF8Text.isExactlyEqual(textView.string, source) else { return false }
         if presentation == .source {
             applySourceSyntaxDifference(
                 from: previousSource,
@@ -2217,6 +2233,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             for batchStart in stride(from: 0, to: sortedSpans.count, by: 512) {
                 guard !Task.isCancelled,
                       generation == self.syntaxApplicationGeneration,
+                      !self.textView.hasActiveComposition,
                       let textStorage = self.textView.textStorage
                 else {
                     return
@@ -2238,7 +2255,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 await Task.yield()
             }
             guard !Task.isCancelled,
-                  generation == self.syntaxApplicationGeneration
+                  generation == self.syntaxApplicationGeneration,
+                  !self.textView.hasActiveComposition
             else { return }
             self.syntaxApplicationIsComplete = true
             self.syntaxApplicationTask = nil
@@ -2461,7 +2479,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private func undoManagerChangedText(_ notification: Notification) {
         invalidateSyntaxApplication()
         lineNumberRuler.updateText(textView.string)
-        if !textView.hasMarkedText() {
+        if !textView.hasActiveComposition {
             engineClient.submit(
                 text: textView.string,
                 selectionUTF16: textView.selectedRange()
@@ -2494,7 +2512,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         let generation = formatInspectionGeneration
         let source = textView.string
         let selection = textView.selectedRange()
-        guard !textView.hasMarkedText(), selection.length > 0 else {
+        guard !textView.hasActiveComposition, selection.length > 0 else {
             canClearFormat = false
             return
         }
@@ -2518,7 +2536,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     fileprivate func synchronizeEngine(text: String, selection: NSRange) {
-        guard role == .document, !textView.hasMarkedText() else { return }
+        guard role == .document, !textView.hasActiveComposition else { return }
         engineClient.submit(text: text, selectionUTF16: selection)
     }
 
@@ -2526,7 +2544,29 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         role == .renderedProjection
     }
 
-    fileprivate func preservesOptimisticText(over boundText: String) -> Bool {
+    /// SwiftUI is a projection of committed text. It must never replace a native
+    /// composition transaction, or a local edit awaiting its Engine acknowledgement.
+    fileprivate enum BoundTextUpdate {
+        case deferred, unchanged, replaced
+    }
+
+    fileprivate func reconcileBoundText(_ boundText: String) -> BoundTextUpdate {
+        guard !textView.hasActiveComposition else { return .deferred }
+        guard role == .document else { return .unchanged }
+        let changed = !preservesOptimisticText(over: boundText)
+            && !UTF8Text.isExactlyEqual(textView.string, boundText)
+        if changed {
+            let selection = textView.selectedRange()
+            textView.string = boundText
+            let length = boundText.utf16.count
+            let location = min(selection.location, length)
+            textView.setSelectedRange(NSRange(location: location, length: min(selection.length, length - location)))
+        }
+        synchronizeEngine(text: textView.string, selection: textView.selectedRange())
+        return changed ? .replaced : .unchanged
+    }
+
+    private func preservesOptimisticText(over boundText: String) -> Bool {
         guard let pendingOptimisticText else { return false }
         return UTF8Text.isExactlyEqual(textView.string, pendingOptimisticText)
             && !UTF8Text.isExactlyEqual(boundText, pendingOptimisticText)
@@ -2540,6 +2580,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     func resetAfterExternalReload(_ text: String) {
         invalidateSyntaxApplication()
         pendingOptimisticText = nil
+        deferredCompositionSnapshot = nil
         let previousSelection = textView.selectedRange()
         textView.string = text
         let utf16Length = (text as NSString).length
@@ -2589,7 +2630,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         expectedText: String
     ) async -> Bool {
         guard textView.isEditable,
-              !textView.hasMarkedText(),
+              !textView.hasActiveComposition,
               UTF8Text.isExactlyEqual(textView.string, expectedText),
               MarkdownSourceRange.navigationTarget(
                   forUTF8Range: utf8Range,
@@ -3002,10 +3043,6 @@ enum RenderedMarkdownMarkerTypography {
 
 @MainActor
 final class WindowAwareTextView: NSTextView {
-    private struct CompositionBaseline {
-        let text: String
-        let selection: NSRange
-    }
 
     private final class RenderedImageViewState {
         var sourceRange: NSRange
@@ -3050,7 +3087,7 @@ final class WindowAwareTextView: NSTextView {
     var focusDidChangeHandler: (() -> Void)?
     var effectiveAppearanceDidChangeHandler: (() -> Void)?
     var textDidChangeHandler: ((String) -> Void)?
-    var compositionDidCommitHandler: ((String, NSRange) -> Void)?
+    var compositionDidEndHandler: ((String, NSRange, Bool) -> Void)?
     var pasteImageHandler: ((ClipboardImagePayload) -> Void)?
     var dropImageHandler: ((URL) -> Void)?
     var linkClickHandler: ((Int) -> Bool)?
@@ -3913,17 +3950,13 @@ final class WindowAwareTextView: NSTextView {
         selectedRange: NSRange,
         replacementRange: NSRange
     ) {
-        if compositionBaseline == nil {
-            compositionBaseline = CompositionBaseline(
-                text: self.string,
-                selection: self.selectedRange()
-            )
-        }
+        if compositionBaseline == nil { compositionBaseline = self.string }
         super.setMarkedText(
             string,
             selectedRange: selectedRange,
             replacementRange: replacementRange
         )
+        if !hasMarkedText() { finishCompositionIfNeeded() }
     }
 
     override func unmarkText() {
@@ -3932,7 +3965,7 @@ final class WindowAwareTextView: NSTextView {
     }
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
-        let wasComposing = compositionBaseline != nil || hasMarkedText()
+        let wasComposing = hasActiveComposition
         let effectiveRange = replacementRange.location == NSNotFound
             ? selectedRange()
             : replacementRange
@@ -4043,7 +4076,7 @@ final class WindowAwareTextView: NSTextView {
     }
 
     private func editableCodeRequest(at location: Int? = nil) -> JavaScriptRenderRequest? {
-        guard isLiveMarkdown, isEditable, !hasMarkedText(), compositionBaseline == nil else { return nil }
+        guard isLiveMarkdown, isEditable, !hasActiveComposition else { return nil }
         let plan = writingPlan?.exactlyMatches(string) == true ? writingPlan! : RenderedMarkdownEditor.plan(for: string)
         let selection = location.map { NSRange(location: $0, length: 0) } ?? selectedRange()
         return plan.renderRequests.first {
@@ -4067,7 +4100,7 @@ final class WindowAwareTextView: NSTextView {
     }
 
     private var canUseWritingRules: Bool {
-        guard isLiveMarkdown, isEditable, !hasMarkedText(), compositionBaseline == nil,
+        guard isLiveMarkdown, isEditable, !hasActiveComposition,
               !suppressesAutomaticEngineGrouping else { return false }
         // Refresh only for an explicit editing gesture when async derivation is stale.
         // Syntax interpretation remains in Rust, including unfinished fenced blocks.
@@ -4202,13 +4235,14 @@ final class WindowAwareTextView: NSTextView {
         return (value as? NSAttributedString)?.string
     }
 
-    private var compositionBaseline: CompositionBaseline?
+    private var compositionBaseline: String?
+    var hasActiveComposition: Bool { compositionBaseline != nil || hasMarkedText() }
 
     private func finishCompositionIfNeeded() {
         guard let baseline = compositionBaseline else { return }
         compositionBaseline = nil
-        guard !UTF8Text.isExactlyEqual(baseline.text, string) else { return }
-        compositionDidCommitHandler?(string, selectedRange())
+        // Cancellation also ends the transaction and releases any deferred acknowledgement.
+        compositionDidEndHandler?(string, selectedRange(), !UTF8Text.isExactlyEqual(baseline, string))
     }
 
     @discardableResult
@@ -5397,24 +5431,10 @@ struct MarkdownSourceEditor: NSViewRepresentable {
                 self.applyPendingSelection(to: textView)
             }
 
-            let preservesOptimisticText = !parent.session.isRenderedProjection
-                && parent.session.preservesOptimisticText(over: parent.text)
-            let textChanged = !parent.session.isRenderedProjection
-                && !preservesOptimisticText
-                && !UTF8Text.isExactlyEqual(textView.string, parent.text)
-            if textChanged {
-                let selection = textView.selectedRange()
-                textView.string = parent.text
-                let utf16Length = (parent.text as NSString).length
-                let location = min(selection.location, utf16Length)
-                let length = min(selection.length, utf16Length - location)
-                textView.setSelectedRange(NSRange(location: location, length: length))
-            }
+            let bindingUpdate = parent.session.reconcileBoundText(parent.text)
+            guard bindingUpdate != .deferred else { return }
+            let textChanged = bindingUpdate == .replaced
             let displayedText = textView.string
-            parent.session.synchronizeEngine(
-                text: displayedText,
-                selection: textView.selectedRange()
-            )
             parent.session.applySourceAppearance(parent.appearance, force: textChanged)
             parent.session.setPresentation(
                 parent.presentation,

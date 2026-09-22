@@ -53,6 +53,8 @@ Engine 的 Memento 栈与连续输入合并策略封装在独立 `History`，Eng
 `unmarkText` 或最终 `insertText` 清除 marked range 后只提交一次最终差异，因此一次候选词确认对应一个 Rust history entry。
 宿主检测到外部文件重载后发送 `OpenDocument(base_revision, text, selection)`。Engine 在同一 opaque handle 内原子替换正文、清空派生缓存/历史/旧保存 receipt、重建已保存 hash，并单调推进 revision；不再销毁并新建 Engine 以及把 revision 退回 0。首次打开的原始字节通过 `OpenBytes` 解码，保存字节通过 `EncodeDocument` 产生；BOM 和换行属性经 HostEffect 返回。路径、文件协调与安全作用域仍属于 macOS Repository，不进入 Engine。
 
+原生组合输入拥有尚未提交的文本和选区。SwiftUI 绑定刷新只经会话的 `reconcileBoundText` 入口，组合期间不得写正文、改选区或重刷展示属性。Engine 确认若在此期间到达，延后到组合结束，并校验文本仍匹配后发布；提交和取消都必须结束事务。该边界的失守已在输入回归中重现并修复，剩余耦合与分步治理见 [输入架构审查](editor-input-architecture-review.md)。
+
 C ABI 3 已收缩为 Engine create/dispatch/snapshot/free 与 owned-bytes free 五个函数，不再暴露 document/render/analyze/highlight/search/format 数组或规划函数。边界用 `major/minor/capabilities` 协商兼容性：major 表示不兼容布局或所有权变化，minor
 表示可加性演进，宿主只要求自身使用的 capability bits，不再因为链接到更新 minor 版本而拒绝启动。
 旧 `inflow_core_abi_version` 保留为 major 的兼容别名。Rust build phase 声明全部 `core/src/*.rs` 源码输入和静态库输出，仓库门禁会拒绝任何未声明的新 Rust 源文件；

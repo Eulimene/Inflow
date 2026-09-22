@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import Inflow
 
 final class EditorEngineClientTests: XCTestCase {
@@ -472,6 +473,104 @@ final class EditorEngineClientTests: XCTestCase {
         XCTAssertEqual(imeSnapshot?.revision, 1)
         XCTAssertEqual(imeProjection, "A拼")
         XCTAssertTrue(imeSnapshot?.canUndo == true)
+    }
+
+    @MainActor
+    func testCoordinatorPreservesCompositionAcrossSwiftUIUpdates() async throws {
+        for presentation in [MarkdownEditorPresentation.source, .rendered] {
+            let session = MarkdownSourceEditorSession()
+            var boundText = "A"
+            let binding = Binding<String>(get: { boundText }, set: { boundText = $0 })
+            func editor() -> MarkdownSourceEditor {
+                MarkdownSourceEditor(text: binding, selectionRequest: nil, session: session, presentation: presentation)
+            }
+            let coordinator = editor().makeCoordinator()
+            coordinator.update(parent: editor(), textView: session.textView)
+            session.textView.setSelectedRange(NSRange(location: 1, length: 0))
+            _ = await session.deriveContent(for: boundText, configuration: .default)
+            coordinator.update(parent: editor(), textView: session.textView)
+
+            session.textView.setMarkedText("pin", selectedRange: NSRange(location: 3, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertEqual(boundText, "A")
+            let selection = session.textView.selectedRange()
+            // SwiftUI refreshes for selection, recovery, scroll, and derived-content changes.
+            for _ in 0..<3 { coordinator.update(parent: editor(), textView: session.textView) }
+            XCTAssertEqual(session.textView.string, "Apin", "A binding refresh must not replace uncommitted IME text")
+            XCTAssertTrue(session.textView.hasMarkedText())
+            XCTAssertEqual(session.textView.selectedRange(), selection)
+
+            session.textView.insertText("拼音", replacementRange: session.textView.markedRange())
+            let committed = await session.persistenceSnapshot()
+            XCTAssertEqual(committed?.text, "A拼音")
+            XCTAssertEqual(boundText, "A拼音")
+            session.textView.undo(nil)
+            for _ in 0..<100 where session.textView.string != "A" { await Task.yield() }
+            XCTAssertEqual(session.textView.string, "A", "IME composition must form one committed edit")
+        }
+    }
+
+    @MainActor
+    func testCoordinatorKeepsPendingEditsWhenCompositionIsCancelled() async throws {
+        for presentation in [MarkdownEditorPresentation.source, .rendered] {
+            let session = MarkdownSourceEditorSession()
+            var boundText = "A"
+            let binding = Binding<String>(get: { boundText }, set: { boundText = $0 })
+            let editor = MarkdownSourceEditor(text: binding, selectionRequest: nil, session: session, presentation: presentation)
+            let coordinator = editor.makeCoordinator()
+            coordinator.update(parent: editor, textView: session.textView)
+            session.textView.setSelectedRange(NSRange(location: 1, length: 0))
+            _ = await session.persistenceSnapshot()
+            session.textView.insertText("B", replacementRange: session.textView.selectedRange())
+            session.textView.setMarkedText("pin", selectedRange: NSRange(location: 3, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+            for _ in 0..<100 where !session.textView.engineCanUndo { try await Task.sleep(for: .milliseconds(2)) }
+            XCTAssertTrue(session.textView.engineCanUndo, "The Engine must acknowledge B while native composition remains active")
+            coordinator.update(parent: editor, textView: session.textView)
+            XCTAssertEqual(boundText, "A")
+            XCTAssertEqual(session.textView.string, "ABpin")
+            session.textView.insertText("", replacementRange: session.textView.markedRange())
+            coordinator.update(parent: editor, textView: session.textView)
+            XCTAssertEqual(session.textView.string, "AB")
+            XCTAssertEqual(boundText, "AB", "Cancelling composition must release the deferred acknowledgement of B")
+            let snapshot = await session.persistenceSnapshot()
+            XCTAssertEqual(snapshot?.revision, 1, "Cancelling an IME candidate must not create another history entry")
+
+            // Cancelling with no outstanding acknowledgement must leave the input boundary idle.
+            session.textView.setMarkedText("cancel", selectedRange: NSRange(location: 6, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+            session.textView.insertText("", replacementRange: session.textView.markedRange())
+            boundText = "replacement"
+            coordinator.update(parent: editor, textView: session.textView)
+            XCTAssertEqual(session.textView.string, "replacement", "A cancelled candidate must not leave a phantom pending edit blocking subsequent document updates")
+        }
+    }
+
+    @MainActor
+    func testCoordinatorPreservesRapidTypingAcrossBindingRefreshes() async throws {
+        for presentation in [MarkdownEditorPresentation.source, .rendered] {
+            let session = MarkdownSourceEditorSession()
+            var boundText = ""
+            let binding = Binding<String>(get: { boundText }, set: { boundText = $0 })
+            let editor = MarkdownSourceEditor(text: binding, selectionRequest: nil, session: session, presentation: presentation)
+            let coordinator = editor.makeCoordinator()
+            coordinator.update(parent: editor, textView: session.textView)
+            _ = await session.persistenceSnapshot()
+            var expected = ""
+            for character in "hello 世界😀\nsecond line\nthird" {
+                if character == "\n" { session.textView.insertNewline(nil) }
+                else { session.textView.insertText(String(character), replacementRange: session.textView.selectedRange()) }
+                expected.append(character)
+                coordinator.update(parent: editor, textView: session.textView)
+                XCTAssertEqual(session.textView.string, expected)
+                XCTAssertEqual(session.textView.selectedRange().location, expected.utf16.count)
+            }
+            let snapshot = await session.persistenceSnapshot()
+            coordinator.update(parent: editor, textView: session.textView)
+            XCTAssertEqual(snapshot?.text, expected)
+            XCTAssertEqual(boundText, expected)
+            XCTAssertEqual(session.textView.selectedRange().location, expected.utf16.count)
+        }
     }
 
     @MainActor

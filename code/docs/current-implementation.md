@@ -52,6 +52,7 @@
 - Swift `EditorStore` 以 `EditorIntent` 接收派生刷新、暂停和取消意图，统一拥有任务 generation 及 `EditorViewState`；同时作为 View 发起格式、查找、替换、快照和保存 receipt 的用例门面。`MarkdownEditorView` 不再直接调用 `MarkdownSourceEditorSession` 的 Engine 命令方法，也不直接持有或发布预览 HTML、预览快照、分析状态和引用集合。预览链接、图片问题导航与文档迁移显式使用与该快照同 revision 的 Engine 引用，不在产品交互路径再扫描全文。
 - Rust `EditorEngine` 是唯一正文、revision 与历史事实源；撤销/重做栈、Memento 与连续输入合并已收敛到独立 `History` 模块。`MarkdownDocument.text` 是 FileDocument/SwiftUI 使用的已确认投影，`MarkdownSourceEditorSession` 中的持久 NSTextView 是可乐观更新的显示缓存。编辑会话无 Engine 关闭开关，查找替换、格式、插入和撤销均先获得 Rust patch 再更新显示投影。保存正文和 HTML 导出结果通过 `StatePatch.effects` 的 `WriteDocument` / `HtmlExportPrepared` HostEffect 返回，平台文件操作仍由 macOS Repository 执行。
 - `EditorEngine` 同时持有 revision-bound `editable/read_only` 模式。macOS 根据文件安全和展示状态由 Store 串行发送 `SetMode`；只读时即使上层误发命令，Rust 也会拒绝正文修改与历史变更。
+- 输入法组合是独立的原生输入事务：从 `setMarkedText` 开始到提交或取消，由 NSTextView 保持正文、marked range 和选区。SwiftUI 的绑定回写集中经 `reconcileBoundText`，组合期间返回 deferred；普通输入等待 Engine 确认时保留乐观正文。显示属性和语法高亮同样避开组合事务。期间收到的 Engine 确认暂存，组合结束后只发布与当前文本一致的确认，其余由最终输入重新同步；取消候选不会新增正文历史。边界级回归覆盖源码/即时编辑、SwiftUI 连续刷新、取消候选、快速输入和回车，真实中文输入法候选窗仍需人工验证。详细问题与重构顺序见 [输入架构审查](editor-input-architecture-review.md)。
 - NSTextView 完成一次非组合输入后，以 UTF-8 grapheme 边界的 `ReplaceText(base_revision, range, inserted)` 提交 Engine，并在 Engine 返回逐字节匹配的快照后才发布 Swift 文档投影。生产会话固定启用 Engine；当前菜单格式与图片、链接、表格等插入命令均发送 selection 与 operation，由 Engine 生成并执行 revision-bound patch 后回写 NSTextView。格式可用性同样通过 revision-bound `InspectFormat` 异步检查，会话只发布与当前正文和选区一致的缓存结果，SwiftUI 菜单构建不再同步调用 Rust。默认会话关闭 AppKit 正文 undo registration，Command-Z/Shift-Command-Z 发送 Engine `Undo/Redo`，Rust Memento 历史是撤销事实源；连续普通输入携带短时 `group_id`，Rust 仅合并相邻纯插入、连续向前删除或连续退格，换行、粘贴、IME 和格式操作断组。原位保存、另存和覆盖确认使用 `PrepareSave(revision, save_id)` 冻结权威正文与 hash；文件安全适配器确认磁盘字节后才回传 `SaveCompleted`，失败则回传 `SaveAborted`。保存期间继续输入不会被误标为已保存；Engine 以已保存 hash 计算 dirty。PDF 导出只冻结 snapshot，不改变保存状态。
 - IME 第一次 `setMarkedText` 会记录组合前正文与选区；marked text 存续期间不发布 Swift 文档投影、不刷新 Engine 正文，`unmarkText` 或最终 `insertText` 结束组合后只提交一次最终 replacement。保存触发提交组合后也等待这条命令完成。
 - 外部变更重载通过同一 Engine handle 的 `OpenDocument` 命令原子替换正文，清空旧 undo/redo、派生缓存和未完成保存 receipt，将新字节视为已保存基线并继续单调 revision，不再重建 Engine 或退回 revision 0。
@@ -151,7 +152,7 @@
 
 判断当前能力时，以已批准的个人首版范围、实际安装的菜单和主流程、以及 UAT-PERSONAL-01 至 10 为准，而不是以某个源文件或测试名称是否存在为准。
 
-自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 421 个 XCTest method：299 个 `current-direct`、31 个依赖真实 `NSApplication` 菜单、生命周期、WebKit 或 AppKit 打印/PDF 系统服务的 `current-host`、86 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
+自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 429 个 XCTest method：305 个 `current-direct`、33 个依赖真实 `NSApplication` 菜单、生命周期、WebKit 或 AppKit 打印/PDF 系统服务的 `current-host`、86 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
 
 ## 4. 人工 UAT 状态
 
