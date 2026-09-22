@@ -66,7 +66,7 @@ Swift 边界中可在 Store/View 传递的稳定领域 DTO 集中在 `CoreBridge
 SwiftUI 与 AppKit 负责：
 
 - `MarkdownEditorView` 通过 `EditorStore` 调度文档派生、格式、查找、替换和持久化命令并消费 `EditorViewState`；Store 统一持有 generation、取消，并把同一 revision 的原生渲染计划安装到只读预览会话，同时原子发布分析和引用；
-- 原生文档窗口、新建、打开、手动保存、另存和关闭确认；
+- 原生文档窗口、新建、打开、手动保存、另存和关闭前暂存；
 - 没有外部目标时由应用委托显式创建并聚焦未命名文档，普通启动或 Finder 双击 App 不弹文件选择器；带外部目标时复用统一打开路由且不残留多余空白窗口；
 - 普通文件夹项目、目录树、沙箱授权与项目根边界；
 - 持久 NSTextView、菜单、快捷键、输入法和 UndoManager；
@@ -176,7 +176,7 @@ LightweightProjectCoordinator 负责单一项目外壳、后台原生文档会�
 - 宿主策略无法安装或复核时，该文档不启用编辑，而不是降级到可能隐式写回的路径；
 - 当前主 App 未安装自动保存开关；
 - 未命名文档首次保存前不绑定用户路径；
-- 已修改文档的普通关闭、项目关闭与应用退出由具体 DocumentGroup 宿主上的 disposable-draft close policy 直接批准；关闭只退休应用私有暂存，不写回用户文件，也不嵌套 `reviewUnsavedDocuments`；
+- 普通关闭、项目关闭与应用退出先同步读取各编辑器的最新文本并写入系统临时目录 `Inflow/SessionDrafts`，成功后由具体 DocumentGroup 宿主批准关闭；应用级 `reviewUnsavedDocuments` 同样执行暂存后回调，避免多文档退出时出现保存询问。暂存失败取消退出，不写回用户文件。启动时由恢复协调器将临时草稿移交加密恢复区，确认成功后删除临时文件；
 - 保存失败保留当前编辑且不显示成功；
 - 另存前只提示相对引用可能变化，不搬移资源或重写引用。
 
@@ -196,7 +196,7 @@ DocumentGroup 本身没有公开的 FileDocument 自动保存策略开关。当�
 DocumentRecovery 负责应用私有恢复存储。当前界面只通过 LightweightRecoveryPromptView 暴露：
 
 - 每份文档最多一个最新快照；
-- 异常退出后恢复为未命名文档或放弃；
+- 正常退出的临时草稿与异常退出的恢复记录，均通过既有认领流程恢复为未命名文档；
 - 恢复文档不绑定、不自动覆盖原文件；
 - 成功手动保存或明确放弃后清理对应快照；
 - 恢复不可用不阻止正常打开和手动保存。

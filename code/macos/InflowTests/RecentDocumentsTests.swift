@@ -6,13 +6,48 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class RecentDocumentsTests: XCTestCase {
-    func testTerminationDelegateNeverCancelsAnApprovedDisposableDraftQuit() {
+    func testTerminationDelegateNeverCancelsAnApprovedDisposableDraftQuit() throws {
         XCTAssertEqual(
             InflowTerminationPolicy.replyAfterDocumentCloseApproval,
             .terminateNow,
             "short-lived Inflow UI work must not turn the approved Quit command into a no-op"
         )
         XCTAssertTrue(InflowTerminationPolicy.terminatesAfterLastWindowClosed)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let previousStore = TemporaryDocumentDrafts.store
+        let id = UUID()
+        let document = NSDocument()
+        var latest = "first"
+        TemporaryDocumentDrafts.store = TemporaryDocumentDraftStore(rootURL: root)
+        TemporaryDocumentDrafts.register(id, owner: document) {
+            DocumentRecoveryRecord(id: id, document: MarkdownDocument(text: latest), originalURL: nil,
+                selectedUTF16Range: NSRange(location: latest.utf16.count, length: 0), viewMode: .preview, verticalScrollOffset: 0)
+        }
+        defer {
+            TemporaryDocumentDrafts.unregister(id)
+            TemporaryDocumentDrafts.store = previousStore
+            try? FileManager.default.removeItem(at: root)
+        }
+        latest = "last keystroke😀"
+        TemporaryDocumentDrafts.installQuitReview()
+        let probe = DraftQuitReviewProbe()
+        NSDocumentController.shared.reviewUnsavedDocuments(withAlertTitle: "Must not present a save review", cancellable: true,
+            delegate: probe, didReviewAllSelector: #selector(DraftQuitReviewProbe.reviewed(_:approved:context:)), contextInfo: nil)
+        XCTAssertEqual(probe.approved, true)
+        XCTAssertEqual(try TemporaryDocumentDrafts.store.records().first?.text, latest)
+        // A failed checkpoint must preserve the last successful draft.
+        let stagedStore = TemporaryDocumentDrafts.store
+        let blockedRoot = root.appendingPathComponent("not-a-directory")
+        try Data("original file".utf8).write(to: blockedRoot)
+        TemporaryDocumentDrafts.store = TemporaryDocumentDraftStore(rootURL: blockedRoot)
+        latest = "newer text"
+        XCTAssertThrowsError(try TemporaryDocumentDrafts.checkpoint(owner: document))
+        XCTAssertEqual(try String(contentsOf: blockedRoot, encoding: .utf8), "original file")
+        XCTAssertEqual(try stagedStore.records().first?.text, "last keystroke😀")
+        TemporaryDocumentDrafts.store = stagedStore
+        latest = ""
+        try TemporaryDocumentDrafts.checkpoint(owner: document)
+        XCTAssertTrue(try stagedStore.records().isEmpty, "Clearing a draft after a cancelled quit must not restore stale content")
         let delegate = InflowApplicationDelegate { _ in }
         XCTAssertTrue(
             delegate.applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared),
@@ -1470,5 +1505,13 @@ private final class TestRecentDocumentPersistence: RecentDocumentPersistence {
 
     func save(_ records: [RecentDocumentRecord]) {
         self.records = records
+    }
+}
+
+@MainActor
+private final class DraftQuitReviewProbe: NSObject {
+    var approved: Bool?
+    @objc func reviewed(_ controller: NSDocumentController, approved: Bool, context: UnsafeMutableRawPointer?) {
+        self.approved = approved
     }
 }

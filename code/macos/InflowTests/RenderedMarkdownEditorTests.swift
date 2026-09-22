@@ -1106,6 +1106,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
     }
 
+    @MainActor
     func testAdaptiveTableLayoutFillsAndRespondsToTheViewport() throws {
         let storage = NSTextStorage(string: "first\nunchanged", attributes: [.font: NSFont.systemFont(ofSize: 16)])
         let projection = NSMutableAttributedString(attributedString: storage)
@@ -1137,6 +1138,20 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertEqual(compressed.count, 5)
         XCTAssertEqual(compressed.reduce(0, +), 160, accuracy: 0.001)
         XCTAssertTrue(compressed.allSatisfy { $0 > 0 })
+
+        let measured = CountingTableLayoutStrategy()
+        let view = RenderedMarkdownTableView(table: table, baseFont: font, maximumWidth: 680,
+            linkActivation: .singleClick, palette: .light, onLinkClick: { _ in }, onEdit: { _ in }, layoutStrategy: measured)
+        for _ in 0..<10 { XCTAssertFalse(view.updateMaximumWidth(680)) }
+        XCTAssertEqual(measured.calls, 1, "Repeated overlay layout must reuse unchanged content measurements")
+        let edited = try XCTUnwrap(RenderedMarkdownEditor.plan(for: source.replacingOccurrences(of: "value", with: "one<br>two<br>three")).tables.first)
+        let oldHeight = view.renderedSize.height
+        view.update(table: edited, onEdit: { _ in })
+        XCTAssertTrue(view.updateMaximumWidth(680))
+        XCTAssertGreaterThan(view.renderedSize.height, oldHeight, "Cell soft breaks must still invalidate row heights")
+        XCTAssertEqual(measured.calls, 2)
+        XCTAssertTrue(view.updateMaximumWidth(320))
+        XCTAssertEqual(measured.calls, 3, "Window resizing must invalidate cached widths")
     }
 
     @MainActor
@@ -1275,8 +1290,8 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             NSRect(x: 10, y: 10, width: 1, height: 40),
             font: font
         )
-        XCTAssertEqual(rect.midY, 30, accuracy: 0.001)
-        XCTAssertGreaterThan(rect.height, 20)
+        XCTAssertEqual(rect.minY, 10, accuracy: 0.001)
+        XCTAssertEqual(rect.height, ceil(font.ascender - font.descender + font.leading))
 
         let baselineRect = RenderedMarkdownCaretStyleResolver.adjustedInsertionRect(
             NSRect(x: 10, y: 10, width: 1, height: 40),
@@ -1284,7 +1299,9 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             baselineY: 50
         )
         XCTAssertGreaterThanOrEqual(baselineRect.minY, 10)
-        XCTAssertLessThanOrEqual(baselineRect.maxY, 50)
+        XCTAssertGreaterThanOrEqual(baselineRect.height, ceil(font.ascender - font.descender + font.leading))
+        let tiny = RenderedMarkdownCaretStyleResolver.adjustedInsertionRect(NSRect(x: 10, y: 100, width: 1, height: 1), font: font)
+        XCTAssertEqual(tiny.height, baselineRect.height, "A temporarily collapsed native line must not shrink the caret")
 
         for initial in ["正文", "# 标题", "> 引用", "- 列表", "- [ ] 任务", "**粗体**", "`代码`", "$$x$$"] {
             let editor = MarkdownSourceEditorSession()
@@ -1307,7 +1324,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                 y: nativeLine.minY + editor.textView.textContainerOrigin.y, width: 1, height: nativeLine.height)
             let drawn = editor.textView.renderedInsertionRect(nativeCaret)
             XCTAssertGreaterThanOrEqual(drawn.minY, nativeCaret.minY, initial)
-            XCTAssertLessThanOrEqual(drawn.maxY, nativeCaret.maxY, initial)
+            XCTAssertGreaterThan(drawn.height, 10, initial)
             XCTAssertGreaterThan(nativeLine.minY, 0, initial)
             XCTAssertEqual(editor.textView.selectedRange().location, changed.utf16.count)
         }
@@ -2751,7 +2768,9 @@ extension RenderedMarkdownEditorTests {
         }
         let persistentGrid = try XCTUnwrap(scrolling.textView.renderedTable(atUTF16Location: prefix.utf16.count))
         let existingCells = persistentGrid.subviews.compactMap { $0 as? NSTextView }
+        let fullPasses = scrolling.renderedPresentationPassCount
         for _ in 0..<6 { (window.firstResponder as? NSTextView)?.insertTab(nil) }
+        XCTAssertEqual(scrolling.renderedPresentationPassCount, fullPasses, "Tab edits must not synchronously re-render the whole document")
         XCTAssertTrue(scrolling.textView.renderedTable(atUTF16Location: prefix.utf16.count) === persistentGrid)
         XCTAssertEqual(persistentGrid.focusedCell?.row, 7)
         XCTAssertEqual(persistentGrid.focusedCell?.column, 0)
@@ -2761,5 +2780,13 @@ extension RenderedMarkdownEditorTests {
 
 
 
+    }
+}
+
+private final class CountingTableLayoutStrategy: RenderedMarkdownTableLayoutStrategy {
+    var calls = 0
+    func columnWidths(for table: RenderedMarkdownTable, font: NSFont, availableWidth: CGFloat) -> [CGFloat] {
+        calls += 1
+        return AdaptiveRenderedMarkdownTableLayoutStrategy().columnWidths(for: table, font: font, availableWidth: availableWidth)
     }
 }

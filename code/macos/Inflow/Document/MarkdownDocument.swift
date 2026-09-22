@@ -50,8 +50,8 @@ enum ManualSaveDocumentHostPolicyError: Error, LocalizedError {
 /// but AppKit will still silently autosave a named, edited document while it is
 /// closing when the host class opts into autosaving in place. Inflow therefore
 /// disables those automatic-save policies and replaces only the inherited close
-/// review on the concrete host. Closing retires the encrypted draft and succeeds
-/// without a Save / Don't Save prompt. Explicit Save continues through Inflow's
+/// review on the concrete host. Closing checkpoints the latest text to the
+/// temporary draft directory before retiring its live recovery session. Explicit Save continues through Inflow's
 /// guarded native save path.
 ///
 /// This compatibility boundary is intentionally fail closed. If the host no
@@ -203,7 +203,8 @@ enum ManualSaveDocumentHostPolicy {
             Selector?,
             UnsafeMutableRawPointer?
         ) -> Void = { document, delegate, callbackSelector, contextInfo in
-            document.updateChangeCount(.changeCleared)
+            let approved = TemporaryDocumentDrafts.approveClose(owner: document)
+            if approved { document.updateChangeCount(.changeCleared) }
             guard let callbackSelector,
                   let callbackMethod = class_getInstanceMethod(
                       type(of: delegate),
@@ -223,7 +224,7 @@ enum ManualSaveDocumentHostPolicy {
                 method_getImplementation(callbackMethod),
                 to: Callback.self
             )
-            callback(delegate, callbackSelector, document, true, contextInfo)
+            callback(delegate, callbackSelector, document, approved, contextInfo)
         }
         let implementation = imp_implementationWithBlock(closeWithoutReview)
         guard class_addMethod(documentClass, selector, implementation, typeEncoding) else {
@@ -443,5 +444,96 @@ enum MarkdownDocumentModificationProjection {
     static func isModified(_ document: MarkdownDocument) -> Bool {
         guard let current = try? document.encodedFileData() else { return true }
         return current != (document.openedFileData ?? Data())
+    }
+}
+
+/// A last synchronous checkpoint before AppKit is allowed to close a document.
+/// These files are drafts; they never replace the user's original Markdown file.
+struct TemporaryDocumentDraftStore {
+    let rootURL: URL
+
+    static var defaultRoot: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("Inflow/SessionDrafts", isDirectory: true)
+    }
+
+    func write(_ record: DocumentRecoveryRecord) throws {
+        try record.validate()
+        let manager = FileManager.default
+        try manager.createDirectory(at: rootURL, withIntermediateDirectories: true,
+                                    attributes: [.posixPermissions: 0o700])
+        let url = rootURL.appendingPathComponent(record.id.uuidString).appendingPathExtension("json")
+        try JSONEncoder().encode(record).write(to: url, options: .atomic)
+        try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    func records() throws -> [DocumentRecoveryRecord] {
+        guard FileManager.default.fileExists(atPath: rootURL.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(at: rootURL, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }.map {
+                let record = try JSONDecoder().decode(DocumentRecoveryRecord.self, from: Data(contentsOf: $0))
+                try record.validate()
+                return record
+            }
+    }
+
+    func remove(_ id: UUID) throws {
+        let url = rootURL.appendingPathComponent(id.uuidString).appendingPathExtension("json")
+        if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+    }
+}
+
+@MainActor
+enum TemporaryDocumentDrafts {
+    private struct Provider {
+        let owners: Set<ObjectIdentifier>
+        let snapshot: () -> DocumentRecoveryRecord
+    }
+    private static var providers: [UUID: Provider] = [:]
+    private static var installed = false
+    static var store = TemporaryDocumentDraftStore(rootURL: TemporaryDocumentDraftStore.defaultRoot)
+
+    static func register(_ id: UUID, owner: NSDocument?, windowOwner: NSDocument? = nil, snapshot: @escaping () -> DocumentRecoveryRecord) {
+        providers[id] = Provider(owners: Set([owner, windowOwner].compactMap { $0.map(ObjectIdentifier.init) }), snapshot: snapshot)
+    }
+
+    static func unregister(_ id: UUID) { providers.removeValue(forKey: id) }
+
+    static func checkpoint(owner: NSDocument? = nil) throws {
+        for provider in Array(providers.values) where owner == nil || owner.map({ provider.owners.contains(ObjectIdentifier($0)) }) == true {
+            let record = provider.snapshot()
+            if record.originalURL == nil && record.text.isEmpty {
+                try store.remove(record.id)
+                continue
+            }
+            try store.write(record)
+        }
+    }
+
+    static func approveClose(owner: NSDocument? = nil) -> Bool {
+        do { try checkpoint(owner: owner); return true }
+        catch {
+            NSApp.presentError(NSError(domain: "Inflow.DraftCheckpoint", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "未能暂存未保存内容，已取消退出以保留编辑。", NSUnderlyingErrorKey: error]))
+            return false
+        }
+    }
+
+    /// AppKit's multi-document Quit review runs before individual canClose callbacks.
+    static func installQuitReview() {
+        guard !installed else { return }
+        let controllerClass: AnyClass = type(of: NSDocumentController.shared)
+        let selector = #selector(NSDocumentController.reviewUnsavedDocuments(withAlertTitle:cancellable:delegate:didReviewAllSelector:contextInfo:))
+        guard let method = class_getInstanceMethod(controllerClass, selector), let encoding = method_getTypeEncoding(method) else { return }
+        let review: @convention(block) (NSDocumentController, NSString?, Bool, AnyObject?, Selector?, UnsafeMutableRawPointer?) -> Void = {
+            controller, _, _, delegate, callbackSelector, context in
+            let approved = approveClose()
+            guard let delegate, let callbackSelector,
+                  let callbackMethod = class_getInstanceMethod(type(of: delegate), callbackSelector) else { return }
+            typealias Callback = @convention(c) (AnyObject, Selector, NSDocumentController, Bool, UnsafeMutableRawPointer?) -> Void
+            let callback = unsafeBitCast(method_getImplementation(callbackMethod), to: Callback.self)
+            callback(delegate, callbackSelector, controller, approved, context)
+        }
+        class_replaceMethod(controllerClass, selector, imp_implementationWithBlock(review), encoding)
+        installed = true
     }
 }

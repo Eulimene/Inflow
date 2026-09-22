@@ -226,6 +226,7 @@ struct MarkdownEditorView: View {
                 if nativeDocumentOverride == nil {
                     MarkdownEditorNativeDocumentResolver { document in
                         nativeDocumentHost.attach(document)
+                        updateRecoveryProtection()
                         projectCoordinator?.activateProjectDocument(document)
                     }
                 }
@@ -1419,6 +1420,15 @@ struct MarkdownEditorView: View {
     }
 
     private func updateRecoveryProtection(originalURL: URL? = nil) {
+        TemporaryDocumentDrafts.register(recoveryRecordID, owner: nativeDocument, windowOwner: workspaceWindowDocument) {
+            let view = sourceEditorSession.textView
+            view.finishPendingInputForCheckpoint()
+            var latest = document
+            latest.text = view.string
+            return DocumentRecoveryRecord(id: recoveryRecordID, document: latest,
+                originalURL: originalURL ?? fileURL, selectedUTF16Range: view.selectedRange(),
+                viewMode: viewMode, verticalScrollOffset: sourceEditorSession.verticalScrollOffset)
+        }
         let isModified = MarkdownDocumentModificationProjection.isModified(document)
         folderBrowser.setDocumentModified(nativeDocument, modified: isModified)
         projectCoordinator?.setDocumentModified(nativeDocument, modified: isModified)
@@ -1908,6 +1918,7 @@ struct MarkdownEditorView: View {
     }
 
     private func tearDownDocumentSession() {
+        TemporaryDocumentDrafts.unregister(recoveryRecordID)
         editorStore.send(.cancelPending)
         previewLinkTask?.cancel()
         findSearchTask?.cancel()

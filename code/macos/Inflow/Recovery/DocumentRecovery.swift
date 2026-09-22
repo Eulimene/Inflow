@@ -712,7 +712,8 @@ enum DocumentRecoveryRuntime {
     ) -> DocumentRecoveryCoordinator {
         switch profile(environment: environment) {
         case .production:
-            return DocumentRecoveryCoordinator(fileManager: fileManager)
+            return DocumentRecoveryCoordinator(fileManager: fileManager,
+                temporaryDraftStore: TemporaryDocumentDraftStore(rootURL: TemporaryDocumentDraftStore.defaultRoot))
         case .automatedTest:
             let root = fileManager.temporaryDirectory
                 .appendingPathComponent("InflowTests", isDirectory: true)
@@ -740,10 +741,12 @@ enum DocumentRecoveryRuntime {
                 keyProvider: DevelopmentDocumentRecoveryKeyProvider(
                     keyURL: root.appendingPathComponent(".development-recovery-key"),
                     fileManager: fileManager
-                )
+                ),
+                temporaryDraftStore: TemporaryDocumentDraftStore(rootURL: TemporaryDocumentDraftStore.defaultRoot)
             )
 #else
-            return DocumentRecoveryCoordinator(fileManager: fileManager)
+            return DocumentRecoveryCoordinator(fileManager: fileManager,
+                temporaryDraftStore: TemporaryDocumentDraftStore(rootURL: TemporaryDocumentDraftStore.defaultRoot))
 #endif
         }
     }
@@ -1011,6 +1014,15 @@ actor DocumentRecoveryStore {
             targetEpoch: current.effectiveEpoch &+ 1,
             committedContentHash: current.committedContentHash
         )
+    }
+
+    func importTemporaryDraft(_ record: DocumentRecoveryRecord) throws {
+        try record.validate()
+        try ensureDirectory()
+        let key = try availableKey()
+        try sessionGate.markActive(record.id, generation: 1)
+        if let existing = try? readRecord(id: record.id, using: key), existing.updatedAt > record.updatedAt { return }
+        try write(record, using: key, now: Date())
     }
 
     func load(now: Date = Date()) throws -> DocumentRecoveryLoadResult {
@@ -1714,6 +1726,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     }
 
     private let store: DocumentRecoveryStore?
+    private let temporaryDraftStore: TemporaryDocumentDraftStore?
     private let intervalNanoseconds: UInt64
     private var activeSessions: [UUID: ActiveSession] = [:]
     private var sessionGenerations: [UUID: UInt64] = [:]
@@ -1727,8 +1740,10 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         intervalNanoseconds: UInt64 = 5_000_000_000,
         fileManager: FileManager = .default,
         keyProvider: (any DocumentRecoveryKeyProviding)? = nil,
-        beforeReconcileCommit: (@Sendable (DocumentRecoveryRecord) async -> Void)? = nil
+        beforeReconcileCommit: (@Sendable (DocumentRecoveryRecord) async -> Void)? = nil,
+        temporaryDraftStore: TemporaryDocumentDraftStore? = nil
     ) {
+        self.temporaryDraftStore = temporaryDraftStore
         self.intervalNanoseconds = intervalNanoseconds
         if let rootURL {
             store = DocumentRecoveryStore(
@@ -1915,16 +1930,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
 
     func retryProtection() async {
         isDegradedProtectionWarningDismissed = false
-        guard let store else {
-            protectionErrorMessage = Self.degradedProtectionMessage
-            return
-        }
-        do {
-            _ = try await store.load()
-            protectionErrorMessage = nil
-        } catch {
-            protectionErrorMessage = Self.degradedProtectionMessage
-        }
+        await loadRecords()
     }
 
     func continueWritingWithoutProtection() {
@@ -1957,8 +1963,14 @@ final class DocumentRecoveryCoordinator: ObservableObject {
             return
         }
         do {
+            if let temporaryDraftStore {
+                for record in try temporaryDraftStore.records() {
+                    try await store.importTemporaryDraft(record)
+                    try temporaryDraftStore.remove(record.id)
+                }
+            }
             let result = try await store.load()
-            recoveredRecords = result.records
+            recoveredRecords = result.records.filter { activeSessions[$0.id] == nil }
             if result.quarantinedRecordCount > 0 {
                 protectionErrorMessage =
                     "有 \(result.quarantinedRecordCount) 项恢复内容无法验证，已保留但不会自动打开。你仍可正常保存 Markdown。"

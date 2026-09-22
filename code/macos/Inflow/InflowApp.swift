@@ -2079,11 +2079,11 @@ private struct ProjectWorkspaceWindowTitle: NSViewRepresentable {
 enum InflowTerminationPolicy {
     /// Inflow is a document editor with no useful windowless runtime. Closing
     /// the final document window therefore has the same lifecycle result as
-    /// choosing Quit after disposable draft sessions have been retired.
+    /// choosing Quit after unsaved text has been checkpointed to temporary drafts.
     static let terminatesAfterLastWindowClosed = true
 
-    /// The concrete document host has already approved each disposable draft
-    /// close. Inflow has no second termination transaction of its own.
+    /// The concrete document host has already checkpointed each approved close.
+    /// The application delegate checkpoints any remaining sessions before replying.
     static var replyAfterDocumentCloseApproval: NSApplication.TerminateReply {
         return .terminateNow
     }
@@ -2159,6 +2159,7 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
         self.createUntitledDocument = createUntitledDocument
         self.hasOpenDocuments = hasOpenDocuments
         self.installLaunchIntegrations = installLaunchIntegrations ?? { controller in
+            TemporaryDocumentDrafts.installQuitReview()
             NSDocumentController.shared.autosavingDelay = 0
             controller.installMenuIntegration()
         }
@@ -2234,8 +2235,7 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
-        // Document hosts have already retired disposable draft sessions before
-        // this callback. Project loading must not turn Quit into a no-op.
+        guard TemporaryDocumentDrafts.approveClose() else { return .terminateCancel }
         return InflowTerminationPolicy.replyAfterDocumentCloseApproval
     }
 }

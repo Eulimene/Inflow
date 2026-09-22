@@ -41,6 +41,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private(set) var lastSyntaxDirtyUTF16Ranges: [NSRange] = []
     private var presentation = MarkdownEditorPresentation.source
     private var renderedPlan: RenderedMarkdownPlan?
+    private var optimisticTable: (source: String, table: RenderedMarkdownTable)?
     private var engineRenderedPlan: RenderedMarkdownPlan?
     private var renderedEditingRange: NSRange?
     private var renderedAppliedAppearance: SourceEditorAppearance?
@@ -1107,6 +1108,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 maximumWidth: max(
                     160,
                     scrollView.contentSize.width - textView.textContainerInset.width * 2
+                        - (textView.textContainer?.lineFragmentPadding ?? 0) * 2
                 ),
                 linkActivation: renderedLinkActivation,
                 onLinkClick: { [weak self] target in
@@ -1697,28 +1699,48 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         )
     }
 
-    private func applyRenderedTableEdit(
-        _ edit: RenderedMarkdownTableEdit,
-        to table: RenderedMarkdownTable
-    ) {
-        guard presentation == .rendered,
-              textView.isEditable,
-              let currentTable = RenderedMarkdownEditor.plan(for: textView.string).tables.first(where: {
-                  $0.sourceRange.utf16Range.location == table.sourceRange.utf16Range.location
-              }),
-              let replacement = RenderedMarkdownTableEditing.replacement(
-                  for: currentTable,
-                  applying: edit
-              ),
-              NSMaxRange(table.sourceRange.utf16Range) <= (textView.string as NSString).length
-        else { return }
-        let original = (textView.string as NSString).substring(with: currentTable.sourceRange.utf16Range)
+    private func applyRenderedTableEdit(_ edit: RenderedMarkdownTableEdit, to table: RenderedMarkdownTable) {
+        guard presentation == .rendered, textView.isEditable else { return }
+        let source = textView.string
+        let current: RenderedMarkdownTable?
+        if let optimisticTable, UTF8Text.isExactlyEqual(optimisticTable.source, source),
+           optimisticTable.table.sourceRange.utf16Range.location == table.sourceRange.utf16Range.location {
+            current = optimisticTable.table
+        } else {
+            let plan = engineRenderedPlan?.exactlyMatches(source) == true ? engineRenderedPlan! : RenderedMarkdownEditor.plan(for: source)
+            current = plan.tables.first { $0.sourceRange.utf16Range.location == table.sourceRange.utf16Range.location }
+        }
+        guard let current, let replacement = RenderedMarkdownTableEditing.replacement(for: current, applying: edit),
+              let localTable = RenderedMarkdownEditor.plan(for: replacement).tables.first else { return }
+        let original = (source as NSString).substring(with: current.sourceRange.utf16Range)
         let ending = original.hasSuffix("\r\n") ? "\r\n" : (original.hasSuffix("\n") ? "\n" : "")
-        textView.replaceRenderedTableSource(replacement + ending, range: currentTable.sourceRange.utf16Range)
+        let text = replacement + ending
+        let newRange = RenderedMarkdownSourceRange(
+            utf8Range: current.sourceRange.utf8Range.lowerBound..<(current.sourceRange.utf8Range.lowerBound + text.utf8.count),
+            utf16Range: NSRange(location: current.sourceRange.utf16Range.location, length: text.utf16.count))
+        func offset(_ range: RenderedMarkdownSourceRange) -> RenderedMarkdownSourceRange {
+            RenderedMarkdownSourceRange(utf8Range: (range.utf8Range.lowerBound + newRange.utf8Range.lowerBound)..<(range.utf8Range.upperBound + newRange.utf8Range.lowerBound),
+                utf16Range: NSRange(location: range.utf16Range.location + newRange.utf16Range.location, length: range.utf16Range.length))
+        }
+        let updated = RenderedMarkdownTable(sourceRange: newRange, alignments: localTable.alignments,
+            rows: localTable.rows.map { $0.map { RenderedMarkdownTableCell(sourceRange: offset($0.sourceRange), markdown: $0.markdown, text: $0.text, links: $0.links) } })
+        // Old image requests still carry positions from before this local edit.
+        cancelRenderedImageLoading()
+        textView.replaceRenderedTableSource(text, range: current.sourceRange.utf16Range)
+        textView.rebaseRenderedRanges(replacing: current.sourceRange.utf16Range, withLength: text.utf16.count)
+        optimisticTable = (textView.string, updated)
+        let size = textView.setRenderedTable(updated, baseFont: renderedBaseFont(),
+            maximumWidth: max(160, scrollView.contentSize.width - textView.textContainerInset.width * 2
+                - (textView.textContainer?.lineFragmentPadding ?? 0) * 2),
+            linkActivation: renderedLinkActivation, onLinkClick: { [weak self] in self?.renderedLinkHandler?($0) },
+            onEdit: { [weak self] in self?.applyRenderedTableEdit($0, to: updated) })
+        if let storage = textView.textStorage {
+            storage.beginEditing()
+            applyRenderedBlock(sourceRange: newRange.utf16Range, size: size, storage: storage)
+            storage.endEditing()
+        }
+        textView.layoutRenderedImages()
         textView.undoManager?.setActionName("编辑表格")
-        let changed = textView.string
-        engineRenderedPlan = RenderedMarkdownEditor.plan(for: changed)
-        applyRenderedPresentation(source: changed, force: true)
     }
 
     private func renderedMermaidImage(from diagram: RenderedMarkdownMermaidDiagram) -> NSImage? {
@@ -2856,7 +2878,7 @@ enum RenderedMarkdownCaretStyleResolver {
     ) -> NSRect {
         guard let font else { return rect }
         let fontHeight = ceil(font.ascender - font.descender + font.leading)
-        let height = min(rect.height, max(1, fontHeight))
+        let height = max(1, fontHeight)
         let proposedY = baselineY.map { $0 - font.ascender } ?? (rect.midY - height / 2)
         // Font attributes may be inherited from another line; caret geometry may not.
         let originY = min(max(rect.minY, proposedY), max(rect.minY, rect.maxY - height))
@@ -2986,7 +3008,7 @@ final class WindowAwareTextView: NSTextView {
     }
 
     private final class RenderedImageViewState {
-        let sourceRange: NSRange
+        var sourceRange: NSRange
         let imageView: RenderedMarkdownImageView
         var renderedSize: NSSize
         let fillsAvailableWidth: Bool
@@ -3114,8 +3136,9 @@ final class WindowAwareTextView: NSTextView {
     }
 
     func renderedInsertionRect(_ rect: NSRect, font: NSFont? = nil) -> NSRect {
-        RenderedMarkdownCaretStyleResolver.adjustedInsertionRect(rect,
-            font: font ?? typingAttributes[.font] as? NSFont)
+        let candidate = font ?? typingAttributes[.font] as? NSFont
+        let visibleFont = (candidate?.pointSize ?? 0) >= 1 ? candidate : renderedReplacementBaseFont
+        return RenderedMarkdownCaretStyleResolver.adjustedInsertionRect(rect, font: visibleFont)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -3395,6 +3418,40 @@ final class WindowAwareTextView: NSTextView {
         )
         scheduleRenderedImageLayout()
         return tableView.renderedSize
+    }
+
+    func rebaseRenderedRanges(replacing old: NSRange, withLength length: Int) {
+        let delta = length - old.length
+        func shifted(_ range: NSRange) -> NSRange {
+            if range == old { return NSRange(location: old.location, length: length) }
+            if range.location >= NSMaxRange(old) { return NSRange(location: range.location + delta, length: range.length) }
+            return range
+        }
+        renderedAnchorSourceRanges = renderedAnchorSourceRanges.map(shifted)
+        renderedCollapsedSourceRanges = renderedCollapsedSourceRanges.map(shifted)
+        renderedCodeBlockRanges = renderedCodeBlockRanges.map(shifted)
+        renderedQuoteRanges = renderedQuoteRanges.map(shifted)
+        renderedInlineCodeRanges = renderedInlineCodeRanges.map(shifted)
+        renderedHeadingDividerRanges = renderedHeadingDividerRanges.map(shifted)
+        clickableLinkRanges = clickableLinkRanges.map(shifted)
+        renderedRuleRanges = renderedRuleRanges.map(shifted)
+        renderedReplacementMarkers = renderedReplacementMarkers.map {
+            RenderedMarkdownMarker(kind: $0.kind, sourceRange: RenderedMarkdownSourceRange(utf8Range: $0.sourceRange.utf8Range,
+                utf16Range: shifted($0.sourceRange.utf16Range)), replacementText: $0.replacementText)
+        }
+        renderedImageViews = Dictionary(uniqueKeysWithValues: renderedImageViews.values.map { state in
+            state.sourceRange = shifted(state.sourceRange)
+            return (state.sourceRange.location, state)
+        })
+        renderedTableViews = Dictionary(uniqueKeysWithValues: renderedTableViews.values.map { state in
+            let range = shifted(state.sourceRange)
+            return (range.location, RenderedTableViewState(sourceRange: range, tableView: state.tableView))
+        })
+    }
+
+    func finishPendingInputForCheckpoint() {
+        if hasMarkedText() { unmarkText() }
+        for state in renderedTableViews.values { state.tableView.finishPendingInputForCheckpoint() }
     }
 
     func renderedTable(atUTF16Location location: Int) -> RenderedMarkdownTableView? {
@@ -3964,9 +4021,25 @@ final class WindowAwareTextView: NSTextView {
                applyWritingEdit(MarkdownWritingEdit(range: selectedRange(), text: newline + indent,
                     selection: NSRange(location: selectedRange().location + newline.utf16.count + indent.utf16.count, length: 0))) { return }
         }
-        if handleWritingAction(.newline) { return }
+        if handleWritingAction(.newline) { normalizeInsertedLine(); return }
         breakEngineTypingGroup()
         super.insertNewline(sender)
+        normalizeInsertedLine()
+    }
+
+    private func normalizeInsertedLine() {
+        guard isLiveMarkdown, !hasMarkedText(), let storage = textStorage else { return }
+        let candidate = typingAttributes[.font] as? NSFont
+        let font = candidate.flatMap { $0.pointSize >= 1 ? $0 : nil } ?? renderedReplacementBaseFont
+        let source = string as NSString
+        let range = source.lineRange(for: selectedRange())
+        guard source.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        typingAttributes[.font] = font
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.minimumLineHeight = max(font.pointSize * 1.6, font.ascender - font.descender + font.leading)
+        typingAttributes[.paragraphStyle] = paragraph
+        if range.length > 0 { storage.addAttributes(typingAttributes, range: range) }
+        layoutManager?.invalidateLayout(forCharacterRange: range, actualCharacterRange: nil)
     }
 
     private func editableCodeRequest(at location: Int? = nil) -> JavaScriptRenderRequest? {
@@ -4027,7 +4100,10 @@ final class WindowAwareTextView: NSTextView {
               NSMaxRange(range) <= storage.length,
               shouldChangeText(in: range, replacementString: replacement) else { return }
         breakEngineTypingGroup()
-        storage.replaceCharacters(in: range, with: replacement)
+        let original = (string as NSString).substring(with: range)
+        guard let diff = EditorEngineTextDiff.replacement(from: original, to: replacement),
+              let target = MarkdownSourceRange.navigationTarget(forUTF8Range: diff.start..<diff.end, in: original) else { return }
+        storage.replaceCharacters(in: NSRange(location: range.location + target.revealRange.location, length: target.revealRange.length), with: diff.inserted)
         setSelectedRange(NSRange(location: range.location, length: 0))
         didChangeText()
     }
@@ -4402,6 +4478,8 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
     private let baseFont: NSFont
     private let layoutStrategy: any RenderedMarkdownTableLayoutStrategy
     private var maximumWidth: CGFloat
+    private var needsContentMeasurement = false
+    private var currentPalette: MarkdownRenderPalette
     private var contextCell = (row: 0, column: 0)
     private var contextLinkTarget: String?
     private(set) var renderedSize: NSSize
@@ -4469,7 +4547,8 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         self.onEdit = onEdit
         self.baseFont = baseFont
         self.layoutStrategy = layoutStrategy
-        self.maximumWidth = maximumWidth
+        self.maximumWidth = max(160, maximumWidth)
+        self.currentPalette = palette
         let widths = layoutStrategy.columnWidths(
             for: table,
             font: baseFont,
@@ -4648,6 +4727,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         table: RenderedMarkdownTable,
         onEdit: @escaping (RenderedMarkdownTableEdit) -> Void
     ) {
+        needsContentMeasurement = needsContentMeasurement || self.table.rows.map { $0.map(\.text) } != table.rows.map { $0.map(\.text) }
         self.table = table
         self.onEdit = onEdit
         for cell in cells {
@@ -4656,6 +4736,8 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
     }
 
     func applyPalette(_ palette: MarkdownRenderPalette) {
+        guard palette != currentPalette else { return }
+        currentPalette = palette
         for cell in cells {
             guard let storage = cell.textView.textStorage, storage.length > 0 else { continue }
             cell.textView.linkTextAttributes = MarkdownLinkVisualStyle.restingAttributes(
@@ -4679,6 +4761,8 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
     @discardableResult
     func updateMaximumWidth(_ width: CGFloat) -> Bool {
         let width = max(160, width)
+        guard needsContentMeasurement || maximumWidth != width else { return false }
+        needsContentMeasurement = false
         let widths = layoutStrategy.columnWidths(
             for: table,
             font: baseFont,
@@ -4688,7 +4772,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         guard widths != columnWidths || maximumWidth != width || heights != rowHeights else { return false }
         maximumWidth = width
         columnWidths = widths
-        rowHeights = Self.rowHeights(for: table, widths: widths, baseFont: baseFont)
+        rowHeights = heights
         renderedSize = NSSize(width: widths.reduce(0, +), height: rowHeights.reduce(0, +))
         setFrameSize(renderedSize)
         layoutCells()
@@ -4894,6 +4978,13 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
             cell.textView.string = cell.originalText
         }
         onEdit(.updateCells(row: row, column: column, texts: values))
+    }
+
+    func finishPendingInputForCheckpoint() {
+        for cell in cells {
+            if cell.textView.hasMarkedText() { cell.textView.unmarkText() }
+            commit(cell.textView)
+        }
     }
 
     private func commit(_ textView: NSTextView) {

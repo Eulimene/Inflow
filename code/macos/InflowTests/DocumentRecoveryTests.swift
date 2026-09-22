@@ -1033,6 +1033,38 @@ final class DocumentRecoveryTests: XCTestCase {
             afterClose = try await store.load()
         }
         XCTAssertTrue(afterClose.records.isEmpty)
+
+        let temporary = TemporaryDocumentDraftStore(rootURL: fixture.root.appendingPathComponent("SessionDrafts"))
+        let fresh = DocumentRecoveryRecord(id: record.id, document: MarkdownDocument(text: "刚输入😀"),
+            originalURL: nil, selectedUTF16Range: NSRange(location: 5, length: 0), viewMode: .preview, verticalScrollOffset: 23)
+        try temporary.write(fresh)
+        XCTAssertEqual(try temporary.records(), [fresh])
+        let relaunched = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot, keyProvider: fixture.keyProvider,
+            temporaryDraftStore: temporary)
+        await relaunched.loadIfNeeded()
+        XCTAssertEqual(relaunched.recoveredRecords.map(\.text), ["刚输入😀"])
+        XCTAssertTrue(try temporary.records().isEmpty, "Remove temporary plaintext only after encrypted recovery owns it")
+        let restored = await relaunched.claimDraftsForAutomaticRestoration()
+        XCTAssertEqual(restored.map(\.text), ["刚输入😀"])
+        XCTAssertEqual(restored.first?.restorationState?.selectedUTF16Location, 5)
+        XCTAssertEqual(restored.first?.restorationState?.verticalScrollOffset, 23)
+        let secondClaim = await relaunched.claimDraftsForAutomaticRestoration()
+        XCTAssertTrue(secondClaim.isEmpty)
+
+        // A blocked recovery handoff must leave the temporary draft available for retry.
+        let retryRoot = fixture.root.appendingPathComponent("blocked-recovery")
+        try Data("blocking file".utf8).write(to: retryRoot)
+        try temporary.write(fresh)
+        let retrying = DocumentRecoveryCoordinator(rootURL: retryRoot, keyProvider: fixture.keyProvider,
+            temporaryDraftStore: temporary)
+        await retrying.loadIfNeeded()
+        XCTAssertNotNil(retrying.protectionErrorMessage)
+        XCTAssertEqual(try temporary.records(), [fresh])
+        try FileManager.default.removeItem(at: retryRoot)
+        await retrying.retryProtection()
+        XCTAssertNil(retrying.protectionErrorMessage)
+        XCTAssertEqual(retrying.recoveredRecords.map(\.text), [fresh.text])
+        XCTAssertTrue(try temporary.records().isEmpty)
     }
 
     @MainActor
