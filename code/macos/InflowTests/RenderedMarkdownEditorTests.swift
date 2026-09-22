@@ -1102,6 +1102,15 @@ final class RenderedMarkdownEditorTests: XCTestCase {
 
         let richSource = "| **Name** | Docs |\n| --- | --- |\n| Alice | [Open](guide.md) |"
         let richTable = try XCTUnwrap(RenderedMarkdownEditor.plan(for: richSource).tables.first)
+        let renamed = try XCTUnwrap(RenderedMarkdownTableEditing.replacement(for: richTable,
+            applying: .updateCell(row: 1, column: 1, text: "Opened")))
+        XCTAssertTrue(renamed.contains("[Opened](guide.md)"), "Editing a link label must retain its destination")
+        let heading = try XCTUnwrap(RenderedMarkdownTableEditing.replacement(for: richTable,
+            applying: .updateCell(row: 0, column: 0, text: "Names")))
+        XCTAssertTrue(heading.contains("**Names**"), "Editing formatted text must retain its delimiters")
+        let same = try XCTUnwrap(RenderedMarkdownTableEditing.replacement(for: richTable,
+            applying: .updateCell(row: 0, column: 0, text: "Name")))
+        XCTAssertTrue(same.contains("**Name**"))
         XCTAssertEqual(
             RenderedMarkdownTableEditing.replacement(
                 for: richTable,
@@ -2581,6 +2590,44 @@ private extension NSRange {
 }
 
 extension RenderedMarkdownEditorTests {
+    @MainActor
+    func testRichClipboardConversionAndExplicitPlainTextPaste() throws {
+        let html = "<!DOCTYPE html><html><body><h2>标题</h2><p>正文<strong>粗体</strong>与<a href='guide.md'>链接</a></p><ul><li>甲</li><li>乙</li></ul><table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2<br>3</td></tr></table><script>alert(1)</script></body></html>"
+        let markdown = try XCTUnwrap(MarkdownClipboardCodec.markdown(fromHTML: html))
+        XCTAssertTrue(markdown.hasPrefix("## 标题\n\n"))
+        XCTAssertTrue(markdown.contains("**粗体**"))
+        XCTAssertTrue(markdown.contains("[链接](<guide.md>)"))
+        XCTAssertTrue(markdown.contains("- 甲\n- 乙"))
+        XCTAssertFalse(markdown.contains("alert"))
+        let parsed = RenderedMarkdownEditor.plan(for: markdown)
+        XCTAssertEqual(parsed.tables.first?.rows[1][1].text, "2\n3")
+        XCTAssertEqual(MarkdownClipboardCodec.markdown(fromHTML: "<a href='javascript:alert(1)'>文字</a>"), "文字")
+        XCTAssertNil(MarkdownClipboardCodec.markdown(fromHTML: "<!DOCTYPE x SYSTEM 'file:///private/test'><p>x</p>"))
+        let board = NSPasteboard.general
+        let saved = (board.pasteboardItems ?? []).map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types { if let data = item.data(forType: type) { copy.setData(data, forType: type) } }
+            return copy
+        }
+        defer { board.clearContents(); board.writeObjects(saved) }
+        let session = MarkdownSourceEditorSession()
+        session.setPresentation(.rendered, source: "", onLinkClick: nil)
+        board.clearContents()
+        board.setString("文字", forType: .string)
+        board.setString("<p><strong>文字</strong></p>", forType: .html)
+        session.textView.paste(nil)
+        XCTAssertEqual(session.textView.string, "**文字**")
+        session.textView.setSelectedRange(NSRange(location: 0, length: session.textView.string.utf16.count))
+        session.textView.pasteAsPlainText(nil)
+        XCTAssertEqual(session.textView.string, "文字")
+        session.textView.setSelectedRange(NSRange(location: 0, length: 2))
+        session.textView.copy(nil)
+        XCTAssertNotNil(board.string(forType: .html))
+        session.textView.copyAsMarkdown(nil)
+        XCTAssertEqual(board.string(forType: .string), "文字")
+        XCTAssertNil(board.string(forType: .html))
+    }
+
     @MainActor
     func testContinuousTableNavigationAndCommandReturn() async throws {
         let session = MarkdownSourceEditorSession()

@@ -128,6 +128,87 @@ struct RenderedMarkdownTable: Equatable, Sendable {
     let rows: [[RenderedMarkdownTableCell]]
 }
 
+/// Visible characters keep their original source positions so a label edit does
+/// not discard its emphasis delimiters or link destination.
+struct MarkdownInlineProjection {
+    let source: String
+    let text: String
+    let sourceCharacters: [NSRange]
+    let plan: RenderedMarkdownPlan
+
+    init(_ source: String) {
+        self.source = source
+        plan = RenderedMarkdownEditor.plan(for: source)
+        let units = Array(source.utf16)
+        let raw = source as NSString
+        let hidden = plan.markers.map(\.sourceRange.utf16Range)
+        var characters: [UInt16] = [], positions: [NSRange] = []
+        var index = 0
+        while index < units.count {
+            if let marker = hidden.first(where: { $0.length > 0 && NSLocationInRange(index, $0) }) {
+                index = NSMaxRange(marker)
+                continue
+            }
+            let tail = raw.substring(from: index)
+            if let lineBreak = ["<br>", "<br/>", "<br />"].first(where: { tail.lowercased().hasPrefix($0) }) {
+                characters.append(10)
+                positions.append(NSRange(location: index, length: lineBreak.utf16.count))
+                index += lineBreak.utf16.count
+            } else if units[index] == 92, index + 1 < units.count,
+                      units[index + 1] < 128, CharacterSet.punctuationCharacters.contains(UnicodeScalar(units[index + 1])!) {
+                characters.append(units[index + 1])
+                positions.append(NSRange(location: index, length: 2))
+                index += 2
+            } else {
+                characters.append(units[index])
+                positions.append(NSRange(location: index, length: 1))
+                index += 1
+            }
+        }
+        text = String(decoding: characters, as: UTF16.self)
+        sourceCharacters = positions
+    }
+
+    func sourceRange(for visible: NSRange) -> NSRange? {
+        guard NSMaxRange(visible) <= sourceCharacters.count else { return nil }
+        if visible.length == 0 {
+            let position = visible.location > 0 ? NSMaxRange(sourceCharacters[visible.location - 1])
+                : (sourceCharacters.first?.location ?? 0)
+            return NSRange(location: position, length: 0)
+        }
+        let start = sourceCharacters[visible.location].location
+        let end = NSMaxRange(sourceCharacters[NSMaxRange(visible) - 1])
+        return NSRange(location: start, length: end - start)
+    }
+
+    @MainActor
+    func applyStyles(to output: NSMutableAttributedString, font: NSFont) {
+        guard output.string == text else { return }
+        for style in plan.contentStyles {
+            let indices = sourceCharacters.indices.filter {
+                NSIntersectionRange(sourceCharacters[$0], style.sourceRange.utf16Range).length > 0
+            }
+            guard let first = indices.first, let last = indices.last else { continue }
+            let range = NSRange(location: first, length: last - first + 1)
+            switch style.kind {
+            case .strong, .emphasis:
+                var replacements: [(NSRange, NSFont)] = []
+                output.enumerateAttribute(.font, in: range) { value, run, _ in
+                    replacements.append((run, NSFontManager.shared.convert((value as? NSFont) ?? font,
+                        toHaveTrait: style.kind == .strong ? .boldFontMask : .italicFontMask)))
+                }
+                for (run, value) in replacements { output.addAttribute(.font, value: value, range: run) }
+            case .inlineCode:
+                output.addAttributes([.font: NSFont.monospacedSystemFont(ofSize: font.pointSize * 0.9, weight: .regular),
+                    .backgroundColor: NSColor.quaternaryLabelColor], range: range)
+            case .strikethrough:
+                output.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: range)
+            default: break
+            }
+        }
+    }
+}
+
 /// Strategy object for translating semantic table content into native editor widths.
 /// Markdown parsing stays in Rust; this policy owns only platform typography and the
 /// currently available viewport width.
@@ -216,7 +297,17 @@ enum RenderedMarkdownTableEditing {
         switch edit {
         case let .updateCell(row, column, text):
             guard rows.indices.contains(row), rows[row].indices.contains(column) else { return nil }
-            rows[row][column] = escapedCell(text)
+            let cell = table.rows[row][column]
+            if cell.text == text { break }
+            let projection = MarkdownInlineProjection(cell.markdown)
+            if projection.text == cell.text,
+               let change = EditorEngineTextDiff.replacement(from: cell.text, to: text),
+               let visible = MarkdownSourceRange.navigationTarget(forUTF8Range: change.start..<change.end, in: cell.text),
+               let target = projection.sourceRange(for: visible.revealRange) {
+                rows[row][column] = (cell.markdown as NSString).replacingCharacters(in: target, with: escapedCell(change.inserted, trim: false))
+            } else {
+                rows[row][column] = escapedCell(text)
+            }
         case let .updateCells(row, column, texts):
             guard row >= 0, column >= 0, !texts.isEmpty,
                   texts.allSatisfy({ !$0.isEmpty }), row <= rows.count, column < columnCount else { return nil }
@@ -273,14 +364,14 @@ enum RenderedMarkdownTableEditing {
         "| " + cells.joined(separator: " | ") + " |"
     }
 
-    private static func escapedCell(_ text: String) -> String {
-        text
+    private static func escapedCell(_ text: String, trim: Bool = true) -> String {
+        let escaped = text
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "|", with: "\\|")
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\n", with: "<br>")
             .replacingOccurrences(of: "\r", with: "<br>")
-            .trimmingCharacters(in: .whitespaces)
+        return trim ? escaped.trimmingCharacters(in: .whitespaces) : escaped
     }
 }
 
@@ -511,6 +602,88 @@ struct MarkdownWritingEdit: Equatable {
 }
 
 enum MarkdownWritingAction { case newline, backwardDelete, indent, outdent }
+
+/// Clipboard HTML is parsed as inert data. No WebView, script, stylesheet or
+/// external entity participates in converting a paste into Markdown.
+enum MarkdownClipboardCodec {
+    static func markdown(fromHTML html: String) -> String? {
+        let inert = html.replacingOccurrences(of: #"(?is)<!DOCTYPE\s+html\s*>"#, with: "", options: .regularExpression)
+        guard html.utf8.count <= 1_000_000,
+              !inert.localizedCaseInsensitiveContains("<!ENTITY"),
+              !inert.localizedCaseInsensitiveContains("<!DOCTYPE"),
+              let document = try? XMLDocument(xmlString: inert, options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever]),
+              let root = document.rootElement() else { return nil }
+        return render(root).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func escaped(_ text: String) -> String {
+        text.reduce(into: "") { result, character in
+            if "\\`*_[]~".contains(character) { result.append("\\") }
+            result.append(character)
+        }
+    }
+
+    private static func target(_ text: String?) -> String? {
+        guard let text, !text.isEmpty, !text.contains(where: { $0.isNewline || $0.asciiValue == 0 }) else { return nil }
+        if let scheme = URL(string: text)?.scheme?.lowercased(), !["https", "http", "file", "mailto"].contains(scheme) { return nil }
+        return "<" + text.replacingOccurrences(of: "<", with: "%3C").replacingOccurrences(of: ">", with: "%3E") + ">"
+    }
+
+    private static func render(_ node: XMLNode, depth: Int = 0) -> String {
+        guard depth < 64 else { return escaped(node.stringValue ?? "") }
+        if node.kind == .text {
+            return escaped((node.stringValue ?? "").replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression))
+        }
+        guard let element = node as? XMLElement else { return "" }
+        let name = (element.name ?? "").lowercased()
+        if ["head", "script", "style", "iframe", "object", "embed", "form", "input", "noscript"].contains(name) { return "" }
+        let children = element.children ?? []
+        let content = children.map { render($0, depth: depth + 1) }.joined()
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch name {
+        case "p", "div", "section", "article": return trimmed.isEmpty ? "" : trimmed + "\n\n"
+        case "br": return "\n"
+        case "strong", "b": return trimmed.isEmpty ? content : "**" + trimmed + "**"
+        case "em", "i": return trimmed.isEmpty ? content : "*" + trimmed + "*"
+        case "del", "s", "strike": return trimmed.isEmpty ? content : "~~" + trimmed + "~~"
+        case "h1", "h2", "h3", "h4", "h5", "h6":
+            return String(repeating: "#", count: Int(name.suffix(1)) ?? 1) + " " + trimmed + "\n\n"
+        case "blockquote": return trimmed.components(separatedBy: "\n").map { "> " + $0 }.joined(separator: "\n") + "\n\n"
+        case "ul", "ol":
+            return children.compactMap { $0 as? XMLElement }.filter { $0.name?.lowercased() == "li" }.enumerated().map { index, item in
+                let body = render(item, depth: depth + 1).trimmingCharacters(in: .whitespacesAndNewlines)
+                let marker = name == "ol" ? "\(index + 1). " : "- "
+                return marker + body.replacingOccurrences(of: "\n", with: "\n" + String(repeating: " ", count: marker.count))
+            }.joined(separator: "\n") + "\n\n"
+        case "pre":
+            let code = (element.stringValue ?? "").trimmingCharacters(in: .newlines)
+            let fence = String(repeating: "`", count: max(3, code.split(whereSeparator: { $0 != "`" }).map(\.count).max().map { $0 + 1 } ?? 3))
+            return fence + "\n" + code + "\n" + fence + "\n\n"
+        case "code":
+            let code = (element.stringValue ?? "").replacingOccurrences(of: "\n", with: " ")
+            let fence = String(repeating: "`", count: max(1, code.split(whereSeparator: { $0 != "`" }).map(\.count).max().map { $0 + 1 } ?? 1))
+            return fence + " " + code + " " + fence
+        case "a":
+            guard let url = target(element.attribute(forName: "href")?.stringValue) else { return content }
+            return "[" + trimmed + "](" + url + ")"
+        case "img":
+            let alt = escaped(element.attribute(forName: "alt")?.stringValue ?? "图片")
+            guard let url = target(element.attribute(forName: "src")?.stringValue) else { return alt }
+            return "![" + alt + "](" + url + ")"
+        case "table":
+            let rows = ((try? element.nodes(forXPath: ".//tr")) ?? []).compactMap { $0 as? XMLElement }.map { row in
+                (row.children ?? []).compactMap { $0 as? XMLElement }.filter { ["th", "td"].contains($0.name?.lowercased() ?? "") }.map {
+                    render($0, depth: depth + 1).trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "|", with: "\\|").replacingOccurrences(of: "\n", with: "<br>")
+                }
+            }.filter { !$0.isEmpty }
+            guard let first = rows.first else { return content }
+            let count = rows.map(\.count).max() ?? first.count
+            func row(_ cells: [String]) -> String { "| " + (cells + Array(repeating: "", count: count - cells.count)).joined(separator: " | ") + " |" }
+            return ([row(first), row(Array(repeating: "---", count: count))] + rows.dropFirst().map(row)).joined(separator: "\n") + "\n\n"
+        default: return content
+        }
+    }
+}
 
 /// Interpret a gesture before touching TextKit. The resulting source and selection
 /// are committed together, so rendering never decides where an edit should land.

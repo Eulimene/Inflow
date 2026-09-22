@@ -560,7 +560,8 @@ final class EditorEngineClientTests: XCTestCase {
             for character in "hello 世界😀\nsecond line\nthird" {
                 if character == "\n" { session.textView.insertNewline(nil) }
                 else { session.textView.insertText(String(character), replacementRange: session.textView.selectedRange()) }
-                expected.append(character)
+                if character == "\n", presentation == .rendered { expected += "\n\n" }
+                else { expected.append(character) }
                 coordinator.update(parent: editor, textView: session.textView)
                 XCTAssertEqual(session.textView.string, expected)
                 XCTAssertEqual(session.textView.selectedRange().location, expected.utf16.count)

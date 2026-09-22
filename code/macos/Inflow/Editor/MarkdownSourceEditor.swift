@@ -4156,6 +4156,11 @@ final class WindowAwareTextView: NSTextView {
 
     override func keyDown(with event: NSEvent) {
         if isLiveMarkdown, !hasActiveComposition,
+           event.modifierFlags.intersection([.shift, .command, .option, .control]) == [.shift, .command] {
+            if event.charactersIgnoringModifiers?.lowercased() == "v" { pasteAsPlainText(nil); return }
+            if event.charactersIgnoringModifiers?.lowercased() == "c" { copyAsMarkdown(nil); return }
+        }
+        if isLiveMarkdown, !hasActiveComposition,
            event.modifierFlags.intersection([.shift, .command, .option, .control]) == [.command],
            event.keyCode == 36 || event.keyCode == 76 {
             cancelOperation(nil)
@@ -4396,11 +4401,51 @@ final class WindowAwareTextView: NSTextView {
     }
 
     override func paste(_ sender: Any?) {
+        if isLiveMarkdown, isEditable, !hasActiveComposition {
+            let board = NSPasteboard.general
+            if let markdown = board.string(forType: Self.markdownClipboardType) {
+                pasteMarkdown(markdown)
+                return
+            }
+            if let html = board.string(forType: .html), let markdown = MarkdownClipboardCodec.markdown(fromHTML: html), !markdown.isEmpty {
+                pasteMarkdown(markdown)
+                return
+            }
+        }
         if consumeImagePaste(from: .general) { return }
         breakEngineTypingGroup()
         suppressesAutomaticEngineGrouping = true
         defer { suppressesAutomaticEngineGrouping = false }
         super.paste(sender)
+    }
+
+    private static let markdownClipboardType = NSPasteboard.PasteboardType("com.inflow.markdown")
+
+    override func copy(_ sender: Any?) {
+        guard isLiveMarkdown, selectedRange().length > 0 else { super.copy(sender); return }
+        let source = (string as NSString).substring(with: selectedRange())
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.setString(source, forType: .string)
+        board.setString(source, forType: Self.markdownClipboardType)
+        if let html = try? MarkdownRenderer.htmlFragment(for: source) { board.setString(html, forType: .html) }
+    }
+
+    @objc func copyAsMarkdown(_ sender: Any?) {
+        guard selectedRange().length > 0 else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString((string as NSString).substring(with: selectedRange()), forType: .string)
+    }
+
+    override func pasteAsPlainText(_ sender: Any?) {
+        guard isLiveMarkdown, isEditable, !hasActiveComposition, let value = NSPasteboard.general.string(forType: .string)
+        else { super.pasteAsPlainText(sender); return }
+        pasteMarkdown(value)
+    }
+
+    private func pasteMarkdown(_ value: String) {
+        _ = applyWritingEdit(MarkdownWritingEdit(range: selectedRange(), text: value,
+            selection: NSRange(location: selectedRange().location + value.utf16.count, length: 0)))
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -4439,7 +4484,15 @@ final class WindowAwareTextView: NSTextView {
         }
         guard let location = clickableLinkLocation(at: localPoint) else {
             let menu = super.menu(for: event) ?? NSMenu()
-            if isLiveMarkdown { addRenderRetry(to: menu) }
+            if isLiveMarkdown {
+                let copy = NSMenuItem(title: "复制 Markdown", action: #selector(copyAsMarkdown(_:)), keyEquivalent: "")
+                copy.target = self
+                menu.addItem(copy)
+                let paste = NSMenuItem(title: "粘贴纯文本", action: #selector(pasteAsPlainText(_:)), keyEquivalent: "")
+                paste.target = self
+                menu.addItem(paste)
+                addRenderRetry(to: menu)
+            }
             return menu
         }
         let menu = NSMenu(title: "")
@@ -4825,6 +4878,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
                         .paragraphStyle: paragraph,
                     ]
                 )
+                MarkdownInlineProjection(cell.markdown).applyStyles(to: attributed, font: font)
                 for link in cell.links
                 where link.visibleRange.length > 0
                     && NSMaxRange(link.visibleRange) <= attributed.length {
@@ -4965,11 +5019,22 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         table: RenderedMarkdownTable,
         onEdit: @escaping (RenderedMarkdownTableEdit) -> Void
     ) {
+        let previous = self.table
         needsContentMeasurement = needsContentMeasurement || self.table.rows.map { $0.map(\.text) } != table.rows.map { $0.map(\.text) }
         self.table = table
         self.onEdit = onEdit
         for cell in cells {
             cell.originalText = table.rows[cell.row][cell.column].text
+            let model = table.rows[cell.row][cell.column]
+            if previous.rows.indices.contains(cell.row), previous.rows[cell.row].indices.contains(cell.column),
+               previous.rows[cell.row][cell.column].markdown != model.markdown,
+               !cell.textView.hasMarkedText(), let storage = cell.textView.textStorage, storage.string == model.text {
+                let full = NSRange(location: 0, length: storage.length)
+                storage.addAttribute(.font, value: cell.textView.caretFont, range: full)
+                storage.removeAttribute(.strikethroughStyle, range: full)
+                storage.removeAttribute(.backgroundColor, range: full)
+                MarkdownInlineProjection(model.markdown).applyStyles(to: storage, font: cell.textView.caretFont)
+            }
         }
     }
 
