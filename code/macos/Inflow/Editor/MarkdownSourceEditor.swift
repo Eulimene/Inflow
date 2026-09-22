@@ -58,6 +58,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var javaScriptResults: [String: JavaScriptRenderedOutput] = [:]
     private var javaScriptFailures: Set<String> = []
     private var javaScriptSnapshot = ""
+    private var latestRenderConfiguration = PreviewAppearanceConfiguration.default
 
     private var renderedRevealedMarkers: [NSRange] = []
     private var renderedInteractionTask: Task<Void, Never>?
@@ -190,9 +191,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             self?.scheduleRenderedInteractionPresentation()
         }
         textView.selectionVisibilityHandler = { [weak self] in self?.centerSelectionForTypewriterMode() }
+        textView.retryRenderingHandler = { [weak self] in self?.retryRenderedResources() }
         textView.effectiveAppearanceDidChangeHandler = { [weak self] in
             guard let self, self.presentation == .rendered else { return }
             self.applyRenderedPresentation(source: self.textView.string, force: true)
+            self.retryRenderedResources()
         }
         NotificationCenter.default.addObserver(
             self,
@@ -273,6 +276,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         for source: String,
         configuration: PreviewAppearanceConfiguration
     ) async -> EditorEngineDerivedContent? {
+        latestRenderConfiguration = configuration
         textView.readingColumnWidth = CGFloat(configuration.contentWidth)
         cancelDeferredMermaidRendering()
         deferredMermaidGeneration &+= 1
@@ -1258,12 +1262,18 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
 
     private func applyJavaScriptResources(_ plan: RenderedMarkdownPlan, editingRange: NSRange?, storage: NSTextStorage) {
         applyCodeMirrorTokens(plan, storage: storage)
+        for block in plan.localSourceBlocks where block.reasons.contains(.mermaid) {
+            applyRenderFailure("图表渲染失败，请检查语法；右键可重新渲染。", range: block.sourceRange.utf16Range, storage: storage)
+        }
         for request in plan.renderRequests where request.kind == "math" {
             guard let svg = javaScriptResults[request.cacheKey]?.svg,
                   let image = NSImage(data: Data(svg.utf8)) else {
                 if javaScriptFailures.contains(request.cacheKey) {
                     storage.addAttributes([.toolTip: "公式渲染失败，请检查 TeX 语法。", .underlineStyle: NSUnderlineStyle.single.rawValue,
                         .underlineColor: NSColor.systemRed], range: request.sourceRange.utf16Range)
+                    if request.display {
+                        applyRenderFailure("公式渲染失败，请检查 TeX；右键可重新渲染。", range: request.sourceRange.utf16Range, storage: storage)
+                    }
                 }
                 continue
             }
@@ -1278,6 +1288,31 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                                sourceRange: request.sourceRange.utf16Range,
                                fillsAvailableWidth: request.display,
                                collapsesSourceLines: request.display, storage: storage)
+        }
+    }
+
+    private func applyRenderFailure(_ message: String, range: NSRange, storage: NSTextStorage) {
+        let width = min(560, max(180, textView.bounds.width - textView.textContainerInset.width * 2))
+        let image = NSImage(size: NSSize(width: width, height: 32), flipped: false) { rect in
+            NSColor.systemRed.withAlphaComponent(0.10).setFill()
+            rect.fill()
+            (message as NSString).draw(in: rect.insetBy(dx: 8, dy: 7), withAttributes: [
+                .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.systemRed])
+            return true
+        }
+        let size = textView.setRenderedImage(image, alternative: message, sourceRange: range,
+            fillsAvailableWidth: false, placement: .belowSource)
+        reserveSpaceBelowRenderedSource(sourceRange: range, size: size, storage: storage)
+    }
+
+    private func retryRenderedResources() {
+        guard !textView.hasActiveComposition else { return }
+        javaScriptFailures.removeAll()
+        let source = textView.string
+        let configuration = latestRenderConfiguration
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            _ = await self.deriveContent(for: source, configuration: configuration)
         }
     }
 
@@ -3183,6 +3218,7 @@ final class WindowAwareTextView: NSTextView {
     var isLiveMarkdown = false { didSet { updateReadingColumn() } }
     var readingColumnWidth = CGFloat(MarkdownRenderMetrics.readingWidth) { didSet { updateReadingColumn() } }
     var selectionVisibilityHandler: (() -> Void)?
+    var retryRenderingHandler: (() -> Void)?
     var markdownAutoPairEnabled = true
     var writingPlan: RenderedMarkdownPlan?
     private var insertedCloser: (location: Int, text: String)?
@@ -4118,6 +4154,16 @@ final class WindowAwareTextView: NSTextView {
         super.insertLineBreak(sender)
     }
 
+    override func keyDown(with event: NSEvent) {
+        if isLiveMarkdown, !hasActiveComposition,
+           event.modifierFlags.intersection([.shift, .command, .option, .control]) == [.command],
+           event.keyCode == 36 || event.keyCode == 76 {
+            cancelOperation(nil)
+            return
+        }
+        super.keyDown(with: event)
+    }
+
     @discardableResult
     private func performEditingIntent(_ intent: MarkdownEditingIntent) -> Bool {
         guard isLiveMarkdown, isEditable, !hasActiveComposition else { return false }
@@ -4381,10 +4427,20 @@ final class WindowAwareTextView: NSTextView {
             item.target = self
             item.representedObject = request
             menu.addItem(item)
+            let copy = NSMenuItem(title: "复制代码内容", action: #selector(copyCodeContent(_:)), keyEquivalent: "")
+            copy.target = self
+            copy.representedObject = request
+            menu.addItem(copy)
+            let finish = NSMenuItem(title: "完成编辑", action: #selector(cancelOperation(_:)), keyEquivalent: "")
+            finish.target = self
+            menu.addItem(finish)
+            addRenderRetry(to: menu)
             return menu
         }
         guard let location = clickableLinkLocation(at: localPoint) else {
-            return super.menu(for: event)
+            let menu = super.menu(for: event) ?? NSMenu()
+            if isLiveMarkdown { addRenderRetry(to: menu) }
+            return menu
         }
         let menu = NSMenu(title: "")
         let item = NSMenuItem(
@@ -4398,10 +4454,27 @@ final class WindowAwareTextView: NSTextView {
         return menu
     }
 
+    private func addRenderRetry(to menu: NSMenu) {
+        let retry = NSMenuItem(title: "重新渲染图表与公式", action: #selector(retryResources(_:)), keyEquivalent: "")
+        retry.target = self
+        menu.addItem(retry)
+    }
+
+    @objc private func retryResources(_ sender: Any?) { retryRenderingHandler?() }
+
+    @objc private func copyCodeContent(_ sender: NSMenuItem) {
+        guard let old = sender.representedObject as? JavaScriptRenderRequest,
+              let current = RenderedMarkdownEditor.plan(for: string).renderRequests.first(where: {
+                  $0.sourceRange == old.sourceRange && $0.source == old.source
+              }) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(current.source, forType: .string)
+    }
+
     @objc private func editCodeLanguage(_ sender: NSMenuItem) {
         guard let old = sender.representedObject as? JavaScriptRenderRequest,
               let request = RenderedMarkdownEditor.plan(for: string).renderRequests.first(where: {
-                  $0.kind == "code" && $0.sourceRange == old.sourceRange && $0.source == old.source
+                  $0.kind != "math" && $0.sourceRange == old.sourceRange && $0.source == old.source
               }) else { return }
         let source = string as NSString
         let opening = source.lineRange(for: NSRange(location: request.sourceRange.utf16Range.location, length: 0))

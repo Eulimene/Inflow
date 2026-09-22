@@ -96,8 +96,8 @@
     return output;
   }
   const MermaidAdapter = {
-    async render(source, host, id) {
-      mermaid.initialize({startOnLoad:false, securityLevel:"strict", theme:"default", htmlLabels:false,
+    async render(source, host, id, display, dark) {
+      mermaid.initialize({startOnLoad:false, securityLevel:"strict", theme:dark ? "dark" : "default", htmlLabels:false,
         fontFamily:"'trebuchet ms', verdana, arial, 'PingFang SC', sans-serif",
         flowchart:{htmlLabels:false, curve:"linear", useMaxWidth:false},
         secure:["securityLevel", "startOnLoad", "htmlLabels", "flowchart", "maxTextSize", "maxEdges"],
@@ -107,12 +107,12 @@
     }
   };
   const FlowchartAdapter = {
-    async render(source, host) {
+    async render(source, host, id, display, dark) {
       const diagram = flowchart.parse(source);
       for (const symbol of Object.values(diagram.symbols)) {
         if (typeof symbol.text === "string") symbol.text = labelBreaks(symbol.text, "\n");
       }
-      diagram.drawSVG(host, {"line-width":1.5, "font-size":16, "font-family":"Arial, PingFang SC, sans-serif", "line-color":"#333", "element-color":"#9370DB", fill:"#ECECFF", "font-color":"#333"});
+      diagram.drawSVG(host, {"line-width":1.5, "font-size":16, "font-family":"Arial, PingFang SC, sans-serif", "line-color":dark ? "#dddddd" : "#333", "element-color":"#9370DB", fill:dark ? "#303044" : "#ECECFF", "font-color":dark ? "#eeeeee" : "#333"});
     }
   };
   const SequenceAdapter = {
@@ -135,7 +135,7 @@
       host.append(node);
     }
   };
-  function standaloneSVG(host, kind) {
+  function standaloneSVG(host, kind, dark) {
     const svg = host.querySelector("svg");
     if (!svg || svg.querySelector("foreignObject")) throw Error("Renderer did not produce a standalone SVG");
     // Raphael reuses marker definitions from earlier diagrams. Copy them into this SVG
@@ -210,7 +210,7 @@
       const bounds = svg.viewBox.baseVal;
       background.setAttribute("x", bounds.x); background.setAttribute("y", bounds.y);
       background.setAttribute("width", bounds.width); background.setAttribute("height", bounds.height);
-      background.setAttribute("fill", "#ffffff");
+      background.setAttribute("fill", dark ? "#1f1f1f" : "#ffffff");
       svg.prepend(background);
     }
     return {svg:new XMLSerializer().serializeToString(svg), width:Math.ceil(width), height:Math.ceil(height)};
@@ -223,11 +223,18 @@
     if (!adapter) throw Error("Unknown renderer");
     const host = document.createElement("div");
     host.id = "inflow-host-" + (++nextID);
-    host.style.cssText = "display:table;color:#333;font-size:16px;background:white";
+    host.style.cssText = `display:table;color:${request.dark ? "#eeeeee" : "#333"};font-size:16px;background:${request.dark ? "#1f1f1f" : "white"}`;
     document.body.append(host);
     try {
-      await adapter.render(request.source.replace(/\r\n?/g, "\n"), host, "inflow-svg-" + nextID, !!request.display);
-      return standaloneSVG(host, request.kind);
+      await adapter.render(request.source.replace(/\r\n?/g, "\n"), host, "inflow-svg-" + nextID, !!request.display, !!request.dark);
+      if (request.dark && request.kind === "sequence") {
+        for (const text of host.querySelectorAll("text")) text.setAttribute("fill", "#eeeeee");
+        for (const shape of host.querySelectorAll("rect,path,line,polygon")) {
+          shape.setAttribute("stroke", "#dddddd");
+          if (shape.getAttribute("fill") !== "none") shape.setAttribute("fill", "#303044");
+        }
+      }
+      return standaloneSVG(host, request.kind, !!request.dark);
     } finally { host.remove(); }
   }
   async function renderDocument() {
@@ -235,7 +242,8 @@
       const kind = element.dataset.inflowRender;
       const source = element.textContent;
       try {
-        const result = await render({kind, source, language:element.dataset.language || kind, display:element.dataset.display === "true"});
+        const result = await render({kind, source, language:element.dataset.language || kind, display:element.dataset.display === "true",
+          dark:getComputedStyle(document.documentElement).colorScheme === "dark"});
         element.innerHTML = result.svg || result.html;
         element.removeAttribute("data-inflow-render");
       } catch (_) {

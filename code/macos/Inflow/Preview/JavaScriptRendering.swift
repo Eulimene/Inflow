@@ -8,10 +8,11 @@ struct JavaScriptRenderRequest: Equatable, Sendable {
     let language: String
     let source: String
     let display: Bool
+    var dark = false
 
-    var cacheKey: String { "\(kind)\u{0}\(language)\u{0}\(display)\u{0}\(source)" }
+    var cacheKey: String { "\(kind)\u{0}\(language)\u{0}\(display)\u{0}\(dark)\u{0}\(source)" }
     var arguments: [String: Any] {
-        ["kind": kind, "language": language, "source": source, "display": display]
+        ["kind": kind, "language": language, "source": source, "display": display, "dark": dark]
     }
 }
 
@@ -229,14 +230,16 @@ final class JavaScriptRenderWorker: NSObject, WKNavigationDelegate {
 }
 
 extension JavaScriptRenderService {
-    func resolveDiagrams(in plan: RenderedMarkdownPlan, revision: UInt64) async -> EditorEngineMermaidResolution? {
+    func resolveDiagrams(in plan: RenderedMarkdownPlan, revision: UInt64, dark: Bool = false) async -> EditorEngineMermaidResolution? {
         var diagrams: [RenderedMarkdownMermaidDiagram] = []
         var failures: [RenderedMarkdownSourceRange] = []
         for request in plan.renderRequests where ["mermaid", "flow", "sequence"].contains(request.kind)
             && plan.mermaidDiagrams.contains(where: { $0.sourceRange == request.sourceRange }) {
             guard !Task.isCancelled else { return nil }
             do {
-                let result = try await render(request)
+                var themed = request
+                themed.dark = dark
+                let result = try await render(themed)
                 guard let svg = result.svg, let width = result.width, let height = result.height else {
                     throw JavaScriptRenderingError.invalidResult
                 }

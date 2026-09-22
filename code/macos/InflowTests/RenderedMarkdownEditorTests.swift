@@ -813,6 +813,12 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertTrue(plan.mermaidDiagrams.isEmpty)
         XCTAssertEqual(plan.localSourceBlocks.flatMap(\.reasons), [.mermaid])
         XCTAssertEqual(plan.sourceSnapshot, source)
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        session.installSharedRenderedPlan(plan, source: source)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        XCTAssertNotNil(session.textView.renderedImage(atUTF16Location: 0), "Failed diagrams retain source and show a visible diagnostic")
+        XCTAssertEqual(session.textView.string, source)
     }
 
     @MainActor

@@ -1522,6 +1522,17 @@ final class MarkdownRendererTests: XCTestCase {
             XCTAssertNotNil(NSImage(data: Data(svg.utf8)), language)
             XCTAssertFalse(svg.contains("<script"), language)
             XCTAssertFalse(svg.contains("foreignObject"), language)
+            if language != "math" {
+                var darkRequest = request
+                darkRequest.dark = true
+                XCTAssertNotEqual(darkRequest.cacheKey, request.cacheKey)
+                let darkResult = try await JavaScriptRenderService.shared.render(darkRequest)
+                let darkSVG = try XCTUnwrap(darkResult.svg)
+                XCTAssertTrue(darkSVG.contains("#1f1f1f"), language)
+                XCTAssertNotEqual(darkSVG, svg, language)
+                XCTAssertNotNil(darkResult.pdfData, language)
+                XCTAssertEqual(darkRequest.source, request.source)
+            }
         }
         // The same adapter is bundled into HTML exports. Labels must become separate
         // SVG text lines before native SVG/PDF conversion, without changing the source.

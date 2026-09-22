@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import os
 
 private final class TemporaryDerivedContentCache: @unchecked Sendable {
@@ -478,7 +478,9 @@ final class EditorEngineClient {
             deferMermaid: true
         ) else { return nil }
         return await JavaScriptRenderService.shared.resolveDiagrams(
-            in: content.nativeRenderPlan, revision: content.revision
+            in: content.nativeRenderPlan, revision: content.revision,
+            dark: (configuration.colorScheme.nativeAppearance ?? NSApp.effectiveAppearance)
+                .bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         )
     }
 
