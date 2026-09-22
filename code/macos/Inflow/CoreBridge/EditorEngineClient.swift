@@ -418,9 +418,15 @@ enum EditorEngineSynchronousCommands {
 final class EditorEngineClient {
     private let client = EditorEngineTransport()
     private var lastSubmittedText: String?
+    private var lastSubmittedSelection: NSRange?
     private var pending: Task<Void, Never>?
     var onHistoryStateChange: ((Bool, Bool) -> Void)?
     var onAuthoritativeSnapshot: ((EditorEngineDocumentSnapshot) -> Void)?
+
+    func observeSelection(text: String, selectionUTF16: NSRange) {
+        guard lastSubmittedText?.utf8.elementsEqual(text.utf8) == true else { return }
+        lastSubmittedSelection = selectionUTF16
+    }
 
     func submit(
         text: String,
@@ -428,8 +434,10 @@ final class EditorEngineClient {
         groupID: String? = nil
     ) {
         guard lastSubmittedText.map({ !$0.utf8.elementsEqual(text.utf8) }) ?? true
-        else { return }
+        else { observeSelection(text: text, selectionUTF16: selectionUTF16); return }
+        let selectionBefore = lastSubmittedSelection
         lastSubmittedText = text
+        lastSubmittedSelection = selectionUTF16
         let previous = pending
         pending = Task {
             await previous?.value
@@ -437,6 +445,7 @@ final class EditorEngineClient {
             guard let snapshot = await client.synchronize(
                 to: text,
                 selectionUTF16: selectionUTF16,
+                selectionBeforeUTF16: selectionBefore,
                 groupID: groupID
             ) else { return }
             guard !Task.isCancelled,
@@ -499,7 +508,8 @@ final class EditorEngineClient {
               )
         else { return nil }
         if lastSubmittedText?.utf8.elementsEqual(text.utf8) == true {
-            lastSubmittedText = mutation.resultingSource
+            lastSubmittedSelection = MarkdownSourceRange.navigationTarget(forUTF8Range: mutation.selectionUTF8Range, in: mutation.resultingSource)?.revealRange
+        lastSubmittedText = mutation.resultingSource
         }
         onHistoryStateChange?(mutation.canUndo, mutation.canRedo)
         return mutation
@@ -525,6 +535,7 @@ final class EditorEngineClient {
                   groupID: groupID
               )
         else { return nil }
+        lastSubmittedSelection = MarkdownSourceRange.navigationTarget(forUTF8Range: mutation.selectionUTF8Range, in: mutation.resultingSource)?.revealRange
         lastSubmittedText = mutation.resultingSource
         onHistoryStateChange?(mutation.canUndo, mutation.canRedo)
         return mutation
@@ -620,6 +631,7 @@ final class EditorEngineClient {
 
     func reset(text: String, selectionUTF16: NSRange) {
         lastSubmittedText = text
+        lastSubmittedSelection = selectionUTF16
         let previous = pending
         pending = Task {
             await previous?.value
@@ -651,6 +663,7 @@ final class EditorEngineClient {
                   expectedText: text
               )
         else { return nil }
+        lastSubmittedSelection = MarkdownSourceRange.navigationTarget(forUTF8Range: mutation.selectionUTF8Range, in: mutation.resultingSource)?.revealRange
         lastSubmittedText = mutation.resultingSource
         onHistoryStateChange?(mutation.canUndo, mutation.canRedo)
         return mutation
@@ -685,6 +698,7 @@ private actor EditorEngineTransport {
     func synchronize(
         to swiftText: String,
         selectionUTF16: NSRange,
+        selectionBeforeUTF16: NSRange?,
         groupID: String?
     ) -> EditorEngineDocumentSnapshot? {
         do {
@@ -710,7 +724,7 @@ private actor EditorEngineTransport {
                     baseRevision: revision,
                     range: EditorEngineByteRange(start: edit.start, end: edit.end),
                     inserted: edit.inserted,
-                    selectionBefore: nil,
+                    selectionBefore: try selectionBeforeUTF16.map { try Self.byteSelection($0, in: projection) },
                     selectionAfter: selection,
                     groupID: groupID
                 )

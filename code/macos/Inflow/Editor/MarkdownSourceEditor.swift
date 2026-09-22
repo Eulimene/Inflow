@@ -190,6 +190,10 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.focusDidChangeHandler = { [weak self] in
             self?.scheduleRenderedInteractionPresentation()
         }
+        textView.sourceSelectionHandler = { [weak self] range in
+            guard let self, !self.textView.hasActiveComposition, !self.isApplyingEngineMutation else { return }
+            self.engineClient.observeSelection(text: self.textView.string, selectionUTF16: range)
+        }
         textView.selectionVisibilityHandler = { [weak self] in self?.centerSelectionForTypewriterMode() }
         textView.retryRenderingHandler = { [weak self] in self?.retryRenderedResources() }
         textView.effectiveAppearanceDidChangeHandler = { [weak self] in
@@ -472,8 +476,15 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             return false
         }
         textView.setSelectedRange(finalSelection.revealRange)
+        if presentation == .rendered {
+            textView.restoreTableFocus(for: finalSelection.revealRange)
+        }
         updateSelectedRange(finalSelection.revealRange)
-        textView.scrollRangeToVisible(finalSelection.revealRange)
+        if presentation == .rendered, textView.pendingTableFocus != nil {
+            applyRenderedPresentation(source: mutation.resultingSource, force: true)
+        } else {
+            textView.scrollRangeToVisible(finalSelection.revealRange)
+        }
         pendingOptimisticText = nil
         updateBoundText?(mutation.resultingSource)
         localTextProjectionDidPublish?(mutation.resultingSource)
@@ -1791,7 +1802,18 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             rows: localTable.rows.map { $0.map { RenderedMarkdownTableCell(sourceRange: offset($0.sourceRange), markdown: $0.markdown, text: $0.text, links: $0.links) } })
         // Old image requests still carry positions from before this local edit.
         cancelRenderedImageLoading()
-        textView.replaceRenderedTableSource(text, range: current.sourceRange.utf16Range)
+        let grid = textView.renderedTable(atUTF16Location: current.sourceRange.utf16Range.location)
+        let focus = grid?.focusedCell
+        let pending = textView.pendingTableFocus
+        let row = min(pending?.row ?? focus?.row ?? 0, updated.rows.count - 1)
+        let column = min(pending?.column ?? focus?.column ?? 0, updated.rows[row].count - 1)
+        let cell = updated.rows[row][column]
+        let projection = MarkdownInlineProjection(cell.markdown)
+        let visible = pending == nil ? focus?.selection : nil
+        let local = projection.sourceRange(for: visible ?? NSRange(location: 0, length: cell.text.utf16.count))
+            ?? NSRange(location: 0, length: 0)
+        let selection = NSRange(location: cell.sourceRange.utf16Range.location + local.location, length: local.length)
+        textView.replaceRenderedTableSource(text, range: current.sourceRange.utf16Range, selection: selection)
         textView.rebaseRenderedRanges(replacing: current.sourceRange.utf16Range, withLength: text.utf16.count)
         optimisticTable = (textView.string, updated)
         let size = textView.setRenderedTable(updated, baseFont: renderedBaseFont(),
@@ -2550,6 +2572,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     fileprivate func updateSelectedRange(_ range: NSRange) {
+        textView.sourceSelectionHandler?(range)
         if selectedUTF16Range != range {
             selectedUTF16Range = range
             scheduleFormatInspection()
@@ -2574,7 +2597,10 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         formatInspectionTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await Task.yield()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled,
+                  UTF8Text.isExactlyEqual(textView.string, source),
+                  textView.selectedRange() == selection,
+                  !textView.hasActiveComposition else { return }
             let result = await engineClient.canClearFormat(
                 text: source,
                 selectionUTF16: selection
@@ -2631,6 +2657,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     func resetAfterExternalReload(_ text: String) {
+        formatInspectionTask?.cancel()
+        formatInspectionGeneration &+= 1
         invalidateSyntaxApplication()
         pendingOptimisticText = nil
         deferredCompositionSnapshot = nil
@@ -3227,7 +3255,13 @@ final class WindowAwareTextView: NSTextView {
     var renderedReplacementBaseFont = NSFont.systemFont(ofSize: 15)
     private var renderedImageViews: [Int: RenderedImageViewState] = [:]
     private var renderedTableViews: [Int: RenderedTableViewState] = [:]
-    var pendingTableFocus: (location: Int, row: Int, column: Int)?
+    var pendingTableFocus: (location: Int, row: Int, column: Int, selection: NSRange?)?
+    var sourceSelectionHandler: ((NSRange) -> Void)?
+
+    override func setSelectedRange(_ charRange: NSRange) {
+        super.setSelectedRange(charRange)
+        sourceSelectionHandler?(charRange)
+    }
     private var tableFocusRestorations: [Int: (row: Int, column: Int, selection: NSRange)] = [:]
     private var tableSelectionRestorations: [Int: (anchor: (Int, Int), end: (Int, Int))] = [:]
     private var retainedRenderedOverlayKeys: Set<Int>?
@@ -3777,7 +3811,7 @@ final class WindowAwareTextView: NSTextView {
         }
         tableSelectionRestorations.removeAll()
         if let pending = pendingTableFocus,
-           renderedTableViews[pending.location]?.tableView.focusCell(row: pending.row, column: pending.column) == true {
+           renderedTableViews[pending.location]?.tableView.focusCell(row: pending.row, column: pending.column, selection: pending.selection) == true {
             pendingTableFocus = nil
         }
     }
@@ -4245,7 +4279,24 @@ final class WindowAwareTextView: NSTextView {
         return true
     }
 
-    func replaceRenderedTableSource(_ replacement: String, range: NSRange) {
+    func restoreTableFocus(for range: NSRange) {
+        for table in RenderedMarkdownEditor.plan(for: string).tables {
+            for (row, cells) in table.rows.enumerated() {
+                for (column, cell) in cells.enumerated() {
+                    let raw = cell.sourceRange.utf16Range
+                    guard range.location >= raw.location, NSMaxRange(range) <= NSMaxRange(raw) else { continue }
+                    let visible = MarkdownInlineProjection(cell.markdown).visibleRange(
+                        for: NSRange(location: range.location - raw.location, length: range.length))
+                    pendingTableFocus = (table.sourceRange.utf16Range.location, row, column, visible)
+                    return
+                }
+            }
+        }
+        pendingTableFocus = nil
+        if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+    }
+
+    func replaceRenderedTableSource(_ replacement: String, range: NSRange, selection: NSRange) {
         guard isEditable, !hasMarkedText(), let storage = textStorage,
               NSMaxRange(range) <= storage.length,
               shouldChangeText(in: range, replacementString: replacement) else { return }
@@ -4254,11 +4305,15 @@ final class WindowAwareTextView: NSTextView {
         guard let diff = EditorEngineTextDiff.replacement(from: original, to: replacement),
               let target = MarkdownSourceRange.navigationTarget(forUTF8Range: diff.start..<diff.end, in: original) else { return }
         storage.replaceCharacters(in: NSRange(location: range.location + target.revealRange.location, length: target.revealRange.length), with: diff.inserted)
-        setSelectedRange(NSRange(location: range.location, length: 0))
+        setSelectedRange(selection)
         didChangeText()
     }
 
     private func handleWritingAction(_ action: MarkdownWritingAction) -> Bool {
+        if canUseWritingRules, action == .indent || action == .outdent,
+           let edit = MarkdownEditingTransaction.indentList(source: string, selection: selectedRange(), backwards: action == .outdent) {
+            return applyWritingEdit(edit)
+        }
         guard canUseWritingRules,
               let edit = MarkdownWritingRules.edit(action, source: string, selection: selectedRange()) else { return false }
         return applyWritingEdit(edit)
@@ -4299,6 +4354,43 @@ final class WindowAwareTextView: NSTextView {
               let marker = renderedCollapsedSourceRanges.first(where: { $0.location == selectedRange().location }),
               !renderedAnchorSourceRanges.contains(marker) else { return }
         setSelectedRange(NSRange(location: NSMaxRange(marker), length: 0))
+    }
+
+    private func normalizeExtendedSelection() {
+        guard isLiveMarkdown, !hasActiveComposition, selectedRange().length > 0 else { return }
+        var range = selectedRange()
+        for marker in renderedCollapsedSourceRanges where NSIntersectionRange(range, marker).length > 0 {
+            range = NSUnionRange(range, marker)
+        }
+        if range != selectedRange(), NSMaxRange(range) <= string.utf16.count { setSelectedRange(range) }
+    }
+
+    override func moveLeftAndModifySelection(_ sender: Any?) {
+        super.moveLeftAndModifySelection(sender)
+        normalizeExtendedSelection()
+    }
+
+    override func moveRightAndModifySelection(_ sender: Any?) {
+        super.moveRightAndModifySelection(sender)
+        normalizeExtendedSelection()
+    }
+
+    override func moveUpAndModifySelection(_ sender: Any?) {
+        super.moveUpAndModifySelection(sender)
+        normalizeExtendedSelection()
+    }
+
+    override func moveDownAndModifySelection(_ sender: Any?) {
+        super.moveDownAndModifySelection(sender)
+        normalizeExtendedSelection()
+    }
+
+    override func accessibilityChildren() -> [Any]? {
+        var children = super.accessibilityChildren() ?? []
+        for view in subviews where !view.isHidden && (view is RenderedMarkdownTableView || view is NSImageView) {
+            if !children.contains(where: { ($0 as? NSView) === view }) { children.append(view) }
+        }
+        return children
     }
 
     override func selectAll(_ sender: Any?) {
@@ -4423,12 +4515,21 @@ final class WindowAwareTextView: NSTextView {
 
     override func copy(_ sender: Any?) {
         guard isLiveMarkdown, selectedRange().length > 0 else { super.copy(sender); return }
+        normalizeExtendedSelection()
         let source = (string as NSString).substring(with: selectedRange())
         let board = NSPasteboard.general
         board.clearContents()
         board.setString(source, forType: .string)
         board.setString(source, forType: Self.markdownClipboardType)
         if let html = try? MarkdownRenderer.htmlFragment(for: source) { board.setString(html, forType: .html) }
+    }
+
+    override func cut(_ sender: Any?) {
+        guard isLiveMarkdown, isEditable, !hasActiveComposition, selectedRange().length > 0 else { super.cut(sender); return }
+        normalizeExtendedSelection()
+        copy(sender)
+        _ = applyWritingEdit(MarkdownWritingEdit(range: selectedRange(), text: "",
+            selection: NSRange(location: selectedRange().location, length: 0)))
     }
 
     @objc func copyAsMarkdown(_ sender: Any?) {
@@ -5314,11 +5415,19 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
 
     func textViewDidChangeSelection(_ notification: Notification) {
         textDidBeginEditing(notification)
+        if let view = notification.object as? NSTextView, !view.hasMarkedText(),
+           let cell = cells.first(where: { $0.textView === view }), view.string == cell.originalText,
+           table.rows.indices.contains(cell.row), table.rows[cell.row].indices.contains(cell.column) {
+            let model = table.rows[cell.row][cell.column]
+            if let range = MarkdownInlineProjection(model.markdown).sourceRange(for: view.selectedRange()) {
+                documentTextView?.setSelectedRange(NSRange(location: model.sourceRange.utf16Range.location + range.location, length: range.length))
+            }
+        }
         documentTextView?.selectionVisibilityHandler?()
     }
 
     private func insertRow(at row: Int, column: Int) {
-        documentTextView?.pendingTableFocus = (table.sourceRange.utf16Range.location, row, column)
+        documentTextView?.pendingTableFocus = (table.sourceRange.utf16Range.location, row, column, nil)
         onEdit(.insertRow(at: row))
     }
 

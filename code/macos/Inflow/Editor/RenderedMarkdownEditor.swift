@@ -181,6 +181,13 @@ struct MarkdownInlineProjection {
         return NSRange(location: start, length: end - start)
     }
 
+    func visibleRange(for source: NSRange) -> NSRange {
+        let start = sourceCharacters.firstIndex { NSMaxRange($0) > source.location } ?? sourceCharacters.count
+        guard source.length > 0 else { return NSRange(location: start, length: 0) }
+        let end = sourceCharacters.firstIndex { $0.location >= NSMaxRange(source) } ?? sourceCharacters.count
+        return NSRange(location: start, length: max(0, end - start))
+    }
+
     @MainActor
     func applyStyles(to output: NSMutableAttributedString, font: NSFont) {
         guard output.string == text else { return }
@@ -732,8 +739,24 @@ enum MarkdownEditingTransaction {
             if intent == .lineBreak {
                 // A continuation belongs to the same quote/list item. Do not copy
                 // its bullet or task marker and accidentally create another item.
-                let continuation = head.quote + (head.list.isEmpty ? head.indent : head.indent + String(repeating: " ", count: head.list.utf16.count))
+                let continuation = head.quote + (head.list.isEmpty ? head.indent : head.indent + String(repeating: " ", count: listContentIndent(head.list)))
                 return replace(selection, newline + continuation)
+            }
+            if !head.list.isEmpty {
+                let headLength = (head.quote + head.indent + head.list).utf16.count
+                let tail = (raw as NSString).substring(from: headLength)
+                if selection.length == 0, tail.trimmingCharacters(in: .whitespaces).isEmpty {
+                    if !head.indent.isEmpty {
+                        return replace(NSRange(location: line.location + head.quote.utf16.count,
+                            length: min(2, head.indent.utf16.count)), "", caret: max(line.location, selection.location - min(2, head.indent.utf16.count)))
+                    }
+                    return replace(NSRange(location: line.location + head.quote.utf16.count, length: head.list.utf16.count), "")
+                }
+                return replace(selection, newline + head.quote + head.indent + nextListMarker(head.list))
+            }
+            if let continuation = listContinuation(at: line.location, source: source, plan: renderPlan),
+               head.quote == continuation.quote, head.indent.utf16.count >= continuation.width {
+                return replace(selection, newline + continuation.quote + continuation.indent + nextListMarker(continuation.list))
             }
             if selection.length == 0,
                let structural = MarkdownWritingRules.edit(.newline, source: source, selection: selection) {
@@ -747,6 +770,14 @@ enum MarkdownEditingTransaction {
             return replace(selection, raw.trimmingCharacters(in: .whitespaces).isEmpty ? newline : newline + newline)
         }
         guard selection.length == 0, request == nil, !protected else { return nil }
+        let head = prefix(raw)
+        if !head.list.isEmpty, selection.location == line.location + (head.quote + head.indent + head.list).utf16.count {
+            if !head.indent.isEmpty {
+                let count = min(2, head.indent.utf16.count)
+                return replace(NSRange(location: line.location + head.quote.utf16.count, length: count), "", caret: selection.location - count)
+            }
+            return replace(NSRange(location: line.location + head.quote.utf16.count, length: head.list.utf16.count), "")
+        }
         if let structural = MarkdownWritingRules.edit(.backwardDelete, source: source, selection: selection) { return structural }
         if selection.location == line.location, selection.location >= newline.utf16.count * 2 {
             let range = NSRange(location: selection.location - newline.utf16.count * 2, length: newline.utf16.count * 2)
@@ -755,6 +786,72 @@ enum MarkdownEditingTransaction {
             }
         }
         return nil
+    }
+
+    private static func listContentIndent(_ marker: String) -> Int {
+        marker.firstIndex(of: "[").map { marker[..<$0].utf16.count } ?? marker.utf16.count
+    }
+
+    private static func nextListMarker(_ marker: String) -> String {
+        var result = marker.replacingOccurrences(of: "[x]", with: "[ ]").replacingOccurrences(of: "[X]", with: "[ ]")
+        if let range = result.range(of: #"^\d{1,9}"#, options: .regularExpression), let value = Int(result[range]) {
+            result.replaceSubrange(range, with: String(value + 1))
+        }
+        return result
+    }
+
+    private static func listContinuation(at location: Int, source: String, plan: RenderedMarkdownPlan)
+        -> (quote: String, indent: String, list: String, width: Int)? {
+        let text = source as NSString
+        guard let marker = plan.markers.last(where: {
+            ($0.kind == .unorderedList || $0.kind == .orderedList) && $0.sourceRange.utf16Range.location < location
+        }) else { return nil }
+        let firstLine = text.lineRange(for: NSRange(location: marker.sourceRange.utf16Range.location, length: 0))
+        guard firstLine.location < location else { return nil }
+        let head = prefix(text.substring(with: firstLine))
+        guard !head.list.isEmpty else { return nil }
+        let width = head.indent.utf16.count + listContentIndent(head.list)
+        var offset = NSMaxRange(firstLine)
+        while offset < location {
+            let line = text.lineRange(for: NSRange(location: offset, length: 0))
+            let value = text.substring(with: line)
+            let next = prefix(value)
+            if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               next.quote != head.quote || next.indent.utf16.count < width || !next.list.isEmpty { return nil }
+            offset = NSMaxRange(line)
+        }
+        return (head.quote, head.indent, head.list, width)
+    }
+
+    static func indentList(source: String, selection: NSRange, backwards: Bool) -> MarkdownWritingEdit? {
+        let text = source as NSString
+        guard selection.length == 0, selection.location <= text.length else { return nil }
+        let first = text.lineRange(for: selection)
+        let head = prefix(text.substring(with: first))
+        guard !head.list.isEmpty, !backwards || !head.indent.isEmpty else { return nil }
+        let count = backwards ? min(2, head.indent.utf16.count) : 2
+        var end = NSMaxRange(first)
+        while end < text.length {
+            let next = text.lineRange(for: NSRange(location: end, length: 0))
+            let value = text.substring(with: next)
+            let nested = prefix(value)
+            guard nested.quote == head.quote, nested.indent.count > head.indent.count else { break }
+            end = NSMaxRange(next)
+        }
+        let range = NSRange(location: first.location, length: end - first.location)
+        let result = NSMutableString(string: text.substring(with: range))
+        var positions: [Int] = []
+        var offset = 0
+        while offset < result.length {
+            let line = result.lineRange(for: NSRange(location: offset, length: 0))
+            positions.append(offset + prefix(result.substring(with: line)).quote.utf16.count)
+            offset = NSMaxRange(line)
+        }
+        for position in positions.reversed() {
+            result.replaceCharacters(in: NSRange(location: position, length: backwards ? count : 0), with: backwards ? "" : "  ")
+        }
+        return MarkdownWritingEdit(range: range, text: result as String,
+            selection: NSRange(location: max(first.location, selection.location + (backwards ? -count : count)), length: 0))
     }
 
     private static func prefix(_ line: String) -> (quote: String, indent: String, list: String) {

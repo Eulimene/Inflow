@@ -2639,8 +2639,33 @@ extension RenderedMarkdownEditorTests {
         defer { window.contentView = nil }
         _ = await session.deriveContent(for: source, configuration: .default)
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
-        let grid = try XCTUnwrap(session.textView.renderedTable(atUTF16Location: 0))
-        XCTAssertTrue(grid.focusCell(row: 1, column: 1))
+        var grid = try XCTUnwrap(session.textView.renderedTable(atUTF16Location: 0))
+        XCTAssertTrue(grid.focusCell(row: 1, column: 1, selection: NSRange(location: 1, length: 0)))
+        let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
+        editor.insertText("😀", replacementRange: editor.selectedRange())
+        let edited = session.textView.string
+        XCTAssertTrue(edited.contains("2😀"))
+        _ = await session.authoritativeSnapshot()
+        session.textView.undo(nil)
+        for _ in 0..<100 where session.textView.string != source { await Task.yield() }
+        XCTAssertEqual(session.textView.string, source)
+        _ = await session.deriveContent(for: source, configuration: .default)
+        session.setPresentation(.rendered, source: session.textView.string, onLinkClick: nil)
+        session.textView.layoutSubtreeIfNeeded()
+        grid = try XCTUnwrap(session.textView.renderedTable(atUTF16Location: 0))
+        XCTAssertEqual(grid.focusedCell?.row, 1)
+        XCTAssertEqual(grid.focusedCell?.column, 1)
+        XCTAssertEqual(grid.focusedCell?.selection, NSRange(location: 1, length: 0))
+        session.textView.redo(nil)
+        for _ in 0..<100 where session.textView.string != edited { await Task.yield() }
+        XCTAssertEqual(session.textView.string, edited)
+        _ = await session.deriveContent(for: edited, configuration: .default)
+        session.setPresentation(.rendered, source: session.textView.string, onLinkClick: nil)
+        session.textView.layoutSubtreeIfNeeded()
+        grid = try XCTUnwrap(session.textView.renderedTable(atUTF16Location: 0))
+        XCTAssertEqual(grid.focusedCell?.row, 1)
+        XCTAssertEqual(grid.focusedCell?.column, 1)
+        XCTAssertEqual(grid.focusedCell?.selection, NSRange(location: 3, length: 0))
         var times: [Double] = []
         for index in 0..<100 {
             let start = ProcessInfo.processInfo.systemUptime
@@ -2682,6 +2707,10 @@ extension RenderedMarkdownEditorTests {
             ("> 引用", 4, .lineBreak, "> 引用\n> ", 7),
             ("> > ", 4, .paragraphBreak, "> ", 2),
             ("- 项目", 4, .lineBreak, "- 项目\n  ", 7),
+            ("- 项目\n  续行", 9, .paragraphBreak, "- 项目\n  续行\n- ", 12),
+            (">   - 子项", 8, .paragraphBreak, ">   - 子项\n>   - ", 15),
+            ("  - ", 4, .paragraphBreak, "- ", 2),
+            ("> - [x] 任务", 10, .lineBreak, "> - [x] 任务\n>   ", 15),
             ("- [x] 项目", 8, .paragraphBreak, "- [x] 项目\n- [ ] ", 15),
             ("第一段\n\n第二段", 5, .mergeBackward, "第一段第二段", 3),
             ("```swift", 8, .paragraphBreak, "```swift\n\n```", 9),
@@ -2694,6 +2723,12 @@ extension RenderedMarkdownEditorTests {
             XCTAssertEqual((source as NSString).replacingCharacters(in: edit.range, with: edit.text), expected, source)
             XCTAssertEqual(edit.selection.location, caret, source)
         }
+        let nested = "- parent\n  continuation\n  - child\n- sibling"
+        let indented = try XCTUnwrap(MarkdownEditingTransaction.indentList(source: nested,
+            selection: NSRange(location: 3, length: 0), backwards: false))
+        XCTAssertEqual((nested as NSString).replacingCharacters(in: indented.range, with: indented.text),
+            "  - parent\n    continuation\n    - child\n- sibling")
+        XCTAssertEqual(indented.selection.location, 5)
         let session = MarkdownSourceEditorSession()
         let source = "中文😀"
         session.textView.string = source

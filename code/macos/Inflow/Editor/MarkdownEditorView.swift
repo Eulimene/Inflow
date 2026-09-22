@@ -2773,6 +2773,16 @@ struct MarkdownEditorView: View {
         guard canEditDocument, !usesSourceOnlyExperience else { return }
         let source = document.text
         let selection = sourceEditorSession.textView.selectedRange()
+        guard !sourceEditorSession.textView.hasActiveComposition else {
+            markdownFormatErrorMessage = "请先确认或取消输入法候选，再应用格式。"
+            return
+        }
+        do {
+            _ = try MarkdownFormatter.plan(source: source, selectedUTF16Range: selection, command: command)
+        } catch {
+            markdownFormatErrorMessage = error.localizedDescription
+            return
+        }
         revealSourceSurface()
         Task { @MainActor in
             guard await editorStore.applyFormat(
