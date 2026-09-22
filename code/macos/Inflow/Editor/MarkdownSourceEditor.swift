@@ -829,11 +829,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             return range
         }
         textView.beginRenderedOverlayUpdate()
-        textView.renderedQuoteRanges = plan.contentStyles.compactMap { style in
+        textView.renderedQuoteRanges = RenderedMarkdownQuoteGeometry.contiguousRanges(plan.contentStyles.compactMap { style in
             guard style.kind == .blockQuote else { return nil }
             guard !rangesOverlap(style.sourceRange.utf16Range, editingRange) else { return nil }
             return (source as NSString).paragraphRange(for: style.sourceRange.utf16Range)
-        }
+        })
         textView.renderedInlineCodeRanges = plan.contentStyles.compactMap { style in
             guard style.kind == .inlineCode,
                   !rangesOverlap(style.sourceRange.utf16Range, editingRange)
@@ -1596,7 +1596,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             return
         }
         var location = min(selection.location, storage.length - 1)
-        if let plan = renderedPlan {
+        if let plan = renderedPlan, plan.exactlyMatches(storage.string) {
             let hiddenRanges = plan.markers.map(\.sourceRange.utf16Range)
             location = RenderedMarkdownCaretStyleResolver.visibleAttributeLocation(
                 forInsertionLocation: selection.location,
@@ -1611,6 +1611,19 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
         if typing[.font] == nil { typing[.font] = textView.font }
         if typing[.foregroundColor] == nil { typing[.foregroundColor] = NSColor.textColor }
+        if (typing[.font] as? NSFont)?.pointSize ?? 0 < 1 {
+            let font = renderedBaseFont()
+            typing[.font] = font
+            let paragraph = (typing[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+            paragraph.minimumLineHeight = max(paragraph.minimumLineHeight, font.pointSize * CGFloat(sourceAppearance.lineHeight))
+            if paragraph.maximumLineHeight > 0, paragraph.maximumLineHeight < paragraph.minimumLineHeight { paragraph.maximumLineHeight = 0 }
+            typing[.paragraphStyle] = paragraph
+        }
+        if (typing[.foregroundColor] as? NSColor)?.alphaComponent == 0 {
+            let palette = MarkdownRenderPalette.resolved(for: textView.effectiveAppearance)
+            let isQuote = textView.renderedQuoteRanges.contains { NSIntersectionRange($0, line).length > 0 }
+            typing[.foregroundColor] = isQuote ? palette.secondaryTextColor : palette.textColor
+        }
         textView.typingAttributes = typing
     }
 
@@ -2881,6 +2894,26 @@ enum RenderedMarkdownLinkActivation {
 }
 
 enum RenderedMarkdownCaretStyleResolver {
+    @MainActor
+    static func insertionRect(_ nativeRect: NSRect, in textView: NSTextView, font: NSFont) -> NSRect {
+        guard let manager = textView.layoutManager, let container = textView.textContainer else {
+            return adjustedInsertionRect(nativeRect, font: font)
+        }
+        let location = min(textView.selectedRange().location, textView.string.utf16.count)
+        let length = textView.string.utf16.count
+        let line: NSRect
+        if location == length, manager.extraLineFragmentTextContainer === container {
+            line = manager.extraLineFragmentRect
+        } else if length > 0 {
+            let glyph = manager.glyphIndexForCharacter(at: min(location, length - 1))
+            guard glyph < manager.numberOfGlyphs else { return adjustedInsertionRect(nativeRect, font: font) }
+            line = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
+        } else { return adjustedInsertionRect(nativeRect, font: font) }
+        guard line.height > 0 else { return adjustedInsertionRect(nativeRect, font: font) }
+        return adjustedInsertionRect(NSRect(x: nativeRect.minX, y: textView.textContainerOrigin.y + line.minY,
+            width: nativeRect.width, height: line.height), font: font)
+    }
+
     static func visibleAttributeLocation(
         forInsertionLocation insertion: Int,
         text: String,
@@ -2921,8 +2954,8 @@ enum RenderedMarkdownCaretStyleResolver {
         let fontHeight = ceil(font.ascender - font.descender + font.leading)
         let height = max(1, fontHeight)
         let proposedY = baselineY.map { $0 - font.ascender } ?? (rect.midY - height / 2)
-        // Font attributes may be inherited from another line; caret geometry may not.
-        let originY = min(max(rect.minY, proposedY), max(rect.minY, rect.maxY - height))
+        // Preserve the line centre even when AppKit supplies a transient short rectangle.
+        let originY = proposedY
         return NSRect(
             x: rect.origin.x,
             y: originY,
@@ -2962,6 +2995,16 @@ enum RenderedMarkdownCaretStyleResolver {
 }
 
 enum RenderedMarkdownQuoteGeometry {
+    static func contiguousRanges(_ ranges: [NSRange]) -> [NSRange] {
+        var result: [NSRange] = []
+        for range in ranges.sorted(by: { $0.location < $1.location }) where range.length > 0 {
+            if let last = result.last, range.location <= NSMaxRange(last) {
+                result[result.count - 1] = NSUnionRange(last, range)
+            } else { result.append(range) }
+        }
+        return result
+    }
+
     static func barRect(
         lineFragment: NSRect,
         textContainerOrigin: NSPoint,
@@ -3159,23 +3202,24 @@ final class WindowAwareTextView: NSTextView {
         persistentUndoManager
     }
 
+    private var drawnInsertionRect: NSRect?
+
     override func drawInsertionPoint(
         in rect: NSRect,
         color: NSColor,
         turnedOn flag: Bool
     ) {
         let font = typingAttributes[.font] as? NSFont
-        super.drawInsertionPoint(
-            in: renderedInsertionRect(rect, font: font),
-            color: color,
-            turnedOn: flag
-        )
+        let target = flag ? renderedInsertionRect(rect, font: font)
+            : (drawnInsertionRect ?? renderedInsertionRect(rect, font: font))
+        super.drawInsertionPoint(in: target, color: color, turnedOn: flag)
+        drawnInsertionRect = flag ? target : nil
     }
 
     func renderedInsertionRect(_ rect: NSRect, font: NSFont? = nil) -> NSRect {
         let candidate = font ?? typingAttributes[.font] as? NSFont
-        let visibleFont = (candidate?.pointSize ?? 0) >= 1 ? candidate : renderedReplacementBaseFont
-        return RenderedMarkdownCaretStyleResolver.adjustedInsertionRect(rect, font: visibleFont)
+        let visibleFont = candidate.flatMap { $0.pointSize >= 1 ? $0 : nil } ?? renderedReplacementBaseFont
+        return RenderedMarkdownCaretStyleResolver.insertionRect(rect, in: self, font: visibleFont)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -3830,7 +3874,10 @@ final class WindowAwareTextView: NSTextView {
                     lineFragment: lineRect,
                     textContainerOrigin: self.textContainerOrigin,
                     font: self.renderedReplacementBaseFont,
-                    baselineOffset: layoutManager.location(forGlyphAt: baselineGlyph).y
+                    baselineOffset: visibleLocation < NSMaxRange(lineCharacterRange)
+                        ? layoutManager.location(forGlyphAt: baselineGlyph).y
+                        : (lineRect.height - self.renderedReplacementBaseFont.ascender + self.renderedReplacementBaseFont.descender) / 2
+                            + self.renderedReplacementBaseFont.ascender
                 )
                 blockBar = blockBar.union(bar)
             }
@@ -4624,6 +4671,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
                 let font = rowIndex == 0
                     ? NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
                     : baseFont
+                paragraph.minimumLineHeight = font.pointSize * MarkdownRenderMetrics.bodyLineHeight
                 let attributed = NSMutableAttributedString(
                     string: cell.text,
                     attributes: [
@@ -4643,6 +4691,10 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
                     )
                 }
                 let textView = RenderedMarkdownTableCellTextView()
+                textView.font = font
+                textView.defaultParagraphStyle = paragraph
+                textView.caretFont = font
+                textView.typingAttributes = [.font: font, .foregroundColor: palette.textColor, .paragraphStyle: paragraph]
                 textView.isEditable = true
                 textView.allowsUndo = false
                 textView.isSelectable = true
@@ -4823,7 +4875,9 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
             let font = rowIndex == 0
                 ? NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
                 : baseFont
-            var rowHeight = CGFloat(36)
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.minimumLineHeight = font.pointSize * MarkdownRenderMetrics.bodyLineHeight
+            var rowHeight = max(CGFloat(36), paragraph.minimumLineHeight + CGFloat(MarkdownRenderMetrics.tableCellVerticalPadding * 2))
             for (column, cell) in row.enumerated() where column < widths.count {
                 let bounds = (cell.text as NSString).boundingRect(
                     with: NSSize(
@@ -4835,11 +4889,11 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
                         height: 2_000
                     ),
                     options: [.usesLineFragmentOrigin, .usesFontLeading],
-                    attributes: [.font: font]
+                    attributes: [.font: font, .paragraphStyle: paragraph]
                 )
                 rowHeight = max(
                     rowHeight,
-                    ceil(bounds.height)
+                    ceil(bounds.height) + (cell.text.hasSuffix("\n") ? paragraph.minimumLineHeight : 0)
                         + CGFloat(MarkdownRenderMetrics.tableCellVerticalPadding * 2)
                 )
             }
@@ -5149,6 +5203,20 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
 
 @MainActor
 final class RenderedMarkdownTableCellTextView: NSTextView {
+    var caretFont = NSFont.systemFont(ofSize: 16)
+
+    func renderedInsertionRect(_ rect: NSRect) -> NSRect {
+        RenderedMarkdownCaretStyleResolver.insertionRect(rect, in: self, font: caretFont)
+    }
+
+    private var drawnInsertionRect: NSRect?
+
+    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+        let target = flag ? renderedInsertionRect(rect) : (drawnInsertionRect ?? renderedInsertionRect(rect))
+        super.drawInsertionPoint(in: target, color: color, turnedOn: flag)
+        drawnInsertionRect = flag ? target : nil
+    }
+
     var selectionClickHandler: ((Bool) -> Bool)?
     var extendSelectionHandler: ((Int, Int) -> Void)?
     var clipboardHandler: ((String) -> Bool)?

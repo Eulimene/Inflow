@@ -644,9 +644,12 @@ fn quote(
                 cursor += 1;
             }
             markers.push(mark(MarkerKind::BlockQuote, start..cursor));
-            if cursor < line.end {
-                styles.push(style(ContentStyleKind::BlockQuote, cursor..line.end));
-            }
+            // Marker-only lines still need quote indentation and a continuous bar.
+            let content_start = if cursor < line.end { cursor } else { start };
+            styles.push(style(ContentStyleKind::BlockQuote, content_start..line.end));
+        } else if !line.is_empty() {
+            // CommonMark lazy continuation lines belong to the same quote block.
+            styles.push(style(ContentStyleKind::BlockQuote, line));
         }
     }
 }
@@ -1238,6 +1241,20 @@ mod tests {
         let render = RenderIr::from_document(&document);
         NativeRenderPlan::from_document(&document, &render, true, false)
     }
+    #[test]
+    fn quote_styles_cover_marker_only_and_lazy_continuation_lines() {
+        let source = "> first\nlazy continuation\n> ";
+        let result = plan(source);
+        let quotes: Vec<_> = result
+            .content_styles
+            .iter()
+            .filter(|item| item.kind == ContentStyleKind::BlockQuote)
+            .collect();
+        assert_eq!(quotes.len(), 3);
+        assert_eq!(&source[quotes[1].source_range.clone()], "lazy continuation");
+        assert_eq!(&source[quotes[2].source_range.clone()], "> ");
+    }
+
     #[test]
     fn derives_native_plan_from_one_parse() {
         let plan = plan("# **标题**\n\n- [x] 任务\n\n[链接](guide.md) ![图](a.png) `code`");

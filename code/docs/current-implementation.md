@@ -79,6 +79,8 @@
 - 展示属性与 Engine patch 回写都不登记 AppKit 正文 undo；三种视图间切换时保持同一正文、修改状态、保存路径和 Rust 撤销历史。
 - 即时编辑中的链接默认单击定位并编辑，⌘+单击执行导航；只读预览默认单击导航，“设置 > 预览”可改为只从右键菜单打开，此时单击只定位光标；文本与表格中的链接共享 Hover 高亮反馈。表格使用 AdaptiveRenderedMarkdownTableLayoutStrategy 按内容测量列宽，再随编辑区扩张或压缩；单元格可编辑，右键提供行列增删和列对齐。链接导航、本地图片和失败降级继续受当前内容快照与封闭宿主消息约束。
 
+引用样式覆盖显式前缀行、无前缀的合法续行和仅有 `>` 的空行；相邻引用段落合并为连续竖线，真正的空白分隔段落仍分成独立引用块。正文与表格单元格共用光标几何计算：高度按输入字体度量，纵向按当前 TextKit 行框居中，擦除时使用上一次绘制的位置。空单元格显式设置字体、段落样式和输入属性；行高测量包含末尾换行产生的空行。隐藏语法的微小字体和透明颜色不再直接继承为输入属性。
+
 对应组件入口在 RenderedMarkdownEditorTests；这些测试不能代替 UAT-PERSONAL-10 的中文输入法、富文本粘贴、跨视图撤销与真实链接操作。
 
 即时编辑第一阶段：光标或选区进入加粗、斜体、删除线、行内代码和链接时，仅显露对应语法标记，正文仍保留渲染字体；离开或失焦后重新折叠。左右方向键跳过未展开标记的内部位置，选区按原始 Markdown 范围操作。编辑态空行保持正常字体和行高，回车进入空段落使用正文输入属性；只有只读预览压缩空行间距。回车后立即补齐空行的输入字体和最小行高；光标高度由字体度量决定，位置沿用当前 AppKit 行框，不借用上一行的字体或基线。
@@ -152,7 +154,7 @@
 
 判断当前能力时，以已批准的个人首版范围、实际安装的菜单和主流程、以及 UAT-PERSONAL-01 至 10 为准，而不是以某个源文件或测试名称是否存在为准。
 
-自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 429 个 XCTest method：305 个 `current-direct`、33 个依赖真实 `NSApplication` 菜单、生命周期、WebKit 或 AppKit 打印/PDF 系统服务的 `current-host`、86 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
+自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 431 个 XCTest method：307 个 `current-direct`、33 个依赖真实 `NSApplication` 菜单、生命周期、WebKit 或 AppKit 打印/PDF 系统服务的 `current-host`、86 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
 
 ## 4. 人工 UAT 状态
 

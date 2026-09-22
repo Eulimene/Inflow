@@ -1290,7 +1290,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             NSRect(x: 10, y: 10, width: 1, height: 40),
             font: font
         )
-        XCTAssertEqual(rect.minY, 10, accuracy: 0.001)
+        XCTAssertEqual(rect.midY, 30, accuracy: 0.001)
         XCTAssertEqual(rect.height, ceil(font.ascender - font.descender + font.leading))
 
         let baselineRect = RenderedMarkdownCaretStyleResolver.adjustedInsertionRect(
@@ -1298,7 +1298,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             font: font,
             baselineY: 50
         )
-        XCTAssertGreaterThanOrEqual(baselineRect.minY, 10)
+        XCTAssertEqual(baselineRect.minY, 50 - font.ascender, accuracy: 0.001)
         XCTAssertGreaterThanOrEqual(baselineRect.height, ceil(font.ascender - font.descender + font.leading))
         let tiny = RenderedMarkdownCaretStyleResolver.adjustedInsertionRect(NSRect(x: 10, y: 100, width: 1, height: 1), font: font)
         XCTAssertEqual(tiny.height, baselineRect.height, "A temporarily collapsed native line must not shrink the caret")
@@ -1323,7 +1323,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             let nativeCaret = NSRect(x: nativeLine.minX + editor.textView.textContainerOrigin.x,
                 y: nativeLine.minY + editor.textView.textContainerOrigin.y, width: 1, height: nativeLine.height)
             let drawn = editor.textView.renderedInsertionRect(nativeCaret)
-            XCTAssertGreaterThanOrEqual(drawn.minY, nativeCaret.minY, initial)
+            XCTAssertEqual(drawn.midY, nativeCaret.midY, accuracy: 0.001, initial)
             XCTAssertGreaterThan(drawn.height, 10, initial)
             XCTAssertGreaterThan(nativeLine.minY, 0, initial)
             XCTAssertEqual(editor.textView.selectedRange().location, changed.utf16.count)
@@ -1346,6 +1346,76 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                 XCTAssertEqual(editor.textView.selectedRange(), caret)
             }
         }
+    }
+
+    @MainActor
+    func testQuoteContinuationKeepsOneBarAndStylesEmptyLines() async throws {
+        for source in ["> 第一行\n> 第二行\n> ", "> 第一行\n后续行\n> ", "> "] {
+            let session = MarkdownSourceEditorSession()
+            session.textView.string = source
+            _ = await session.deriveContent(for: source, configuration: .default)
+            session.textView.setSelectedRange(NSRange(location: source.utf16.count, length: 0))
+            session.setPresentation(.rendered, source: source, onLinkClick: nil)
+            XCTAssertEqual(session.textView.renderedQuoteRanges, [NSRange(location: 0, length: source.utf16.count)])
+            let storage = try XCTUnwrap(session.textView.textStorage)
+            var location = 0
+            while location < storage.length {
+                let line = (source as NSString).lineRange(for: NSRange(location: location, length: 0))
+                let paragraph = try XCTUnwrap(storage.attribute(.paragraphStyle, at: location, effectiveRange: nil) as? NSParagraphStyle)
+                XCTAssertEqual(paragraph.headIndent, 16, source)
+                XCTAssertGreaterThan(paragraph.minimumLineHeight, 20, source)
+                location = NSMaxRange(line)
+            }
+            let font = try XCTUnwrap(session.textView.typingAttributes[.font] as? NSFont)
+            XCTAssertEqual(font.pointSize, session.textView.renderedReplacementBaseFont.pointSize)
+            XCTAssertEqual(session.textView.typingAttributes[.foregroundColor] as? NSColor,
+                MarkdownRenderPalette.resolved(for: session.textView.effectiveAppearance).secondaryTextColor)
+            session.textView.insertText("新增", replacementRange: session.textView.selectedRange())
+            XCTAssertEqual(session.textView.string, source + "新增")
+        }
+        let separated = "> 第一块\n\n> 第二块"
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = separated
+        _ = await session.deriveContent(for: separated, configuration: .default)
+        session.setPresentation(.rendered, source: separated, onLinkClick: nil)
+        XCTAssertEqual(session.textView.renderedQuoteRanges.count, 2, "Separate quote blocks must retain their gap")
+    }
+
+    @MainActor
+    func testTableAndParagraphCaretsShareFontHeightAndLineCentre() async throws {
+        let session = MarkdownSourceEditorSession()
+        session.scrollView.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        let source = "| A | B |\n| --- | --- |\n| | |"
+        session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let table = try XCTUnwrap(session.textView.renderedTable(atUTF16Location: 0))
+        let cells = table.subviews.compactMap { $0 as? RenderedMarkdownTableCellTextView }
+        let cell = try XCTUnwrap(cells.last)
+        let font = try XCTUnwrap(cell.typingAttributes[.font] as? NSFont)
+        XCTAssertEqual(font.pointSize, session.textView.renderedReplacementBaseFont.pointSize)
+        let oldHeight = table.renderedSize.height
+        cell.insertText("文字", replacementRange: NSRange(location: 0, length: 0))
+        cell.insertLineBreak(nil)
+        XCTAssertEqual(cell.string, "文字\n")
+        XCTAssertGreaterThan(table.renderedSize.height, oldHeight)
+        let manager = try XCTUnwrap(cell.layoutManager)
+        manager.ensureLayout(for: try XCTUnwrap(cell.textContainer))
+        let line = manager.extraLineFragmentRect
+        let caret = cell.renderedInsertionRect(NSRect(x: 3, y: 0, width: 1, height: 1))
+        XCTAssertEqual(caret.height, ceil(font.ascender - font.descender + font.leading))
+        XCTAssertEqual(caret.midY, cell.textContainerOrigin.y + line.midY, accuracy: 0.001)
+        XCTAssertLessThanOrEqual(caret.maxY, cell.bounds.height, "The trailing empty line and caret must fit in the cell")
+        let paragraph = MarkdownSourceEditorSession()
+        paragraph.textView.string = "正文\n"
+        _ = await paragraph.deriveContent(for: paragraph.textView.string, configuration: .default)
+        paragraph.setPresentation(.rendered, source: paragraph.textView.string, onLinkClick: nil)
+        paragraph.textView.setSelectedRange(NSRange(location: paragraph.textView.string.utf16.count, length: 0))
+        let paragraphManager = try XCTUnwrap(paragraph.textView.layoutManager)
+        paragraphManager.ensureLayout(for: try XCTUnwrap(paragraph.textView.textContainer))
+        let bodyCaret = paragraph.textView.renderedInsertionRect(NSRect(x: 3, y: 0, width: 1, height: 1))
+        XCTAssertEqual(bodyCaret.height, caret.height)
+        XCTAssertEqual(bodyCaret.midY, paragraph.textView.textContainerOrigin.y + paragraphManager.extraLineFragmentRect.midY, accuracy: 0.001)
     }
 
     @MainActor

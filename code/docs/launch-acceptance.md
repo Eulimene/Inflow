@@ -55,7 +55,7 @@
 - 通过、失败、跳过与未执行数量；
 - 已知测试宿主或环境阻塞。
 
-仓库级当前自动检查的唯一配置是 `scripts/verify-launch.sh --personal`。它运行生成绑定校验、Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查，不生成归档或发布证据。`quality/personal-xctest-scope.tsv` 将当前 429 个 XCTest method 逐项分为 305 个 `current-direct`、33 个 `current-host`、86 个 `deferred` 与 5 个 `fixed-performance`；personal profile 只执行第一类，其他三类不计为通过。33 个宿主用例保留为 App-host 专项验证或真实应用 UAT，其中包括需要 AppKit 打印/PDF 系统服务的导出用例和 WebKit 离线 JS 渲染用例；deferred profile 仍运行 macOS 全量测试。清单只要出现重复、陈旧、未分类、非法分区或计数变化，脚本就失败关闭。`--deferred-release-local`、`--deferred-signed-archive`、`scripts/release-workflow.sh`、固定性能协议和扩展合同均为显式后置门禁；即使单独通过，也不改变本表的人工状态。
+仓库级当前自动检查的唯一配置是 `scripts/verify-launch.sh --personal`。它运行生成绑定校验、Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查，不生成归档或发布证据。`quality/personal-xctest-scope.tsv` 将当前 431 个 XCTest method 逐项分为 307 个 `current-direct`、33 个 `current-host`、86 个 `deferred` 与 5 个 `fixed-performance`；personal profile 只执行第一类，其他三类不计为通过。33 个宿主用例保留为 App-host 专项验证或真实应用 UAT，其中包括需要 AppKit 打印/PDF 系统服务的导出用例和 WebKit 离线 JS 渲染用例；deferred profile 仍运行 macOS 全量测试。清单只要出现重复、陈旧、未分类、非法分区或计数变化，脚本就失败关闭。`--deferred-release-local`、`--deferred-signed-archive`、`scripts/release-workflow.sh`、固定性能协议和扩展合同均为显式后置门禁；即使单独通过，也不改变本表的人工状态。
 
 可用 `scripts/verify-launch.sh --describe-profile personal` 查看当前配置，也可查看两个 deferred profile；描述命令不构建、不归档、不签名、不联网。
 
