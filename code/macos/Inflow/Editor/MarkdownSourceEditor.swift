@@ -189,6 +189,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.focusDidChangeHandler = { [weak self] in
             self?.scheduleRenderedInteractionPresentation()
         }
+        textView.selectionVisibilityHandler = { [weak self] in self?.centerSelectionForTypewriterMode() }
         textView.effectiveAppearanceDidChangeHandler = { [weak self] in
             guard let self, self.presentation == .rendered else { return }
             self.applyRenderedPresentation(source: self.textView.string, force: true)
@@ -272,6 +273,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         for source: String,
         configuration: PreviewAppearanceConfiguration
     ) async -> EditorEngineDerivedContent? {
+        textView.readingColumnWidth = CGFloat(configuration.contentWidth)
         cancelDeferredMermaidRendering()
         deferredMermaidGeneration &+= 1
         let mermaidGeneration = deferredMermaidGeneration
@@ -2087,15 +2089,17 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
 
     private func centerSelectionForTypewriterMode() {
         guard typewriterModeEnabled,
-              textView.window?.firstResponder === textView,
-              let layoutManager = textView.layoutManager,
-              let textContainer = textView.textContainer
+              let active = textView.window?.firstResponder as? NSTextView,
+              active === textView || active.isDescendant(of: textView),
+              !active.hasMarkedText(),
+              let layoutManager = active.layoutManager,
+              let textContainer = active.textContainer
         else {
             return
         }
         layoutManager.ensureLayout(for: textContainer)
-        let length = (textView.string as NSString).length
-        let selectionLocation = min(textView.selectedRange().location, length)
+        let length = (active.string as NSString).length
+        let selectionLocation = min(active.selectedRange().location, length)
         let caretRect: NSRect
         if selectionLocation == length {
             caretRect = layoutManager.extraLineFragmentRect
@@ -2107,7 +2111,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 withoutAdditionalLayout: true
             )
         }
-        let caretMidpoint = caretRect.midY + textView.textContainerOrigin.y
+        let caretMidpoint = active.convert(caretRect.offsetBy(dx: active.textContainerOrigin.x,
+            dy: active.textContainerOrigin.y), to: textView).midY
         let clipView = scrollView.contentView
         let maximumOffset = max(0, textView.bounds.height - clipView.bounds.height)
         let targetOffset = min(
@@ -3175,7 +3180,9 @@ final class WindowAwareTextView: NSTextView {
             if oldValue != renderedRuleRanges { needsDisplay = true }
         }
     }
-    var isLiveMarkdown = false
+    var isLiveMarkdown = false { didSet { updateReadingColumn() } }
+    var readingColumnWidth = CGFloat(MarkdownRenderMetrics.readingWidth) { didSet { updateReadingColumn() } }
+    var selectionVisibilityHandler: (() -> Void)?
     var markdownAutoPairEnabled = true
     var writingPlan: RenderedMarkdownPlan?
     private var insertedCloser: (location: Int, text: String)?
@@ -3238,9 +3245,18 @@ final class WindowAwareTextView: NSTextView {
     override func setFrameSize(_ newSize: NSSize) {
         let sizeChanged = frame.size != newSize
         super.setFrameSize(newSize)
+        updateReadingColumn()
         if sizeChanged, !renderedImageViews.isEmpty || !renderedTableViews.isEmpty {
             scheduleRenderedImageLayout()
         }
+    }
+
+    private func updateReadingColumn() {
+        let inset = isLiveMarkdown ? max(MarkdownRenderMetrics.editorHorizontalInset,
+            (bounds.width - readingColumnWidth) / 2) : MarkdownRenderMetrics.editorHorizontalInset
+        guard abs(textContainerInset.width - inset) > 0.5 else { return }
+        textContainerInset = NSSize(width: inset, height: textContainerInset.height)
+        scheduleRenderedImageLayout()
     }
 
     override func viewDidMoveToWindow() {
@@ -4561,6 +4577,8 @@ final class RenderedMarkdownImageView: NSImageView {
 
 @MainActor
 final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
+    private static let toolbarHeight: CGFloat = 28
+    private let toolsButton = NSPopUpButton(frame: .zero, pullsDown: true)
     private final class CellLayout {
         let row: Int
         let column: Int
@@ -4668,7 +4686,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
 
         let heights = Self.rowHeights(for: table, widths: widths, baseFont: baseFont)
         rowHeights = heights
-        renderedSize = NSSize(width: widths.reduce(0, +), height: heights.reduce(0, +))
+        renderedSize = NSSize(width: widths.reduce(0, +), height: heights.reduce(0, +) + Self.toolbarHeight)
 
         cells = Self.makeCells(table: table, widths: widths, baseFont: baseFont, palette: palette)
         super.init(frame: NSRect(origin: .zero, size: renderedSize))
@@ -4677,10 +4695,35 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         layer?.masksToBounds = true
         setAccessibilityElement(true)
         setAccessibilityRole(.table)
-        toolTip = "Tab 切换单元格；Shift+Enter 换行；Shift+方向键或 Shift+点击选择多个单元格；Enter / Esc 退出表格。"
+        toolTip = "Tab 切换单元格；⌘Enter 新增行；Shift+Enter 换行；Shift+方向键选择多个单元格；Enter / Esc 退出表格。"
         setAccessibilityHelp(toolTip)
         for cell in cells { configure(cell) }
+        configureTools()
         layoutCells()
+    }
+
+    private func configureTools() {
+        let menu = NSMenu()
+        menu.addItem(withTitle: "表格", action: nil, keyEquivalent: "")
+        for (title, action) in [("在上方插入行", #selector(insertRowAbove(_:))),
+                                ("在下方插入行", #selector(insertRowBelow(_:))),
+                                ("删除当前行", #selector(deleteCurrentRow(_:))),
+                                ("在左侧插入列", #selector(insertColumnLeft(_:))),
+                                ("在右侧插入列", #selector(insertColumnRight(_:))),
+                                ("删除当前列", #selector(deleteCurrentColumn(_:))),
+                                ("左对齐", #selector(alignColumnLeading(_:))),
+                                ("居中对齐", #selector(alignColumnCenter(_:))),
+                                ("右对齐", #selector(alignColumnTrailing(_:)))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
+        toolsButton.menu = menu
+        toolsButton.bezelStyle = .recessed
+        toolsButton.font = .systemFont(ofSize: 12)
+        toolsButton.setAccessibilityLabel("表格行列与对齐操作")
+        addSubview(toolsButton)
+        setAccessibilityChildren(cells.map { $0.textView as NSView } + [toolsButton])
     }
 
     private static func makeCells(table: RenderedMarkdownTable, widths: [CGFloat], baseFont: NSFont,
@@ -4738,7 +4781,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
                 )
                 textView.textStorage?.setAttributedString(attributed)
                 textView.delegate = nil
-                textView.setAccessibilityLabel(cell.text)
+                textView.setAccessibilityLabel("第 \(rowIndex + 1) 行，第 \(column + 1) 列")
                 layouts.append(
                     CellLayout(
                         row: rowIndex,
@@ -4759,6 +4802,11 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         layout.textView.navigationHandler = { [weak self, weak textView = layout.textView] backwards, exit in
             guard let self, let textView else { return }
             self.navigate(from: textView, backwards: backwards, exit: exit)
+        }
+        layout.textView.insertRowHandler = { [weak self, weak textView = layout.textView] in
+            guard let self, let textView, !textView.hasMarkedText() else { return }
+            self.commit(textView)
+            self.insertRow(at: layout.row + 1, column: layout.column)
         }
         layout.textView.selectionClickHandler = { [weak self] extend in
             guard let self else { return false }
@@ -4808,6 +4856,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         let editable = cells.first?.textView.isEditable ?? false
         cells += added
         for cell in added { configure(cell); cell.textView.isEditable = editable }
+        setAccessibilityChildren(cells.map { $0.textView as NSView } + [toolsButton])
         update(table: updated, onEdit: onEdit)
         _ = updateMaximumWidth(maximumWidth)
         return true
@@ -4818,6 +4867,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
 
     func setEditingEnabled(_ enabled: Bool) {
         for cell in cells { cell.textView.isEditable = enabled }
+        toolsButton.isEnabled = enabled
     }
 
     func hasSameRenderedContent(as other: RenderedMarkdownTable) -> Bool {
@@ -4888,7 +4938,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         maximumWidth = width
         columnWidths = widths
         rowHeights = heights
-        renderedSize = NSSize(width: widths.reduce(0, +), height: rowHeights.reduce(0, +))
+        renderedSize = NSSize(width: widths.reduce(0, +), height: rowHeights.reduce(0, +) + Self.toolbarHeight)
         setFrameSize(renderedSize)
         layoutCells()
         needsDisplay = true
@@ -4934,7 +4984,9 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         let xOffsets = columnWidths.reduce(into: [CGFloat(0)]) { result, width in
             result.append((result.last ?? 0) + width)
         }
-        let yOffsets = rowHeights.reduce(into: [CGFloat(0)]) { result, height in
+        toolsButton.frame = NSRect(x: 4, y: 0, width: min(220, renderedSize.width - 8), height: Self.toolbarHeight)
+        toolsButton.menu?.items.first?.title = "表格 · \(table.rows.count) 行 × \(table.alignments.count) 列"
+        let yOffsets = rowHeights.reduce(into: [Self.toolbarHeight]) { result, height in
             result.append((result.last ?? 0) + height)
         }
         for cell in cells {
@@ -4952,7 +5004,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        var y = CGFloat(0)
+        var y = Self.toolbarHeight
         for (index, height) in rowHeights.enumerated() {
             let rowRect = NSRect(x: 0, y: y, width: renderedSize.width, height: height)
             backgroundColor(forRow: index).setFill()
@@ -4971,7 +5023,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
             divider.line(to: NSPoint(x: x, y: renderedSize.height))
             divider.stroke()
         }
-        y = 0
+        y = Self.toolbarHeight
         for height in rowHeights.dropLast() {
             y += height
             let divider = NSBezierPath()
@@ -5014,6 +5066,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         let range = selection ?? NSRange(location: 0, length: length)
         cell.textView.setSelectedRange(NSRange(location: min(range.location, length), length: min(range.length, max(0, length - range.location))))
         if scroll { cell.textView.scrollRangeToVisible(cell.textView.selectedRange()) }
+        documentTextView?.selectionVisibilityHandler?()
         return true
     }
 
@@ -5115,6 +5168,22 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         if let textView = notification.object as? NSTextView { commit(textView) }
     }
 
+    func textDidBeginEditing(_ notification: Notification) {
+        guard let view = notification.object as? NSTextView,
+              let cell = cells.first(where: { $0.textView === view }) else { return }
+        contextCell = (cell.row, cell.column)
+    }
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        textDidBeginEditing(notification)
+        documentTextView?.selectionVisibilityHandler?()
+    }
+
+    private func insertRow(at row: Int, column: Int) {
+        documentTextView?.pendingTableFocus = (table.sourceRange.utf16Range.location, row, column)
+        onEdit(.insertRow(at: row))
+    }
+
     func textDidEndEditing(_ notification: Notification) {
         if let textView = notification.object as? NSTextView { commit(textView) }
     }
@@ -5141,8 +5210,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
             _ = focusCell(row: cells[next].row, column: cells[next].column)
         } else {
             guard documentTextView?.pendingTableFocus == nil else { return }
-            documentTextView?.pendingTableFocus = (table.sourceRange.utf16Range.location, table.rows.count, 0)
-            onEdit(.insertRow(at: table.rows.count))
+            insertRow(at: table.rows.count, column: 0)
         }
     }
 
@@ -5194,11 +5262,11 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
     }
 
     @objc private func insertRowAbove(_ sender: Any?) {
-        onEdit(.insertRow(at: contextCell.row))
+        insertRow(at: contextCell.row, column: contextCell.column)
     }
 
     @objc private func insertRowBelow(_ sender: Any?) {
-        onEdit(.insertRow(at: contextCell.row + 1))
+        insertRow(at: contextCell.row + 1, column: contextCell.column)
     }
 
     @objc private func deleteCurrentRow(_ sender: Any?) {
@@ -5258,12 +5326,18 @@ final class RenderedMarkdownTableCellTextView: NSTextView {
     override func deleteForward(_ sender: Any?) { if clipboardHandler?("delete") != true { super.deleteForward(sender) } }
 
     var navigationHandler: ((_ backwards: Bool, _ exit: Bool) -> Void)?
+    var insertRowHandler: (() -> Void)?
 
     override func insertLineBreak(_ sender: Any?) {
         guard isEditable, !hasMarkedText() else { super.insertLineBreak(sender); return }
         insertText("\n", replacementRange: selectedRange())
     }
     override func keyDown(with event: NSEvent) {
+        if !hasMarkedText(), event.modifierFlags.intersection([.shift, .command, .option, .control]) == [.command],
+           event.keyCode == 36 || event.keyCode == 76 {
+            insertRowHandler?()
+            return
+        }
         if !hasMarkedText(), event.modifierFlags.intersection([.shift, .command, .option, .control]) == [.shift] {
             if event.keyCode == 36 || event.keyCode == 76 { insertLineBreak(nil); return }
             let delta: (Int, Int)? = switch event.keyCode {

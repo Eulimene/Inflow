@@ -586,7 +586,7 @@ final class AppPreferences: ObservableObject {
         static let showsLineNumbers = false
         static let previewZoom = 1.0
         static let previewTheme = PreviewTheme.standard
-        static let mathRenderingEnabled = false
+        static let mathRenderingEnabled = true
         static let mermaidRenderingEnabled = true
         static let linkActivation = LinkActivationPreference.singleClick
         static let increasedContrast = AccessibilityPreference.followSystem

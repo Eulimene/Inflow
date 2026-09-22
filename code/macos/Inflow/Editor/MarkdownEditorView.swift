@@ -391,6 +391,7 @@ struct MarkdownEditorView: View {
                 ) {
                     ForEach(EditorViewMode.allCases) { mode in
                         Label(mode.label, systemImage: mode.systemImage)
+                            .accessibilityLabel(mode.label)
                             .tag(mode)
                     }
                 }

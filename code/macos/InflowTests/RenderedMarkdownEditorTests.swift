@@ -2576,6 +2576,50 @@ private extension NSRange {
 
 extension RenderedMarkdownEditorTests {
     @MainActor
+    func testContinuousTableNavigationAndCommandReturn() async throws {
+        let session = MarkdownSourceEditorSession()
+        let source = "| A | B |\n| --- | --- |\n| 1 | 2 |"
+        session.textView.string = source
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = session.scrollView
+        defer { window.contentView = nil }
+        _ = await session.deriveContent(for: source, configuration: .default)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let grid = try XCTUnwrap(session.textView.renderedTable(atUTF16Location: 0))
+        XCTAssertTrue(grid.focusCell(row: 1, column: 1))
+        var times: [Double] = []
+        for index in 0..<100 {
+            let start = ProcessInfo.processInfo.systemUptime
+            (window.firstResponder as? NSTextView)?.insertTab(nil)
+            times.append((ProcessInfo.processInfo.systemUptime - start) * 1000)
+            let current = try XCTUnwrap(session.textView.renderedTable(atUTF16Location: 0))
+            XCTAssertTrue(current === grid, "Appending rows must retain existing cell editors")
+            XCTAssertEqual(current.focusedCell?.row, 2 + index / 2)
+            XCTAssertEqual(current.focusedCell?.column, index % 2)
+        }
+        XCTAssertEqual(grid.table.rows.count, 52)
+        let sorted = times.sorted()
+        print("Table navigation, 100 native commands: P50=\(sorted[49])ms P95=\(sorted[94])ms (not end-to-end input latency)")
+        XCTAssertTrue(grid.focusCell(row: 1, column: 1))
+        let command = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: [.command], timestamp: 0, windowNumber: window.windowNumber,
+            context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        (window.firstResponder as? NSTextView)?.keyDown(with: command)
+        let updated = try XCTUnwrap(session.textView.renderedTable(atUTF16Location: 0))
+        XCTAssertEqual(updated.table.rows.count, 53)
+        XCTAssertEqual(updated.focusedCell?.row, 2)
+        XCTAssertEqual(updated.focusedCell?.column, 1)
+        XCTAssertTrue(updated.subviews.contains { $0 is NSPopUpButton })
+        let cell = try XCTUnwrap(window.firstResponder as? NSTextView)
+        XCTAssertEqual(cell.accessibilityLabel(), "第 3 行，第 2 列")
+        cell.setMarkedText("pin", selectedRange: NSRange(location: 3, length: 0), replacementRange: cell.selectedRange())
+        XCTAssertFalse(session.textView.string.contains("pin"), "Uncommitted cell composition must not reach the document")
+        cell.insertText("拼", replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(session.textView.string.contains("拼"))
+    }
+
+    @MainActor
     func testSemanticParagraphAndLineBreakTransactions() async throws {
         let examples: [(String, Int, MarkdownEditingIntent, String, Int)] = [
             ("前后", 1, .paragraphBreak, "前\n\n后", 3),
