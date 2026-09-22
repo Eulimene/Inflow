@@ -34,7 +34,7 @@ final class RecentDocumentsTests: XCTestCase {
         NSDocumentController.shared.reviewUnsavedDocuments(withAlertTitle: "Must not present a save review", cancellable: true,
             delegate: probe, didReviewAllSelector: #selector(DraftQuitReviewProbe.reviewed(_:approved:context:)), contextInfo: nil)
         XCTAssertEqual(probe.approved, true)
-        XCTAssertEqual(try TemporaryDocumentDrafts.store.records().first?.text, latest)
+        XCTAssertEqual(try TemporaryDocumentDrafts.store.records().first(where: { $0.id == id })?.text, latest)
         // A failed checkpoint must preserve the last successful draft.
         let stagedStore = TemporaryDocumentDrafts.store
         let blockedRoot = root.appendingPathComponent("not-a-directory")
@@ -43,11 +43,11 @@ final class RecentDocumentsTests: XCTestCase {
         latest = "newer text"
         XCTAssertThrowsError(try TemporaryDocumentDrafts.checkpoint(owner: document))
         XCTAssertEqual(try String(contentsOf: blockedRoot, encoding: .utf8), "original file")
-        XCTAssertEqual(try stagedStore.records().first?.text, "last keystroke😀")
+        XCTAssertEqual(try stagedStore.records().first(where: { $0.id == id })?.text, "last keystroke😀")
         TemporaryDocumentDrafts.store = stagedStore
         latest = ""
         try TemporaryDocumentDrafts.checkpoint(owner: document)
-        XCTAssertTrue(try stagedStore.records().isEmpty, "Clearing a draft after a cancelled quit must not restore stale content")
+        XCTAssertFalse(try stagedStore.records().contains { $0.id == id }, "Clearing a draft after a cancelled quit must not restore stale content for that document")
         let delegate = InflowApplicationDelegate { _ in }
         XCTAssertTrue(
             delegate.applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared),

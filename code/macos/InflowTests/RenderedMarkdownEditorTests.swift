@@ -1111,6 +1111,13 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         let same = try XCTUnwrap(RenderedMarkdownTableEditing.replacement(for: richTable,
             applying: .updateCell(row: 0, column: 0, text: "Name")))
         XCTAssertTrue(same.contains("**Name**"))
+        let cleared = try XCTUnwrap(RenderedMarkdownTableEditing.replacement(for: richTable,
+            applying: .updateCell(row: 0, column: 0, text: "")))
+        XCTAssertEqual(RenderedMarkdownEditor.plan(for: cleared).tables.first?.rows[0][0].text, "")
+        let mixed = try XCTUnwrap(RenderedMarkdownEditor.plan(for: "| **abc** def |\n| --- |\n| body |").tables.first)
+        let across = try XCTUnwrap(RenderedMarkdownTableEditing.replacement(for: mixed,
+            applying: .updateCell(row: 0, column: 0, text: "aXef")))
+        XCTAssertEqual(RenderedMarkdownEditor.plan(for: across).tables.first?.rows[0][0].text, "aXef")
         XCTAssertEqual(
             RenderedMarkdownTableEditing.replacement(
                 for: richTable,
@@ -2253,6 +2260,32 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             effectiveRange: nil
         ) as? NSColor
         XCTAssertGreaterThan(invalidColor?.alphaComponent ?? 0, 0.8)
+
+        let tableSource = "| Formula |\n| --- |\n| value $x^2$ tail |"
+        let tableSession = MarkdownSourceEditorSession()
+        tableSession.textView.string = tableSource
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = tableSession.scrollView
+        defer { window.contentView = nil }
+        _ = await tableSession.deriveContent(for: tableSource, configuration: .default)
+        tableSession.setPresentation(.rendered, source: tableSource, onLinkClick: nil)
+        await tableSession.waitForRenderedResources()
+        let grid = try XCTUnwrap(tableSession.textView.renderedTable(atUTF16Location: 0))
+        let preview = try XCTUnwrap(grid.subviews.compactMap { $0 as? MarkdownTableMathPreview }.first)
+        XCTAssertEqual(preview.string, "value \u{fffc} tail")
+        XCTAssertNil(tableSession.textView.renderedImage(atUTF16Location: (tableSource as NSString).range(of: "$x^2$").location),
+            "Cell math must not create an overlay on the table's collapsed document source")
+        XCTAssertTrue(grid.focusCell(row: 1, column: 0, selection: NSRange(location: 7, length: 0)))
+        XCTAssertTrue(preview.isHidden)
+        let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
+        XCTAssertEqual(editor.string, "value x^2 tail")
+        editor.insertText("+1", replacementRange: editor.selectedRange())
+        XCTAssertTrue(tableSession.textView.string.contains("$x+1^2$"))
+        _ = await tableSession.authoritativeSnapshot()
+        tableSession.textView.undo(nil)
+        for _ in 0..<100 where tableSession.textView.string != tableSource { await Task.yield() }
+        XCTAssertEqual(tableSession.textView.string, tableSource)
     }
 
     @MainActor
@@ -2591,7 +2624,7 @@ private extension NSRange {
 
 extension RenderedMarkdownEditorTests {
     @MainActor
-    func testRichClipboardConversionAndExplicitPlainTextPaste() throws {
+    func testRichClipboardConversionAndExplicitPlainTextPaste() async throws {
         let html = "<!DOCTYPE html><html><body><h2>标题</h2><p>正文<strong>粗体</strong>与<a href='guide.md'>链接</a></p><ul><li>甲</li><li>乙</li></ul><table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2<br>3</td></tr></table><script>alert(1)</script></body></html>"
         let markdown = try XCTUnwrap(MarkdownClipboardCodec.markdown(fromHTML: html))
         XCTAssertTrue(markdown.hasPrefix("## 标题\n\n"))
@@ -2626,6 +2659,13 @@ extension RenderedMarkdownEditorTests {
         session.textView.copyAsMarkdown(nil)
         XCTAssertEqual(board.string(forType: .string), "文字")
         XCTAssertNil(board.string(forType: .html))
+        session.textView.cut(nil)
+        XCTAssertEqual(session.textView.string, "")
+        XCTAssertNotNil(board.string(forType: .html))
+        _ = await session.authoritativeSnapshot()
+        session.textView.undo(nil)
+        for _ in 0..<100 where session.textView.string != "文字" { await Task.yield() }
+        XCTAssertEqual(session.textView.string, "文字")
     }
 
     @MainActor
@@ -2689,6 +2729,7 @@ extension RenderedMarkdownEditorTests {
         XCTAssertEqual(updated.focusedCell?.row, 2)
         XCTAssertEqual(updated.focusedCell?.column, 1)
         XCTAssertTrue(updated.subviews.contains { $0 is NSPopUpButton })
+        XCTAssertTrue(session.textView.accessibilityChildren()?.contains { ($0 as? NSView) === updated } == true)
         let cell = try XCTUnwrap(window.firstResponder as? NSTextView)
         XCTAssertEqual(cell.accessibilityLabel(), "第 3 行，第 2 列")
         cell.setMarkedText("pin", selectedRange: NSRange(location: 3, length: 0), replacementRange: cell.selectedRange())

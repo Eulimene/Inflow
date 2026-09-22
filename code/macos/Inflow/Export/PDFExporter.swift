@@ -37,6 +37,8 @@ enum PDFExporter {
         try Task.checkCancellation()
         let markdown = String(decoding: snapshot.utf8, as: UTF8.self)
         let session = MarkdownSourceEditorSession(role: .renderedProjection)
+        session.scrollView.frame = NSRect(origin: .zero, size: printableSize)
+        session.scrollView.layoutSubtreeIfNeeded()
         let appearance = snapshot.appearance.nativeRenderedAppearance(spellingEnabled: false)
         session.textView.string = markdown
         session.applySourceAppearance(appearance, force: true)
@@ -69,10 +71,12 @@ enum PDFExporter {
             width: printableSize.width,
             height: .greatestFiniteMagnitude
         )
+        view.prepareRenderedLayoutForPrinting()
         view.layoutManager?.ensureLayout(for: view.textContainer!)
         let usedHeight = view.layoutManager?.usedRect(for: view.textContainer!).height ?? 0
         view.frame.size.height = max(printableSize.height, ceil(usedHeight + view.textContainerInset.height * 2))
         view.layoutSubtreeIfNeeded()
+        view.prepareRenderedLayoutForPrinting()
 
         var sourcePages: [Data] = []
         var pageOriginY = 0.0

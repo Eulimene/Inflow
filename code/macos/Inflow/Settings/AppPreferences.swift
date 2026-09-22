@@ -344,7 +344,7 @@ struct PreviewAppearanceConfiguration: Equatable, Sendable {
         theme: .standard,
         increasedContrast: false,
         reduceMotion: true,
-        mathRenderingEnabled: false,
+        mathRenderingEnabled: true,
         mermaidRenderingEnabled: true
     )
 

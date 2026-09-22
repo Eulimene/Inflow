@@ -74,7 +74,7 @@
 
 ### 2.3 即时编辑与分栏预览
 
-- 即时编辑始终挂载同一个 MarkdownSourceEditor。Rust Engine 从同一份 `DocumentIr` 一次生成 HTML、分析、高亮、引用、块 IR 与 `NativeRenderPlan`；Swift 已删除手写 Markdown planner，只把已验证的 UTF-8 DTO 范围映射为 TextKit 属性。普通文字、行内代码与引用在渲染态直接输入；Markdown 标记以透明和负字距折叠，不再用 0.1pt 字体改变行度量。CaretStyleResolver 按当前输入字体绘制完整高度的光标；AppKit 暂时返回过小的行框时不缩小光标。围栏代码正文可直接编辑并保持等宽样式，进入围栏行才显示完整源码；图表编辑时显示源码和下方预览。保存内容和 undo 始终属于原始 Markdown。
+- 即时编辑始终挂载同一个 MarkdownSourceEditor。Rust Engine 从同一份 `DocumentIr` 一次生成 HTML、分析、高亮、引用、块 IR 与 `NativeRenderPlan`；Swift 已删除手写 Markdown planner，只把已验证的 UTF-8 DTO 范围映射为 TextKit 属性。普通文字、行内代码与引用在渲染态直接输入；Markdown 标记由显示属性折叠，隐藏范围不作为光标样式来源。CaretStyleResolver 按当前输入字体绘制完整高度的光标；AppKit 暂时返回过小的行框时不缩小光标。围栏代码正文可直接编辑并保持等宽样式，进入围栏行才显示完整源码；图表编辑时显示源码和下方预览。保存内容和 undo 始终属于原始 Markdown。
 - 分栏右侧直接安装与即时编辑相同的 `NativeRenderPlan`，并把 NSTextView 设为只读。Mermaid `flowchart` 支持普通连线和仓库已有的 `-.文字.->` 带标签虚线；同一次 Engine 派生源码请求，再由离线 JavaScript 适配层生成自包含 SVG，并由两个 TextKit 表面共用的原生覆盖层呈现，不存在 Mermaid 专用 C ABI 或第二预览分支。进入即时编辑中的 Mermaid 源码块时将预览放在源码下方，移出后恢复图表呈现；只读表面始终保持渲染态。
 - 展示属性与 Engine patch 回写都不登记 AppKit 正文 undo；三种视图间切换时保持同一正文、修改状态、保存路径和 Rust 撤销历史。
 - 即时编辑中的链接默认单击定位并编辑，⌘+单击执行导航；只读预览默认单击导航，“设置 > 预览”可改为只从右键菜单打开，此时单击只定位光标；文本与表格中的链接共享 Hover 高亮反馈。表格使用 AdaptiveRenderedMarkdownTableLayoutStrategy 按内容测量列宽，再随编辑区扩张或压缩；单元格可编辑，右键提供行列增删和列对齐。链接导航、本地图片和失败降级继续受当前内容快照与封闭宿主消息约束。
@@ -85,13 +85,15 @@
 
 即时编辑第一阶段：光标或选区进入加粗、斜体、删除线、行内代码和链接时，仅显露对应语法标记，正文仍保留渲染字体；离开或失焦后重新折叠。左右方向键跳过未展开标记的内部位置，选区按原始 Markdown 范围操作。编辑态空行保持正常字体和行高，回车进入空段落使用正文输入属性；只有只读预览压缩空行间距。回车后立即补齐空行的输入字体和最小行高；光标高度由字体度量决定，位置沿用当前 AppKit 行框，不借用上一行的字体或基线。
 
-`MarkdownWritingRules` 只生成编辑手势对应的 UTF-16 源码事务，不承担 Markdown 解析或渲染。列表/任务列表回车续项（新任务未勾选）、空项回车退出、引用逐层退出；行首退格移除前缀或降低缩进。Tab / Shift+Tab 支持单行及多行列表缩进；标题末尾回车沿用普通换行，行首退格清除前缀。Rust 计划识别的代码、公式、表格及局部回退块不应用这些正文编辑规则。
+`MarkdownEditingTransactions.swift` 统一解释段落、软换行、合并块和列表缩进；其中 `MarkdownWritingRules` 只生成编辑手势对应的 UTF-16 源码事务，不承担 Markdown 解析或渲染。列表/任务列表回车续项（新任务未勾选）、空项回车退出、引用逐层退出；行首退格移除前缀或降低缩进。Tab / Shift+Tab 支持单行及多行列表缩进；标题末尾回车新建正文段落，行首退格清除前缀。Rust 计划识别的代码、公式、表格及局部回退块不应用这些正文编辑规则。
 
 编辑设置中新增自动配对开关，默认开启并持久化。括号、单反引号支持补齐、越过本次生成的结束符和空配对删除；选中文字后输入强调符或括号可包裹选区。强调符在空选区下保留原始输入，避免与列表、连续标记冲突。输入法组合和粘贴不触发自动配对。每个结构化动作只提交一次正文变化，沿用 Engine 撤销历史。
 
 即时编辑第二阶段：代码正文保持等宽字体及 CodeMirror 高亮，Enter 继承当前缩进，Tab / Shift+Tab 支持多行缩进；右键“编辑代码语言…”定位围栏信息行，Esc 移出块。MathJax 公式在编辑时保留源码并在下方显示预览，失败时保留可编辑源码并以红色下划线和提示标记。图表/公式编辑预览以源码末行的可见字形底部定位，保留 10pt 间距，避免重复计入图片占位高度。
 
 表格单元格修改立即写回 Markdown，Tab / Shift+Tab 按单元格导航，末格 Tab 新增一行并恢复焦点，Enter / Esc 移出表格。单元格撤销/重做转交文档历史；只读表格不启用编辑动作。表格后的换行保留；新增行复用表格与已有单元格，只创建新行编辑器；源码事务只替换当前表格中实际变化的文本，同步解析表格片段、更新覆盖层范围与占位并切换焦点；完整展示计划由既有 Engine 异步派生。表格宽度计算统一扣除文本容器内边距，内容和宽度不变时复用测量结果，主题不变时不重复写入单元格颜色属性。连续 Tab 不等待整篇解析，也不滚动到隐藏的 Markdown。Shift+方向键或 Shift+点击建立跨单元格矩形选区，支持复制、剪切、删除和直接输入替换；复制使用带引号的 TSV 保留单元格内换行，粘贴 TSV 可自动扩展行列，批量修改作为一次文档事务。Shift+Enter 插入单元格内软换行，序列化为 `<br>`，Rust 原生计划与 HTML 导出统一显示换行；仅接受无属性的 `<br>` / `<br/>` / `<br />`，其他 HTML 继续转义。
+
+2026-09-23 的补充实施：表格 Cmd+Enter 与 Tab 新增行共享焦点目标，可见菜单提供行列与对齐入口；单元格字符通过 `MarkdownInlineProjection` 映射到源码，Engine 保存编辑前后选区，撤销/重做恢复单元格焦点。粗体、代码、链接和数学公式保留源标记；跨格式范围无法保留成对标记时优先保证文字内容正确。数学附件是不可编辑投影，进入单元格后编辑原 TeX。阅读栏按配置宽度居中，打字机滚动覆盖表格实际输入行。格式拒绝返回具体原因，网页 HTML 在独立 `MarkdownClipboard` 中静态转换，普通剪切与复制保留 Markdown/HTML 两种表示。
 
 即时编辑第三阶段：保留完整的 revision-bound 语法计划，在离屏属性投影上计算最终样式，通过 `RenderedAttributePatch` 比较并只写回变化的属性区间，避免无关段落的 TextKit 排版失效；语法影响扩展到后续内容时仍完整计算正确结果。公式、图表和表格覆盖层继续按源码位置复用。该优化针对展示层属性更新，不宣称 Rust 已实现增量 Markdown 解析。
 
@@ -154,7 +156,7 @@
 
 判断当前能力时，以已批准的个人首版范围、实际安装的菜单和主流程、以及 UAT-PERSONAL-01 至 10 为准，而不是以某个源文件或测试名称是否存在为准。
 
-自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 431 个 XCTest method：307 个 `current-direct`、33 个依赖真实 `NSApplication` 菜单、生命周期、WebKit 或 AppKit 打印/PDF 系统服务的 `current-host`、86 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
+自动化同样按这个边界分区。`quality/personal-xctest-scope.tsv` 当前完整列出 434 个 XCTest method：309 个 `current-direct`、34 个依赖真实 `NSApplication` 菜单、生命周期、WebKit 或 AppKit 打印/PDF 系统服务的 `current-host`、86 个后置 selector，以及 5 个固定性能 selector。`scripts/verify-launch.sh --personal` 只执行 `current-direct`，不会把另外三类记作通过；deferred profile 仍保留 macOS 全量测试。清单对重复、陈旧、未分类、非法分区及四类精确计数失败关闭，因此新增后置测试不能静默成为个人首版完成条件。
 
 ## 4. 人工 UAT 状态
 

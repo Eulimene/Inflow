@@ -465,7 +465,7 @@ final class HTMLExporterTests: XCTestCase {
     func testPDFPersonalAppearanceUsesTheNativeLightTheme() {
         XCTAssertEqual(PreviewAppearanceConfiguration.personalPDF.colorScheme, .light)
         XCTAssertEqual(PreviewAppearanceConfiguration.personalPDF.theme, .standard)
-        XCTAssertFalse(PreviewAppearanceConfiguration.personalPDF.mathRenderingEnabled)
+        XCTAssertTrue(PreviewAppearanceConfiguration.personalPDF.mathRenderingEnabled)
         XCTAssertTrue(PreviewAppearanceConfiguration.personalPDF.mermaidRenderingEnabled)
     }
 
@@ -650,15 +650,27 @@ final class HTMLExporterTests: XCTestCase {
             snapshot: HTMLExportSnapshot(markdown: markdown, appearance: .personalPDF)
         )
         let document = try XCTUnwrap(PDFDocument(data: data))
-        let selection = try XCTUnwrap(document.findString("FORMULAEND").first)
-        let page = try XCTUnwrap(selection.pages.first)
-        let bounds = selection.bounds(for: page)
-
-        XCTAssertGreaterThanOrEqual(bounds.minX, PDFExporter.margin - 1)
-        XCTAssertLessThanOrEqual(
-            bounds.maxX,
-            PDFExporter.paperSize.width - PDFExporter.margin + 1
-        )
+        XCTAssertEqual(document.pageCount, 1)
+        let page = try XCTUnwrap(document.page(at: 0))
+        // MathJax emits vector paths, so searchable source text is no longer proof
+        // of a rendered formula. Check actual page ink and its printable bounds.
+        let image = page.thumbnail(of: NSSize(width: PDFExporter.paperSize.width * 2,
+                                              height: PDFExporter.paperSize.height * 2), for: .mediaBox)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: XCTUnwrap(image.tiffRepresentation)))
+        var minimumX = bitmap.pixelsWide, maximumX = 0, ink = 0
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                      min(color.redComponent, color.greenComponent, color.blueComponent) < 0.85 else { continue }
+                ink += 1
+                minimumX = min(minimumX, x)
+                maximumX = max(maximumX, x)
+            }
+        }
+        let scale = CGFloat(bitmap.pixelsWide) / PDFExporter.paperSize.width
+        XCTAssertGreaterThan(ink, 20, "The PDF must contain visible formula paths")
+        XCTAssertGreaterThanOrEqual(CGFloat(minimumX) / scale, PDFExporter.margin - 2)
+        XCTAssertLessThanOrEqual(CGFloat(maximumX) / scale, PDFExporter.paperSize.width - PDFExporter.margin + 2)
     }
 
     func testExportBundlesOfflineMathJax() throws {

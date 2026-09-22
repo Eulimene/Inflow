@@ -823,9 +823,13 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
 
         invalidateSyntaxApplication()
-        guard let plan = engineRenderedPlan,
+        guard var plan = engineRenderedPlan,
               plan.exactlyMatches(source)
         else { return }
+        let dark = textView.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        for index in plan.renderRequests.indices where plan.renderRequests[index].kind == "math" {
+            plan.renderRequests[index].dark = dark
+        }
         renderedPlan = plan
         textView.writingPlan = plan
         renderedRevealedMarkers = activeRevealedMarkers()
@@ -906,6 +910,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
         let mathAnchors = plan.renderRequests.compactMap { request -> NSRange? in
             guard request.kind == "math", javaScriptResults[request.cacheKey]?.svg != nil,
+                  !plan.tables.contains(where: { NSIntersectionRange($0.sourceRange.utf16Range, request.sourceRange.utf16Range).length > 0 }),
                   !rangesOverlap(request.sourceRange.utf16Range, editingRange) else { return nil }
             return request.sourceRange.utf16Range
         }
@@ -1134,7 +1139,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
         for table in plan.tables {
             guard !rangesOverlap(table.sourceRange.utf16Range, editingRange) else { continue }
-            let size = textView.setRenderedTable(
+            var size = textView.setRenderedTable(
                 table,
                 baseFont: baseFont,
                 maximumWidth: max(
@@ -1150,6 +1155,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                     self?.applyRenderedTableEdit(edit, to: table)
                 }
             )
+            if let grid = textView.renderedTable(atUTF16Location: table.sourceRange.utf16Range.location) {
+                size = grid.updateMathPreviews(requests: plan.renderRequests.filter { $0.kind == "math" }, results: javaScriptResults, failures: javaScriptFailures)
+            }
             applyRenderedBlock(
                 sourceRange: table.sourceRange.utf16Range,
                 size: size,
@@ -1277,8 +1285,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             applyRenderFailure("图表渲染失败，请检查语法；右键可重新渲染。", range: block.sourceRange.utf16Range, storage: storage)
         }
         for request in plan.renderRequests where request.kind == "math" {
-            guard let svg = javaScriptResults[request.cacheKey]?.svg,
-                  let image = NSImage(data: Data(svg.utf8)) else {
+            guard !plan.tables.contains(where: { NSIntersectionRange($0.sourceRange.utf16Range, request.sourceRange.utf16Range).length > 0 }) else { continue }
+            guard let result = javaScriptResults[request.cacheKey], let svg = result.svg,
+                  let image = NSImage(data: result.pdfData ?? Data(svg.utf8)) else {
                 if javaScriptFailures.contains(request.cacheKey) {
                     storage.addAttributes([.toolTip: "公式渲染失败，请检查 TeX 语法。", .underlineStyle: NSUnderlineStyle.single.rawValue,
                         .underlineColor: NSColor.systemRed], range: request.sourceRange.utf16Range)
@@ -1288,7 +1297,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 }
                 continue
             }
-            image.isTemplate = true
+            image.isTemplate = result.pdfData == nil
             if rangesOverlap(request.sourceRange.utf16Range, editingRange) {
                 let size = textView.setRenderedImage(image, alternative: "数学公式预览",
                     sourceRange: request.sourceRange.utf16Range, fillsAvailableWidth: request.display, placement: .belowSource)
@@ -3634,6 +3643,11 @@ final class WindowAwareTextView: NSTextView {
         }
     }
 
+    func prepareRenderedLayoutForPrinting() {
+        // Export has no window/run-loop layout pass to finish deferred overlays.
+        layoutRenderedImages()
+    }
+
     fileprivate func layoutRenderedImages() {
         guard let layoutManager, let textContainer, !isUpdatingRenderedOverlayLayout else { return }
         isUpdatingRenderedOverlayLayout = true
@@ -4811,6 +4825,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         let column: Int
         let textView: RenderedMarkdownTableCellTextView
         var originalText: String
+        var mathPreview: MarkdownTableMathPreview?
 
         init(
             row: Int,
@@ -4824,6 +4839,16 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
             self.originalText = originalText
         }
     }
+
+    private struct MathPreviewState: Equatable {
+        let table: RenderedMarkdownTable
+        let requests: [JavaScriptRenderRequest]
+        let available: Set<String>
+        let failures: Set<String>
+        let widths: [CGFloat]
+        let dark: Bool
+    }
+    private var mathPreviewState: MathPreviewState?
 
     private var columnWidths: [CGFloat]
     private var rowHeights: [CGFloat]
@@ -5128,13 +5153,26 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
             cell.originalText = table.rows[cell.row][cell.column].text
             let model = table.rows[cell.row][cell.column]
             if previous.rows.indices.contains(cell.row), previous.rows[cell.row].indices.contains(cell.column),
+               previous.rows[cell.row][cell.column].markdown != model.markdown {
+                cell.mathPreview?.removeFromSuperview()
+                cell.mathPreview = nil
+            }
+            if previous.rows.indices.contains(cell.row), previous.rows[cell.row].indices.contains(cell.column),
                previous.rows[cell.row][cell.column].markdown != model.markdown,
                !cell.textView.hasMarkedText(), let storage = cell.textView.textStorage, storage.string == model.text {
                 let full = NSRange(location: 0, length: storage.length)
                 storage.addAttribute(.font, value: cell.textView.caretFont, range: full)
                 storage.removeAttribute(.strikethroughStyle, range: full)
                 storage.removeAttribute(.backgroundColor, range: full)
+                storage.removeAttribute(.link, range: full)
+                storage.removeAttribute(.toolTip, range: full)
+                storage.removeAttribute(.underlineColor, range: full)
+                storage.removeAttribute(.underlineStyle, range: full)
                 MarkdownInlineProjection(model.markdown).applyStyles(to: storage, font: cell.textView.caretFont)
+                for link in model.links where NSMaxRange(link.visibleRange) <= storage.length {
+                    storage.addAttributes(MarkdownLinkVisualStyle.restingAttributes(foregroundColor: currentPalette.accentColor)
+                        .merging([.link: link.target]) { current, _ in current }, range: link.visibleRange)
+                }
             }
         }
     }
@@ -5172,7 +5210,13 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
             font: baseFont,
             availableWidth: width
         )
-        let heights = Self.rowHeights(for: table, widths: widths, baseFont: baseFont)
+        var heights = Self.rowHeights(for: table, widths: widths, baseFont: baseFont)
+        for cell in cells {
+            if let preview = cell.mathPreview {
+                heights[cell.row] = max(heights[cell.row], preview.height(for: widths[cell.column]
+                    - CGFloat(MarkdownRenderMetrics.tableCellHorizontalPadding * 2)) + CGFloat(MarkdownRenderMetrics.tableCellVerticalPadding * 2))
+            }
+        }
         guard widths != columnWidths || maximumWidth != width || heights != rowHeights else { return false }
         maximumWidth = width
         columnWidths = widths
@@ -5182,6 +5226,73 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         layoutCells()
         needsDisplay = true
         return true
+    }
+
+    @discardableResult
+    func updateMathPreviews(requests: [JavaScriptRenderRequest], results: [String: JavaScriptRenderedOutput], failures: Set<String>) -> NSSize {
+        let requests = requests.filter { NSIntersectionRange($0.sourceRange.utf16Range, table.sourceRange.utf16Range).length > 0 }
+        guard !requests.isEmpty || cells.contains(where: { $0.mathPreview != nil }) else { return renderedSize }
+        let state = MathPreviewState(table: table, requests: requests,
+            available: Set(requests.compactMap { results[$0.cacheKey]?.svg == nil ? nil : $0.cacheKey }),
+            failures: failures, widths: columnWidths,
+            dark: effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
+        if mathPreviewState == state { updateMathPreviewVisibility(); return renderedSize }
+        mathPreviewState = state
+        let palette = MarkdownRenderPalette.resolved(for: effectiveAppearance)
+        var heights = Self.rowHeights(for: table, widths: columnWidths, baseFont: baseFont)
+        for cell in cells {
+            cell.mathPreview?.removeFromSuperview()
+            cell.mathPreview = nil
+            let model = table.rows[cell.row][cell.column]
+            let cellRequests = requests.filter { NSIntersectionRange($0.sourceRange.utf16Range, model.sourceRange.utf16Range).length > 0 }
+            guard !cellRequests.isEmpty, let storage = cell.textView.textStorage else { continue }
+            for request in requests where failures.contains(request.cacheKey) {
+                let raw = request.sourceRange.utf16Range
+                guard raw.location >= model.sourceRange.utf16Range.location,
+                      NSMaxRange(raw) <= NSMaxRange(model.sourceRange.utf16Range) else { continue }
+                let range = MarkdownInlineProjection(model.markdown).visibleRange(for:
+                    NSRange(location: raw.location - model.sourceRange.utf16Range.location, length: raw.length))
+                if NSMaxRange(range) <= storage.length {
+                    storage.addAttributes([.toolTip: "公式渲染失败，请检查 TeX；表格外右键可重新渲染。",
+                        .underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: NSColor.systemRed], range: range)
+                }
+            }
+            guard let preview = MarkdownTableMathPreview(cell: model, attributedText: storage,
+                requests: cellRequests, results: results, color: palette.textColor, font: cell.textView.caretFont,
+                maximumWidth: columnWidths[cell.column] - CGFloat(MarkdownRenderMetrics.tableCellHorizontalPadding * 2)) else { continue }
+            let row = cell.row, column = cell.column
+            preview.drawsBackground = true
+            preview.backgroundColor = backgroundColor(forRow: row)
+            preview.activate = { [weak self, weak editor = cell.textView] location, event in
+                guard let self, let editor, editor.isEditable else { return }
+                if event.modifierFlags.contains(.shift), editor.selectionClickHandler?(true) == true { return }
+                self.clearCellSelection()
+                _ = self.focusCell(row: row, column: column, selection: NSRange(location: location, length: 0))
+            }
+            preview.openLink = { [weak self, weak editor = cell.textView] target, event in
+                guard let self, let editor, RenderedMarkdownLinkActivation.shouldNavigate(for: event.modifierFlags,
+                    preference: self.linkActivation, isEditing: editor.isEditable) else { return false }
+                self.onLinkClick(target)
+                return true
+            }
+            cell.mathPreview = preview
+            addSubview(preview)
+            let height = preview.height(for: columnWidths[cell.column] - CGFloat(MarkdownRenderMetrics.tableCellHorizontalPadding * 2))
+            heights[cell.row] = max(heights[cell.row], height + CGFloat(MarkdownRenderMetrics.tableCellVerticalPadding * 2))
+        }
+        rowHeights = heights
+        renderedSize.height = rowHeights.reduce(0, +) + Self.toolbarHeight
+        setFrameSize(renderedSize)
+        layoutCells()
+        updateMathPreviewVisibility()
+        return renderedSize
+    }
+
+    private func updateMathPreviewVisibility() {
+        for cell in cells {
+            let reading = window?.firstResponder !== cell.textView && selectionAnchor == nil
+            cell.mathPreview?.isHidden = !reading
+        }
     }
 
     private static func rowHeights(
@@ -5238,6 +5349,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
                 width: max(1, columnWidths[cell.column] - horizontalPadding * 2),
                 height: max(1, rowHeights[cell.row] - verticalPadding * 2)
             )
+            cell.mathPreview?.frame = cell.textView.frame
         }
     }
 
@@ -5305,6 +5417,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         let range = selection ?? NSRange(location: 0, length: length)
         cell.textView.setSelectedRange(NSRange(location: min(range.location, length), length: min(range.length, max(0, length - range.location))))
         if scroll { cell.textView.scrollRangeToVisible(cell.textView.selectedRange()) }
+        updateMathPreviewVisibility()
         documentTextView?.selectionVisibilityHandler?()
         return true
     }
@@ -5316,6 +5429,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         selectionAnchor = nil
         selectionEnd = nil
         for cell in cells { cell.textView.drawsBackground = false }
+        updateMathPreviewVisibility()
     }
 
     func selectCells(from anchor: (Int, Int), to end: (Int, Int), scroll: Bool = true) {
@@ -5330,6 +5444,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
                 && (min(anchor.1, end.1)...max(anchor.1, end.1)).contains(cell.column)
             cell.textView.backgroundColor = NSColor.selectedTextBackgroundColor.withAlphaComponent(0.3)
         }
+        updateMathPreviewVisibility()
     }
 
     func extendCellSelection(row: Int, column: Int) {
@@ -5411,6 +5526,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         guard let view = notification.object as? NSTextView,
               let cell = cells.first(where: { $0.textView === view }) else { return }
         contextCell = (cell.row, cell.column)
+        updateMathPreviewVisibility()
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
@@ -5433,6 +5549,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
 
     func textDidEndEditing(_ notification: Notification) {
         if let textView = notification.object as? NSTextView { commit(textView) }
+        updateMathPreviewVisibility()
     }
 
     private func navigate(from textView: NSTextView, backwards: Bool, exit: Bool) {

@@ -153,6 +153,7 @@ final class JavaScriptRenderWorker: NSObject, WKNavigationDelegate {
             config.defaultWebpagePreferences.allowsContentJavaScript = true
             let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 1200, height: 900), configuration: config)
             view.navigationDelegate = self
+            view.underPageBackgroundColor = .clear
             webView = view
             let nonce = UUID().uuidString
             let script = try JavaScriptRenderAssets.scriptElement(nonce: nonce, renderDocument: false)
@@ -183,11 +184,11 @@ final class JavaScriptRenderWorker: NSObject, WKNavigationDelegate {
                               svg.hasPrefix("<svg"), width > 0, height > 0, width <= 16384, height <= 16384
                         else { throw JavaScriptRenderingError.invalidResult }
                     }
-                    if ["mermaid", "flow", "sequence"].contains(request.kind), let svg = output.svg,
+                    if ["mermaid", "flow", "sequence", "math"].contains(request.kind), let svg = output.svg,
                        let width = output.width, let height = output.height {
-                        // WebKit's vector PDF preserves SVG markers, which AppKit's SVG decoder ignores.
+                        // WebKit's vector PDF preserves SVG markers and MathJax paths that AppKit may omit.
                         view.callAsyncJavaScript(
-                            "document.body.innerHTML = svg; document.body.firstElementChild.style.display = 'block';",
+                            "document.body.innerHTML = svg; document.body.style.background = 'transparent'; document.body.firstElementChild.style.display = 'block';",
                             arguments: ["svg": svg], in: nil, in: .page
                         ) { [weak self] mounted in
                             guard let self, self.generation == current, self.renderWaiter != nil else { return }
