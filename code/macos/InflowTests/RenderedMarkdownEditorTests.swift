@@ -507,7 +507,15 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             accuracy: 12,
             "table width may differ only by the viewport's vertical scroller inset"
         )
-        XCTAssertEqual(readOnlyTable.renderedSize.height, contextMenuTable.renderedSize.height)
+        let readingCells = readOnlyTable.subviews.compactMap { $0 as? RenderedMarkdownTableCellTextView }
+        let writingCells = contextMenuTable.subviews.compactMap { $0 as? RenderedMarkdownTableCellTextView }
+        XCTAssertEqual(readingCells.count, writingCells.count)
+        for (reading, writing) in zip(readingCells, writingCells) {
+            XCTAssertEqual(reading.frame.height, writing.frame.height, accuracy: 1,
+                "Attached and offscreen views can round to different backing pixel grids")
+        }
+        XCTAssertEqual(readOnlyTable.renderedSize.height, contextMenuTable.renderedSize.height - 28,
+            "Read-only tables omit the writing toolbar margin; cell geometry remains shared")
         XCTAssertEqual(
             readOnlyTable.backgroundColor(forRow: 0),
             contextMenuTable.backgroundColor(forRow: 0)
@@ -2878,7 +2886,21 @@ extension RenderedMarkdownEditorTests {
         _ = await session.deriveContent(for: source, configuration: .default)
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
         var grid = try XCTUnwrap(session.textView.renderedTable(atUTF16Location: 0))
+        let focusToolbar = try XCTUnwrap(grid.subviews.compactMap { $0 as? MarkdownTableToolbar }.first)
+        window.makeFirstResponder(session.textView)
+        window.update()
+        XCTAssertTrue(focusToolbar.isHidden, "Body focus must hide the table toolbar")
+        let unfocusedSize = grid.renderedSize
         XCTAssertTrue(grid.focusCell(row: 1, column: 1, selection: NSRange(location: 1, length: 0)))
+        window.update()
+        XCTAssertFalse(focusToolbar.isHidden)
+        XCTAssertEqual(grid.renderedSize, unfocusedSize, "Revealing controls must not move the clicked cell")
+        window.makeFirstResponder(session.textView)
+        window.update()
+        XCTAssertTrue(focusToolbar.isHidden)
+        XCTAssertTrue(grid.focusCell(row: 1, column: 1, selection: NSRange(location: 1, length: 0)))
+        window.update()
+        XCTAssertFalse(focusToolbar.isHidden)
         let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
         editor.insertText("😀", replacementRange: editor.selectedRange())
         let edited = session.textView.string
@@ -2992,8 +3014,11 @@ extension RenderedMarkdownEditorTests {
             ("### 标题", 4, .lineBreak, "\n\n### 标题", 0),
             ("正文\r\n\r\n## 标题", 9, .paragraphBreak, "正文\r\n\r\n\r\n\r\n## 标题", 6),
             ("# 标题", 3, .paragraphBreak, "# 标\n\n题", 5),
-            ("> 引用", 4, .paragraphBreak, "> 引用\n>\n> ", 9),
+            ("> 引用", 4, .paragraphBreak, "> 引用\n> ", 7),
             ("> 引用", 4, .lineBreak, "> 引用\n> ", 7),
+            ("> > 引用", 6, .paragraphBreak, "> > 引用\n> > ", 11),
+            ("> 前后", 3, .paragraphBreak, "> 前\n> 后", 6),
+            ("> 引用\r\n> 后续", 4, .paragraphBreak, "> 引用\r\n> \r\n> 后续", 8),
             ("> > ", 4, .paragraphBreak, "> ", 2),
             ("- 项目\n- ", 7, .paragraphBreak, "- 项目\n\n", 6),
             ("> 引用\n> ", 7, .paragraphBreak, "> 引用\n\n", 6),
@@ -3022,6 +3047,18 @@ extension RenderedMarkdownEditorTests {
         XCTAssertEqual((nested as NSString).replacingCharacters(in: indented.range, with: indented.text),
             "  - parent\n    continuation\n    - child\n- sibling")
         XCTAssertEqual(indented.selection.location, 5)
+        let quotedSession = MarkdownSourceEditorSession()
+        let quotedSource = "> 引用"
+        quotedSession.textView.string = quotedSource
+        _ = await quotedSession.deriveContent(for: quotedSource, configuration: .default)
+        quotedSession.setPresentation(.rendered, source: quotedSource, onLinkClick: nil)
+        quotedSession.textView.setSelectedRange(NSRange(location: quotedSource.utf16.count, length: 0))
+        quotedSession.textView.insertNewline(nil)
+        XCTAssertEqual(quotedSession.textView.string, "> 引用\n> ")
+        XCTAssertEqual(quotedSession.textView.selectedRange().location, 7)
+        quotedSession.textView.insertText("续行", replacementRange: quotedSession.textView.selectedRange())
+        XCTAssertEqual(quotedSession.textView.string, "> 引用\n> 续行")
+
         let session = MarkdownSourceEditorSession()
         let source = "中文😀"
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),

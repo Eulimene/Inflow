@@ -142,7 +142,7 @@ enum MarkdownEditingTransaction {
                 }
             }
             if !head.quote.isEmpty {
-                return replace(selection, newline + head.quote.trimmingCharacters(in: .whitespaces) + newline + head.quote + head.indent)
+                return replace(selection, newline + head.quote + head.indent)
             }
             return replace(selection, raw.trimmingCharacters(in: .whitespaces).isEmpty ? newline : newline + newline)
         }

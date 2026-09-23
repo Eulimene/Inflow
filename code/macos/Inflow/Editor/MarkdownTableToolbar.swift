@@ -2,8 +2,10 @@ import AppKit
 
 /// Presentation only: all commands are applied by the session's source transaction pipeline.
 @MainActor
-final class MarkdownTableToolbar: NSView {
+final class MarkdownTableToolbar: NSView, NSPopoverDelegate {
     var onEdit: ((RenderedMarkdownTableEdit) -> Void)?
+    var onInteractionChange: (() -> Void)?
+    var hasActivePopover: Bool { sizePopover?.isShown == true }
     var onAlignment: ((RenderedMarkdownTableAlignment) -> Void)?
     private let sizeButton = NSButton(title: "", target: nil, action: nil)
     private let alignmentControl = NSSegmentedControl()
@@ -73,6 +75,7 @@ final class MarkdownTableToolbar: NSView {
         let controller = MarkdownTableSizeController(rows: rows, columns: columns)
         let popover = NSPopover()
         popover.behavior = .transient
+        popover.delegate = self
         popover.contentViewController = controller
         controller.onApply = { [weak self, weak popover] rows, columns in
             popover?.close()
@@ -80,6 +83,11 @@ final class MarkdownTableToolbar: NSView {
         }
         sizePopover = popover
         popover.show(relativeTo: sizeButton.bounds, of: sizeButton, preferredEdge: .maxX)
+        onInteractionChange?()
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        onInteractionChange?()
     }
 }
 

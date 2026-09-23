@@ -148,6 +148,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
         toolsButton.bezelStyle = .recessed
         toolsButton.font = .systemFont(ofSize: 12)
         toolsButton.setAccessibilityLabel("表格更多操作")
+        tableToolbar.onInteractionChange = { [weak self] in self?.updateToolbarVisibility() }
         tableToolbar.onEdit = { [weak self] edit in self?.onEdit(edit) }
         tableToolbar.onAlignment = { [weak self] alignment in
             guard let self else { return }
@@ -155,6 +156,31 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
         }
         addSubview(tableToolbar)
         addSubview(toolsButton)
+        updateToolbarVisibility()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didUpdateNotification, object: nil)
+        if let window {
+            NotificationCenter.default.addObserver(self, selector: #selector(windowDidUpdate(_:)),
+                name: NSWindow.didUpdateNotification, object: window)
+        }
+        updateToolbarVisibility()
+    }
+
+    @objc private func windowDidUpdate(_ notification: Notification) {
+        updateToolbarVisibility()
+    }
+
+    private func updateToolbarVisibility() {
+        let responder = window?.firstResponder as? NSView
+        let containsFocus = responder?.isDescendant(of: self) == true
+        let visible = toolsButton.isEnabled && (containsFocus || tableToolbar.hasActivePopover)
+        let hidden = !visible
+        guard tableToolbar.isHidden != hidden || toolsButton.isHidden != hidden else { return }
+        tableToolbar.isHidden = hidden
+        toolsButton.isHidden = hidden
         updateToolAccessibility()
     }
 
@@ -311,9 +337,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
     func setEditingEnabled(_ enabled: Bool) {
         for cell in cells { cell.textView.isEditable = enabled }
         toolsButton.isEnabled = enabled
-        tableToolbar.isHidden = !enabled
-        toolsButton.isHidden = !enabled
-        updateToolAccessibility()
+        updateToolbarVisibility()
         let height = enabled ? Self.toolbarHeight : 0
         guard visibleToolbarHeight != height else { return }
         visibleToolbarHeight = height
@@ -564,14 +588,16 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
             y += height
         }
         MarkdownRenderPalette.resolved(for: effectiveAppearance).borderColor.setStroke()
-        let path = NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5))
+        let gridBounds = NSRect(x: 0, y: visibleToolbarHeight, width: renderedSize.width,
+            height: renderedSize.height - visibleToolbarHeight)
+        let path = NSBezierPath(rect: gridBounds.insetBy(dx: 0.5, dy: 0.5))
         path.lineWidth = 1
         path.stroke()
         var x = CGFloat(0)
         for width in columnWidths.dropLast() {
             x += width
             let divider = NSBezierPath()
-            divider.move(to: NSPoint(x: x, y: 0))
+            divider.move(to: NSPoint(x: x, y: visibleToolbarHeight))
             divider.line(to: NSPoint(x: x, y: renderedSize.height))
             divider.stroke()
         }
@@ -728,6 +754,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
               let cell = cells.first(where: { $0.textView === view }) else { return }
         contextCell = (cell.row, cell.column)
         updateTools()
+        updateToolbarVisibility()
         updateMathPreviewVisibility()
     }
 
