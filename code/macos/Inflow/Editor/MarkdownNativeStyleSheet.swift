@@ -290,6 +290,41 @@ struct MarkdownNativeStyleSheet {
         }
     }
 
+    /// The first blank paragraph after a parsed heading is its optional Markdown
+    /// separator. Further blanks retain their spacing; an active blank remains editable.
+    static func headingSeparatorRanges(in plan: RenderedMarkdownPlan) -> [NSRange] {
+        let text = plan.sourceSnapshot as NSString
+        return plan.contentStyles.compactMap { content in
+            guard case .heading = content.kind else { return nil }
+            var end = NSMaxRange(text.paragraphRange(for: content.sourceRange.utf16Range))
+            // Setext headings have a separate underline source paragraph.
+            if let underline = plan.markers.first(where: { marker in
+                guard case .heading = marker.kind, marker.sourceRange.utf16Range.location == end else { return false }
+                let raw = text.substring(with: marker.sourceRange.utf16Range)
+                    .trimmingCharacters(in: .whitespaces)
+                return raw.first == "=" || raw.first == "-"
+            }) {
+                end = NSMaxRange(text.paragraphRange(for: underline.sourceRange.utf16Range))
+            }
+            guard end < text.length else { return nil }
+            let line = text.paragraphRange(for: NSRange(location: end, length: 0))
+            guard line.length > 0,
+                  text.substring(with: line).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return line
+        }
+    }
+
+    func collapseHeadingSeparators(_ ranges: [NSRange], expandedRange: NSRange?, storage: NSTextStorage) {
+        for range in ranges where range != expandedRange {
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.minimumLineHeight = 0.001
+            paragraph.maximumLineHeight = 0.001
+            paragraph.lineHeightMultiple = 0.001
+            storage.addAttributes([.font: NSFont.systemFont(ofSize: 0.1),
+                .foregroundColor: NSColor.clear, .paragraphStyle: paragraph], range: range)
+        }
+    }
+
     func applyCompactParagraphGaps(source: String, storage: NSTextStorage) {
         // Editable blank lines are caret destinations, not display-only paragraph gaps.
         guard !isEditable else { return }
