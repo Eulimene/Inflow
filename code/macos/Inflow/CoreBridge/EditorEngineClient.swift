@@ -108,7 +108,8 @@ private func decodeEditorEngineBridgeError(
 extension EditorEngineDerivedContent {
     static func deriveSynchronously(
         source: String,
-        configuration: PreviewAppearanceConfiguration = .default
+        configuration: PreviewAppearanceConfiguration = .default,
+        includeHTML: Bool = true
     ) -> Self? {
         if let cached = temporaryDerivedContentCache.content(
             for: source,
@@ -127,7 +128,7 @@ extension EditorEngineDerivedContent {
                     mathEnabled: configuration.mathRenderingEnabled,
                     mermaidEnabled: configuration.mermaidRenderingEnabled,
                     deferMermaid: true,
-                    includeHTML: true
+                    includeHTML: includeHTML
                 )
             )
             let response = try dispatchTemporaryEditorEngine(envelope, to: handle)
@@ -136,7 +137,8 @@ extension EditorEngineDerivedContent {
             else { return nil }
             return try? derived.validated(source: source)
         }
-        if let derived {
+        // Only complete snapshots belong in the shared export/tooling cache.
+        if let derived, includeHTML {
             temporaryDerivedContentCache.store(
                 derived,
                 source: source,

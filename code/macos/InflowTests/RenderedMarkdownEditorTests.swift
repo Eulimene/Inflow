@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import Inflow
 
@@ -1272,6 +1273,81 @@ final class RenderedMarkdownEditorTests: XCTestCase {
 
     @MainActor
     func testRenderedCaretTypingFontMatchesTheVisibleText() async throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        for sample in ["正文", "# 标题", "> 引用", "- 列表", "- [ ] 任务", "**粗体**", "`代码`", "> **引用**", "正文\n\n", "正文\r\n\r\n"] {
+            for softBreak in [false, true] {
+                let editor = MarkdownSourceEditorSession()
+                var bound = sample
+                let bridge = MarkdownSourceEditor(text: Binding(get: { bound }, set: { bound = $0 }),
+                    selectionRequest: nil, session: editor, presentation: .rendered)
+                let coordinator = bridge.makeCoordinator()
+                coordinator.update(parent: bridge, textView: editor.textView)
+                window.contentView = editor.scrollView
+                window.makeFirstResponder(editor.textView)
+                editor.textView.setSelectedRange(NSRange(location: sample.utf16.count, length: 0))
+                _ = await editor.deriveContent(for: sample, configuration: .default)
+                editor.setPresentation(.rendered, source: sample, onLinkClick: nil)
+                func geometry() -> (native: NSRect, caret: NSRect) {
+                    let view = editor.textView
+                    view.layoutManager!.ensureLayout(for: view.textContainer!)
+                    let screen = view.firstRect(forCharacterRange: view.selectedRange(), actualRange: nil)
+                    let native = view.convert(window.convertFromScreen(screen), from: nil)
+                    return (native, view.renderedInsertionRect(native))
+                }
+                let before = geometry()
+                if softBreak { editor.textView.insertLineBreak(nil) } else { editor.textView.insertNewline(nil) }
+                let immediate = geometry()
+                let changed = editor.textView.string
+                let selection = editor.textView.selectedRange()
+                XCTAssertGreaterThan(immediate.native.minY, before.native.minY, sample)
+                _ = await editor.deriveContent(for: changed, configuration: .default)
+                editor.setPresentation(.rendered, source: changed, onLinkClick: nil)
+                let rendered = geometry()
+                XCTAssertEqual(immediate.native.minX, rendered.native.minX, accuracy: 0.01, sample)
+                XCTAssertEqual(immediate.native.minY, rendered.native.minY, accuracy: 0.01, sample)
+                XCTAssertEqual(immediate.caret, rendered.caret, sample)
+                XCTAssertEqual(editor.textView.selectedRange(), selection, sample)
+                editor.textView.insertText("新", replacementRange: selection)
+                let typed = geometry()
+                XCTAssertEqual(typed.native.minY, rendered.native.minY, accuracy: 0.01, sample)
+                XCTAssertEqual(typed.caret.height, rendered.caret.height, accuracy: 0.01,
+                    "Chinese fallback fonts must not resize the caret: \(sample)")
+                if sample == "正文" {
+                    XCTAssertEqual(before.caret.height, immediate.caret.height,
+                        "Return must not shrink the caret when leaving Chinese text")
+                }
+            }
+        }
+        // The same source offset has two visual positions at a soft-wrap boundary.
+        let wrapped = MarkdownSourceEditorSession()
+        let wrappedSource = String(repeating: "中文 wrap ", count: 40)
+        wrapped.textView.string = wrappedSource
+        window.contentView = wrapped.scrollView
+        window.makeFirstResponder(wrapped.textView)
+        _ = await wrapped.deriveContent(for: wrappedSource, configuration: .default)
+        wrapped.setPresentation(.rendered, source: wrappedSource, onLinkClick: nil)
+        let layout = try XCTUnwrap(wrapped.textView.layoutManager)
+        layout.ensureLayout(for: try XCTUnwrap(wrapped.textView.textContainer))
+        var firstLineGlyphs = NSRange()
+        let firstLine = layout.lineFragmentRect(forGlyphAt: 0, effectiveRange: &firstLineGlyphs)
+        let boundary = layout.characterIndexForGlyph(at: NSMaxRange(firstLineGlyphs))
+        wrapped.textView.setSelectedRange(NSRange(location: boundary, length: 0), affinity: .upstream, stillSelecting: false)
+        let upstream = firstLine.offsetBy(dx: wrapped.textView.textContainerOrigin.x,
+            dy: wrapped.textView.textContainerOrigin.y)
+        XCTAssertEqual(wrapped.textView.renderedInsertionRect(upstream).midY, upstream.midY, accuracy: 0.01,
+            "The caret at the end of a wrapped line must not be drawn on the following line")
+        // An empty structural line must never borrow the next heading's font.
+        let quoted = "> 引用\n> \n\n# 后面的标题"
+        let quotePlan = RenderedMarkdownEditor.plan(for: quoted)
+        let emptyQuoteEnd = (quoted as NSString).range(of: "\n\n").location
+        for position in (emptyQuoteEnd - 2)...emptyQuoteEnd {
+            XCTAssertNil(RenderedMarkdownCaretStyleResolver.visibleAttributeLocation(
+                forInsertionLocation: position,
+                text: quoted, hiddenRanges: quotePlan.markers.map(\.sourceRange.utf16Range)))
+        }
         let source = "# 同一基线"
         let location = (source as NSString).range(of: "同").location
         let session = MarkdownSourceEditorSession()

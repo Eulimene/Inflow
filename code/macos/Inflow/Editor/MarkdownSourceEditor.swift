@@ -194,6 +194,17 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             guard let self, !self.textView.hasActiveComposition, !self.isApplyingEngineMutation else { return }
             self.engineClient.observeSelection(text: self.textView.string, selectionUTF16: range)
         }
+        textView.structuralEditDidApply = { [weak self] in
+            guard let self, self.presentation == .rendered else { return }
+            // Enter changes paragraph geometry. Commit its native projection before
+            // scrolling or drawing the caret; JS resources still resolve asynchronously.
+            let source = self.textView.string
+            guard let plan = EditorEngineDerivedContent.deriveSynchronously(
+                source: source, configuration: self.latestRenderConfiguration, includeHTML: false
+            )?.nativeRenderPlan else { return }
+            self.engineRenderedPlan = plan
+            self.applyRenderedPresentation(source: source, force: true)
+        }
         textView.selectionVisibilityHandler = { [weak self] in self?.centerSelectionForTypewriterMode() }
         textView.retryRenderingHandler = { [weak self] in self?.retryRenderedResources() }
         textView.effectiveAppearanceDidChangeHandler = { [weak self] in
@@ -2982,7 +2993,14 @@ enum RenderedMarkdownCaretStyleResolver {
         if location == length, manager.extraLineFragmentTextContainer === container {
             line = manager.extraLineFragmentRect
         } else if length > 0 {
-            let glyph = manager.glyphIndexForCharacter(at: min(location, length - 1))
+            var character = min(location, length - 1)
+            // A soft-wrap boundary has two insertion positions. Preserve AppKit's
+            // affinity instead of moving an upstream caret onto the next line.
+            if textView.selectionAffinity == .upstream, location > 0, location < length,
+               !isLineEnding((textView.string as NSString).character(at: location - 1)) {
+                character = location - 1
+            }
+            let glyph = manager.glyphIndexForCharacter(at: character)
             guard glyph < manager.numberOfGlyphs else { return adjustedInsertionRect(nativeRect, font: font) }
             line = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
         } else { return adjustedInsertionRect(nativeRect, font: font) }
@@ -2998,14 +3016,17 @@ enum RenderedMarkdownCaretStyleResolver {
     ) -> Int? {
         let source = text as NSString
         guard source.length > 0 else { return nil }
-        let location = min(max(0, insertion), source.length - 1)
+        let insertion = min(max(0, insertion), source.length)
+        let line = source.lineRange(for: NSRange(location: insertion, length: 0))
+        guard line.length > 0 else { return nil }
+        let location = min(insertion, NSMaxRange(line) - 1)
         if !isHidden(location, in: hiddenRanges), !isLineEnding(source.character(at: location)) {
             return location
         }
         if let hidden = hiddenRanges.first(where: { NSLocationInRange(location, $0) }),
            let forward = firstVisibleLocation(
                from: NSMaxRange(hidden),
-               through: source.length,
+               through: NSMaxRange(line),
                direction: 1,
                source: source,
                hiddenRanges: hiddenRanges
@@ -3015,7 +3036,7 @@ enum RenderedMarkdownCaretStyleResolver {
         }
         return firstVisibleLocation(
             from: min(insertion - 1, source.length - 1),
-            through: -1,
+            through: line.location - 1,
             direction: -1,
             source: source,
             hiddenRanges: hiddenRanges
@@ -3254,6 +3275,7 @@ final class WindowAwareTextView: NSTextView {
     }
     var isLiveMarkdown = false { didSet { updateReadingColumn() } }
     var readingColumnWidth = CGFloat(MarkdownRenderMetrics.readingWidth) { didSet { updateReadingColumn() } }
+    var structuralEditDidApply: (() -> Void)?
     var selectionVisibilityHandler: (() -> Void)?
     var retryRenderingHandler: (() -> Void)?
     var markdownAutoPairEnabled = true
@@ -3305,7 +3327,11 @@ final class WindowAwareTextView: NSTextView {
     func renderedInsertionRect(_ rect: NSRect, font: NSFont? = nil) -> NSRect {
         let candidate = font ?? typingAttributes[.font] as? NSFont
         let visibleFont = candidate.flatMap { $0.pointSize >= 1 ? $0 : nil } ?? renderedReplacementBaseFont
-        return RenderedMarkdownCaretStyleResolver.insertionRect(rect, in: self, font: visibleFont)
+        let metricsFont = isLiveMarkdown
+            ? (NSFont(descriptor: renderedReplacementBaseFont.fontDescriptor, size: visibleFont.pointSize)
+                ?? renderedReplacementBaseFont)
+            : visibleFont
+        return RenderedMarkdownCaretStyleResolver.insertionRect(rect, in: self, font: metricsFont)
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -4077,7 +4103,8 @@ final class WindowAwareTextView: NSTextView {
                     font: font,
                     baseFont: renderedReplacementBaseFont,
                     lineRect: lineRect,
-                    baselineOffset: layoutManager.location(forGlyphAt: baselineGlyph).y
+                    baselineOffset: contentLocation < NSMaxRange(lineCharacterRange)
+                        ? layoutManager.location(forGlyphAt: baselineGlyph).y : nil
                 )
             )
             let drawRect = NSRect(origin: point, size: size)
@@ -4191,14 +4218,14 @@ final class WindowAwareTextView: NSTextView {
     }
 
     override func insertNewline(_ sender: Any?) {
-        if performEditingIntent(.paragraphBreak) { normalizeInsertedLine(); return }
+        if performEditingIntent(.paragraphBreak) { return }
         breakEngineTypingGroup()
         super.insertNewline(sender)
         normalizeInsertedLine()
     }
 
     override func insertLineBreak(_ sender: Any?) {
-        if performEditingIntent(.lineBreak) { normalizeInsertedLine(); return }
+        if performEditingIntent(.lineBreak) { return }
         super.insertLineBreak(sender)
     }
 
@@ -4222,7 +4249,7 @@ final class WindowAwareTextView: NSTextView {
         guard isLiveMarkdown, isEditable, !hasActiveComposition else { return false }
         let plan = writingPlan?.exactlyMatches(string) == true ? writingPlan! : RenderedMarkdownEditor.plan(for: string)
         guard let edit = MarkdownEditingTransaction.plan(intent, source: string, selection: selectedRange(), renderPlan: plan) else { return false }
-        return applyWritingEdit(edit)
+        return applyWritingEdit(edit, updatesParagraphLayout: true)
     }
 
     private func normalizeInsertedLine() {
@@ -4281,13 +4308,14 @@ final class WindowAwareTextView: NSTextView {
     }
 
     @discardableResult
-    private func applyWritingEdit(_ edit: MarkdownWritingEdit) -> Bool {
+    private func applyWritingEdit(_ edit: MarkdownWritingEdit, updatesParagraphLayout: Bool = false) -> Bool {
         guard NSMaxRange(edit.range) <= string.utf16.count,
               shouldChangeText(in: edit.range, replacementString: edit.text), let storage = textStorage else { return false }
         breakEngineTypingGroup()
         insertedCloser = nil
         storage.replaceCharacters(in: edit.range, with: edit.text)
         setSelectedRange(edit.selection)
+        if updatesParagraphLayout { structuralEditDidApply?() }
         didChangeText()
         scrollRangeToVisible(edit.selection)
         return true

@@ -466,7 +466,7 @@ enum RenderedMarkdownEditor {
             + plan.mermaidDiagrams.map(\.sourceRange.utf16Range)
             + plan.renderRequests.filter { $0.kind == "math" }.map(\.sourceRange.utf16Range)
             + plan.markers.compactMap { marker in
-                marker.replacementText != nil || marker.kind == .rule
+                marker.kind == .rule
                     ? marker.sourceRange.utf16Range
                     : nil
             }
