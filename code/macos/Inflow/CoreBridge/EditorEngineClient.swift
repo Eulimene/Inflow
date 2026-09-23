@@ -468,6 +468,7 @@ final class EditorEngineClient {
         configuration: PreviewAppearanceConfiguration,
         deferMermaid: Bool = true
     ) async -> EditorEngineDerivedContent? {
+        guard !Task.isCancelled else { return nil }
         submit(text: text, selectionUTF16: selectionUTF16)
         await pending?.value
         guard !Task.isCancelled else { return nil }
@@ -2015,7 +2016,8 @@ private struct EditorEngineDerivedState: Decodable {
             return MarkdownReference(kind: kind, target: reference.target, sourceUTF8Range: range)
         }
         let blocks = try render.blocks.map { block in
-            guard let range = block.sourceRange.validated(in: source, permitsEmpty: false),
+            // GFM pads short rows with source-less empty cells.
+            guard let range = block.sourceRange.validated(in: source, permitsEmpty: block.kind == "table_cell"),
                   let depth = Int(exactly: block.depth)
             else { throw EditorEngineBridgeError.invalidResponse }
             return EditorEngineRenderBlock(

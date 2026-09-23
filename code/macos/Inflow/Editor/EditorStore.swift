@@ -47,7 +47,7 @@ struct EditorDerivedContentRequest: Equatable, Sendable {
     let delayNanoseconds: UInt64
 
     func hasSameDerivationInput(as other: Self) -> Bool {
-        markdown == other.markdown
+        UTF8Text.isExactlyEqual(markdown, other.markdown)
             && documentDirectory == other.documentDirectory
             && projectRoot == other.projectRoot
             && expectedProjectRootIdentity == other.expectedProjectRootIdentity
@@ -73,6 +73,7 @@ final class EditorStore: ObservableObject {
     private var derivedContentTask: Task<Void, Never>?
     private var activeDerivedRequest: EditorDerivedContentRequest?
     private var completedDerivedRequest: EditorDerivedContentRequest?
+    private var latestDerivedRequest: EditorDerivedContentRequest?
     private var requestedMode: EditorEngineMode
     private var modeSynchronizationTask: Task<Bool, Never>?
 
@@ -88,7 +89,19 @@ final class EditorStore: ObservableObject {
         state = initialState
         requestedMode = initialState.engineMode
         sourceEditorSession.localTextProjectionDidPublish = { [weak self] sourceSnapshot in
-            self?.state.renderedSurfacePhase = .optimistic(sourceSnapshot: sourceSnapshot)
+            guard let self else { return }
+            self.state.renderedSurfacePhase = .optimistic(sourceSnapshot: sourceSnapshot)
+            // SwiftUI may coalesce A -> B -> A during undo/redo. A native
+            // acknowledgement still invalidates analysis of the earlier A.
+            guard let request = self.latestDerivedRequest else { return }
+            self.activeDerivedRequest = nil
+            self.completedDerivedRequest = nil
+            self.refreshDerived(EditorDerivedContentRequest(
+                markdown: sourceSnapshot, documentDirectory: request.documentDirectory,
+                projectRoot: request.projectRoot, expectedProjectRootIdentity: request.expectedProjectRootIdentity,
+                requiresProjectBoundary: request.requiresProjectBoundary, configuration: request.configuration,
+                syntaxHighlightingEnabled: request.syntaxHighlightingEnabled,
+                delayNanoseconds: request.delayNanoseconds))
         }
         sourceEditorSession.resolvedMermaidPlanDidPublish = {
             [weak renderedPreviewSession] plan, source in
@@ -207,10 +220,12 @@ final class EditorStore: ObservableObject {
             derivedContentTask?.cancel()
             derivedContentGeneration &+= 1
             activeDerivedRequest = nil
+            latestDerivedRequest = nil
         }
     }
 
     func prepareForDocumentReplacement() {
+        latestDerivedRequest = nil
         derivedContentTask?.cancel()
         derivedContentGeneration &+= 1
         activeDerivedRequest = nil
@@ -219,6 +234,7 @@ final class EditorStore: ObservableObject {
     }
 
     private func refreshDerived(_ request: EditorDerivedContentRequest) {
+        latestDerivedRequest = request
         if activeDerivedRequest?.hasSameDerivationInput(as: request) == true
             || completedDerivedRequest?.hasSameDerivationInput(as: request) == true
         {
@@ -284,6 +300,7 @@ final class EditorStore: ObservableObject {
     }
 
     private func suspendDerived(markdown: String) {
+        latestDerivedRequest = nil
         derivedContentTask?.cancel()
         derivedContentGeneration &+= 1
         activeDerivedRequest = nil

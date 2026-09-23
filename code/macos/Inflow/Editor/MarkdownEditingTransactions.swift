@@ -15,6 +15,22 @@ enum MarkdownWritingAction { case newline, backwardDelete, indent, outdent }
 enum MarkdownEditingIntent { case paragraphBreak, lineBreak, mergeBackward }
 
 enum MarkdownEditingTransaction {
+    /// Leave a table in an empty paragraph separated from both neighbouring
+    /// blocks, even when the table range already includes its trailing newline.
+    static func exitTable(source: String, at location: Int) -> MarkdownWritingEdit? {
+        let text = source as NSString
+        guard location >= 0, location <= text.length else { return nil }
+        let newline = source.contains("\r\n") ? "\r\n" : "\n"
+        let before = text.substring(to: location)
+        let after = text.substring(from: location)
+        let prefix = before.hasSuffix(newline) ? newline : newline + newline
+        let suffix = after.isEmpty || after.hasPrefix(newline + newline)
+            ? "" : (after.hasPrefix(newline) ? newline : newline + newline)
+        return MarkdownWritingEdit(range: NSRange(location: location, length: 0),
+            text: prefix + suffix,
+            selection: NSRange(location: location + prefix.utf16.count, length: 0))
+    }
+
     /// Cheap lexical gate before consulting the native render plan. Ordinary
     /// character deletion must not synchronously parse the whole document.
     static func mayHandleBackwardDelete(source: String, selection: NSRange) -> Bool {
@@ -42,6 +58,16 @@ enum MarkdownEditingTransaction {
         func replace(_ range: NSRange, _ value: String, caret: Int? = nil) -> MarkdownWritingEdit {
             MarkdownWritingEdit(range: range, text: value,
                 selection: NSRange(location: caret ?? range.location + value.utf16.count, length: 0))
+        }
+        func exitEmptyBlock(removing range: NSRange, retaining outerPrefix: String) -> MarkdownWritingEdit {
+            guard line.location > 0 else { return replace(range, "") }
+            let previous = text.lineRange(for: NSRange(location: line.location - 1, length: 0))
+            let previousText = text.substring(with: previous).trimmingCharacters(in: .whitespacesAndNewlines)
+            let outerMarker = outerPrefix.trimmingCharacters(in: .whitespaces)
+            // Without a blank separator, the next typed paragraph is a lazy
+            // continuation of the list/quote that the user has just exited.
+            let separator = previousText.isEmpty || previousText == outerMarker ? "" : newline + outerPrefix
+            return replace(range, separator)
         }
         let request = renderPlan.renderRequests.first {
             selection.location >= $0.sourceRange.utf16Range.location
@@ -84,7 +110,8 @@ enum MarkdownEditingTransaction {
                         return replace(NSRange(location: line.location + head.quote.utf16.count,
                             length: min(2, head.indent.utf16.count)), "", caret: max(line.location, selection.location - min(2, head.indent.utf16.count)))
                     }
-                    return replace(NSRange(location: line.location + head.quote.utf16.count, length: head.list.utf16.count), "")
+                    return exitEmptyBlock(removing: NSRange(location: line.location + head.quote.utf16.count,
+                        length: head.list.utf16.count), retaining: head.quote)
                 }
                 return replace(selection, newline + head.quote + head.indent + nextListMarker(head.list))
             }
@@ -95,6 +122,11 @@ enum MarkdownEditingTransaction {
             if selection.length == 0,
                let structural = MarkdownWritingRules.edit(.newline, source: source, selection: selection) {
                 if !head.list.isEmpty || raw.trimmingCharacters(in: .whitespaces) == head.quote.trimmingCharacters(in: .whitespaces) {
+                    if structural.text.isEmpty {
+                        let outer = text.substring(with: NSRange(location: line.location,
+                            length: structural.range.location - line.location))
+                        return exitEmptyBlock(removing: structural.range, retaining: outer)
+                    }
                     return structural
                 }
             }

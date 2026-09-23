@@ -52,6 +52,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var renderedImageGeneration = 0
     private var renderedImageTask: Task<Void, Never>?
     private var deferredMermaidGeneration = 0
+    // Core analysis survives presentation changes; diagram work does not.
+    private var contentDerivationGeneration = 0
     private var deferredMermaidTask: Task<Void, Never>?
     private var javaScriptResourcesTask: Task<Void, Never>?
     private var javaScriptResults: [String: JavaScriptRenderedOutput] = [:]
@@ -65,6 +67,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private let engineClient: EditorEngineClient
     private var formatInspectionGeneration = 0
     private var formatInspectionTask: Task<Void, Never>?
+    private var engineHistoryTask: Task<Void, Never>?
+    private var engineHistoryGeneration = 0
+    private var pendingHistoryCommands = 0
     private let inputState = MarkdownInputState()
     private let typingStyles = MarkdownTypingStyleProjection()
     private let layoutPlans = MarkdownLayoutPlanCache()
@@ -174,6 +179,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 _ = self.textView.consumeEngineEditGroupID()
             }
             self.invalidateSyntaxApplication()
+            self.contentDerivationGeneration &+= 1
             self.cancelDeferredMermaidRendering()
             self.scheduleFormatInspection()
             self.lineNumberRuler.updateText(text)
@@ -288,7 +294,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         latestRenderConfiguration = configuration
         textView.readingColumnWidth = CGFloat(configuration.contentWidth)
         cancelDeferredMermaidRendering()
-        deferredMermaidGeneration &+= 1
+        contentDerivationGeneration &+= 1
+        let contentGeneration = contentDerivationGeneration
         let mermaidGeneration = deferredMermaidGeneration
         guard let content = await engineClient.derive(
             text: source,
@@ -296,8 +303,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             configuration: configuration,
             deferMermaid: configuration.mermaidRenderingEnabled
         ) else { return nil }
-        guard !Task.isCancelled, mermaidGeneration == deferredMermaidGeneration,
-              content.nativeRenderPlan.exactlyMatches(source) else { return nil }
+        guard !Task.isCancelled, content.nativeRenderPlan.exactlyMatches(source) else { return nil }
+        // A resource/theme refresh can supersede this session's installation
+        // while a Store request still needs its valid immutable result.
+        // Superseded side effects are forbidden; the read itself has not failed.
+        guard contentGeneration == contentDerivationGeneration else { return content }
         let planChanged = engineRenderedPlan != content.nativeRenderPlan
         engineRenderedPlan = content.nativeRenderPlan
         layoutPlans.install(content.nativeRenderPlan, configuration: configuration)
@@ -308,7 +318,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         {
             applyRenderedPresentation(source: source, force: planChanged)
         }
-        if content.mermaidDeferred,
+        if mermaidGeneration == deferredMermaidGeneration, content.mermaidDeferred,
            content.nativeRenderPlan.mermaidDiagrams.contains(where: \.isPlaceholder)
         {
             scheduleDeferredMermaidRendering(
@@ -417,10 +427,24 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
 
     private func performEngineHistory(_ action: EngineHistoryAction) {
         guard !textView.hasActiveComposition, !inputState.isApplyingEngineMutation else { return }
-        let source = textView.string
-        let selection = textView.selectedRange()
-        Task { @MainActor [weak self] in
-            guard let self else { return }
+        let previous = engineHistoryTask
+        let generation = engineHistoryGeneration
+        pendingHistoryCommands += 1
+        textView.engineHistoryIsPending = true
+        engineHistoryTask = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self, generation == self.engineHistoryGeneration else { return }
+            defer {
+                if generation == self.engineHistoryGeneration {
+                    self.pendingHistoryCommands -= 1
+                    self.textView.engineHistoryIsPending = self.pendingHistoryCommands > 0
+                }
+            }
+            guard !Task.isCancelled, !self.textView.hasActiveComposition else { return }
+            // Capture source after the previous command has updated the native
+            // surface; rapid Undo/Redo must not both target the pre-Undo text.
+            let source = self.textView.string
+            let selection = self.textView.selectedRange()
             let mutation: EditorEngineMutation?
             switch action {
             case .undo:
@@ -434,7 +458,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                     selectionUTF16: selection
                 )
             }
-            guard let mutation else { return }
+            guard !Task.isCancelled, generation == self.engineHistoryGeneration, let mutation else { return }
             _ = self.applyEngineMutation(mutation, plan: nil, actionName: nil)
         }
     }
@@ -2304,6 +2328,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     func resetAfterExternalReload(_ text: String) {
+        engineHistoryGeneration &+= 1
+        engineHistoryTask?.cancel()
+        engineHistoryTask = nil
+        pendingHistoryCommands = 0
+        textView.engineHistoryIsPending = false
+        contentDerivationGeneration &+= 1
         typingStyles.reset()
         layoutPlans.invalidate()
         cancelDeferredMermaidRendering()
@@ -2446,4 +2476,3 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
 }
-

@@ -110,6 +110,32 @@ final class EditorEngineClientTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(5))
         }
         XCTAssertEqual(store.state.renderedSurfacePhase, .ready(sourceSnapshot: source))
+
+        session.textView.setSelectedRange(NSRange(location: source.utf16.count, length: 0))
+        session.textView.insertText("x", replacementRange: session.textView.selectedRange())
+        let typed = source + "x"
+        for _ in 0..<100 where store.state.renderedSurfacePhase != .ready(sourceSnapshot: typed) {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(store.state.renderedSurfacePhase, .ready(sourceSnapshot: typed),
+            "Native acknowledgements must refresh analysis without waiting for SwiftUI onChange")
+        var historyPublications: [String] = []
+        session.updateBoundText = { historyPublications.append($0) }
+        session.textView.undo(nil)
+        let redoItem = NSMenuItem(title: "Redo", action: #selector(WindowAwareTextView.redo(_:)), keyEquivalent: "z")
+        XCTAssertTrue(session.textView.validateUserInterfaceItem(redoItem),
+            "AppKit must accept Cmd-Shift-Z while the preceding Undo is still queued")
+        session.textView.redo(nil)
+        session.setPresentation(.source, source: typed, onLinkClick: nil)
+        for _ in 0..<100 where historyPublications.count < 2
+            || store.state.renderedSurfacePhase != .ready(sourceSnapshot: typed) {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(Array(historyPublications.suffix(2)), [source, typed])
+        XCTAssertEqual(session.textView.string, typed)
+        XCTAssertEqual(store.state.renderedSurfacePhase, .ready(sourceSnapshot: typed))
+        XCTAssertNil(store.state.previewFailureMessage)
+        XCTAssertFalse(session.textView.engineHistoryIsPending)
     }
 
     @MainActor
@@ -725,6 +751,10 @@ final class EditorEngineClientTests: XCTestCase {
         XCTAssertTrue(derived.nativeRenderPlan.exactlyMatches(decomposed))
         let strong = try XCTUnwrap(derived.nativeRenderPlan.contentStyles.first { $0.kind == .strong })
         XCTAssertEqual(strong.sourceRange.utf16Range, (decomposed as NSString).range(of: "e\u{301}"))
+
+        let shortRow = "| A | B |\n| --- | --- |\n| C | D<br>F |\nAfter\n结束"
+        let table = try XCTUnwrap(EditorEngineDerivedContent.deriveSynchronously(source: shortRow))
+        XCTAssertEqual(table.nativeRenderPlan.tables.first?.rows.last?.last?.text, "")
     }
 
     @MainActor
@@ -748,6 +778,23 @@ final class EditorEngineClientTests: XCTestCase {
         XCTAssertNotNil(current)
         XCTAssertGreaterThan(session.renderedPresentationPassCount, passes)
         XCTAssertEqual(session.textView.string, "# new")
+
+        // SwiftUI can reapply source presentation while analysis is awaiting
+        // the Engine. Cancelling diagram work must not discard core analysis.
+        for _ in 0..<5 {
+            let presentationRefresh = Task { @MainActor in
+                session.setPresentation(.source, source: "# new", onLinkClick: nil)
+            }
+            let refreshed = await session.deriveContent(for: "# new", configuration: .default)
+            await presentationRefresh.value
+            XCTAssertEqual(refreshed?.sourceSnapshot, "# new")
+        }
+        async let analysis = session.deriveContent(for: "# new", configuration: .default)
+        async let resourceRefresh = session.deriveContent(for: "# new", configuration: .default)
+        let concurrent = await (analysis, resourceRefresh)
+        XCTAssertEqual(concurrent.0?.sourceSnapshot, "# new")
+        XCTAssertEqual(concurrent.1?.sourceSnapshot, "# new",
+            "Superseding plan installation must not turn a valid analysis result into a failure")
     }
 
     func testDiffReturnsOneUTF8ReplacementForUnicodeText() {

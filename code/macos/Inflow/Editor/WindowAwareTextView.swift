@@ -40,6 +40,7 @@ final class WindowAwareTextView: NSTextView {
     var usesEngineHistory = false
     var engineCanUndo = false
     var engineCanRedo = false
+    var engineHistoryIsPending = false
     var engineUndoHandler: (() -> Void)?
     var engineRedoHandler: (() -> Void)?
     var didAttachToWindow: (() -> Void)?
@@ -1060,6 +1061,15 @@ final class WindowAwareTextView: NSTextView {
     }
 
     override func keyDown(with event: NSEvent) {
+        // AppKit may map Shift-Return to insertNewline:, so resolve the live
+        // editor's soft-break shortcut before the system key-binding layer.
+        // Composition must keep receiving the original event to accept IME text.
+        if isLiveMarkdown, isEditable, !hasActiveComposition,
+           event.modifierFlags.intersection([.shift, .command, .option, .control]) == [.shift],
+           event.keyCode == 36 || event.keyCode == 76 {
+            insertLineBreak(nil)
+            return
+        }
         if isLiveMarkdown, !hasActiveComposition,
            event.modifierFlags.intersection([.shift, .command, .option, .control]) == [.shift, .command] {
             if event.charactersIgnoringModifiers?.lowercased() == "v" { pasteAsPlainText(nil); return }
@@ -1072,6 +1082,11 @@ final class WindowAwareTextView: NSTextView {
             return
         }
         super.keyDown(with: event)
+    }
+
+    func exitRenderedTable(at location: Int) {
+        guard let edit = MarkdownEditingTransaction.exitTable(source: string, at: location) else { return }
+        _ = applyWritingEdit(edit, updatesParagraphLayout: true)
     }
 
     @discardableResult
@@ -1629,12 +1644,11 @@ final class WindowAwareTextView: NSTextView {
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
         switch item.action {
         case #selector(undo(_:)):
-            usesEngineHistory ? engineCanUndo : persistentUndoManager.canUndo
+            usesEngineHistory ? (engineCanUndo || engineHistoryIsPending) : persistentUndoManager.canUndo
         case #selector(redo(_:)):
-            usesEngineHistory ? engineCanRedo : persistentUndoManager.canRedo
+            usesEngineHistory ? (engineCanRedo || engineHistoryIsPending) : persistentUndoManager.canRedo
         default:
             super.validateUserInterfaceItem(item)
         }
     }
 }
-

@@ -2896,6 +2896,26 @@ extension RenderedMarkdownEditorTests {
         XCTAssertFalse(session.textView.string.contains("pin"), "Uncommitted cell composition must not reach the document")
         cell.insertText("拼", replacementRange: NSRange(location: NSNotFound, length: 0))
         XCTAssertTrue(session.textView.string.contains("拼"))
+
+        for newline in ["\n", "\r\n"] {
+            let tableSource = "| A | B |\(newline)| --- | --- |\(newline)| 1 | 2 |"
+            for following in ["", newline, newline + newline + "尾段"] {
+                let source = tableSource + following
+                session.resetAfterExternalReload(source)
+                _ = await session.deriveContent(for: source, configuration: .default)
+                session.setPresentation(.rendered, source: source, onLinkClick: nil)
+                let table = try XCTUnwrap(session.textView.renderedTable(atUTF16Location: 0))
+                XCTAssertTrue(table.focusCell(row: 1, column: 1))
+                (window.firstResponder as? NSTextView)?.insertNewline(nil)
+                XCTAssertTrue(window.firstResponder === session.textView)
+                session.textView.insertText("next", replacementRange: session.textView.selectedRange())
+                let expected = tableSource + newline + newline + "next"
+                    + (following.contains("尾段") ? newline + newline + "尾段" : "")
+                XCTAssertEqual(session.textView.string, expected)
+                XCTAssertEqual(session.textView.selectedRange().location,
+                    (tableSource + newline + newline + "next").utf16.count)
+            }
+        }
     }
 
     @MainActor
@@ -2907,6 +2927,10 @@ extension RenderedMarkdownEditorTests {
             ("> 引用", 4, .paragraphBreak, "> 引用\n>\n> ", 9),
             ("> 引用", 4, .lineBreak, "> 引用\n> ", 7),
             ("> > ", 4, .paragraphBreak, "> ", 2),
+            ("- 项目\n- ", 7, .paragraphBreak, "- 项目\n\n", 6),
+            ("> 引用\n> ", 7, .paragraphBreak, "> 引用\n\n", 6),
+            ("> - 项目\n> - ", 11, .paragraphBreak, "> - 项目\n> \n> ", 12),
+            ("- 项目\r\n- ", 8, .paragraphBreak, "- 项目\r\n\r\n", 8),
             ("- 项目", 4, .lineBreak, "- 项目\n  ", 7),
             ("- 项目\n  续行", 9, .paragraphBreak, "- 项目\n  续行\n- ", 12),
             (">   - 子项", 8, .paragraphBreak, ">   - 子项\n>   - ", 15),
@@ -2932,6 +2956,11 @@ extension RenderedMarkdownEditorTests {
         XCTAssertEqual(indented.selection.location, 5)
         let session = MarkdownSourceEditorSession()
         let source = "中文😀"
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = session.scrollView
+        defer { window.contentView = nil }
+        XCTAssertTrue(window.makeFirstResponder(session.textView))
         session.textView.string = source
         _ = await session.deriveContent(for: source, configuration: .default)
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
@@ -2943,8 +2972,16 @@ extension RenderedMarkdownEditorTests {
         for _ in 0..<100 where session.textView.string != source { await Task.yield() }
         XCTAssertEqual(session.textView.string, source)
         XCTAssertEqual(session.textView.selectedRange().location, source.utf16.count)
-        session.textView.insertLineBreak(nil)
-        XCTAssertEqual(session.textView.string, source + "\n")
+        // AppKit's default Shift-Return binding can dispatch insertNewline:.
+        // Exercise the actual key entry point, including keypad Enter.
+        for (index, keyCode) in [UInt16(36), UInt16(76)].enumerated() {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                modifierFlags: [.shift], timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: keyCode))
+            session.textView.keyDown(with: event)
+            XCTAssertEqual(session.textView.string, source + String(repeating: "\n", count: index + 1))
+            XCTAssertEqual(session.textView.selectedRange().location, source.utf16.count + index + 1)
+        }
     }
 
     func testLiveWritingStructuralTransactions() throws {

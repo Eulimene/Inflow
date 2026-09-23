@@ -751,7 +751,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
             } ?? table
             let location = backwards ? current.sourceRange.utf16Range.location : NSMaxRange(current.sourceRange.utf16Range)
             owner.setSelectedRange(NSRange(location: min(location, owner.string.utf16.count), length: 0))
-            if !backwards, location == owner.string.utf16.count { owner.insertText("\n\n", replacementRange: owner.selectedRange()) }
+            if !backwards { owner.exitRenderedTable(at: location) }
             return
         }
         if next < cells.count {
@@ -1043,4 +1043,3 @@ final class RenderedMarkdownTableCellTextView: NSTextView {
         needsDisplay = true
     }
 }
-
