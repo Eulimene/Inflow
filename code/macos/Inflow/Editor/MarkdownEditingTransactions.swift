@@ -15,6 +15,22 @@ enum MarkdownWritingAction { case newline, backwardDelete, indent, outdent }
 enum MarkdownEditingIntent { case paragraphBreak, lineBreak, mergeBackward }
 
 enum MarkdownEditingTransaction {
+    /// Cheap lexical gate before consulting the native render plan. Ordinary
+    /// character deletion must not synchronously parse the whole document.
+    static func mayHandleBackwardDelete(source: String, selection: NSRange) -> Bool {
+        let text = source as NSString
+        guard selection.length == 0, selection.location > 0, selection.location <= text.length else { return false }
+        if selection.location < text.length {
+            let left = text.substring(with: NSRange(location: selection.location - 1, length: 1))
+            let right = text.substring(with: NSRange(location: selection.location, length: 1))
+            if ["(": ")", "[": "]", "{": "}", "`": "`"][left] == right { return true }
+        }
+        if MarkdownWritingRules.edit(.backwardDelete, source: source, selection: selection) != nil { return true }
+        let line = text.lineRange(for: selection)
+        // The planner decides whether this is a paragraph merge or a protected block.
+        return selection.location == line.location
+    }
+
     static func plan(_ intent: MarkdownEditingIntent, source: String, selection: NSRange,
                      renderPlan: RenderedMarkdownPlan) -> MarkdownWritingEdit? {
         let text = source as NSString

@@ -1272,6 +1272,86 @@ final class RenderedMarkdownEditorTests: XCTestCase {
     }
 
     @MainActor
+    func testWritingPlanCacheSeparatesConfigurationAndAvoidsParsingOrdinaryDeletion() {
+        var builds = 0
+        let cache = MarkdownLayoutPlanCache { source, configuration in
+            builds += 1
+            return RenderedMarkdownEditor.plan(for: source, configuration: configuration)
+        }
+        _ = cache.resolve(source: "**é**", configuration: .default)
+        _ = cache.resolve(source: "**é**", configuration: .default)
+        XCTAssertEqual(builds, 1)
+        _ = cache.resolve(source: "**e\u{301}**", configuration: .default)
+        XCTAssertEqual(builds, 2)
+        cache.invalidate()
+        _ = cache.resolve(source: "**e\u{301}**", configuration: .default)
+        XCTAssertEqual(builds, 3)
+        let authoritative = RenderedMarkdownEditor.plan(for: "authoritative")
+        cache.install(authoritative, configuration: .default)
+        _ = cache.resolve(source: "authoritative", configuration: .default)
+        XCTAssertEqual(builds, 3)
+        let disabledMath = PreviewAppearanceConfiguration(contentWidth: 760, zoom: 1, colorScheme: .system,
+            theme: .standard, increasedContrast: false, reduceMotion: false, mathRenderingEnabled: false)
+        let math = cache.resolve(source: "$x$", configuration: .default)
+        let literal = cache.resolve(source: "$x$", configuration: disabledMath)
+        XCTAssertTrue(math.renderRequests.contains { $0.kind == "math" })
+        XCTAssertFalse(literal.renderRequests.contains { $0.kind == "math" })
+        XCTAssertEqual(builds, 5)
+        let view = WindowAwareTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 300))
+        view.isLiveMarkdown = true
+        view.isEditable = true
+        view.string = "plain body"
+        view.setSelectedRange(NSRange(location: view.string.utf16.count, length: 0))
+        view.layoutPlanProvider = { source in cache.resolve(source: source, configuration: .default) }
+        for _ in 0..<4 { view.deleteBackward(nil) }
+        XCTAssertEqual(view.string, "plain ")
+        XCTAssertEqual(builds, 5, "Deleting ordinary characters must not invoke the Markdown parser")
+    }
+
+    @MainActor
+    func testTypingProjectionCannotInheritHiddenDisplayAttributes() async throws {
+        let session = MarkdownSourceEditorSession()
+        let source = "# 标题\n\n> 引用\n> "
+        session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let bridge = MarkdownSourceEditor(text: .constant(source), selectionRequest: nil, session: session, presentation: .rendered)
+        let coordinator = bridge.makeCoordinator()
+        coordinator.update(parent: bridge, textView: session.textView)
+        let heading = (source as NSString).range(of: "标题").location
+        let baseline = try XCTUnwrap(session.textView.textStorage?.attribute(.font, at: heading, effectiveRange: nil) as? NSFont)
+        // Simulate a display pass that collapses text. It must have no authority over input style.
+        session.textView.textStorage?.addAttributes([.font: NSFont.systemFont(ofSize: 0.1), .foregroundColor: NSColor.clear],
+            range: NSRange(location: 0, length: source.utf16.count))
+        session.textView.setSelectedRange(NSRange(location: heading, length: 0))
+        XCTAssertEqual((session.textView.typingAttributes[.font] as? NSFont)?.pointSize, baseline.pointSize)
+        XCTAssertNotEqual((session.textView.typingAttributes[.foregroundColor] as? NSColor)?.alphaComponent, 0)
+        session.textView.setSelectedRange(NSRange(location: source.utf16.count, length: 0))
+        XCTAssertEqual((session.textView.typingAttributes[.font] as? NSFont)?.pointSize, session.textView.renderedReplacementBaseFont.pointSize)
+        XCTAssertEqual(session.textView.string, source)
+    }
+
+    @MainActor
+    func testTypingProjectionRebasesUTF16WithoutCrossingSemanticRuns() throws {
+        let source = "# 标题\n\n正文😀"
+        let semantic = NSMutableAttributedString(string: source)
+        let bodyFont = NSFont.systemFont(ofSize: 16)
+        let headingFont = NSFont.boldSystemFont(ofSize: 32)
+        let base: [NSAttributedString.Key: Any] = [.font: bodyFont, .foregroundColor: NSColor.textColor]
+        semantic.setAttributes(base, range: NSRange(location: 0, length: semantic.length))
+        semantic.addAttribute(.font, value: headingFont, range: (source as NSString).range(of: "标题"))
+        let projection = MarkdownTypingStyleProjection()
+        projection.install(semanticText: semantic, plan: RenderedMarkdownEditor.plan(for: source), baseAttributes: base)
+        for changed in ["# 标题\n\n正文😀e\u{301}", "# 新标题\n\n正文😀e\u{301}", "# 新标题\n\n正文"] {
+            let attributes = try XCTUnwrap(projection.attributes(in: changed, selection: NSRange(location: changed.utf16.count, length: 0)))
+            XCTAssertEqual((attributes[.font] as? NSFont)?.pointSize, bodyFont.pointSize)
+            XCTAssertNil(attributes[.kern])
+        }
+        projection.reset()
+        XCTAssertNil(projection.attributes(in: source, selection: NSRange(location: 0, length: 0)))
+    }
+
+    @MainActor
     func testRenderedCaretTypingFontMatchesTheVisibleText() async throws {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
             styleMask: [.titled], backing: .buffered, defer: false)
@@ -1362,7 +1442,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         let caretFont = try XCTUnwrap(session.textView.typingAttributes[.font] as? NSFont)
 
         XCTAssertEqual(caretFont.pointSize, visibleFont.pointSize, accuracy: 0.001)
-        XCTAssertEqual(caretFont.fontName, visibleFont.fontName)
+        // AppKit may substitute PingFang for Chinese glyphs. Input keeps the
+        // semantic theme font instead of copying that display-time fallback.
+        XCTAssertEqual(caretFont.familyName, session.textView.renderedReplacementBaseFont.familyName)
+        XCTAssertEqual(NSFontManager.shared.traits(of: caretFont).contains(.boldFontMask),
+            NSFontManager.shared.traits(of: visibleFont).contains(.boldFontMask))
     }
 
     @MainActor

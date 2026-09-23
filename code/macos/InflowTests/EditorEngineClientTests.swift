@@ -644,6 +644,112 @@ final class EditorEngineClientTests: XCTestCase {
         XCTAssertEqual(session.textView.string, "ab\n")
     }
 
+    @MainActor
+    func testAdapterDetachmentPreservesSessionOwnedCallbacks() {
+        let session = MarkdownSourceEditorSession()
+        let editor = MarkdownSourceEditor(text: .constant("body"), selectionRequest: nil, session: session, presentation: .rendered)
+        let first = editor.makeCoordinator()
+        first.update(parent: editor, textView: session.textView)
+        MarkdownSourceEditor.dismantleNSView(session.scrollView, coordinator: first)
+        XCTAssertNil(session.textView.delegate)
+        XCTAssertNil(session.textView.didAttachToWindow)
+        XCTAssertNotNil(session.textView.focusDidChangeHandler)
+        XCTAssertNotNil(session.textView.effectiveAppearanceDidChangeHandler)
+        XCTAssertNotNil(session.textView.linkClickHandler)
+        let second = editor.makeCoordinator()
+        second.update(parent: editor, textView: session.textView)
+        // A stale adapter cannot detach the replacement adapter's bindings.
+        MarkdownSourceEditor.dismantleNSView(session.scrollView, coordinator: first)
+        XCTAssertTrue(session.textView.delegate === second)
+        XCTAssertNotNil(session.textView.didAttachToWindow)
+        XCTAssertNotNil(session.textView.focusDidChangeHandler)
+    }
+
+    @MainActor
+    func testInputStateMachineProtectsCompositionAndMutationScopes() {
+        let state = MarkdownInputState()
+        let acknowledgement = EditorEngineDocumentSnapshot(revision: 1, text: "AB", selectionUTF8Range: 2..<2,
+            mode: .editable, contentHash: "", canUndo: true, canRedo: false, dirty: true)
+        XCTAssertTrue(state.recordNativeEdit("AB", isComposing: false))
+        XCTAssertEqual(state.bindingDecision(bound: "A", native: "AB", isComposing: false), .unchanged)
+        state.beginComposition()
+        XCTAssertFalse(state.recordNativeEdit("ABpin", isComposing: true))
+        XCTAssertNil(state.acknowledge(acknowledgement, isComposing: true))
+        XCTAssertEqual(state.bindingDecision(bound: "A", native: "ABpin", isComposing: true), .deferred)
+        let cancelled = state.finishComposition(text: "AB", changed: false)
+        XCTAssertTrue(cancelled.shouldSubmit)
+        XCTAssertEqual(cancelled.acknowledgement, acknowledgement)
+        XCTAssertEqual(state.acknowledge(acknowledgement, isComposing: false), true)
+        XCTAssertEqual(state.bindingDecision(bound: "external", native: "AB", isComposing: false), .replace)
+        state.withEngineMutation {
+            XCTAssertFalse(state.recordNativeEdit("command", isComposing: false))
+            XCTAssertNil(state.acknowledge(acknowledgement, isComposing: false))
+            state.withEngineMutation { XCTAssertTrue(state.isApplyingEngineMutation) }
+            XCTAssertTrue(state.isApplyingEngineMutation)
+        }
+        XCTAssertFalse(state.isApplyingEngineMutation)
+        state.beginComposition()
+        _ = state.acknowledge(acknowledgement, isComposing: true)
+        let committed = state.finishComposition(text: "AB拼", changed: true)
+        XCTAssertTrue(committed.shouldSubmit)
+        XCTAssertNil(committed.acknowledgement, "An old acknowledgement must not replace committed composition")
+        state.reset()
+        XCTAssertEqual(state.bindingDecision(bound: "external", native: "AB拼", isComposing: false), .replace)
+    }
+
+    @MainActor
+    func testEngineResetAndABAInputPublishOnlyLatestSubmission() async throws {
+        let client = EditorEngineClient()
+        var acknowledgements: [String] = []
+        client.onAuthoritativeSnapshot = { acknowledgements.append($0.text) }
+        client.reset(text: "A", selectionUTF16: NSRange(location: 1, length: 0))
+        client.submit(text: "B", selectionUTF16: NSRange(location: 1, length: 0))
+        client.reset(text: "A", selectionUTF16: NSRange(location: 1, length: 0))
+        let snapshot = await client.authoritativeSnapshot(matching: "A", selectionUTF16: NSRange(location: 1, length: 0))
+        XCTAssertEqual(snapshot?.text, "A")
+        XCTAssertEqual(acknowledgements, ["A"], "Byte equality cannot distinguish an obsolete A from the latest A")
+        acknowledgements = []
+        client.reset(text: "old", selectionUTF16: NSRange(location: 3, length: 0))
+        client.submit(text: "new", selectionUTF16: NSRange(location: 3, length: 0))
+        _ = await client.authoritativeSnapshot(matching: "new", selectionUTF16: NSRange(location: 3, length: 0))
+        XCTAssertEqual(acknowledgements, ["new"], "A queued reset must not rewind subsequent native typing")
+    }
+
+    func testSynchronousDerivationCacheKeepsUnicodeByteIdentity() throws {
+        let composed = "**é**"
+        let decomposed = "**e\u{301}**"
+        XCTAssertEqual(composed, decomposed, "Swift string equality is canonically equivalent")
+        _ = try XCTUnwrap(EditorEngineDerivedContent.deriveSynchronously(source: composed))
+        let derived = try XCTUnwrap(EditorEngineDerivedContent.deriveSynchronously(source: decomposed))
+        XCTAssertTrue(UTF8Text.isExactlyEqual(derived.sourceSnapshot, decomposed))
+        XCTAssertTrue(derived.nativeRenderPlan.exactlyMatches(decomposed))
+        let strong = try XCTUnwrap(derived.nativeRenderPlan.contentStyles.first { $0.kind == .strong })
+        XCTAssertEqual(strong.sourceRange.utf16Range, (decomposed as NSString).range(of: "e\u{301}"))
+    }
+
+    @MainActor
+    func testCancelledDerivationCannotInstallPlanAfterDocumentReplacement() async throws {
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = "old"
+        _ = await session.deriveContent(for: "old", configuration: .default)
+        session.setPresentation(.rendered, source: "old", onLinkClick: nil)
+        session.resetAfterExternalReload("# new")
+        let cancelled = Task { @MainActor in
+            await session.deriveContent(for: "# new", configuration: .default)
+        }
+        cancelled.cancel()
+        let result = await cancelled.value
+        XCTAssertNil(result)
+        let passes = session.renderedPresentationPassCount
+        session.setPresentation(.rendered, source: "# new", onLinkClick: nil)
+        XCTAssertEqual(session.renderedPresentationPassCount, passes,
+            "A cancelled derivation must not install a render plan as a hidden side effect")
+        let current = await session.deriveContent(for: "# new", configuration: .default)
+        XCTAssertNotNil(current)
+        XCTAssertGreaterThan(session.renderedPresentationPassCount, passes)
+        XCTAssertEqual(session.textView.string, "# new")
+    }
+
     func testDiffReturnsOneUTF8ReplacementForUnicodeText() {
         XCTAssertEqual(
             EditorEngineTextDiff.replacement(from: "A🌍B", to: "A世界B"),

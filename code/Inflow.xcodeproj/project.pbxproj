@@ -86,6 +86,16 @@
 		C10000000000000000000008 /* SourceEditorSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000008 /* SourceEditorSupport.swift */; };
         D10000000000000000000001 /* JavaScriptRendering.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001; };
         D10000000000000000000002 /* JavaScript in Resources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000002; };
+		B10000000000000000000020 /* MarkdownInputState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000020 /* MarkdownInputState.swift */; };
+		B10000000000000000000021 /* MarkdownSourceEditorSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000021 /* MarkdownSourceEditorSession.swift */; };
+		B10000000000000000000022 /* MarkdownLineNumberRulerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000022 /* MarkdownLineNumberRulerView.swift */; };
+		B10000000000000000000023 /* MarkdownNativeGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000023 /* MarkdownNativeGeometry.swift */; };
+		B10000000000000000000024 /* WindowAwareTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000024 /* WindowAwareTextView.swift */; };
+		B10000000000000000000025 /* RenderedMarkdownImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000025 /* RenderedMarkdownImageView.swift */; };
+		B10000000000000000000026 /* RenderedMarkdownTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000026 /* RenderedMarkdownTableView.swift */; };
+		B10000000000000000000027 /* MarkdownTypingStyleProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000027 /* MarkdownTypingStyleProjection.swift */; };
+		B10000000000000000000028 /* MarkdownNativeStyleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000028 /* MarkdownNativeStyleSheet.swift */; };
+		B10000000000000000000029 /* MarkdownLayoutPlanCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000029 /* MarkdownLayoutPlanCache.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -185,6 +195,16 @@
 		C20000000000000000000008 /* SourceEditorSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/SourceEditorSupport.swift; sourceTree = "<group>"; };
         D20000000000000000000001 /* JavaScriptRendering.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preview/JavaScriptRendering.swift; sourceTree = "<group>"; };
         D20000000000000000000002 /* JavaScript */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/JavaScript; sourceTree = "<group>"; };
+		B20000000000000000000020 /* MarkdownInputState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownInputState.swift; sourceTree = "<group>"; };
+		B20000000000000000000021 /* MarkdownSourceEditorSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownSourceEditorSession.swift; sourceTree = "<group>"; };
+		B20000000000000000000022 /* MarkdownLineNumberRulerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownLineNumberRulerView.swift; sourceTree = "<group>"; };
+		B20000000000000000000023 /* MarkdownNativeGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownNativeGeometry.swift; sourceTree = "<group>"; };
+		B20000000000000000000024 /* WindowAwareTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/WindowAwareTextView.swift; sourceTree = "<group>"; };
+		B20000000000000000000025 /* RenderedMarkdownImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/RenderedMarkdownImageView.swift; sourceTree = "<group>"; };
+		B20000000000000000000026 /* RenderedMarkdownTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/RenderedMarkdownTableView.swift; sourceTree = "<group>"; };
+		B20000000000000000000027 /* MarkdownTypingStyleProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownTypingStyleProjection.swift; sourceTree = "<group>"; };
+		B20000000000000000000028 /* MarkdownNativeStyleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownNativeStyleSheet.swift; sourceTree = "<group>"; };
+		B20000000000000000000029 /* MarkdownLayoutPlanCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownLayoutPlanCache.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -225,6 +245,16 @@
 				B2000000000000000000000C /* MarkdownEditingTransactions.swift */,
 				B2000000000000000000000D /* MarkdownClipboard.swift */,
 				B2000000000000000000000E /* MarkdownTableMathPreview.swift */,
+				B20000000000000000000029 /* MarkdownLayoutPlanCache.swift */,
+				B20000000000000000000028 /* MarkdownNativeStyleSheet.swift */,
+				B20000000000000000000027 /* MarkdownTypingStyleProjection.swift */,
+				B20000000000000000000026 /* RenderedMarkdownTableView.swift */,
+				B20000000000000000000025 /* RenderedMarkdownImageView.swift */,
+				B20000000000000000000024 /* WindowAwareTextView.swift */,
+				B20000000000000000000023 /* MarkdownNativeGeometry.swift */,
+				B20000000000000000000022 /* MarkdownLineNumberRulerView.swift */,
+				B20000000000000000000021 /* MarkdownSourceEditorSession.swift */,
+				B20000000000000000000020 /* MarkdownInputState.swift */,
 				B20000000000000000000003 /* RenderedMarkdownEditor.swift */,
 				A20000000000000000000018 /* EditorViewModeCommands.swift */,
 				A20000000000000000000039 /* WritingModeCommands.swift */,
@@ -522,6 +552,16 @@
 				B1000000000000000000000C /* MarkdownEditingTransactions.swift in Sources */,
 				B1000000000000000000000D /* MarkdownClipboard.swift in Sources */,
 				B1000000000000000000000E /* MarkdownTableMathPreview.swift in Sources */,
+				B10000000000000000000029 /* MarkdownLayoutPlanCache.swift in Sources */,
+				B10000000000000000000028 /* MarkdownNativeStyleSheet.swift in Sources */,
+				B10000000000000000000027 /* MarkdownTypingStyleProjection.swift in Sources */,
+				B10000000000000000000026 /* RenderedMarkdownTableView.swift in Sources */,
+				B10000000000000000000025 /* RenderedMarkdownImageView.swift in Sources */,
+				B10000000000000000000024 /* WindowAwareTextView.swift in Sources */,
+				B10000000000000000000023 /* MarkdownNativeGeometry.swift in Sources */,
+				B10000000000000000000022 /* MarkdownLineNumberRulerView.swift in Sources */,
+				B10000000000000000000021 /* MarkdownSourceEditorSession.swift in Sources */,
+				B10000000000000000000020 /* MarkdownInputState.swift in Sources */,
 				B10000000000000000000003 /* RenderedMarkdownEditor.swift in Sources */,
 				A10000000000000000000029 /* DocumentRelocationView.swift in Sources */,
 				A1000000000000000000002B /* AppPreferences.swift in Sources */,

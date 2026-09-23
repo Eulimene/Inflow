@@ -409,10 +409,10 @@ enum RenderedMarkdownRefreshDecision: Equatable, Sendable {
 }
 
 enum RenderedMarkdownEditor {
-    /// Creates an isolated Engine only for synchronous tooling and unit-test callers.
-    /// Production sessions consume the revision-bound plan returned by their existing Engine.
-    static func plan(for source: String) -> RenderedMarkdownPlan {
-        EditorEngineDerivedContent.deriveSynchronously(source: source)?.nativeRenderPlan
+    /// Isolated native layout derivation for tooling and explicit structural edits.
+    /// Sessions cache this result; ordinary document derivation uses their Engine.
+    static func plan(for source: String, configuration: PreviewAppearanceConfiguration = .default) -> RenderedMarkdownPlan {
+        EditorEngineDerivedContent.deriveSynchronously(source: source, configuration: configuration, includeHTML: false)?.nativeRenderPlan
             ?? parserFailurePlan(for: source)
     }
 

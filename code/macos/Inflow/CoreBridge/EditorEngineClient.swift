@@ -19,7 +19,7 @@ private final class TemporaryDerivedContentCache: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard let entry,
-              entry.source == source,
+              UTF8Text.isExactlyEqual(entry.source, source),
               entry.mathEnabled == configuration.mathRenderingEnabled,
               entry.mermaidEnabled == configuration.mermaidRenderingEnabled
         else { return nil }
@@ -419,6 +419,7 @@ enum EditorEngineSynchronousCommands {
 @MainActor
 final class EditorEngineClient {
     private let client = EditorEngineTransport()
+    private var inputGeneration: UInt64 = 0
     private var lastSubmittedText: String?
     private var lastSubmittedSelection: NSRange?
     private var pending: Task<Void, Never>?
@@ -437,6 +438,8 @@ final class EditorEngineClient {
     ) {
         guard lastSubmittedText.map({ !$0.utf8.elementsEqual(text.utf8) }) ?? true
         else { observeSelection(text: text, selectionUTF16: selectionUTF16); return }
+        inputGeneration &+= 1
+        let generation = inputGeneration
         let selectionBefore = lastSubmittedSelection
         lastSubmittedText = text
         lastSubmittedSelection = selectionUTF16
@@ -450,7 +453,7 @@ final class EditorEngineClient {
                 selectionBeforeUTF16: selectionBefore,
                 groupID: groupID
             ) else { return }
-            guard !Task.isCancelled,
+            guard !Task.isCancelled, generation == inputGeneration,
                   lastSubmittedText?.utf8.elementsEqual(text.utf8) == true
             else { return }
             lastSubmittedText = snapshot.text
@@ -632,6 +635,8 @@ final class EditorEngineClient {
     }
 
     func reset(text: String, selectionUTF16: NSRange) {
+        inputGeneration &+= 1
+        let generation = inputGeneration
         lastSubmittedText = text
         lastSubmittedSelection = selectionUTF16
         let previous = pending
@@ -643,6 +648,7 @@ final class EditorEngineClient {
                       selectionUTF16: selectionUTF16
                   )
             else { return }
+            guard generation == inputGeneration else { return }
             onHistoryStateChange?(snapshot.canUndo, snapshot.canRedo)
             onAuthoritativeSnapshot?(snapshot)
         }
