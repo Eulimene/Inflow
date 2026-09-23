@@ -78,6 +78,17 @@ enum MarkdownEditingTransaction {
                 && selection.location < NSMaxRange($0.sourceRange.utf16Range)
         }
         if intent != .mergeBackward {
+            // The visible beginning of an ATX heading follows its hidden marker.
+            // Insert before the whole block, never between '#' and its content.
+            if selection.length == 0,
+               let heading = renderPlan.markers.first(where: {
+                   if case .heading = $0.kind { return $0.sourceRange.utf16Range.location == line.location }
+                   return false
+               }),
+               selection.location <= NSMaxRange(heading.sourceRange.utf16Range) {
+                return replace(NSRange(location: line.location, length: 0), newline + newline,
+                    caret: line.location)
+            }
             // Complete a newly typed fence in a single undoable transaction.
             if intent == .paragraphBreak, selection.length == 0, before == raw,
                let match = raw.range(of: #"^(`{3,}|~{3,})[A-Za-z0-9_+.#-]*$"#, options: .regularExpression),

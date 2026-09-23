@@ -164,7 +164,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             let result = self.inputState.finishComposition(text: text, changed: changed)
             if result.shouldSubmit { self.engineClient.submit(text: text, selectionUTF16: selection) }
             if let acknowledgement = result.acknowledgement { self.applyAuthoritativeSnapshot(acknowledgement) }
-            self.syncRenderedTypingAttributes()
+            self.syncTypingAttributes()
             self.scheduleRenderedPresentation(for: text)
         }
         textView.textDidChangeHandler = { [weak self] text in
@@ -246,8 +246,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             ofSize: CGFloat(appearance.fontSize),
             weight: .regular
         )
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineHeightMultiple = CGFloat(appearance.lineHeight)
+        let paragraphStyle = MarkdownNativeTypography.paragraphStyle(font: font, lineHeight: CGFloat(appearance.lineHeight))
+        textView.sourceCaretFont = font
 
         let undoManager = textView.undoManager
         let shouldRestoreUndoRegistration = undoManager?.isUndoRegistrationEnabled == true
@@ -951,8 +951,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             else { return [] }
             return [parts.opening, parts.closing].filter { $0.length > 0 }
         }
-        let baseParagraph = NSMutableParagraphStyle()
-        baseParagraph.minimumLineHeight = baseFont.pointSize * CGFloat(sourceAppearance.lineHeight)
+        let baseParagraph = MarkdownNativeTypography.paragraphStyle(font: baseFont, lineHeight: CGFloat(sourceAppearance.lineHeight))
         baseParagraph.paragraphSpacing = 0
         let palette = MarkdownRenderPalette.resolved(for: textView.effectiveAppearance)
         if textView.string.isEmpty { textView.font = baseFont }
@@ -1217,7 +1216,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         renderedAppliedTheme = renderedTheme
         renderedPresentationPassCount &+= 1
         textView.setSelectedRange(selection)
-        syncRenderedTypingAttributes()
+        syncTypingAttributes()
         refreshWritingModePresentation()
         loadRenderedImages(for: plan)
         scheduleJavaScriptResources(for: plan)
@@ -1655,9 +1654,16 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         )
     }
 
-    private func syncRenderedTypingAttributes() {
-        guard !textView.hasActiveComposition, presentation == .rendered,
-              let attributes = typingStyles.attributes(in: textView.string, selection: textView.selectedRange())
+    private func syncTypingAttributes() {
+        guard !textView.hasActiveComposition else { return }
+        if presentation == .source {
+            textView.typingAttributes = [.font: textView.sourceCaretFont,
+                .foregroundColor: NSColor.textColor,
+                .paragraphStyle: MarkdownNativeTypography.paragraphStyle(font: textView.sourceCaretFont,
+                    lineHeight: CGFloat(sourceAppearance.lineHeight))]
+            return
+        }
+        guard let attributes = typingStyles.attributes(in: textView.string, selection: textView.selectedRange())
         else { return }
         textView.typingAttributes = attributes
     }
@@ -1673,8 +1679,17 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             let plan = engineRenderedPlan?.exactlyMatches(source) == true ? engineRenderedPlan! : RenderedMarkdownEditor.plan(for: source)
             current = plan.tables.first { $0.sourceRange.utf16Range.location == table.sourceRange.utf16Range.location }
         }
-        guard let current, let replacement = RenderedMarkdownTableEditing.replacement(for: current, applying: edit),
-              let localTable = RenderedMarkdownEditor.plan(for: replacement).tables.first else { return }
+        guard let current, let replacement = RenderedMarkdownTableEditing.replacement(for: current, applying: edit) else { return }
+        if edit == .deleteTable {
+            textView.pendingTableFocus = nil
+            textView.window?.makeFirstResponder(textView)
+            textView.replaceRenderedTableSource("", range: current.sourceRange.utf16Range,
+                selection: NSRange(location: current.sourceRange.utf16Range.location, length: 0))
+            optimisticTable = nil
+            applyRenderedPresentation(source: textView.string, force: true)
+            return
+        }
+        guard let localTable = RenderedMarkdownEditor.plan(for: replacement).tables.first else { return }
         let original = (source as NSString).substring(with: current.sourceRange.utf16Range)
         let ending = original.hasSuffix("\r\n") ? "\r\n" : (original.hasSuffix("\n") ? "\n" : "")
         let text = replacement + ending
@@ -1915,8 +1930,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             ofSize: CGFloat(sourceAppearance.fontSize),
             weight: .regular
         )
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineHeightMultiple = CGFloat(sourceAppearance.lineHeight)
+        let paragraphStyle = MarkdownNativeTypography.paragraphStyle(font: font, lineHeight: CGFloat(sourceAppearance.lineHeight))
         let fullRange = NSRange(location: 0, length: storage.length)
         let dirtyRanges = previousApplicationWasComplete
             ? Self.syntaxDirtyRanges(
@@ -2255,7 +2269,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             scheduleFormatInspection()
             scheduleRenderedInteractionPresentation()
         }
-        syncRenderedTypingAttributes()
+        syncTypingAttributes()
         refreshWritingModePresentation()
     }
 

@@ -9,7 +9,7 @@ struct MarkdownHeadingStyle: Equatable, Sendable {
 }
 
 enum MarkdownRenderMetrics {
-    static let readingWidth = 760.0
+    static let readingWidth = 1_080.0
     static let bodyFontSize = 16.0
     static let bodyLineHeight = 1.6
     static let paragraphGap = CGFloat(12.8)
@@ -433,7 +433,7 @@ final class AppPreferences: ObservableObject {
     enum Limits {
         static let editorFontSize = 12.0 ... 28.0
         static let editorLineHeight = 1.2 ... 2.0
-        static let previewContentWidth = 600.0 ... 1_200.0
+        static let previewContentWidth = 600.0 ... 1_800.0
         static let previewZoom = 0.5 ... 2.0
         static let workspaceSplitFraction = EditorSplitLayout.allowedFraction
         static let projectSidebarWidth =
@@ -455,6 +455,7 @@ final class AppPreferences: ObservableObject {
         static let scrollSyncEnabled = "preferences.preview.scrollSyncEnabled"
         static let headingNavigationEnabled = "preferences.preview.headingNavigationEnabled"
         static let previewContentWidth = "preferences.preview.contentWidth"
+        static let previewWidthMigration = "preferences.preview.widthMigration2"
         static let previewZoom = "preferences.preview.zoom"
         static let previewColorScheme = "preferences.preview.colorScheme"
         static let previewTheme = "preferences.preview.theme"
@@ -498,6 +499,7 @@ final class AppPreferences: ObservableObject {
             Key.scrollSyncEnabled,
             Key.headingNavigationEnabled,
             Key.previewContentWidth,
+            Key.previewWidthMigration,
             Key.previewZoom,
             Key.previewColorScheme,
             Key.previewTheme,
@@ -853,6 +855,12 @@ final class AppPreferences: ObservableObject {
             in: defaults,
             defaultValue: true
         )
+        if defaults.object(forKey: Key.previewWidthMigration) == nil {
+            if defaults.double(forKey: Key.previewContentWidth) == 760 {
+                defaults.set(MarkdownRenderMetrics.readingWidth, forKey: Key.previewContentWidth)
+            }
+            defaults.set(true, forKey: Key.previewWidthMigration)
+        }
         previewContentWidth = Self.number(
             forKey: Key.previewContentWidth,
             in: defaults,

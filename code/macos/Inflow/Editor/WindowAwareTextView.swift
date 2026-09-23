@@ -41,6 +41,7 @@ final class WindowAwareTextView: NSTextView {
     var engineCanUndo = false
     var engineCanRedo = false
     var engineHistoryIsPending = false
+    var sourceCaretFont = NSFont.monospacedSystemFont(ofSize: 15, weight: .regular)
     var engineUndoHandler: (() -> Void)?
     var engineRedoHandler: (() -> Void)?
     var didAttachToWindow: (() -> Void)?
@@ -156,7 +157,7 @@ final class WindowAwareTextView: NSTextView {
         let metricsFont = isLiveMarkdown
             ? (NSFont(descriptor: renderedReplacementBaseFont.fontDescriptor, size: visibleFont.pointSize)
                 ?? renderedReplacementBaseFont)
-            : visibleFont
+            : sourceCaretFont
         return RenderedMarkdownCaretStyleResolver.insertionRect(rect, in: self, font: metricsFont)
     }
 

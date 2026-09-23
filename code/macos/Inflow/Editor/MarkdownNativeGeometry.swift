@@ -1,5 +1,14 @@
 import AppKit
 
+enum MarkdownNativeTypography {
+    static func paragraphStyle(font: NSFont, lineHeight: CGFloat) -> NSMutableParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.minimumLineHeight = max(font.pointSize * lineHeight,
+            ceil(font.ascender - font.descender + font.leading))
+        return style
+    }
+}
+
 @MainActor
 enum RenderedMarkdownLinkActivation {
     static func shouldNavigate(
@@ -215,4 +224,3 @@ enum RenderedMarkdownMarkerTypography {
         return baseline - font.ascender - footnoteLift
     }
 }
-

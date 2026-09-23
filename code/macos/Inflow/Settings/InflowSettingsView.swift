@@ -228,7 +228,7 @@ struct InflowSettingsView: View {
     private var previewSettings: some View {
         Form {
             SettingSliderRow(
-                title: "内容宽度",
+                title: "最大正文宽度",
                 value: $preferences.previewContentWidth,
                 range: AppPreferences.Limits.previewContentWidth,
                 step: 20,

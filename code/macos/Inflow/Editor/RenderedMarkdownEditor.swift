@@ -186,6 +186,8 @@ struct AdaptiveRenderedMarkdownTableLayoutStrategy: RenderedMarkdownTableLayoutS
 }
 
 enum RenderedMarkdownTableEdit: Equatable, Sendable {
+    case resize(rows: Int, columns: Int)
+    case deleteTable
     case updateCell(row: Int, column: Int, text: String)
     case updateCells(row: Int, column: Int, texts: [[String]])
     case insertRow(at: Int)
@@ -196,6 +198,10 @@ enum RenderedMarkdownTableEdit: Equatable, Sendable {
 }
 
 enum RenderedMarkdownTableEditing {
+    static func isValidSize(rows: Int, columns: Int) -> Bool {
+        (1...1_000).contains(rows) && (1...100).contains(columns) && rows * columns <= 10_000
+    }
+
     static func replacement(
         for table: RenderedMarkdownTable,
         applying edit: RenderedMarkdownTableEdit
@@ -214,6 +220,15 @@ enum RenderedMarkdownTableEditing {
         }
 
         switch edit {
+        case .deleteTable: return ""
+        case let .resize(rowCount, columns):
+            guard isValidSize(rows: rowCount, columns: columns) else { return nil }
+            rows = (0..<rowCount).map { row in
+                (0..<columns).map { column in
+                    row < table.rows.count && column < table.rows[row].count ? table.rows[row][column].markdown : ""
+                }
+            }
+            alignments = (0..<columns).map { $0 < table.alignments.count ? table.alignments[$0] : .leading }
         case let .updateCell(row, column, text):
             guard rows.indices.contains(row), rows[row].indices.contains(column) else { return nil }
             let cell = table.rows[row][column]

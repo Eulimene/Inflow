@@ -1084,6 +1084,20 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             "| Name | Score |\n| :---: | ---: |\n| Alice | 9 |"
         )
 
+        let resized = try XCTUnwrap(RenderedMarkdownTableEditing.replacement(for: table,
+            applying: .resize(rows: 4, columns: 3)))
+        let resizedTable = try XCTUnwrap(RenderedMarkdownEditor.plan(for: resized).tables.first)
+        XCTAssertEqual(resizedTable.rows.count, 4)
+        XCTAssertEqual(resizedTable.alignments, [.leading, .trailing, .leading])
+        XCTAssertEqual(resizedTable.rows[1][0].text, "Alice")
+        XCTAssertEqual(resizedTable.rows[3][2].text, "")
+        let shrunk = try XCTUnwrap(RenderedMarkdownTableEditing.replacement(for: table,
+            applying: .resize(rows: 1, columns: 1)))
+        XCTAssertEqual(RenderedMarkdownEditor.plan(for: shrunk).tables.first?.rows[0][0].text, "Name")
+        XCTAssertNil(RenderedMarkdownTableEditing.replacement(for: table, applying: .resize(rows: 0, columns: 2)))
+        XCTAssertNil(RenderedMarkdownTableEditing.replacement(for: table, applying: .resize(rows: 1_000, columns: 100)))
+        XCTAssertEqual(RenderedMarkdownTableEditing.replacement(for: table, applying: .deleteTable), "")
+
         let values = [["中文😀\n下一行", "a\tb"], ["quote\"here", "A|B"]]
         XCTAssertEqual(TableClipboard.decode(TableClipboard.encode(values)), values)
         let updated = try XCTUnwrap(RenderedMarkdownTableEditing.replacement(for: table,
@@ -1175,6 +1189,13 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertEqual(measured.calls, 2)
         XCTAssertTrue(view.updateMaximumWidth(320))
         XCTAssertEqual(measured.calls, 3, "Window resizing must invalidate cached widths")
+        let editableHeight = view.renderedSize.height
+        view.setEditingEnabled(false)
+        XCTAssertEqual(view.renderedSize.height, editableHeight - 28)
+        XCTAssertFalse(view.accessibilityChildren()?.contains { $0 is MarkdownTableToolbar } ?? true)
+        view.setEditingEnabled(true)
+        XCTAssertEqual(view.renderedSize.height, editableHeight)
+
     }
 
     @MainActor
@@ -1596,6 +1617,23 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         let paragraphManager = try XCTUnwrap(paragraph.textView.layoutManager)
         paragraphManager.ensureLayout(for: try XCTUnwrap(paragraph.textView.textContainer))
         let bodyCaret = paragraph.textView.renderedInsertionRect(NSRect(x: 3, y: 0, width: 1, height: 1))
+        for source in ["Latin", "中文😀", "中文\n"] {
+            let native = MarkdownSourceEditorSession()
+            native.scrollView.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+            native.textView.string = source
+            native.applySourceAppearance(.default, force: true)
+            native.textView.setSelectedRange(NSRange(location: source.utf16.count, length: 0))
+            let manager = try XCTUnwrap(native.textView.layoutManager)
+            manager.ensureLayout(for: try XCTUnwrap(native.textView.textContainer))
+            let font = native.textView.sourceCaretFont
+            // A fallback font in typing attributes must not alter source caret metrics.
+            native.textView.typingAttributes[.font] = NSFont.systemFont(ofSize: 9)
+            let rect = native.textView.renderedInsertionRect(NSRect(x: 1, y: 0, width: 1, height: 1))
+            let line = source.hasSuffix("\n") ? manager.extraLineFragmentRect
+                : manager.lineFragmentRect(forGlyphAt: manager.numberOfGlyphs - 1, effectiveRange: nil)
+            XCTAssertEqual(rect.height, ceil(font.ascender - font.descender + font.leading))
+            XCTAssertEqual(rect.midY, native.textView.textContainerOrigin.y + line.midY, accuracy: 0.001)
+        }
         XCTAssertEqual(bodyCaret.height, caret.height)
         XCTAssertEqual(bodyCaret.midY, paragraph.textView.textContainerOrigin.y + paragraphManager.extraLineFragmentRect.midY, accuracy: 0.001)
     }
@@ -2897,6 +2935,31 @@ extension RenderedMarkdownEditorTests {
         cell.insertText("拼", replacementRange: NSRange(location: NSNotFound, length: 0))
         XCTAssertTrue(session.textView.string.contains("拼"))
 
+        // The toolbar uses the same source and Engine-history transactions as cells.
+        session.resetAfterExternalReload(source)
+        _ = await session.deriveContent(for: source, configuration: .default)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let originalGrid = try XCTUnwrap(session.textView.renderedTable(atUTF16Location: 0))
+        XCTAssertTrue(originalGrid.focusCell(row: 1, column: 1))
+        let toolbar = try XCTUnwrap(originalGrid.subviews.compactMap { $0 as? MarkdownTableToolbar }.first)
+        toolbar.onEdit?(.resize(rows: 3, columns: 3))
+        let resizedSource = session.textView.string
+        XCTAssertEqual(RenderedMarkdownEditor.plan(for: resizedSource).tables.first?.alignments.count, 3)
+        _ = await session.authoritativeSnapshot()
+        session.textView.undo(nil)
+        for _ in 0..<100 where session.textView.string != source { await Task.yield() }
+        XCTAssertEqual(session.textView.string, source)
+        _ = await session.deriveContent(for: source, configuration: .default)
+        let restored = try XCTUnwrap(session.textView.renderedTable(atUTF16Location: 0))
+        let restoredToolbar = try XCTUnwrap(restored.subviews.compactMap { $0 as? MarkdownTableToolbar }.first)
+        restoredToolbar.onEdit?(.deleteTable)
+        XCTAssertTrue(RenderedMarkdownEditor.plan(for: session.textView.string).tables.isEmpty)
+        XCTAssertTrue(window.firstResponder === session.textView)
+        _ = await session.authoritativeSnapshot()
+        session.textView.undo(nil)
+        for _ in 0..<100 where session.textView.string != source { await Task.yield() }
+        XCTAssertEqual(session.textView.string, source)
+
         for newline in ["\n", "\r\n"] {
             let tableSource = "| A | B |\(newline)| --- | --- |\(newline)| 1 | 2 |"
             for following in ["", newline, newline + newline + "尾段"] {
@@ -2924,6 +2987,11 @@ extension RenderedMarkdownEditorTests {
             ("前后", 1, .paragraphBreak, "前\n\n后", 3),
             ("前后", 1, .lineBreak, "前\n后", 2),
             ("# 标题", 4, .paragraphBreak, "# 标题\n\n", 6),
+            ("# 标题", 0, .paragraphBreak, "\n\n# 标题", 0),
+            ("# 标题", 2, .paragraphBreak, "\n\n# 标题", 0),
+            ("### 标题", 4, .lineBreak, "\n\n### 标题", 0),
+            ("正文\r\n\r\n## 标题", 9, .paragraphBreak, "正文\r\n\r\n\r\n\r\n## 标题", 6),
+            ("# 标题", 3, .paragraphBreak, "# 标\n\n题", 5),
             ("> 引用", 4, .paragraphBreak, "> 引用\n>\n> ", 9),
             ("> 引用", 4, .lineBreak, "> 引用\n> ", 7),
             ("> > ", 4, .paragraphBreak, "> ", 2),

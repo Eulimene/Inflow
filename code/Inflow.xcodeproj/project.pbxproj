@@ -93,6 +93,7 @@
 		B10000000000000000000024 /* WindowAwareTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000024 /* WindowAwareTextView.swift */; };
 		B10000000000000000000025 /* RenderedMarkdownImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000025 /* RenderedMarkdownImageView.swift */; };
 		B10000000000000000000026 /* RenderedMarkdownTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000026 /* RenderedMarkdownTableView.swift */; };
+		B10000000000000000000056 /* MarkdownTableToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000056 /* MarkdownTableToolbar.swift */; };
 		B10000000000000000000027 /* MarkdownTypingStyleProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000027 /* MarkdownTypingStyleProjection.swift */; };
 		B10000000000000000000028 /* MarkdownNativeStyleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000028 /* MarkdownNativeStyleSheet.swift */; };
 		B10000000000000000000029 /* MarkdownLayoutPlanCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000029 /* MarkdownLayoutPlanCache.swift */; };
@@ -202,6 +203,7 @@
 		B20000000000000000000024 /* WindowAwareTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/WindowAwareTextView.swift; sourceTree = "<group>"; };
 		B20000000000000000000025 /* RenderedMarkdownImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/RenderedMarkdownImageView.swift; sourceTree = "<group>"; };
 		B20000000000000000000026 /* RenderedMarkdownTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/RenderedMarkdownTableView.swift; sourceTree = "<group>"; };
+		B20000000000000000000056 /* MarkdownTableToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownTableToolbar.swift; sourceTree = "<group>"; };
 		B20000000000000000000027 /* MarkdownTypingStyleProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownTypingStyleProjection.swift; sourceTree = "<group>"; };
 		B20000000000000000000028 /* MarkdownNativeStyleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownNativeStyleSheet.swift; sourceTree = "<group>"; };
 		B20000000000000000000029 /* MarkdownLayoutPlanCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownLayoutPlanCache.swift; sourceTree = "<group>"; };
@@ -249,6 +251,7 @@
 				B20000000000000000000028 /* MarkdownNativeStyleSheet.swift */,
 				B20000000000000000000027 /* MarkdownTypingStyleProjection.swift */,
 				B20000000000000000000026 /* RenderedMarkdownTableView.swift */,
+				B20000000000000000000056 /* MarkdownTableToolbar.swift */,
 				B20000000000000000000025 /* RenderedMarkdownImageView.swift */,
 				B20000000000000000000024 /* WindowAwareTextView.swift */,
 				B20000000000000000000023 /* MarkdownNativeGeometry.swift */,
@@ -556,6 +559,7 @@
 				B10000000000000000000028 /* MarkdownNativeStyleSheet.swift in Sources */,
 				B10000000000000000000027 /* MarkdownTypingStyleProjection.swift in Sources */,
 				B10000000000000000000026 /* RenderedMarkdownTableView.swift in Sources */,
+				B10000000000000000000056 /* MarkdownTableToolbar.swift in Sources */,
 				B10000000000000000000025 /* RenderedMarkdownImageView.swift in Sources */,
 				B10000000000000000000024 /* WindowAwareTextView.swift in Sources */,
 				B10000000000000000000023 /* MarkdownNativeGeometry.swift in Sources */,

@@ -6,6 +6,17 @@ import XCTest
 final class AppPreferencesTests: XCTestCase {
     func testDefaultsMatchLaunchContract() {
         withDefaults { defaults in
+            defaults.set(760, forKey: "preferences.preview.contentWidth")
+            XCTAssertEqual(AppPreferences(defaults: defaults).previewContentWidth, 1_080)
+            defaults.set(760, forKey: "preferences.preview.contentWidth")
+            XCTAssertEqual(AppPreferences(defaults: defaults).previewContentWidth, 760,
+                "A later explicit width choice must survive relaunch")
+        }
+        withDefaults { defaults in
+            defaults.set(940, forKey: "preferences.preview.contentWidth")
+            XCTAssertEqual(AppPreferences(defaults: defaults).previewContentWidth, 940)
+        }
+        withDefaults { defaults in
             let preferences = AppPreferences(defaults: defaults)
             preferences.applyAutosavePolicy()
 
@@ -22,7 +33,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertFalse(preferences.showsLineNumbers)
             XCTAssertTrue(preferences.scrollSyncEnabled)
             XCTAssertTrue(preferences.headingNavigationEnabled)
-            XCTAssertEqual(preferences.previewContentWidth, 760)
+            XCTAssertEqual(preferences.previewContentWidth, 1_080)
             XCTAssertEqual(preferences.previewZoom, 1)
             XCTAssertEqual(preferences.previewColorScheme, .system)
             XCTAssertEqual(preferences.previewTheme, .standard)
@@ -197,7 +208,7 @@ final class AppPreferencesTests: XCTestCase {
             let preferences = AppPreferences(defaults: defaults)
             XCTAssertEqual(preferences.editorFontSize, 15)
             XCTAssertEqual(preferences.editorLineHeight, 1.6)
-            XCTAssertEqual(preferences.previewContentWidth, 1_200)
+            XCTAssertEqual(preferences.previewContentWidth, 1_800)
             XCTAssertEqual(preferences.previewTheme, .standard)
             XCTAssertEqual(preferences.linkActivation, .singleClick)
             XCTAssertEqual(preferences.workspaceViewMode, .automatic)
@@ -329,7 +340,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertFalse(preferences.showsLineNumbers)
             XCTAssertTrue(preferences.scrollSyncEnabled)
             XCTAssertTrue(preferences.headingNavigationEnabled)
-            XCTAssertEqual(preferences.previewContentWidth, 760)
+            XCTAssertEqual(preferences.previewContentWidth, 1_080)
             XCTAssertEqual(preferences.previewZoom, 1)
             XCTAssertEqual(preferences.previewColorScheme, .system)
             XCTAssertEqual(preferences.previewTheme, .standard)
@@ -444,7 +455,7 @@ final class AppPreferencesTests: XCTestCase {
                 persistence: persistence
             )
             XCTAssertNil(preferences.persistenceFailure)
-            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 760)
+            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 1_080)
 
             persistence.shouldFail = true
             preferences.previewContentWidth = 900
@@ -452,7 +463,7 @@ final class AppPreferencesTests: XCTestCase {
 
             XCTAssertEqual(preferences.previewContentWidth, 900)
             XCTAssertTrue(preferences.workspaceOutlineVisible)
-            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 760)
+            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 1_080)
             XCTAssertFalse(defaults.bool(forKey: "preferences.workspace.outlineVisible"))
             XCTAssertNotNil(preferences.persistenceFailure)
             XCTAssertEqual(SettingsPersistencePrompt.title, "暂时无法保存设置")
@@ -631,7 +642,7 @@ final class AppPreferencesTests: XCTestCase {
             at: 0,
             effectiveRange: nil
         ) as? NSParagraphStyle
-        XCTAssertEqual(try XCTUnwrap(style).lineHeightMultiple, 1.9, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(style).minimumLineHeight, 22 * 1.9, accuracy: 0.001)
 
         session.applySourceAppearance(.default, force: true)
         XCTAssertFalse(session.scrollView.hasHorizontalScroller)

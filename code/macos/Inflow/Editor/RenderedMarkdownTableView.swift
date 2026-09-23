@@ -1,9 +1,11 @@
 import AppKit
 
 @MainActor
-final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
+final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemValidation {
     private static let toolbarHeight: CGFloat = 28
+    private var visibleToolbarHeight: CGFloat = 28
     private let toolsButton = NSPopUpButton(frame: .zero, pullsDown: true)
+    private let tableToolbar = MarkdownTableToolbar()
     private final class CellLayout {
         let row: Int
         let column: Int
@@ -140,26 +142,30 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
 
     private func configureTools() {
         let menu = NSMenu()
-        menu.addItem(withTitle: "表格", action: nil, keyEquivalent: "")
-        for (title, action) in [("在上方插入行", #selector(insertRowAbove(_:))),
-                                ("在下方插入行", #selector(insertRowBelow(_:))),
-                                ("删除当前行", #selector(deleteCurrentRow(_:))),
-                                ("在左侧插入列", #selector(insertColumnLeft(_:))),
-                                ("在右侧插入列", #selector(insertColumnRight(_:))),
-                                ("删除当前列", #selector(deleteCurrentColumn(_:))),
-                                ("左对齐", #selector(alignColumnLeading(_:))),
-                                ("居中对齐", #selector(alignColumnCenter(_:))),
-                                ("右对齐", #selector(alignColumnTrailing(_:)))] {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            item.target = self
-            menu.addItem(item)
-        }
+        menu.addItem(withTitle: "更多", action: nil, keyEquivalent: "")
+        appendTableCommands(to: menu)
         toolsButton.menu = menu
         toolsButton.bezelStyle = .recessed
         toolsButton.font = .systemFont(ofSize: 12)
-        toolsButton.setAccessibilityLabel("表格行列与对齐操作")
+        toolsButton.setAccessibilityLabel("表格更多操作")
+        tableToolbar.onEdit = { [weak self] edit in self?.onEdit(edit) }
+        tableToolbar.onAlignment = { [weak self] alignment in
+            guard let self else { return }
+            self.onEdit(.setAlignment(column: self.contextCell.column, alignment: alignment))
+        }
+        addSubview(tableToolbar)
         addSubview(toolsButton)
-        setAccessibilityChildren(cells.map { $0.textView as NSView } + [toolsButton])
+        updateToolAccessibility()
+    }
+
+    private func updateToolAccessibility() {
+        setAccessibilityChildren(cells.map { $0.textView as NSView }
+            + (toolsButton.isHidden ? [] : [tableToolbar, toolsButton]))
+    }
+
+    private func updateTools() {
+        tableToolbar.configure(rows: table.rows.count, columns: table.alignments.count,
+            alignment: table.alignments.indices.contains(contextCell.column) ? table.alignments[contextCell.column] : .leading)
     }
 
     private static func makeCells(table: RenderedMarkdownTable, widths: [CGFloat], baseFont: NSFont,
@@ -293,7 +299,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         let editable = cells.first?.textView.isEditable ?? false
         cells += added
         for cell in added { configure(cell); cell.textView.isEditable = editable }
-        setAccessibilityChildren(cells.map { $0.textView as NSView } + [toolsButton])
+        updateToolAccessibility()
         update(table: updated, onEdit: onEdit)
         _ = updateMaximumWidth(maximumWidth)
         return true
@@ -305,6 +311,16 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
     func setEditingEnabled(_ enabled: Bool) {
         for cell in cells { cell.textView.isEditable = enabled }
         toolsButton.isEnabled = enabled
+        tableToolbar.isHidden = !enabled
+        toolsButton.isHidden = !enabled
+        updateToolAccessibility()
+        let height = enabled ? Self.toolbarHeight : 0
+        guard visibleToolbarHeight != height else { return }
+        visibleToolbarHeight = height
+        renderedSize.height = rowHeights.reduce(0, +) + height
+        setFrameSize(renderedSize)
+        layoutCells()
+        needsDisplay = true
     }
 
     func hasSameRenderedContent(as other: RenderedMarkdownTable) -> Bool {
@@ -405,7 +421,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         maximumWidth = width
         columnWidths = widths
         rowHeights = heights
-        renderedSize = NSSize(width: widths.reduce(0, +), height: rowHeights.reduce(0, +) + Self.toolbarHeight)
+        renderedSize = NSSize(width: widths.reduce(0, +), height: rowHeights.reduce(0, +) + visibleToolbarHeight)
         setFrameSize(renderedSize)
         layoutCells()
         needsDisplay = true
@@ -465,7 +481,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
             heights[cell.row] = max(heights[cell.row], height + CGFloat(MarkdownRenderMetrics.tableCellVerticalPadding * 2))
         }
         rowHeights = heights
-        renderedSize.height = rowHeights.reduce(0, +) + Self.toolbarHeight
+        renderedSize.height = rowHeights.reduce(0, +) + visibleToolbarHeight
         setFrameSize(renderedSize)
         layoutCells()
         updateMathPreviewVisibility()
@@ -518,9 +534,10 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         let xOffsets = columnWidths.reduce(into: [CGFloat(0)]) { result, width in
             result.append((result.last ?? 0) + width)
         }
-        toolsButton.frame = NSRect(x: 4, y: 0, width: min(220, renderedSize.width - 8), height: Self.toolbarHeight)
-        toolsButton.menu?.items.first?.title = "表格 · \(table.rows.count) 行 × \(table.alignments.count) 列"
-        let yOffsets = rowHeights.reduce(into: [Self.toolbarHeight]) { result, height in
+        tableToolbar.frame = NSRect(x: 4, y: 0, width: max(80, renderedSize.width - 86), height: Self.toolbarHeight)
+        toolsButton.frame = NSRect(x: max(4, renderedSize.width - 80), y: 0, width: 76, height: Self.toolbarHeight)
+        updateTools()
+        let yOffsets = rowHeights.reduce(into: [visibleToolbarHeight]) { result, height in
             result.append((result.last ?? 0) + height)
         }
         for cell in cells {
@@ -539,7 +556,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        var y = Self.toolbarHeight
+        var y = visibleToolbarHeight
         for (index, height) in rowHeights.enumerated() {
             let rowRect = NSRect(x: 0, y: y, width: renderedSize.width, height: height)
             backgroundColor(forRow: index).setFill()
@@ -558,7 +575,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
             divider.line(to: NSPoint(x: x, y: renderedSize.height))
             divider.stroke()
         }
-        y = Self.toolbarHeight
+        y = visibleToolbarHeight
         for height in rowHeights.dropLast() {
             y += height
             let divider = NSBezierPath()
@@ -710,6 +727,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         guard let view = notification.object as? NSTextView,
               let cell = cells.first(where: { $0.textView === view }) else { return }
         contextCell = (cell.row, cell.column)
+        updateTools()
         updateMathPreviewVisibility()
     }
 
@@ -779,6 +797,11 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
             addMenuItem("打开链接", action: #selector(openTableLink(_:)), to: menu)
             menu.addItem(.separator())
         }
+        appendTableCommands(to: menu)
+        return menu
+    }
+
+    private func appendTableCommands(to menu: NSMenu) {
         addMenuItem("在上方插入行", action: #selector(insertRowAbove(_:)), to: menu)
         addMenuItem("在下方插入行", action: #selector(insertRowBelow(_:)), to: menu)
         addMenuItem("删除当前行", action: #selector(deleteCurrentRow(_:)), to: menu)
@@ -790,7 +813,8 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         addMenuItem("左对齐", action: #selector(alignColumnLeading(_:)), to: menu)
         addMenuItem("居中对齐", action: #selector(alignColumnCenter(_:)), to: menu)
         addMenuItem("右对齐", action: #selector(alignColumnTrailing(_:)), to: menu)
-        return menu
+        menu.addItem(.separator())
+        addMenuItem("删除表格", action: #selector(deleteTable(_:)), to: menu)
     }
 
     private func addMenuItem(_ title: String, action: Selector, to menu: NSMenu) {
@@ -804,6 +828,27 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate {
         item.target = nil
         menu.addItem(item)
     }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(deleteCurrentRow(_:)): return table.rows.count > 1
+        case #selector(deleteCurrentColumn(_:)): return table.alignments.count > 1
+        default: break
+        }
+        let alignment: RenderedMarkdownTableAlignment? = switch item.action {
+        case #selector(alignColumnLeading(_:)): .leading
+        case #selector(alignColumnCenter(_:)): .center
+        case #selector(alignColumnTrailing(_:)): .trailing
+        default: nil
+        }
+        if let alignment {
+            item.state = table.alignments.indices.contains(contextCell.column)
+                && table.alignments[contextCell.column] == alignment ? .on : .off
+        }
+        return true
+    }
+
+    @objc private func deleteTable(_ sender: Any?) { onEdit(.deleteTable) }
 
     @objc private func openTableLink(_ sender: Any?) {
         if let contextLinkTarget { onLinkClick(contextLinkTarget) }
