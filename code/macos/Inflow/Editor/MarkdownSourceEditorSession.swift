@@ -201,9 +201,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             guard let self, self.presentation == .rendered else { return }
             // Enter changes paragraph geometry. Commit its native projection before
             // scrolling or drawing the caret; JS resources still resolve asynchronously.
-            let source = self.textView.string
-            self.engineRenderedPlan = self.layoutPlans.resolve(source: source, configuration: self.latestRenderConfiguration)
-            self.applyRenderedPresentation(source: source, force: true)
+            self.synchronizeStructuralPresentation(source: self.textView.string)
         }
         textView.selectionVisibilityHandler = { [weak self] in self?.centerSelectionForTypewriterMode() }
         textView.retryRenderingHandler = { [weak self] in self?.retryRenderedResources() }
@@ -506,9 +504,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 textView.restoreTableFocus(for: finalSelection.revealRange)
             }
             updateSelectedRange(finalSelection.revealRange)
-            if presentation == .rendered, textView.pendingTableFocus != nil {
-                applyRenderedPresentation(source: mutation.resultingSource, force: true)
-            } else {
+            if presentation == .rendered {
+                // Undo/Redo may restore hidden syntax or shorten a quote. Its
+                // attributes and decoration ranges must match before publication.
+                synchronizeStructuralPresentation(source: mutation.resultingSource)
+            }
+            if textView.pendingTableFocus == nil {
                 textView.scrollRangeToVisible(finalSelection.revealRange)
             }
             inputState.reset()
@@ -759,6 +760,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         deferredMermaidGeneration &+= 1
         deferredMermaidTask?.cancel()
         deferredMermaidTask = nil
+    }
+
+    private func synchronizeStructuralPresentation(source: String) {
+        guard presentation == .rendered else { return }
+        engineRenderedPlan = layoutPlans.resolve(source: source, configuration: latestRenderConfiguration)
+        applyRenderedPresentation(source: source, force: true)
     }
 
     private func scheduleRenderedPresentation(for source: String) {

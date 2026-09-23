@@ -3185,24 +3185,47 @@ extension RenderedMarkdownEditorTests {
 
     @MainActor
     func testLiveWritingReturnUndoRestoresSourceAndCaret() async throws {
-        let session = MarkdownSourceEditorSession()
-        let source = "- 中文😀"
-        session.textView.string = source
-        _ = await session.deriveContent(for: source, configuration: .default)
-        session.setPresentation(.rendered, source: source, onLinkClick: nil)
-        let caret = NSRange(location: source.utf16.count, length: 0)
-        session.textView.setSelectedRange(caret)
-        session.textView.insertNewline(nil)
-        let changed = source + "\n- "
-        XCTAssertEqual(session.textView.string, changed)
-        _ = await session.deriveContent(for: changed, configuration: .default)
-        session.textView.undo(nil)
-        for _ in 0..<100 where session.textView.string != source { await Task.yield() }
-        XCTAssertEqual(session.textView.string, source)
-        XCTAssertEqual(session.textView.selectedRange(), caret)
-        session.textView.redo(nil)
-        for _ in 0..<100 where session.textView.string != changed { await Task.yield() }
-        XCTAssertEqual(session.textView.string, changed)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        for source in ["- 中文😀", "> 中文😀", "> > 中文😀", "> 中文😀\n> ", "> 引用\n\n后续正文"] {
+            let session = MarkdownSourceEditorSession()
+            window.contentView = session.scrollView
+            window.makeFirstResponder(session.textView)
+            session.textView.string = source
+            let location = source.contains("后续正文") ? 4 : source.utf16.count
+            let caret = NSRange(location: location, length: 0)
+            session.textView.setSelectedRange(caret)
+            _ = await session.deriveContent(for: source, configuration: .default)
+            session.setPresentation(.rendered, source: source, onLinkClick: nil)
+            let quoteRanges = session.textView.renderedQuoteRanges
+            let originalAttributes = NSAttributedString(attributedString: try XCTUnwrap(session.textView.textStorage))
+            session.textView.insertNewline(nil)
+            let changed = session.textView.string
+            XCTAssertNotEqual(changed, source)
+            _ = await session.authoritativeSnapshot()
+            session.textView.undo(nil)
+            for _ in 0..<200 where session.textView.engineHistoryIsPending { await Task.yield() }
+            XCTAssertEqual(session.textView.string, source)
+            XCTAssertEqual(session.textView.selectedRange(), caret)
+            // History must restore native presentation before publishing the edit,
+            // without waiting for the Store's asynchronous content derivation.
+            XCTAssertTrue(session.textView.writingPlan?.exactlyMatches(source) == true, source)
+            XCTAssertEqual(session.textView.renderedQuoteRanges, quoteRanges, source)
+            let storage = try XCTUnwrap(session.textView.textStorage)
+            for index in 0..<storage.length {
+                for key in [NSAttributedString.Key.font, .paragraphStyle, .foregroundColor] {
+                    XCTAssertEqual(storage.attribute(key, at: index, effectiveRange: nil) as? NSObject,
+                        originalAttributes.attribute(key, at: index, effectiveRange: nil) as? NSObject,
+                        "\(source): \(key) at \(index)")
+                }
+            }
+            session.textView.redo(nil)
+            for _ in 0..<200 where session.textView.engineHistoryIsPending { await Task.yield() }
+            XCTAssertEqual(session.textView.string, changed)
+            XCTAssertTrue(session.textView.writingPlan?.exactlyMatches(changed) == true, source)
+        }
     }
 
     @MainActor
