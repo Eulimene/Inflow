@@ -3191,13 +3191,14 @@ extension RenderedMarkdownEditorTests {
     @MainActor
     func testSemanticParagraphAndLineBreakTransactions() async throws {
         let examples: [(String, Int, MarkdownEditingIntent, String, Int)] = [
+            ("前后", 0, .paragraphBreak, "\n前后", 1),
             ("前后", 1, .paragraphBreak, "前\n\n后", 3),
             ("前后", 1, .lineBreak, "前\n后", 2),
             ("# 标题", 4, .paragraphBreak, "# 标题\n\n", 6),
-            ("# 标题", 0, .paragraphBreak, "\n\n# 标题", 0),
-            ("# 标题", 2, .paragraphBreak, "\n\n# 标题", 0),
-            ("### 标题", 4, .lineBreak, "\n\n### 标题", 0),
-            ("正文\r\n\r\n## 标题", 9, .paragraphBreak, "正文\r\n\r\n\r\n\r\n## 标题", 6),
+            ("# 标题", 0, .paragraphBreak, "\n# 标题", 0),
+            ("# 标题", 2, .paragraphBreak, "\n# 标题", 0),
+            ("### 标题", 4, .lineBreak, "\n### 标题", 0),
+            ("正文\r\n\r\n## 标题", 9, .paragraphBreak, "正文\r\n\r\n\r\n## 标题", 4),
             ("# 标题", 3, .paragraphBreak, "# 标\n\n题", 5),
             ("> 引用", 4, .paragraphBreak, "> 引用\n> ", 7),
             ("> 引用", 4, .lineBreak, "> 引用\n> ", 7),
@@ -3225,6 +3226,66 @@ extension RenderedMarkdownEditorTests {
                 selection: NSRange(location: location, length: 0), renderPlan: RenderedMarkdownEditor.plan(for: source)), source)
             XCTAssertEqual((source as NSString).replacingCharacters(in: edit.range, with: edit.text), expected, source)
             XCTAssertEqual(edit.selection.location, caret, source)
+        }
+        // Exercise Return followed by real input, rather than only inspecting
+        // the intermediate blank whose display may be collapsed next to a heading.
+        for newline in ["\n", "\r\n"] {
+            for blanks in 0...3 {
+                for heading in [false, true] {
+                    let prefix = (heading ? "前文" : "# 前标题") + String(repeating: newline, count: blanks + 1)
+                    let subject = heading ? "## 标题" : "正文"
+                    let initial = prefix + subject
+                    let editor = MarkdownSourceEditorSession()
+                    editor.textView.string = initial
+                    _ = await editor.deriveContent(for: initial, configuration: .default)
+                    editor.setPresentation(.rendered, source: initial, onLinkClick: nil)
+                    editor.textView.setSelectedRange(NSRange(location: prefix.utf16.count + (heading ? 3 : 0), length: 0))
+                    editor.textView.insertNewline(nil)
+                    let afterReturn = prefix + newline + subject
+                    XCTAssertEqual(editor.textView.string, afterReturn)
+                    let caret = prefix.utf16.count + (heading ? (blanks > 0 ? -newline.utf16.count : 0) : newline.utf16.count)
+                    XCTAssertEqual(editor.textView.selectedRange(), NSRange(location: caret, length: 0))
+                    editor.textView.insertText("新😀", replacementRange: editor.textView.selectedRange())
+                    let afterInput = (afterReturn as NSString).replacingCharacters(in: NSRange(location: caret, length: 0), with: "新😀")
+                    XCTAssertEqual(editor.textView.string, afterInput)
+                    if heading {
+                        let afterPlan = RenderedMarkdownEditor.plan(for: afterInput)
+                        let afterSpacing = MarkdownBlockSpacingPlan(source: afterInput, blockRanges: afterPlan.headingSpacingBoundaries)
+                        XCTAssertEqual(afterSpacing.blankLines.count - afterSpacing.collapsedLines.count, max(0, blanks - 1))
+                    }
+                    _ = await editor.authoritativeSnapshot()
+                    editor.textView.undo(nil)
+                    for _ in 0..<200 where editor.textView.engineHistoryIsPending { await Task.yield() }
+                    XCTAssertEqual(editor.textView.string, afterReturn)
+                    editor.textView.undo(nil)
+                    for _ in 0..<200 where editor.textView.engineHistoryIsPending { await Task.yield() }
+                    XCTAssertEqual(editor.textView.string, initial)
+                    editor.textView.redo(nil)
+                    for _ in 0..<200 where editor.textView.engineHistoryIsPending { await Task.yield() }
+                    XCTAssertEqual(editor.textView.string, afterReturn)
+                }
+            }
+        }
+        for initial in ["前文\n\n## 标题", "前文\n\n\n## 标题", "前文\r\n\r\n## 标题"] {
+            let newline = initial.contains("\r\n") ? "\r\n" : "\n"
+            let editor = MarkdownSourceEditorSession()
+            editor.textView.string = initial
+            _ = await editor.deriveContent(for: initial, configuration: .default)
+            editor.setPresentation(.rendered, source: initial, onLinkClick: nil)
+            let headingStart = (initial as NSString).range(of: "## 标题").location
+            let location = headingStart - newline.utf16.count
+            editor.textView.setSelectedRange(NSRange(location: location, length: 0))
+            editor.textView.insertNewline(nil)
+            XCTAssertEqual(editor.textView.selectedRange().location, location)
+            editor.textView.insertText("新行", replacementRange: editor.textView.selectedRange())
+            let expected = (initial as NSString).substring(to: location) + "新行" + newline + newline + "## 标题"
+            XCTAssertEqual(editor.textView.string, expected)
+            let plan = RenderedMarkdownEditor.plan(for: expected)
+            let spacing = MarkdownBlockSpacingPlan(source: expected, blockRanges: plan.headingSpacingBoundaries)
+            let visibleBlanks = spacing.blankLines.filter { !spacing.collapsedLines.contains($0) }
+            let originalSpacing = MarkdownBlockSpacingPlan(source: initial, blockRanges: RenderedMarkdownEditor.plan(for: initial).headingSpacingBoundaries)
+            XCTAssertEqual(visibleBlanks.count, originalSpacing.blankLines.count - originalSpacing.collapsedLines.count,
+                "Typing must not reveal an extra separator before the new paragraph")
         }
         let nested = "- parent\n  continuation\n  - child\n- sibling"
         let indented = try XCTUnwrap(MarkdownEditingTransaction.indentList(source: nested,

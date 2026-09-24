@@ -78,6 +78,7 @@ enum MarkdownEditingTransaction {
                 && selection.location < NSMaxRange($0.sourceRange.utf16Range)
         }
         if intent != .mergeBackward {
+            let spacing = MarkdownBlockSpacingPlan(source: source, blockRanges: renderPlan.headingSpacingBoundaries)
             // The visible beginning of an ATX heading follows its hidden marker.
             // Insert before the whole block, never between '#' and its content.
             if selection.length == 0,
@@ -86,8 +87,17 @@ enum MarkdownEditingTransaction {
                    return false
                }),
                selection.location <= NSMaxRange(heading.sourceRange.utf16Range) {
-                return replace(NSRange(location: line.location, length: 0), newline + newline,
-                    caret: line.location)
+                // ATX headings already delimit their block. One leading Return
+                // inserts one line; a paragraph separator would add a spare blank.
+                let insertion = spacing.leadingBlankLines.first { NSMaxRange($0) == line.location }?.location ?? line.location
+                return replace(NSRange(location: line.location, length: 0), newline,
+                    caret: insertion)
+            }
+            // Fill the existing leading blank, leaving the inserted separator
+            // next to the block. Advancing past it would expose a formerly folded
+            // line between ordinary paragraphs as soon as the user types.
+            if selection.length == 0, spacing.leadingBlankLines.contains(line) {
+                return replace(selection, newline, caret: selection.location)
             }
             // Complete a newly typed fence in a single undoable transaction.
             if intent == .paragraphBreak, selection.length == 0, before == raw,
@@ -144,7 +154,9 @@ enum MarkdownEditingTransaction {
             if !head.quote.isEmpty {
                 return replace(selection, newline + head.quote + head.indent)
             }
-            return replace(selection, raw.trimmingCharacters(in: .whitespaces).isEmpty ? newline : newline + newline)
+            // At the start there is no left-hand paragraph to separate. Keep the
+            // usual forward caret movement, but do not manufacture a second line.
+            return replace(selection, before.isEmpty || raw.trimmingCharacters(in: .whitespaces).isEmpty ? newline : newline + newline)
         }
         guard selection.length == 0, request == nil, !protected else { return nil }
         let head = prefix(raw)

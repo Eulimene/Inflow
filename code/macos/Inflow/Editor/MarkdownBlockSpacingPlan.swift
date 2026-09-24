@@ -7,6 +7,9 @@ import Foundation
 struct MarkdownBlockSpacingPlan {
     let blankLines: [NSRange]
     let collapsedLines: [NSRange]
+    /// The last blank immediately before each block. Editing can reuse this line
+    /// while retaining the new separator next to the block, where it stays folded.
+    let leadingBlankLines: [NSRange]
 
     init(source: String, blockRanges: [NSRange]) {
         let text = source as NSString
@@ -18,6 +21,7 @@ struct MarkdownBlockSpacingPlan {
         let ends = Set(blocks.map { NSMaxRange($0) })
         var blanks: [NSRange] = []
         var collapsed: [NSRange] = []
+        var leading: [NSRange] = []
         var run: [NSRange] = []
         func finishRun() {
             guard let first = run.first, let last = run.last else { return }
@@ -25,6 +29,7 @@ struct MarkdownBlockSpacingPlan {
             if ends.contains(first.location) || starts.contains(NSMaxRange(last)) {
                 collapsed.append(first)
             }
+            if starts.contains(NSMaxRange(last)) { leading.append(last) }
             run.removeAll(keepingCapacity: true)
         }
         var location = 0
@@ -46,6 +51,7 @@ struct MarkdownBlockSpacingPlan {
         finishRun()
         blankLines = blanks
         collapsedLines = collapsed
+        leadingBlankLines = leading
     }
 }
 
