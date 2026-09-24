@@ -737,6 +737,11 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                 (liveStorage.attribute(.paragraphStyle, at: blank.location, effectiveRange: nil) as? NSParagraphStyle)?.minimumLineHeight ?? 0
             }
             XCTAssertLessThan(blankHeight(), 1)
+            let all = NSRange(location: 0, length: editableSource.utf16.count)
+            focused.textView.setSelectedRange(all)
+            focused.updateSelectedRange(all)
+            for _ in 0..<100 { await Task.yield() }
+            XCTAssertLessThan(blankHeight(), 1, "Selecting across a separator must not expand it")
             focused.textView.setSelectedRange(blank)
             focused.updateSelectedRange(blank)
             for _ in 0..<100 where blankHeight() < 1 { await Task.yield() }
@@ -753,6 +758,39 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             for _ in 0..<100 where blankHeight() > 1 { await Task.yield() }
             XCTAssertLessThan(blankHeight(), 1)
 
+        }
+
+        for sample in ["# 标题\n\n\n正文", "正文\n\n\n# 标题", "# 上标题\n\n\n## 标题"] {
+            let editor = MarkdownSourceEditorSession()
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = editor.scrollView
+            defer { window.contentView = nil }
+            editor.textView.string = sample
+            editor.textView.setSelectedRange(NSRange(location: sample.utf16.count, length: 0))
+            _ = await editor.deriveContent(for: sample, configuration: .default)
+            editor.setPresentation(.rendered, source: sample, onLinkClick: nil)
+            window.makeFirstResponder(editor.textView)
+            let manager = try XCTUnwrap(editor.textView.layoutManager)
+            let container = try XCTUnwrap(editor.textView.textContainer)
+            func lastLineY() -> CGFloat {
+                manager.ensureLayout(for: container)
+                return manager.lineFragmentRect(forGlyphAt: manager.glyphIndexForCharacter(at: sample.utf16.count - 1), effectiveRange: nil).minY
+            }
+            let baseline = lastLineY()
+            let firstBlank = (sample as NSString).range(of: "\n\n\n").location + 1
+            for location in [firstBlank, firstBlank + 1, sample.utf16.count] {
+                let selection = NSRange(location: location, length: 0)
+                editor.textView.setSelectedRange(selection)
+                editor.updateSelectedRange(selection)
+                for _ in 0..<100 { await Task.yield() }
+                XCTAssertEqual(lastLineY(), baseline, accuracy: 0.01, "Focus must preserve n−1 blank lines: \(sample)")
+                if location < sample.utf16.count {
+                    let style = editor.textView.textStorage?.attribute(.paragraphStyle, at: location, effectiveRange: nil) as? NSParagraphStyle
+                    XCTAssertGreaterThan(style?.minimumLineHeight ?? 0, 10, "The active blank needs a normal caret line")
+                }
+            }
         }
 
         let source = "第一段\n\n第二段"

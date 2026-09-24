@@ -43,8 +43,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var optimisticTable: (source: String, table: RenderedMarkdownTable)?
     private var engineRenderedPlan: RenderedMarkdownPlan?
     private var renderedEditingRange: NSRange?
-    private var renderedHeadingSeparators: [NSRange] = []
-    private var renderedExpandedHeadingSeparator: NSRange?
+    private var renderedHeadingSeparatorRuns: [NSRange] = []
+    private var renderedCollapsedHeadingSeparators: [NSRange] = []
     private var renderedAppliedAppearance: SourceEditorAppearance?
     private var renderedTheme = PreviewTheme.standard
     private var renderedAppliedTheme: PreviewTheme?
@@ -647,8 +647,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             textView.writingPlan = nil
             renderedRevealedMarkers = []
             renderedEditingRange = nil
-            renderedHeadingSeparators = []
-            renderedExpandedHeadingSeparator = nil
+            renderedHeadingSeparatorRuns = []
+            renderedCollapsedHeadingSeparators = []
             textView.linkClickHandler = nil
             textView.clickableLinkRanges = []
             textView.clearRenderedImages()
@@ -811,15 +811,15 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             && renderedAppliedTheme == renderedTheme
             && currentRenderedEditingRange(source: source) == renderedEditingRange
             && activeRevealedMarkers() == renderedRevealedMarkers
-            && activeHeadingSeparator() == renderedExpandedHeadingSeparator
+            && currentCollapsedHeadingSeparators() == renderedCollapsedHeadingSeparators
     }
 
-    private func activeHeadingSeparator() -> NSRange? {
-        guard textView.isEditable, textView.window?.firstResponder === textView else { return nil }
+    private func currentCollapsedHeadingSeparators() -> [NSRange] {
         let selection = textView.selectedRange()
-        return renderedHeadingSeparators.first {
-            NSLocationInRange(selection.location, $0) || NSIntersectionRange(selection, $0).length > 0
-        }
+        let caret = textView.isEditable && textView.window?.firstResponder === textView && selection.length == 0
+            ? selection.location : nil
+        return MarkdownNativeStyleSheet.collapsedHeadingSeparators(
+            in: renderedHeadingSeparatorRuns, source: textView.string, caret: caret)
     }
 
     private func activeRevealedMarkers() -> [NSRange] {
@@ -869,8 +869,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             plan.renderRequests[index].dark = dark
         }
         renderedPlan = plan
-        renderedHeadingSeparators = MarkdownNativeStyleSheet.headingSeparatorRanges(in: plan)
-        renderedExpandedHeadingSeparator = activeHeadingSeparator()
+        renderedHeadingSeparatorRuns = MarkdownNativeStyleSheet.headingSeparatorRuns(in: plan)
+        renderedCollapsedHeadingSeparators = currentCollapsedHeadingSeparators()
         textView.writingPlan = plan
         renderedRevealedMarkers = activeRevealedMarkers()
         let editingRange: NSRange? = if textView.isEditable,
@@ -1102,8 +1102,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             .font: baseFont, .foregroundColor: palette.textColor, .paragraphStyle: baseParagraph,
         ])
         // Capture semantic input attributes before collapsing display-only gaps.
-        styleSheet.collapseHeadingSeparators(renderedHeadingSeparators,
-            expandedRange: renderedExpandedHeadingSeparator, storage: storage)
+        styleSheet.collapseHeadingSeparators(renderedCollapsedHeadingSeparators, storage: storage)
         for marker in plan.markers {
             if renderedRevealedMarkers.contains(marker.sourceRange.utf16Range) { continue }
             if marker.kind == .mathDelimiter,

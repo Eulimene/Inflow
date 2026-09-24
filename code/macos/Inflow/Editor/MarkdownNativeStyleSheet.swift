@@ -290,13 +290,23 @@ struct MarkdownNativeStyleSheet {
         }
     }
 
-    /// Collapse one blank paragraph per separator run adjacent to a heading.
-    /// Shared runs between headings collapse only once; an active blank remains editable.
-    static func headingSeparatorRanges(in plan: RenderedMarkdownPlan) -> [NSRange] {
+    /// Keep complete blank runs, so focus can use a visible line without changing
+    /// the run's total spacing. Shared runs between headings occur only once.
+    static func headingSeparatorRuns(in plan: RenderedMarkdownPlan) -> [NSRange] {
         let text = plan.sourceSnapshot as NSString
         var separators: [Int: NSRange] = [:]
         func isBlank(_ range: NSRange) -> Bool {
             range.length > 0 && text.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        func recordRun(startingAt start: Int) {
+            guard start < text.length, separators[start] == nil else { return }
+            var end = start
+            while end < text.length {
+                let line = text.paragraphRange(for: NSRange(location: end, length: 0))
+                guard isBlank(line) else { break }
+                end = NSMaxRange(line)
+            }
+            if end > start { separators[start] = NSRange(location: start, length: end - start) }
         }
         for content in plan.contentStyles {
             guard case .heading = content.kind else { continue }
@@ -310,7 +320,7 @@ struct MarkdownNativeStyleSheet {
                 start = previous.location
             }
             if start < heading.location {
-                separators[start] = text.paragraphRange(for: NSRange(location: start, length: 0))
+                recordRun(startingAt: start)
             }
             var end = NSMaxRange(heading)
             // Setext headings have a separate underline source paragraph.
@@ -322,15 +332,25 @@ struct MarkdownNativeStyleSheet {
             }) {
                 end = NSMaxRange(text.paragraphRange(for: underline.sourceRange.utf16Range))
             }
-            guard end < text.length else { continue }
-            let line = text.paragraphRange(for: NSRange(location: end, length: 0))
-            if isBlank(line) { separators[line.location] = line }
+            recordRun(startingAt: end)
         }
         return separators.values.sorted { $0.location < $1.location }
     }
 
-    func collapseHeadingSeparators(_ ranges: [NSRange], expandedRange: NSRange?, storage: NSTextStorage) {
-        for range in ranges where range != expandedRange {
+    static func collapsedHeadingSeparators(in runs: [NSRange], source: String, caret: Int?) -> [NSRange] {
+        let text = source as NSString
+        return runs.compactMap { run in
+            let first = text.paragraphRange(for: NSRange(location: run.location, length: 0))
+            guard let caret, NSLocationInRange(caret, first) else { return first }
+            // When there are multiple blanks, collapse another line to keep n−1
+            // visible. Only a lone active blank needs temporary editing space.
+            guard NSMaxRange(first) < NSMaxRange(run) else { return nil }
+            return text.paragraphRange(for: NSRange(location: NSMaxRange(first), length: 0))
+        }
+    }
+
+    func collapseHeadingSeparators(_ ranges: [NSRange], storage: NSTextStorage) {
+        for range in ranges {
             let paragraph = NSMutableParagraphStyle()
             paragraph.minimumLineHeight = 0.001
             paragraph.maximumLineHeight = 0.001
