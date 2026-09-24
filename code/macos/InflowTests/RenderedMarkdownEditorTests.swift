@@ -683,63 +683,77 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         for editable in [true, false] {
             for heading in ["# 标题", "## 标题", "### 标题", "#### 标题", "##### 标题", "###### 标题", "标题\n===", "标题\n---"] {
                 for newline in ["\n", "\r\n"] {
-                    var referenceY: CGFloat?
-                    for (gap, remainingLines) in [("", 0), (newline, 0), ("  \t" + newline, 0), (newline + newline, 1), (String(repeating: newline, count: 5), 4)] {
-                        let sample = heading.replacingOccurrences(of: "\n", with: newline) + newline + gap + "正文"
-                        let editor = MarkdownSourceEditorSession()
-                        editor.scrollView.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
-                        editor.textView.isEditable = editable
-                        editor.textView.string = sample
-                        _ = await editor.deriveContent(for: sample, configuration: .default)
-                        editor.setPresentation(.rendered, source: sample, onLinkClick: nil)
-                        let manager = try XCTUnwrap(editor.textView.layoutManager)
-                        manager.ensureLayout(for: try XCTUnwrap(editor.textView.textContainer))
-                        let location = (sample as NSString).range(of: "正文").location
-                        let y = manager.lineFragmentRect(forGlyphAt: manager.glyphIndexForCharacter(at: location), effectiveRange: nil).minY
-                        let gapHeight = editable
-                            ? editor.sourceAppearance.fontSize * editor.sourceAppearance.lineHeight
-                            : Double(MarkdownRenderMetrics.paragraphGap) * editor.sourceAppearance.fontSize / MarkdownRenderMetrics.bodyFontSize
-                        if let referenceY {
-                            XCTAssertEqual(y, referenceY + CGFloat(remainingLines) * gapHeight, accuracy: 0.01, sample)
-                        } else { referenceY = y }
-                        XCTAssertEqual(editor.textView.string, sample, "Presentation must preserve blank source lines")
+                    // Setext headings cannot immediately follow ordinary prose without
+                    // absorbing that prose, so use another heading for that boundary.
+                    let prefixes = heading.hasPrefix("#") ? ["", "正文" + newline, "# 前文" + newline] : ["", "# 前文" + newline]
+                    let layouts = [(before: false, prefix: "")] + prefixes.map { (before: true, prefix: $0) }
+                    for layout in layouts {
+                        var referenceY: CGFloat?
+                        for (gap, remainingLines) in [("", 0), (newline, 0), ("  \t" + newline, 0), (newline + newline, 1), (String(repeating: newline, count: 5), 4)] {
+                            let normalizedHeading = heading.replacingOccurrences(of: "\n", with: newline)
+                            let sample = layout.before
+                                ? layout.prefix + gap + normalizedHeading
+                                : normalizedHeading + newline + gap + "正文"
+                            let editor = MarkdownSourceEditorSession()
+                            editor.scrollView.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+                            editor.textView.isEditable = editable
+                            editor.textView.string = sample
+                            _ = await editor.deriveContent(for: sample, configuration: .default)
+                            editor.setPresentation(.rendered, source: sample, onLinkClick: nil)
+                            let manager = try XCTUnwrap(editor.textView.layoutManager)
+                            manager.ensureLayout(for: try XCTUnwrap(editor.textView.textContainer))
+                            let location = (sample as NSString).range(of: layout.before ? "标题" : "正文").location
+                            let y = manager.lineFragmentRect(forGlyphAt: manager.glyphIndexForCharacter(at: location), effectiveRange: nil).minY
+                            let gapHeight = editable
+                                ? editor.sourceAppearance.fontSize * editor.sourceAppearance.lineHeight
+                                : Double(MarkdownRenderMetrics.paragraphGap) * editor.sourceAppearance.fontSize / MarkdownRenderMetrics.bodyFontSize
+                            if let referenceY {
+                                XCTAssertEqual(y, referenceY + CGFloat(remainingLines) * gapHeight, accuracy: 0.01, sample)
+                            } else { referenceY = y }
+                            XCTAssertEqual(editor.textView.string, sample, "Presentation must preserve blank source lines")
+                        }
                     }
                 }
             }
         }
-        let editableSource = "# 标题\n\n正文"
-        let focused = MarkdownSourceEditorSession()
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
-            styleMask: [.titled], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = focused.scrollView
-        defer { window.contentView = nil }
-        focused.textView.string = editableSource
-        focused.textView.setSelectedRange(NSRange(location: editableSource.utf16.count, length: 0))
-        _ = await focused.deriveContent(for: editableSource, configuration: .default)
-        focused.setPresentation(.rendered, source: editableSource, onLinkClick: nil)
-        window.makeFirstResponder(focused.textView)
-        let blank = NSRange(location: 5, length: 0)
-        let liveStorage = try XCTUnwrap(focused.textView.textStorage)
-        func blankHeight() -> CGFloat {
-            (liveStorage.attribute(.paragraphStyle, at: blank.location, effectiveRange: nil) as? NSParagraphStyle)?.minimumLineHeight ?? 0
+        for (editableSource, blankLocation, insertedSource) in [
+            ("# 标题\n\n正文", 5, "# 标题\n插入\n正文"),
+            ("正文\n\n# 标题", 3, "正文\n插入\n# 标题"),
+        ] {
+            let focused = MarkdownSourceEditorSession()
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = focused.scrollView
+            defer { window.contentView = nil }
+            focused.textView.string = editableSource
+            focused.textView.setSelectedRange(NSRange(location: editableSource.utf16.count, length: 0))
+            _ = await focused.deriveContent(for: editableSource, configuration: .default)
+            focused.setPresentation(.rendered, source: editableSource, onLinkClick: nil)
+            window.makeFirstResponder(focused.textView)
+            let blank = NSRange(location: blankLocation, length: 0)
+            let liveStorage = try XCTUnwrap(focused.textView.textStorage)
+            func blankHeight() -> CGFloat {
+                (liveStorage.attribute(.paragraphStyle, at: blank.location, effectiveRange: nil) as? NSParagraphStyle)?.minimumLineHeight ?? 0
+            }
+            XCTAssertLessThan(blankHeight(), 1)
+            focused.textView.setSelectedRange(blank)
+            focused.updateSelectedRange(blank)
+            for _ in 0..<100 where blankHeight() < 1 { await Task.yield() }
+            XCTAssertGreaterThan(blankHeight(), 10, "An active source blank must offer normal caret space")
+            focused.textView.insertText("插入", replacementRange: blank)
+            XCTAssertEqual(focused.textView.string, insertedSource)
+            _ = await focused.authoritativeSnapshot()
+            focused.textView.undo(nil)
+            for _ in 0..<200 where focused.textView.engineHistoryIsPending { await Task.yield() }
+            XCTAssertEqual(focused.textView.string, editableSource)
+            let end = NSRange(location: editableSource.utf16.count, length: 0)
+            focused.textView.setSelectedRange(end)
+            focused.updateSelectedRange(end)
+            for _ in 0..<100 where blankHeight() > 1 { await Task.yield() }
+            XCTAssertLessThan(blankHeight(), 1)
+
         }
-        XCTAssertLessThan(blankHeight(), 1)
-        focused.textView.setSelectedRange(blank)
-        focused.updateSelectedRange(blank)
-        for _ in 0..<100 where blankHeight() < 1 { await Task.yield() }
-        XCTAssertGreaterThan(blankHeight(), 10, "An active source blank must offer normal caret space")
-        focused.textView.insertText("插入", replacementRange: blank)
-        XCTAssertEqual(focused.textView.string, "# 标题\n插入\n正文")
-        _ = await focused.authoritativeSnapshot()
-        focused.textView.undo(nil)
-        for _ in 0..<200 where focused.textView.engineHistoryIsPending { await Task.yield() }
-        XCTAssertEqual(focused.textView.string, editableSource)
-        let end = NSRange(location: editableSource.utf16.count, length: 0)
-        focused.textView.setSelectedRange(end)
-        focused.updateSelectedRange(end)
-        for _ in 0..<100 where blankHeight() > 1 { await Task.yield() }
-        XCTAssertLessThan(blankHeight(), 1)
 
         let source = "第一段\n\n第二段"
         let session = MarkdownSourceEditorSession()

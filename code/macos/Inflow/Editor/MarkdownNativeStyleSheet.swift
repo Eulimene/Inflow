@@ -290,13 +290,29 @@ struct MarkdownNativeStyleSheet {
         }
     }
 
-    /// The first blank paragraph after a parsed heading is its optional Markdown
-    /// separator. Further blanks retain their spacing; an active blank remains editable.
+    /// Collapse one blank paragraph per separator run adjacent to a heading.
+    /// Shared runs between headings collapse only once; an active blank remains editable.
     static func headingSeparatorRanges(in plan: RenderedMarkdownPlan) -> [NSRange] {
         let text = plan.sourceSnapshot as NSString
-        return plan.contentStyles.compactMap { content in
-            guard case .heading = content.kind else { return nil }
-            var end = NSMaxRange(text.paragraphRange(for: content.sourceRange.utf16Range))
+        var separators: [Int: NSRange] = [:]
+        func isBlank(_ range: NSRange) -> Bool {
+            range.length > 0 && text.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        for content in plan.contentStyles {
+            guard case .heading = content.kind else { continue }
+            let heading = text.paragraphRange(for: content.sourceRange.utf16Range)
+            var start = heading.location
+            // Use the first paragraph of the whole run on either side, so two
+            // neighboring headings identify the same separator instead of two.
+            while start > 0 {
+                let previous = text.paragraphRange(for: NSRange(location: start - 1, length: 0))
+                guard isBlank(previous) else { break }
+                start = previous.location
+            }
+            if start < heading.location {
+                separators[start] = text.paragraphRange(for: NSRange(location: start, length: 0))
+            }
+            var end = NSMaxRange(heading)
             // Setext headings have a separate underline source paragraph.
             if let underline = plan.markers.first(where: { marker in
                 guard case .heading = marker.kind, marker.sourceRange.utf16Range.location == end else { return false }
@@ -306,12 +322,11 @@ struct MarkdownNativeStyleSheet {
             }) {
                 end = NSMaxRange(text.paragraphRange(for: underline.sourceRange.utf16Range))
             }
-            guard end < text.length else { return nil }
+            guard end < text.length else { continue }
             let line = text.paragraphRange(for: NSRange(location: end, length: 0))
-            guard line.length > 0,
-                  text.substring(with: line).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-            return line
+            if isBlank(line) { separators[line.location] = line }
         }
+        return separators.values.sorted { $0.location < $1.location }
     }
 
     func collapseHeadingSeparators(_ ranges: [NSRange], expandedRange: NSRange?, storage: NSTextStorage) {
