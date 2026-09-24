@@ -856,7 +856,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             plan.renderRequests[index].dark = dark
         }
         renderedPlan = plan
-        let blockSpacing = MarkdownBlockSpacingPlan(source: source, blockRanges: plan.headingSpacingBoundaries)
+        let blockSpacing = plan.blockSpacing
         textView.writingPlan = plan
         renderedRevealedMarkers = activeRevealedMarkers()
         let editingRange: NSRange? = if textView.isEditable,
@@ -994,7 +994,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         )
         let styleSheet = MarkdownNativeStyleSheet(baseFont: baseFont, palette: palette,
             sourceAppearance: sourceAppearance, isEditable: textView.isEditable)
-        styleSheet.applyCompactParagraphGaps(blockSpacing.blankLines, storage: storage)
+        styleSheet.applyCompactParagraphGaps(blockSpacing.separatorLines, storage: storage)
         for style in plan.contentStyles {
             let range = style.sourceRange.utf16Range
             guard NSMaxRange(range) <= storage.length,

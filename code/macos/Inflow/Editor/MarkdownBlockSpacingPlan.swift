@@ -6,6 +6,8 @@ import Foundation
 /// to the same initializer; they do not need their own before/after blank-line rules.
 struct MarkdownBlockSpacingPlan {
     let blankLines: [NSRange]
+    /// Only whitespace outside complete blocks participates in block spacing.
+    let separatorLines: [NSRange]
     let collapsedLines: [NSRange]
     /// The last blank immediately before each block. Editing can reuse this line
     /// while retaining the new separator next to the block, where it stays folded.
@@ -21,12 +23,14 @@ struct MarkdownBlockSpacingPlan {
         let ends = Set(blocks.map { NSMaxRange($0) })
         var blanks: [NSRange] = []
         var collapsed: [NSRange] = []
+        var separators: [NSRange] = []
         var leading: [NSRange] = []
         var run: [NSRange] = []
         func finishRun() {
             guard let first = run.first, let last = run.last else { return }
             // A run shared by two blocks is still one separator, not two.
             if ends.contains(first.location) || starts.contains(NSMaxRange(last)) {
+                separators.append(contentsOf: run)
                 collapsed.append(first)
             }
             if starts.contains(NSMaxRange(last)) { leading.append(last) }
@@ -50,30 +54,14 @@ struct MarkdownBlockSpacingPlan {
         }
         finishRun()
         blankLines = blanks
+        separatorLines = separators
         collapsedLines = collapsed
         leadingBlankLines = leading
     }
 }
 
 extension RenderedMarkdownPlan {
-    /// Syntax adapter only: Setext's underline is part of the heading block.
-    /// Tables, quotes and code blocks can supply their complete parsed ranges to
-    /// MarkdownBlockSpacingPlan without changing its spacing policy.
-    var headingSpacingBoundaries: [NSRange] {
-        let text = sourceSnapshot as NSString
-        let underlines = Set(markers.compactMap { marker -> Int? in
-            guard case .heading = marker.kind else { return nil }
-            let raw = text.substring(with: marker.sourceRange.utf16Range)
-                .trimmingCharacters(in: .whitespaces)
-            return raw.first == "=" || raw.first == "-" ? marker.sourceRange.utf16Range.location : nil
-        })
-        return contentStyles.compactMap { content in
-            guard case .heading = content.kind else { return nil }
-            var range = text.paragraphRange(for: content.sourceRange.utf16Range)
-            if underlines.contains(NSMaxRange(range)) {
-                range = NSUnionRange(range, text.paragraphRange(for: NSRange(location: NSMaxRange(range), length: 0)))
-            }
-            return range
-        }
+    var blockSpacing: MarkdownBlockSpacingPlan {
+        MarkdownBlockSpacingPlan(source: sourceSnapshot, blockRanges: blockSpacingBoundaries)
     }
 }

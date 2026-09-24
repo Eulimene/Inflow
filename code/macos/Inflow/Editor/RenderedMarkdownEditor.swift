@@ -339,6 +339,9 @@ struct RenderedMarkdownPlan: Equatable, Sendable {
     let tables: [RenderedMarkdownTable]
     let mermaidDiagrams: [RenderedMarkdownMermaidDiagram]
     var renderRequests: [JavaScriptRenderRequest] = []
+    /// Complete top-level blocks from the canonical parser, in TextKit coordinates.
+    /// Nested paragraphs/items remain inside their owning quote/list/code block.
+    var blockSpacingBoundaries: [NSRange] = []
 
     func exactlyMatches(_ source: String) -> Bool {
         sourceUTF8 == Data(source.utf8)
@@ -352,6 +355,7 @@ struct RenderedMarkdownPlan: Equatable, Sendable {
             && links == other.links
             && images == other.images
             && tables == other.tables
+            && blockSpacingBoundaries == other.blockSpacingBoundaries
     }
 
     func resolvingMermaid(
@@ -405,7 +409,8 @@ struct RenderedMarkdownPlan: Equatable, Sendable {
             mermaidDiagrams: resolution.diagrams.sorted {
                 rangeOrder($0.sourceRange.utf8Range, $1.sourceRange.utf8Range)
             },
-            renderRequests: renderRequests
+            renderRequests: renderRequests,
+            blockSpacingBoundaries: blockSpacingBoundaries
         )
     }
 

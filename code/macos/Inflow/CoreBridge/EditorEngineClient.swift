@@ -2029,7 +2029,13 @@ private struct EditorEngineDerivedState: Decodable {
                 visibleText: block.visibleText
             )
         }
-        let nativeRenderPlan = try nativeRender.validated(source: source)
+        var nativeRenderPlan = try nativeRender.validated(source: source)
+        // Reuse the canonical block tree rather than inferring boundaries from
+        // heading markers, inline styles or the separately mounted overlays.
+        guard let boundaries = MarkdownSyntaxRange.utf16Ranges(
+            for: blocks.filter { $0.parentID == nil }.map(\.sourceUTF8Range), in: source
+        ) else { throw EditorEngineBridgeError.invalidResponse }
+        nativeRenderPlan.blockSpacingBoundaries = boundaries
 
         return EditorEngineDerivedContent(
             revision: revision,

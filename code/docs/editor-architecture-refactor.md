@@ -212,3 +212,13 @@ flowchart TD
 修复前专项测试产生 6 个源码/选区断言失败。最终构建和 55 项原生编辑测试通过，扩充了 LF/CRLF、原有 0–3 个空行、标题行首/正文行首/标题前已有空行、回车后输入中文和表情、连续撤销及重做；额外检查输入后的可见空行数量，避免只验证按回车那一刻。实机确认 `前文\n\n## 标题` 在标题前回车并输入 `Before123` 后为 `前文\nBefore123\n\n## 标题`，预览中新文字前无额外空行；正文行首回车输入 `Body123` 只多一行，输入位置正确。最终应用已更新并核对动态库 SHA-256。
 
 日志：`/private/tmp/inflow-leading-return-before.log`、`/private/tmp/inflow-leading-return-build.log`、`/private/tmp/inflow-leading-return-tests.log`。用户产品文档的既有修改不纳入提交。
+
+### 将块间空行策略接入全部顶层语法（2026-09-24）
+
+本节替代前述“仅标题接入”的范围限制。Engine 派生结果已经包含解析器生成的完整块树，现在桥接层统一将顶层块范围转换为 TextKit 的 UTF-16 范围，并随原生渲染计划传递。删除标题标记与 Setext 的专用边界推断，段落、标题、列表、引用、代码块、表格等通过同一个 `RenderedMarkdownPlan.blockSpacing` 入口执行 `MarkdownBlockSpacingPlan`：0/1 个分隔空行不显示额外空行，n≥2 时显示 n−1 个，共享间隔只处理一次。
+
+列表、引用和代码使用完整容器边界，不将内部段落或列表项作为外部块；内部空行不折叠。计划新增 `separatorLines`，只读预览的普通间隔压缩也仅消费这些外部分隔行，避免压缩容器内部空行。结构输入事务复用同一计划的 `leadingBlankLines`，不再限定标题。焦点不改变折叠结果，源码模式和 Markdown 原文保持不变；图表异步解析替换计划时保留块边界。
+
+构建通过；56 项原生编辑测试与 25 项 Engine 测试，共 81 项全部通过。新增 282 组跨语法/LF/CRLF/1–3 空行的规范解析边界检查，覆盖松散列表、引用、围栏及缩进代码的内部空行保护；实际 TextKit 几何验证覆盖可编辑与只读的段落、列表、引用、代码、表格间隔。此前输入、撤销、焦点和源码模式测试继续通过。测试范围检查通过，清单为 446 个选择器，其中 321 个 current-direct。
+
+实机新建独立文稿验证混合段落、列表、引用、代码和表格；即时编辑及分栏预览均折叠单个块间空行，2/3 个空行分别保留 1/2 个，代码内部空行保留，源码栏完整保留原文。已更新本机应用并核对动态库 SHA-256 一致。日志：`/private/tmp/inflow-all-block-spacing-build.log`、`/private/tmp/inflow-all-block-spacing-tests.log`、`/private/tmp/inflow-all-block-spacing-scope.log`。用户产品文档的既有修改不纳入提交。

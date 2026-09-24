@@ -78,7 +78,7 @@ enum MarkdownEditingTransaction {
                 && selection.location < NSMaxRange($0.sourceRange.utf16Range)
         }
         if intent != .mergeBackward {
-            let spacing = MarkdownBlockSpacingPlan(source: source, blockRanges: renderPlan.headingSpacingBoundaries)
+            let spacing = renderPlan.blockSpacing
             // The visible beginning of an ATX heading follows its hidden marker.
             // Insert before the whole block, never between '#' and its content.
             if selection.length == 0,

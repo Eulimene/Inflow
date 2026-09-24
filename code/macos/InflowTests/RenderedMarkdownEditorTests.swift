@@ -741,13 +741,62 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             storage.attribute(.paragraphStyle, at: blankLineLocation, effectiveRange: nil)
                 as? NSParagraphStyle
         )
-        XCTAssertEqual(
-            blankStyle.minimumLineHeight,
-            CGFloat(session.sourceAppearance.fontSize * session.sourceAppearance.lineHeight),
-            accuracy: 0.001
-        )
-        XCTAssertEqual(blankStyle.maximumLineHeight, 0)
-        XCTAssertGreaterThan(try XCTUnwrap(storage.attribute(.font, at: blankLineLocation, effectiveRange: nil) as? NSFont).pointSize, 1)
+        XCTAssertLessThan(blankStyle.minimumLineHeight, 1, "Paragraph separators use the same n−1 policy as headings")
+        XCTAssertLessThan(blankStyle.maximumLineHeight, 1)
+    }
+
+    @MainActor
+    func testBlockSpacingUsesCanonicalBoundariesAcrossSyntax() async throws {
+        let blocks = ["普通正文", "## 标题", "- 第一项\n- 第二项", "1. 第一项\n2. 第二项",
+            "> 第一行\n> 第二行", "```text\n代码一\n\n代码二\n```", "| A | B |\n| --- | --- |\n| 1 | 2 |"]
+        for newline in ["\n", "\r\n"] {
+            for (leftIndex, left) in blocks.enumerated() {
+                for (rightIndex, right) in blocks.enumerated() {
+                    // Same-kind list items belong to one container, not two blocks.
+                    if leftIndex == rightIndex && [2, 3].contains(leftIndex) { continue }
+                    for count in 1...3 {
+                        let before = left.replacingOccurrences(of: "\n", with: newline)
+                        let after = right.replacingOccurrences(of: "\n", with: newline)
+                        let source = before + String(repeating: newline, count: count + 1) + after
+                        let plan = RenderedMarkdownEditor.plan(for: source)
+                        XCTAssertEqual(plan.blockSpacingBoundaries.count, 2, source)
+                        XCTAssertEqual(plan.blockSpacing.collapsedLines,
+                            [NSRange(location: before.utf16.count + newline.utf16.count, length: newline.utf16.count)], source)
+                    }
+                }
+            }
+        }
+        // The parser owns nesting: internal loose-list/quote/code blanks survive.
+        for source in ["- 第一项\n\n- 第二项", "> 引用\n>\n> 续段", "```text\n第一行\n\n第二行\n```", "    代码一\n\n    代码二"] {
+            let plan = RenderedMarkdownEditor.plan(for: source)
+            XCTAssertEqual(plan.blockSpacingBoundaries.count, 1, source)
+            XCTAssertTrue(plan.blockSpacing.collapsedLines.isEmpty, source)
+            XCTAssertTrue(plan.blockSpacing.separatorLines.isEmpty, "Internal blanks must not receive preview gap compaction")
+        }
+        for editable in [true, false] {
+            for (left, right) in [("前段", "后段"), ("- 项目", "后段"), ("> 引用", "后段"), ("```text\n代码\n```", "后段"), ("| A | B |\n| --- | --- |\n| 1 | 2 |", "后段")] {
+                var baseline: CGFloat?
+                for count in 1...3 {
+                    let source = left + String(repeating: "\n", count: count + 1) + right
+                    let editor = MarkdownSourceEditorSession()
+                    editor.scrollView.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+                    editor.textView.isEditable = editable
+                    editor.textView.string = source
+                    _ = await editor.deriveContent(for: source, configuration: .default)
+                    editor.setPresentation(.rendered, source: source, onLinkClick: nil)
+                    let manager = try XCTUnwrap(editor.textView.layoutManager)
+                    manager.ensureLayout(for: try XCTUnwrap(editor.textView.textContainer))
+                    let location = (source as NSString).range(of: right).location
+                    let y = manager.lineFragmentRect(forGlyphAt: manager.glyphIndexForCharacter(at: location), effectiveRange: nil).minY
+                    let lineHeight = editable ? editor.sourceAppearance.fontSize * editor.sourceAppearance.lineHeight
+                        : Double(MarkdownRenderMetrics.paragraphGap) * editor.sourceAppearance.fontSize / MarkdownRenderMetrics.bodyFontSize
+                    if let baseline {
+                        XCTAssertEqual(y, baseline + CGFloat(count - 1) * lineHeight, accuracy: 0.01, source)
+                    } else { baseline = y }
+                    XCTAssertEqual(editor.textView.string, source)
+                }
+            }
+        }
     }
 
     @MainActor
@@ -3250,8 +3299,8 @@ extension RenderedMarkdownEditorTests {
                     XCTAssertEqual(editor.textView.string, afterInput)
                     if heading {
                         let afterPlan = RenderedMarkdownEditor.plan(for: afterInput)
-                        let afterSpacing = MarkdownBlockSpacingPlan(source: afterInput, blockRanges: afterPlan.headingSpacingBoundaries)
-                        XCTAssertEqual(afterSpacing.blankLines.count - afterSpacing.collapsedLines.count, max(0, blanks - 1))
+                        let afterSpacing = MarkdownBlockSpacingPlan(source: afterInput, blockRanges: afterPlan.blockSpacingBoundaries)
+                        XCTAssertEqual(afterSpacing.blankLines.count - afterSpacing.collapsedLines.count, max(0, blanks - 2))
                     }
                     _ = await editor.authoritativeSnapshot()
                     editor.textView.undo(nil)
@@ -3281,11 +3330,11 @@ extension RenderedMarkdownEditorTests {
             let expected = (initial as NSString).substring(to: location) + "新行" + newline + newline + "## 标题"
             XCTAssertEqual(editor.textView.string, expected)
             let plan = RenderedMarkdownEditor.plan(for: expected)
-            let spacing = MarkdownBlockSpacingPlan(source: expected, blockRanges: plan.headingSpacingBoundaries)
+            let spacing = MarkdownBlockSpacingPlan(source: expected, blockRanges: plan.blockSpacingBoundaries)
             let visibleBlanks = spacing.blankLines.filter { !spacing.collapsedLines.contains($0) }
-            let originalSpacing = MarkdownBlockSpacingPlan(source: initial, blockRanges: RenderedMarkdownEditor.plan(for: initial).headingSpacingBoundaries)
-            XCTAssertEqual(visibleBlanks.count, originalSpacing.blankLines.count - originalSpacing.collapsedLines.count,
-                "Typing must not reveal an extra separator before the new paragraph")
+            let originalSpacing = MarkdownBlockSpacingPlan(source: initial, blockRanges: RenderedMarkdownEditor.plan(for: initial).blockSpacingBoundaries)
+            XCTAssertEqual(visibleBlanks.count, max(0, originalSpacing.blankLines.count - originalSpacing.collapsedLines.count - 1),
+                "Both newly separated block boundaries obey the same n−1 rule")
         }
         let nested = "- parent\n  continuation\n  - child\n- sibling"
         let indented = try XCTUnwrap(MarkdownEditingTransaction.indentList(source: nested,
