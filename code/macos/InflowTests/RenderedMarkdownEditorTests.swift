@@ -716,6 +716,103 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                 }
             }
         }
+        let source = "第一段\n\n第二段"
+        let session = MarkdownSourceEditorSession()
+        session.textView.string = source
+        _ = await session.deriveContent(for: source, configuration: .default)
+        session.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let storage = try XCTUnwrap(session.textView.textStorage)
+
+        for text in ["第一段", "第二段"] {
+            let location = (source as NSString).range(of: text).location
+            let style = try XCTUnwrap(
+                storage.attribute(
+                    .paragraphStyle,
+                    at: location,
+                    effectiveRange: nil
+                ) as? NSParagraphStyle
+            )
+            XCTAssertEqual(style.paragraphSpacing, 0, accuracy: 0.001)
+        }
+        let defaultStyle = try XCTUnwrap(session.textView.defaultParagraphStyle)
+        XCTAssertEqual(defaultStyle.paragraphSpacing, 0, accuracy: 0.001)
+        let blankLineLocation = (source as NSString).range(of: "\n\n").location + 1
+        let blankStyle = try XCTUnwrap(
+            storage.attribute(.paragraphStyle, at: blankLineLocation, effectiveRange: nil)
+                as? NSParagraphStyle
+        )
+        XCTAssertEqual(
+            blankStyle.minimumLineHeight,
+            CGFloat(session.sourceAppearance.fontSize * session.sourceAppearance.lineHeight),
+            accuracy: 0.001
+        )
+        XCTAssertEqual(blankStyle.maximumLineHeight, 0)
+        XCTAssertGreaterThan(try XCTUnwrap(storage.attribute(.font, at: blankLineLocation, effectiveRange: nil) as? NSFont).pointSize, 1)
+    }
+
+    @MainActor
+    func testBlockSpacingPolicyCanBeReusedWithoutChangingBlockContents() throws {
+        // These are parsed block boundaries, not syntax-specific spacing rules.
+        for block in ["## 标题", "| A | B |\n|---|---|\n| 1 | 2 |", "> 引用\n>\n> 续段", "```text\n第一行\n\n第二行\n```"] {
+            for newline in ["\n", "\r\n"] {
+                for count in 0...4 {
+                    let normalized = block.replacingOccurrences(of: "\n", with: newline)
+                    let gap = String(repeating: newline, count: count)
+                    let source = "正文" + newline + gap + normalized + newline + gap + "尾文"
+                    let boundary = (source as NSString).range(of: normalized)
+                    let spacing = MarkdownBlockSpacingPlan(source: source, blockRanges: [boundary, boundary])
+                    XCTAssertEqual(spacing.collapsedLines.count, count == 0 ? 0 : 2)
+                    for collapsed in spacing.collapsedLines {
+                        XCTAssertEqual(NSIntersectionRange(boundary, collapsed).length, 0, "Never collapse a block's internal blanks")
+                    }
+                }
+            }
+        }
+        let shared = "# A\n\n\n# B"
+        let spacing = MarkdownBlockSpacingPlan(source: shared, blockRanges: [NSRange(location: 0, length: 3), NSRange(location: 6, length: 3)])
+        XCTAssertEqual(spacing.blankLines.count, 2)
+        XCTAssertEqual(spacing.collapsedLines, [NSRange(location: 4, length: 1)])
+        for meaningfulWhitespace in ["\u{00A0}", "\u{3000}"] {
+            let source = "# A\n" + meaningfulWhitespace + "\n正文"
+            XCTAssertTrue(MarkdownBlockSpacingPlan(source: source, blockRanges: [NSRange(location: 0, length: 3)]).collapsedLines.isEmpty)
+        }
+    }
+
+    @MainActor
+    func testSourceModePreservesBlankLineLayoutAfterRenderedMode() async throws {
+        for newline in ["\n", "\r\n"] {
+            for count in 1...4 {
+                let gap = String(repeating: newline, count: count)
+                let source = "正文" + newline + gap + "## 标题" + newline + gap + "尾文"
+                let editor = MarkdownSourceEditorSession()
+                editor.scrollView.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+                editor.textView.string = source
+                editor.setPresentation(.source, source: source, onLinkClick: nil)
+                let manager = try XCTUnwrap(editor.textView.layoutManager)
+                let container = try XCTUnwrap(editor.textView.textContainer)
+                func lastLineY() -> CGFloat {
+                    manager.ensureLayout(for: container)
+                    return manager.lineFragmentRect(forGlyphAt: manager.glyphIndexForCharacter(at: source.utf16.count - 1), effectiveRange: nil).minY
+                }
+                let sourceY = lastLineY()
+                _ = await editor.deriveContent(for: source, configuration: .default)
+                editor.setPresentation(.rendered, source: source, onLinkClick: nil)
+                editor.setPresentation(.source, source: source, onLinkClick: nil)
+                XCTAssertEqual(editor.textView.string, source)
+                XCTAssertEqual(lastLineY(), sourceY, accuracy: 0.01)
+                let blanks = MarkdownBlockSpacingPlan(source: source, blockRanges: []).blankLines
+                XCTAssertEqual(blanks.count, count * 2)
+                for blank in blanks {
+                    let attributes = try XCTUnwrap(editor.textView.textStorage).attributes(at: blank.location, effectiveRange: nil)
+                    XCTAssertGreaterThan((attributes[.font] as? NSFont)?.pointSize ?? 0, 10)
+                    XCTAssertGreaterThan((attributes[.paragraphStyle] as? NSParagraphStyle)?.minimumLineHeight ?? 0, 10)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func testHeadingSpacingDoesNotDependOnSelection() async throws {
         for (editableSource, blankLocation, insertedSource) in [
             ("# 标题\n\n正文", 5, "# 标题\n插入\n正文"),
             ("正文\n\n# 标题", 3, "正文\n插入\n# 标题"),
@@ -744,8 +841,10 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             XCTAssertLessThan(blankHeight(), 1, "Selecting across a separator must not expand it")
             focused.textView.setSelectedRange(blank)
             focused.updateSelectedRange(blank)
-            for _ in 0..<100 where blankHeight() < 1 { await Task.yield() }
-            XCTAssertGreaterThan(blankHeight(), 10, "An active source blank must offer normal caret space")
+            for _ in 0..<100 { await Task.yield() }
+            XCTAssertLessThan(blankHeight(), 1, "A lone blank stays collapsed even when focused")
+            let caretFont = try XCTUnwrap(focused.textView.typingAttributes[.font] as? NSFont)
+            XCTAssertGreaterThan(caretFont.pointSize, 10, "Display collapse must not shrink the typing font")
             focused.textView.insertText("插入", replacementRange: blank)
             XCTAssertEqual(focused.textView.string, insertedSource)
             _ = await focused.authoritativeSnapshot()
@@ -788,43 +887,15 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                 XCTAssertEqual(lastLineY(), baseline, accuracy: 0.01, "Focus must preserve n−1 blank lines: \(sample)")
                 if location < sample.utf16.count {
                     let style = editor.textView.textStorage?.attribute(.paragraphStyle, at: location, effectiveRange: nil) as? NSParagraphStyle
-                    XCTAssertGreaterThan(style?.minimumLineHeight ?? 0, 10, "The active blank needs a normal caret line")
+                    if location == firstBlank {
+                        XCTAssertLessThan(style?.minimumLineHeight ?? 1, 1, "Focus must not move the collapsed separator")
+                    } else {
+                        XCTAssertGreaterThan(style?.minimumLineHeight ?? 0, 10, "Remaining blank lines retain their height")
+                    }
                 }
             }
         }
 
-        let source = "第一段\n\n第二段"
-        let session = MarkdownSourceEditorSession()
-        session.textView.string = source
-        _ = await session.deriveContent(for: source, configuration: .default)
-        session.setPresentation(.rendered, source: source, onLinkClick: nil)
-        let storage = try XCTUnwrap(session.textView.textStorage)
-
-        for text in ["第一段", "第二段"] {
-            let location = (source as NSString).range(of: text).location
-            let style = try XCTUnwrap(
-                storage.attribute(
-                    .paragraphStyle,
-                    at: location,
-                    effectiveRange: nil
-                ) as? NSParagraphStyle
-            )
-            XCTAssertEqual(style.paragraphSpacing, 0, accuracy: 0.001)
-        }
-        let defaultStyle = try XCTUnwrap(session.textView.defaultParagraphStyle)
-        XCTAssertEqual(defaultStyle.paragraphSpacing, 0, accuracy: 0.001)
-        let blankLineLocation = (source as NSString).range(of: "\n\n").location + 1
-        let blankStyle = try XCTUnwrap(
-            storage.attribute(.paragraphStyle, at: blankLineLocation, effectiveRange: nil)
-                as? NSParagraphStyle
-        )
-        XCTAssertEqual(
-            blankStyle.minimumLineHeight,
-            CGFloat(session.sourceAppearance.fontSize * session.sourceAppearance.lineHeight),
-            accuracy: 0.001
-        )
-        XCTAssertEqual(blankStyle.maximumLineHeight, 0)
-        XCTAssertGreaterThan(try XCTUnwrap(storage.attribute(.font, at: blankLineLocation, effectiveRange: nil) as? NSFont).pointSize, 1)
     }
 
     @MainActor

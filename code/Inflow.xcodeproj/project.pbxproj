@@ -96,6 +96,7 @@
 		B10000000000000000000056 /* MarkdownTableToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000056 /* MarkdownTableToolbar.swift */; };
 		B10000000000000000000027 /* MarkdownTypingStyleProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000027 /* MarkdownTypingStyleProjection.swift */; };
 		B10000000000000000000028 /* MarkdownNativeStyleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000028 /* MarkdownNativeStyleSheet.swift */; };
+		86BD0B38137448F78DBA0DFC /* MarkdownBlockSpacingPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98AE260274C7498AB145B240 /* MarkdownBlockSpacingPlan.swift */; };
 		B10000000000000000000029 /* MarkdownLayoutPlanCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000029 /* MarkdownLayoutPlanCache.swift */; };
 /* End PBXBuildFile section */
 
@@ -206,6 +207,7 @@
 		B20000000000000000000056 /* MarkdownTableToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownTableToolbar.swift; sourceTree = "<group>"; };
 		B20000000000000000000027 /* MarkdownTypingStyleProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownTypingStyleProjection.swift; sourceTree = "<group>"; };
 		B20000000000000000000028 /* MarkdownNativeStyleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownNativeStyleSheet.swift; sourceTree = "<group>"; };
+		98AE260274C7498AB145B240 /* MarkdownBlockSpacingPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownBlockSpacingPlan.swift; sourceTree = "<group>"; };
 		B20000000000000000000029 /* MarkdownLayoutPlanCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownLayoutPlanCache.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -249,6 +251,7 @@
 				B2000000000000000000000E /* MarkdownTableMathPreview.swift */,
 				B20000000000000000000029 /* MarkdownLayoutPlanCache.swift */,
 				B20000000000000000000028 /* MarkdownNativeStyleSheet.swift */,
+				98AE260274C7498AB145B240 /* MarkdownBlockSpacingPlan.swift */,
 				B20000000000000000000027 /* MarkdownTypingStyleProjection.swift */,
 				B20000000000000000000026 /* RenderedMarkdownTableView.swift */,
 				B20000000000000000000056 /* MarkdownTableToolbar.swift */,
@@ -557,6 +560,7 @@
 				B1000000000000000000000E /* MarkdownTableMathPreview.swift in Sources */,
 				B10000000000000000000029 /* MarkdownLayoutPlanCache.swift in Sources */,
 				B10000000000000000000028 /* MarkdownNativeStyleSheet.swift in Sources */,
+				86BD0B38137448F78DBA0DFC /* MarkdownBlockSpacingPlan.swift in Sources */,
 				B10000000000000000000027 /* MarkdownTypingStyleProjection.swift in Sources */,
 				B10000000000000000000026 /* RenderedMarkdownTableView.swift in Sources */,
 				B10000000000000000000056 /* MarkdownTableToolbar.swift in Sources */,
