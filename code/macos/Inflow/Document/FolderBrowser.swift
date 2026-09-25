@@ -1933,7 +1933,9 @@ private struct FolderProjectTreeRows: View {
         .contentShape(Rectangle())
         .onTapGesture {
             selectedItemID = item.id
-            if item.isMarkdown {
+            if item.isDirectory {
+                expansionBinding(for: item.id).wrappedValue.toggle()
+            } else if item.isMarkdown {
                 onActivate(item)
             }
         }
