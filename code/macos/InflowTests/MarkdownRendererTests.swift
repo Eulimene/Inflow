@@ -271,8 +271,11 @@ final class MarkdownRendererTests: XCTestCase {
             for: "`草稿`\n\n> 注意\n\n[链接](https://example.com)\n\n| 标题 |\n| --- |\n| 内容 |"
         )
 
-        XCTAssertTrue(html.contains(MarkdownRenderPalette.light.cssVariables))
-        XCTAssertTrue(html.contains(MarkdownRenderPalette.dark.cssVariables))
+        for palette in [MarkdownRenderPalette.light, .dark] {
+            for declaration in palette.cssVariables.split(separator: ";") {
+                XCTAssertTrue(html.contains(declaration.trimmingCharacters(in: .whitespacesAndNewlines)))
+            }
+        }
         XCTAssertTrue(html.contains(
             "font: \(MarkdownRenderMetrics.bodyFontSize)px/\(MarkdownRenderMetrics.bodyLineHeight)"
         ))

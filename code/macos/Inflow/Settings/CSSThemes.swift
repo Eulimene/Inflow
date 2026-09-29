@@ -1,5 +1,16 @@
 import AppKit
 import Foundation
+import CryptoKit
+
+/// All authored style values live beside the theme CSS resources. Swift only adapts them.
+enum ThemeStyleResources {
+    static func css(_ name: String) -> String {
+        (try? String(contentsOf: ThemeCatalog.bundledDirectory.appendingPathComponent("Base/" + name + ".css"), encoding: .utf8)) ?? ""
+    }
+    static func styles(_ name: String) -> NativeCSSStyles { NativeCSSStyles(css: css(name)) }
+    static let defaults = styles("default")
+    static let defaultCSS = css("default")
+}
 
 /// Immutable CSS snapshot: changing a file never changes an export already in flight.
 struct PreviewTheme: RawRepresentable, Hashable, Identifiable, Sendable, CaseIterable {
@@ -21,7 +32,7 @@ struct PreviewTheme: RawRepresentable, Hashable, Identifiable, Sendable, CaseIte
         rawValue = id
         self.label = label
         self.css = css
-        styles = NativeCSSStyles(css: css)
+        styles = NativeCSSStyles(css: ThemeStyleResources.defaultCSS + "\n" + css)
     }
 
     init?(rawValue: String) {
@@ -41,7 +52,7 @@ struct PreviewTheme: RawRepresentable, Hashable, Identifiable, Sendable, CaseIte
     static var standard: Self { allCases[0] }
     static var longform: Self { allCases[3] }
     // Retain old saved selections without adding legacy choices to the new menu.
-    static let code = Self(id: "code", label: "代码优先（旧版）", css: "body { font-family: ui-monospace, Menlo, monospace; line-height: 1.58; }")
+    static let code = Self(id: "code", label: "代码优先（旧版）", css: ThemeStyleResources.css("legacy-code"))
     static let highContrast = Self(id: "highContrast", label: "高对比度（旧版）", css: "")
     static func displayName(_ id: String) -> String { id.replacingOccurrences(of: "-", with: " ").replacingOccurrences(of: "_", with: " ").capitalized }
     var safeStyleContent: String { css.replacingOccurrences(of: "<", with: "\\3C ") }
@@ -64,15 +75,41 @@ struct ThemeCatalog {
         return bundle.url(forResource: "Themes", withExtension: nil) ?? bundle.bundleURL.appendingPathComponent("Themes")
     }()
 
+    // Fingerprints of the first shipped CSS files, before install manifests existed.
+    private static let legacyBuiltinHashes: [String: String] = [
+        "github": "47140fe0d826b6b2345c5356abb68296494c473be98ed1d21f33a1190809e123",
+        "gothic": "6907fc471c3f8e650432c62b665a32aea5075929a2ae0f7e286548304c19d9b3",
+        "newsprint": "72433f8d1860486685f4d6a2e39901775d7d2c9e43e39bbffc34b8330f2cd584",
+        "night": "cccd00ee1e34332050b8d5f0c7200538bb86322c3f4fc9746b29f8e6200838c1",
+        "pixyll": "d7307318c0842e29239fd1f047179b064034e70b4d7213b5e71b0b8155ce0eef",
+        "whitey": "c8408c39172635cfc7a9395a79e9b771852af8b83f4825ab1adb42db510d7350",
+    ]
+    static func fingerprint(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
     let directory: URL
     func load() throws -> (themes: [PreviewTheme], issues: [String]) {
         let fm = FileManager.default
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        let manifestURL = directory.appendingPathComponent(".builtin-versions.json")
+        let installed = (try? JSONDecoder().decode([String: String].self, from: Data(contentsOf: manifestURL))) ?? [:]
+        var versions = installed
         for theme in PreviewTheme.allCases {
             let file = directory.appendingPathComponent(theme.rawValue + ".css")
-            if !fm.fileExists(atPath: file.path) {
-                try fm.copyItem(at: Self.bundledDirectory.appendingPathComponent(theme.rawValue + ".css"), to: file)
+            let bundled = Data(theme.css.utf8)
+            let current = try? Data(contentsOf: file)
+            let hash = current.map(Self.fingerprint)
+            let isUnmodified = hash != nil && (hash == installed[theme.id] || hash == Self.legacyBuiltinHashes[theme.id])
+            if !fm.fileExists(atPath: file.path) || isUnmodified {
+                if current != bundled { try bundled.write(to: file, options: .atomic) }
+                versions[theme.id] = Self.fingerprint(bundled)
+            } else if current == bundled {
+                versions[theme.id] = Self.fingerprint(bundled)
             }
+        }
+        if versions != installed {
+            try JSONEncoder().encode(versions).write(to: manifestURL, options: .atomic)
         }
         let guide = directory.appendingPathComponent("README.md")
         if !fm.fileExists(atPath: guide.path) {
@@ -131,7 +168,7 @@ struct NativeCSSStyles: Hashable, Sendable {
         var escaped = false
         var valid = true
         var unsupported = false
-        let supported = Set([":root", "html", "body", "#write", "p", "h1", "h2", "h3", "h4", "h5", "h6", "a", "blockquote", "pre", "code", "table", "th", "td", "tr:nth-child(even)", "tr:nth-child(2n)", "strong", "em", "li", "ul", "ol", "hr"])
+        let supported = Set([":root", "html", "body", "#write", "p", "h1", "h2", "h3", "h4", "h5", "h6", "a", "blockquote", "pre", "code", "table", "th", "td", "tr:nth-child(even)", "tr:nth-child(2n)", "strong", "em", "li", "ul", "ol", "hr", "math"])
         for c in clean {
             if escaped { if depth > 0 { body.append(c) } else { header.append(c) }; escaped = false; continue }
             if c == "\\" { if depth > 0 { body.append(c) } else { header.append(c) }; escaped = true; continue }
@@ -153,7 +190,8 @@ struct NativeCSSStyles: Hashable, Sendable {
                             guard supported.contains(element) else { unsupported = true; continue }
                             for declaration in body.split(separator: ";") {
                                 guard let colon = declaration.firstIndex(of: ":") else { continue }
-                                let property = declaration[..<colon].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                                let name = declaration[..<colon].trimmingCharacters(in: .whitespacesAndNewlines)
+                                let property = name.hasPrefix("--") ? name : name.lowercased()
                                 let value = declaration[declaration.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
                                 let important = value.range(of: #"\s*!important\s*$"#, options: [.regularExpression, .caseInsensitive])
                                 let stripped = important.map { String(value[..<$0.lowerBound]) } ?? value
@@ -168,8 +206,15 @@ struct NativeCSSStyles: Hashable, Sendable {
                                         }
                                     }
                                 }
-                                if ["border", "border-left"].contains(property), let color = stripped.split(separator: " ").last {
-                                    result.append(Rule(selector: selector, property: property + "-color", value: String(color), priority: priority))
+                                if ["border", "border-left", "border-bottom", "border-top"].contains(property) {
+                                    let parts = stripped.split(separator: " ").map(String.init)
+                                    if let first = parts.first {
+                                        let width = ["none", "hidden"].contains(first) ? "0" : first
+                                        result.append(Rule(selector: selector, property: property + "-width", value: width, priority: priority))
+                                    }
+                                    if let color = parts.last {
+                                        result.append(Rule(selector: selector, property: property + "-color", value: color, priority: priority))
+                                    }
                                 }
                             }
                         }
@@ -225,14 +270,36 @@ struct NativeCSSStyles: Hashable, Sendable {
     @MainActor
     func font(on element: String = "body", size: CGFloat, fallback: NSFont) -> NSFont {
         guard let family = value("font-family", on: element) else { return fallback }
-        for entry in family.split(separator: ",") {
+        let fonts: [NSFont] = family.split(separator: ",").compactMap { entry in
             let name = entry.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"'")))
             if ["monospace", "ui-monospace"].contains(name) { return NSFont.monospacedSystemFont(ofSize: size, weight: .regular) }
-            if ["serif", "ui-serif"].contains(name), let descriptor = fallback.fontDescriptor.withDesign(.serif) { return NSFont(descriptor: descriptor, size: size) ?? fallback }
+            if ["serif", "ui-serif"].contains(name), let descriptor = fallback.fontDescriptor.withDesign(.serif) { return NSFont(descriptor: descriptor, size: size) }
             if ["sans-serif", "system-ui", "-apple-system"].contains(name) { return NSFont.systemFont(ofSize: size) }
-            if let font = NSFont(name: name, size: size) { return font }
+            return NSFont(name: name, size: size)
         }
-        return fallback
+        guard let first = fonts.first else { return fallback }
+        // Preserve the CSS fallback chain for Chinese glyphs as well as Latin text.
+        let descriptor = first.fontDescriptor.addingAttributes([.cascadeList: fonts.dropFirst().map(\.fontDescriptor)])
+        return NSFont(descriptor: descriptor, size: size) ?? first
+    }
+
+    @MainActor
+    static func font(_ font: NSFont, bold: Bool) -> NSFont {
+        let manager = NSFontManager.shared
+        let converted = bold ? manager.convert(font, toHaveTrait: .boldFontMask) : manager.convert(font, toNotHaveTrait: .boldFontMask)
+        guard let cascade = font.fontDescriptor.object(forKey: .cascadeList) as? [NSFontDescriptor] else { return converted }
+        let fallback = cascade.compactMap { descriptor -> NSFontDescriptor? in
+            guard let member = NSFont(descriptor: descriptor, size: font.pointSize) else { return nil }
+            return (bold ? manager.convert(member, toHaveTrait: .boldFontMask) : manager.convert(member, toNotHaveTrait: .boldFontMask)).fontDescriptor
+        }
+        return NSFont(descriptor: converted.fontDescriptor.addingAttributes([.cascadeList: fallback]), size: font.pointSize) ?? converted
+    }
+
+    func metric(_ name: String) -> CGFloat { length("--inflow-" + name) ?? 0 }
+    func token(_ name: String) -> CGFloat { length("--md-" + name) ?? 0 }
+
+    func headingDividerWidth(level: Int) -> CGFloat {
+        max(0, min(8, length("--md-divider-height", on: "h\(level)") ?? length("border-bottom-width", on: "h\(level)") ?? 0))
     }
 
     static func colorHex(_ value: String?) -> String? {

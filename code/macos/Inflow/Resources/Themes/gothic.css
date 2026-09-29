@@ -1,31 +1,37 @@
-/* Inflow Gothic — original CSS, inspired by the named Typora theme style. */
+/* Inflow native adaptation. Reference: https://github.com/typora/typora-default-themes/blob/master/themes/gothic.css
+   Uses installed font fallbacks; keeps the user's reading-width preference. */
 :root {
-  --bg-color: #ffffff;
-  --text-color: #343434;
-  --primary-color: #2b7a78;
-  --md-heading: #111111;
-  --md-secondary: #777777;
-  --md-border: #d7dcdb;
-  --md-quote-bar: #d7dcdb;
-  --md-surface: #f2f5f4;
-  --md-surface-strong: #e9efed;
-  --md-table-stripe: #f2f5f4;
-  --md-inline-code: #e9efed;
+  --bg-color: #fcfcfc; --text-color: #111111; --primary-color: #990000;
+  --md-heading: #111111; --md-secondary: #6f6f6f; --md-border: #dddddd;
+  --md-quote-bar: #dddddd; --md-surface: #fcfcfc; --md-surface-strong: #fcfcfc;
+  --md-table-stripe: #fcfcfc; --md-inline-code: #f5f5f5;
 }
 body {
-  background-color: var(--bg-color);
-  color: var(--text-color);
-  font-family: "Avenir Next", "Helvetica Neue", "PingFang SC", sans-serif;
-  line-height: 1.65;
+  background-color: var(--bg-color); color: var(--text-color);
+  font-family: "Century Gothic", "Avenir Next", "PingFang SC", sans-serif; font-size: 16px; line-height: 1.75;
   color-scheme: light;
 }
-h1, h2, h3, h4, h5, h6 { color: var(--md-heading); }
 a { color: var(--primary-color); }
-blockquote { color: var(--md-secondary); border-left-color: var(--md-quote-bar); }
-pre { background-color: var(--md-surface); border-color: var(--md-border); }
-code { background-color: var(--md-inline-code); }
-th, td { border-color: var(--md-border); }
-th { background-color: var(--md-surface); }
+blockquote { color: var(--md-secondary); }
+pre { background-color: var(--md-surface); font-family: Menlo, monospace; }
+code { background-color: var(--md-inline-code); font-family: Menlo, monospace; font-size: .9em; }
+th { background-color: var(--md-surface-strong); }
+td { border-color: var(--md-border); }
 tr:nth-child(even) { background-color: var(--md-table-stripe); }
-h1 { font-size: 2.1em; letter-spacing: 0.03em; }
-h2 { letter-spacing: 0.02em; }
+li { margin-bottom: .3125rem; }
+h1 { font-size: 2.827em; }
+h2 { font-size: 1.999em; }
+h3 { font-size: 1.413em; }
+h4 { font-size: 1.25em; }
+h5 { font-size: 1.125em; }
+h6 { font-size: 1em; }
+h1, h2, h3, h4, h5, h6 { border-bottom: 0 solid transparent; font-weight: 400; line-height: 1.5; margin: 1.6rem 0 1rem; }
+h1, h2 { text-align: center; letter-spacing: .05em; }
+h1 { margin-bottom: 1.75rem; }
+h2 { margin-bottom: 1.5rem; }
+h6 { font-weight: 700; }
+p { text-align: justify; margin: 0 0 1.25rem; }
+blockquote { border-left: 1px solid #808080; padding-left: 1.05556em; }
+pre { border: 1px solid #cccccc; border-radius: 0; }
+table { --md-table-grid: rows; border: 0; border-radius: 0; }
+th, td { border: 0; border-top: 1px solid #dddddd; }

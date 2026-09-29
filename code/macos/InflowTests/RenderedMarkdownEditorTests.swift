@@ -802,7 +802,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                     effectiveRange: nil
                 ) as? NSParagraphStyle
             )
-            XCTAssertEqual(style.paragraphSpacing, 0, accuracy: 0.001)
+            XCTAssertEqual(style.paragraphSpacing, try XCTUnwrap(session.textView.renderedTheme.styles.length("margin-bottom", on: "p", relativeTo: CGFloat(session.sourceAppearance.fontSize))), accuracy: 0.001)
             XCTAssertEqual(style.paragraphSpacingBefore, text == "第一段" ? 0 : MarkdownRenderMetrics.paragraphGap
                 * CGFloat(session.sourceAppearance.fontSize / MarkdownRenderMetrics.bodyFontSize), accuracy: 0.001)
         }
@@ -1910,7 +1910,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             while location < storage.length {
                 let line = (source as NSString).lineRange(for: NSRange(location: location, length: 0))
                 let paragraph = try XCTUnwrap(storage.attribute(.paragraphStyle, at: location, effectiveRange: nil) as? NSParagraphStyle)
-                XCTAssertEqual(paragraph.headIndent, 16, source)
+                XCTAssertEqual(paragraph.headIndent, session.textView.renderedTheme.styles.length("padding-left", on: "blockquote", relativeTo: CGFloat(session.sourceAppearance.fontSize)), source)
                 XCTAssertGreaterThan(paragraph.minimumLineHeight, 20, source)
                 location = NSMaxRange(line)
             }
@@ -2023,7 +2023,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         let paragraph = try XCTUnwrap(
             storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
         )
-        XCTAssertEqual(paragraph.headIndent, 16, accuracy: 0.001)
+        XCTAssertEqual(paragraph.headIndent, try XCTUnwrap(session.textView.renderedTheme.styles.length("padding-left", on: "blockquote", relativeTo: CGFloat(session.sourceAppearance.fontSize))), accuracy: 0.001)
         XCTAssertEqual(paragraph.paragraphSpacingBefore, 0, accuracy: 0.001)
         XCTAssertEqual(paragraph.paragraphSpacing, 0, accuracy: 0.001)
         XCTAssertTrue(session.textView.isRenderedCharacterSuppressed(at: 0))
@@ -2866,7 +2866,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertTrue(NSFontManager.shared.traits(of: boldFont).contains(.boldFontMask))
         XCTAssertEqual(
             codeFont.pointSize,
-            headingPointSize * CGFloat(MarkdownRenderMetrics.inlineCodeScale),
+            try XCTUnwrap(session.textView.renderedTheme.styles.length("font-size", on: "code", relativeTo: headingPointSize)),
             accuracy: 0.001
         )
         XCTAssertTrue(codeFont.fontDescriptor.symbolicTraits.contains(.monoSpace))

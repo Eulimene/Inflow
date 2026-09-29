@@ -420,6 +420,7 @@ final class WindowAwareTextView: NSTextView {
                 || existing.tableView.hasSameLiveRenderedContent(as: table)
                 || existing.tableView.appendRowsIfPossible(table, onEdit: onEdit)
             {
+                existing.tableView.applyTheme(renderedTheme)
                 existing.tableView.applyPalette(
                     MarkdownRenderPalette.resolved(for: effectiveAppearance, theme: renderedTheme)
                 )
@@ -438,6 +439,7 @@ final class WindowAwareTextView: NSTextView {
                 && state.tableView.linkActivation == linkActivation
         }) {
             renderedTableViews.removeValue(forKey: reusable.key)
+            reusable.value.tableView.applyTheme(renderedTheme)
             reusable.value.tableView.applyPalette(
                 MarkdownRenderPalette.resolved(for: effectiveAppearance, theme: renderedTheme)
             )
@@ -462,6 +464,7 @@ final class WindowAwareTextView: NSTextView {
             onLinkClick: onLinkClick,
             onEdit: onEdit
         )
+        tableView.applyTheme(renderedTheme)
         tableView.setEditingEnabled(isEditable)
         addSubview(tableView)
         renderedTableViews[key] = RenderedTableViewState(
@@ -752,13 +755,15 @@ final class WindowAwareTextView: NSTextView {
                     lineFragment: lineRect,
                     textContainerOrigin: self.textContainerOrigin,
                     font: font,
-                    baselineOffset: layoutManager.location(forGlyphAt: segment.location).y
+                    baselineOffset: layoutManager.location(forGlyphAt: segment.location).y,
+                    horizontalPadding: self.renderedTheme.styles.length("padding-left", on: "code") ?? 0,
+                    verticalPadding: self.renderedTheme.styles.length("padding-top", on: "code") ?? 0
                 )
                 guard background.intersects(rect) else { return }
                 NSBezierPath(
                     roundedRect: background,
-                    xRadius: MarkdownRenderMetrics.inlineCodeCornerRadius,
-                    yRadius: MarkdownRenderMetrics.inlineCodeCornerRadius
+                    xRadius: max(0, self.renderedTheme.styles.length("border-radius", on: "code") ?? 0),
+                    yRadius: max(0, self.renderedTheme.styles.length("border-radius", on: "code") ?? 0)
                 ).fill()
             }
         }
@@ -783,21 +788,26 @@ final class WindowAwareTextView: NSTextView {
                 ),
                 height: backgroundRect.height
             )
-            backgroundRect = backgroundRect.insetBy(dx: 0, dy: -4)
+            backgroundRect = backgroundRect.insetBy(dx: 0, dy: -renderedTheme.styles.token("code-block-outset"))
             guard backgroundRect.intersects(rect) else { continue }
             palette.subtleSurfaceColor.setFill()
-            palette.borderColor.setStroke()
-            let path = NSBezierPath(
-                roundedRect: backgroundRect,
-                xRadius: MarkdownRenderMetrics.blockCornerRadius,
-                yRadius: MarkdownRenderMetrics.blockCornerRadius
-            )
+            let css = renderedTheme.styles
+            (css.value("border-color", on: "pre").flatMap(NativeCSSStyles.color) ?? palette.borderColor).setStroke()
+            let radius = max(0, min(24, css.length("border-radius", on: "pre") ?? MarkdownRenderMetrics.blockCornerRadius))
+            let path = NSBezierPath(roundedRect: backgroundRect, xRadius: radius, yRadius: radius)
             path.fill()
-            path.lineWidth = 1
-            path.stroke()
+            path.lineWidth = max(0, min(8, css.length("border-width", on: "pre") ?? 1))
+            if path.lineWidth > 0 { path.stroke() }
         }
-        palette.borderColor.withAlphaComponent(0.72).setFill()
         for characterRange in renderedHeadingDividerRanges where characterRange.length > 0 {
+            guard let heading = writingPlan?.contentStyles.first(where: { style in
+                if case .heading = style.kind { return NSIntersectionRange(style.sourceRange.utf16Range, characterRange).length > 0 }
+                return false
+            }), case .heading(let level) = heading.kind else { continue }
+            let css = renderedTheme.styles
+            let thickness = css.headingDividerWidth(level: level)
+            guard thickness > 0 else { continue }
+            ((css.value("--md-divider-color", on: "h\(level)") ?? css.value("border-bottom-color", on: "h\(level)")).flatMap(NativeCSSStyles.color) ?? palette.borderColor).setFill()
             let glyphRange = layoutManager.glyphRange(
                 forCharacterRange: characterRange,
                 actualCharacterRange: nil
@@ -812,15 +822,11 @@ final class WindowAwareTextView: NSTextView {
                 effectiveRange: nil,
                 withoutAdditionalLayout: true
             )
-            let startX = textContainerOrigin.x + lineRect.minX
-            let endX = textContainerOrigin.x + textContainer.size.width
-                - textContainer.lineFragmentPadding
-            let divider = NSRect(
-                x: startX,
-                y: textContainerOrigin.y + lineRect.maxY - 1,
-                width: max(1, endX - startX),
-                height: 1
-            )
+            let startX = textContainerOrigin.x + textContainer.lineFragmentPadding
+            let availableWidth = max(1, textContainer.size.width - textContainer.lineFragmentPadding * 2)
+            let width = min(availableWidth, max(1, css.length("--md-divider-width", on: "h\(level)") ?? availableWidth))
+            let divider = NSRect(x: startX + (availableWidth - width) / 2,
+                y: textContainerOrigin.y + lineRect.maxY - thickness, width: width, height: thickness)
             if divider.intersects(rect) { divider.fill() }
         }
         palette.quoteBarColor.setFill()
@@ -857,11 +863,16 @@ final class WindowAwareTextView: NSTextView {
                 )
                 blockBar = blockBar.union(bar)
             }
-            if !blockBar.isNull, blockBar.intersects(rect) {
+            if !blockBar.isNull {
+                blockBar.origin.x += max(0, min(120, renderedTheme.styles.length("margin-left", on: "blockquote",
+                    relativeTo: renderedReplacementBaseFont.pointSize) ?? 0))
+                blockBar.size.width = max(0, min(12, renderedTheme.styles.length("border-left-width", on: "blockquote") ?? blockBar.width))
+            }
+            if !blockBar.isNull, blockBar.width > 0, blockBar.intersects(rect) {
                 NSBezierPath(
                     roundedRect: blockBar,
-                    xRadius: 1.5,
-                    yRadius: 1.5
+                    xRadius: renderedTheme.styles.token("quote-radius"),
+                    yRadius: renderedTheme.styles.token("quote-radius")
                 ).fill()
             }
         }
@@ -882,7 +893,8 @@ final class WindowAwareTextView: NSTextView {
             let endX = textContainerOrigin.x + textContainer.size.width
                 - textContainer.lineFragmentPadding
             let path = NSBezierPath()
-            path.lineWidth = 1
+            path.lineWidth = max(0, min(8, renderedTheme.styles.length("border-width", on: "hr") ?? 0))
+            guard path.lineWidth > 0 else { continue }
             path.move(to: NSPoint(x: startX, y: y))
             path.line(to: NSPoint(x: endX, y: y))
             let strokeRect = NSRect(
@@ -898,6 +910,7 @@ final class WindowAwareTextView: NSTextView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard let layoutManager, let textContainer else { return }
+        let palette = MarkdownRenderPalette.resolved(for: effectiveAppearance, theme: renderedTheme)
         for marker in renderedReplacementMarkers {
             let range = marker.sourceRange.utf16Range
             guard let text = marker.replacementText,
@@ -942,8 +955,8 @@ final class WindowAwareTextView: NSTextView {
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: font,
                 .foregroundColor: marker.kind == .footnoteReference
-                    ? NSColor.linkColor
-                    : NSColor.labelColor,
+                    ? palette.accentColor
+                    : palette.textColor,
             ]
             let size = (text as NSString).size(withAttributes: attributes)
             let point = NSPoint(

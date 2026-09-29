@@ -1,30 +1,35 @@
-/* Inflow Night — original CSS, inspired by the named Typora theme style. */
+/* Inflow native adaptation. Reference: https://github.com/typora/typora-default-themes/blob/master/themes/night.css
+   Uses installed font fallbacks; keeps the user's reading-width preference. */
 :root {
-  --bg-color: #20242b;
-  --text-color: #d5d9df;
-  --primary-color: #80b7ff;
-  --md-heading: #f0f3f6;
-  --md-secondary: #9da7b5;
-  --md-border: #414955;
-  --md-quote-bar: #414955;
-  --md-surface: #292f38;
-  --md-surface-strong: #343c48;
-  --md-table-stripe: #292f38;
-  --md-inline-code: #343c48;
+  --bg-color: #363b40; --text-color: #b8bfc6; --primary-color: #6dc1e7;
+  --md-heading: #b8bfc6; --md-secondary: #9da2a6; --md-border: #474d54;
+  --md-quote-bar: #474d54; --md-surface: #333333; --md-surface-strong: #333333;
+  --md-table-stripe: #2e3033; --md-inline-code: #333333;
 }
 body {
-  background-color: var(--bg-color);
-  color: var(--text-color);
-  font-family: "Helvetica Neue", "PingFang SC", sans-serif;
-  line-height: 1.7;
+  background-color: var(--bg-color); color: var(--text-color);
+  font-family: "Helvetica Neue", "PingFang SC", Helvetica, sans-serif; font-size: 16px; line-height: 1.625;
   color-scheme: dark;
 }
-h1, h2, h3, h4, h5, h6 { color: var(--md-heading); }
 a { color: var(--primary-color); }
-blockquote { color: var(--md-secondary); border-left-color: var(--md-quote-bar); }
-pre { background-color: var(--md-surface); border-color: var(--md-border); }
-code { background-color: var(--md-inline-code); }
-th, td { border-color: var(--md-border); }
-th { background-color: var(--md-surface); }
+blockquote { color: var(--md-secondary); }
+pre { background-color: var(--md-surface); font-family: Menlo, monospace; }
+code { background-color: var(--md-inline-code); font-family: Menlo, monospace; font-size: .9em; }
+th { background-color: var(--md-surface-strong); }
+td { border-color: var(--md-border); }
 tr:nth-child(even) { background-color: var(--md-table-stripe); }
-:root { --md-keyword: #ff8a80; --md-type: #c4a7ff; --md-string: #9cc2ff; --md-number: #7cd4fd; --md-comment: #9ba7b4; --md-tag: #75e0a7; --md-warning: #e0b450; }
+li { margin-bottom: .3125rem; }
+h1 { font-size: 2.5em; }
+h2 { font-size: 1.63em; }
+h3 { font-size: 1.17em; }
+h4 { font-size: 1.12em; }
+h5 { font-size: 0.97em; }
+h6 { font-size: 0.97em; }
+h1, h2, h3, h4, h5, h6 { border-bottom: 0 solid transparent; font-family: "Lucida Grande", "PingFang SC", sans-serif; color: #dedede; font-weight: 400; line-height: 1.25; margin: .8rem 0 1.5rem; }
+h1 { letter-spacing: -1.5px; }
+h2, h3 { font-weight: 700; letter-spacing: -1px; }
+p { margin: 0 0 1rem; }
+blockquote { border-left: 4px solid #474d54; padding-left: 1em; }
+pre { border: 1px solid #2e3033; border-radius: 3px; }
+th, td { border: 1px solid #474d54; }
+:root { --md-keyword: #c88fd0; --md-type: #7df46a; --md-string: #d26b6b; --md-number: #64ab8f; --md-comment: #da924a; --md-tag: #7df46a; }

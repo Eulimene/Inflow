@@ -1,0 +1,20 @@
+:root {
+  --md-canvas: #0f1115;
+  --md-text: #dfe4ea;
+  --md-heading: #f1f4f7;
+  --md-secondary: #9ba7b4;
+  --md-accent: #79a8ff;
+  --md-border: #303744;
+  --md-quote-bar: #4a5565;
+  --md-surface: #171b22;
+  --md-surface-strong: #202630;
+  --md-table-stripe: #141820;
+  --md-inline-code: #252b35;
+  --md-keyword: #ff8a80;
+  --md-type: #c4a7ff;
+  --md-string: #9cc2ff;
+  --md-number: #7cd4fd;
+  --md-comment: #9ba7b4;
+  --md-tag: #75e0a7;
+  --md-warning: #e0b450;
+}

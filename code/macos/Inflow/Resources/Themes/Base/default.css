@@ -1,0 +1,45 @@
+/* Shared visual defaults for native rendering and theme inheritance.
+   Editor code reads these values; theme files override element rules or --md-* tokens. */
+:root {
+  --inflow-readingWidth: 800.0;
+  --inflow-previewReadingWidth: 1200.0;
+  --inflow-renderedHorizontalInset: 24;
+  --inflow-bodyFontSize: 16.0;
+  --inflow-bodyLineHeight: 1.6;
+  --inflow-paragraphGap: 12.8;
+  --inflow-listItemGap: 5;
+  --inflow-unorderedListMarkerScale: 1.22;
+  --inflow-listMarkerExtraSpacing: 6;
+  --inflow-editorHorizontalInset: 28;
+  --inflow-editorVerticalInset: 30;
+  --inflow-blockCornerRadius: 4;
+  --inflow-inlineCodeScale: 0.88;
+  --inflow-inlineCodeHorizontalPadding: 4;
+  --inflow-inlineCodeVerticalPadding: 2;
+  --inflow-inlineCodeCornerRadius: 4;
+  --inflow-codeBlockLineHeight: 1.5;
+  --inflow-tableCellHorizontalPadding: 12;
+  --inflow-tableCellVerticalPadding: 8;
+  --md-quote-inset: 16px;
+  --md-quote-bar-offset: 4px;
+  --md-quote-bar-width: 3px;
+  --md-quote-radius: 1.5px;
+  --md-code-block-outset: 4px;
+  --md-inline-min-size: 13px;
+  --md-emphasis-slant: .18;
+}
+body { font-family: "Open Sans", "Helvetica Neue", "PingFang SC", Helvetica, Arial, sans-serif; font-size: 16px; line-height: 1.6; }
+p { margin: 0; }
+h1, h2, h3, h4, h5, h6 { font-weight: 700; margin: 1em 0 1em; text-align: left; }
+h1 { font-size: 2.25em; line-height: 1.2; }
+h2 { font-size: 1.75em; line-height: 1.225; }
+h3 { font-size: 1.5em; line-height: 1.43; }
+h4 { font-size: 1.25em; line-height: 1.4; }
+h5, h6 { font-size: 1em; line-height: 1.4; }
+blockquote { padding-left: 16px; border-left-width: 3px; }
+code { font-family: Menlo, monospace; font-size: .88em; border-radius: 4px; padding: 2px 4px; }
+pre { font-family: Menlo, monospace; font-size: .88em; line-height: 1.5; padding: 4px 12px; border-width: 1px; border-radius: 4px; }
+th, td { padding: 8px 12px; }
+table { border-width: 1px; border-radius: 4px; --md-table-grid: grid; }
+hr { border-width: 1px; }
+math { font-family: "Times New Roman", serif; font-size: 1em; margin: 8px 0; }

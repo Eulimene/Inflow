@@ -53,6 +53,16 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
     private(set) var table: RenderedMarkdownTable
     let linkActivation: LinkActivationPreference
 
+    private var borderWidth = ThemeStyleResources.defaults.length("border-width", on: "table") ?? 0
+    private(set) var usesRowBorders = false
+    func applyTheme(_ theme: PreviewTheme) {
+        usesRowBorders = theme.styles.value("--md-table-grid", on: "table") == "rows"
+        borderWidth = max(0, min(8, theme.styles.length("border-top-width", on: "td")
+            ?? theme.styles.length("border-width", on: "td") ?? theme.styles.length("border-width", on: "table") ?? 0))
+        layer?.cornerRadius = max(0, min(24, theme.styles.length("border-radius", on: "table") ?? 0))
+        needsDisplay = true
+    }
+
     override var isFlipped: Bool { true }
 
     static func backgroundColor(
@@ -619,12 +629,14 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
         let gridBounds = NSRect(x: 0, y: visibleToolbarHeight, width: renderedSize.width,
             height: renderedSize.height - visibleToolbarHeight)
         let path = NSBezierPath(rect: gridBounds.insetBy(dx: 0.5, dy: 0.5))
-        path.lineWidth = 1
-        path.stroke()
+        path.lineWidth = borderWidth
+        guard borderWidth > 0 else { return }
+        if !usesRowBorders { path.stroke() }
         var x = CGFloat(0)
-        for width in columnWidths.dropLast() {
+        for width in columnWidths.dropLast() where !usesRowBorders {
             x += width
             let divider = NSBezierPath()
+            divider.lineWidth = borderWidth
             divider.move(to: NSPoint(x: x, y: visibleToolbarHeight))
             divider.line(to: NSPoint(x: x, y: renderedSize.height))
             divider.stroke()
@@ -633,6 +645,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
         for height in rowHeights.dropLast() {
             y += height
             let divider = NSBezierPath()
+            divider.lineWidth = borderWidth
             divider.move(to: NSPoint(x: 0, y: y))
             divider.line(to: NSPoint(x: renderedSize.width, y: y))
             divider.stroke()

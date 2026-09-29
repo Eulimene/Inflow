@@ -8,98 +8,52 @@ struct MarkdownHeadingStyle: Equatable, Sendable {
     let spacingAfter: Double
 }
 
+/// Compatibility accessors for the shared CSS defaults, never a second style definition.
 enum MarkdownRenderMetrics {
-    static let readingWidth = 800.0
-    static let previewReadingWidth = 1_200.0
-    static let renderedHorizontalInset = CGFloat(24)
-    static let bodyFontSize = 16.0
-    static let bodyLineHeight = 1.6
-    static let paragraphGap = CGFloat(12.8)
-    static let listItemGap = CGFloat(5)
-    static let unorderedListMarkerScale = CGFloat(1.22)
-    static let listMarkerExtraSpacing = CGFloat(6)
-    static let editorHorizontalInset = CGFloat(28)
-    static let editorVerticalInset = CGFloat(30)
-    static let blockCornerRadius = CGFloat(4)
-    static let inlineCodeScale = 0.88
-    static let inlineCodeHorizontalPadding = CGFloat(4)
-    static let inlineCodeVerticalPadding = CGFloat(2)
-    static let inlineCodeCornerRadius = CGFloat(4)
-    static let codeBlockLineHeight = CGFloat(1.5)
-    static let tableCellHorizontalPadding = CGFloat(12)
-    static let tableCellVerticalPadding = CGFloat(8)
+    static let readingWidth = Double(ThemeStyleResources.defaults.length("--inflow-readingWidth") ?? 0)
+    static let previewReadingWidth = Double(ThemeStyleResources.defaults.length("--inflow-previewReadingWidth") ?? 0)
+    static let renderedHorizontalInset = CGFloat(ThemeStyleResources.defaults.length("--inflow-renderedHorizontalInset") ?? 0)
+    static let bodyFontSize = Double(ThemeStyleResources.defaults.length("--inflow-bodyFontSize") ?? 0)
+    static let bodyLineHeight = Double(ThemeStyleResources.defaults.length("--inflow-bodyLineHeight") ?? 0)
+    static let paragraphGap = CGFloat(ThemeStyleResources.defaults.length("--inflow-paragraphGap") ?? 0)
+    static let listItemGap = CGFloat(ThemeStyleResources.defaults.length("--inflow-listItemGap") ?? 0)
+    static let unorderedListMarkerScale = CGFloat(ThemeStyleResources.defaults.length("--inflow-unorderedListMarkerScale") ?? 0)
+    static let listMarkerExtraSpacing = CGFloat(ThemeStyleResources.defaults.length("--inflow-listMarkerExtraSpacing") ?? 0)
+    static let editorHorizontalInset = CGFloat(ThemeStyleResources.defaults.length("--inflow-editorHorizontalInset") ?? 0)
+    static let editorVerticalInset = CGFloat(ThemeStyleResources.defaults.length("--inflow-editorVerticalInset") ?? 0)
+    static let blockCornerRadius = CGFloat(ThemeStyleResources.defaults.length("--inflow-blockCornerRadius") ?? 0)
+    static let inlineCodeScale = Double(ThemeStyleResources.defaults.length("--inflow-inlineCodeScale") ?? 0)
+    static let inlineCodeHorizontalPadding = CGFloat(ThemeStyleResources.defaults.length("--inflow-inlineCodeHorizontalPadding") ?? 0)
+    static let inlineCodeVerticalPadding = CGFloat(ThemeStyleResources.defaults.length("--inflow-inlineCodeVerticalPadding") ?? 0)
+    static let inlineCodeCornerRadius = CGFloat(ThemeStyleResources.defaults.length("--inflow-inlineCodeCornerRadius") ?? 0)
+    static let codeBlockLineHeight = CGFloat(ThemeStyleResources.defaults.length("--inflow-codeBlockLineHeight") ?? 0)
+    static let tableCellHorizontalPadding = CGFloat(ThemeStyleResources.defaults.length("--inflow-tableCellHorizontalPadding") ?? 0)
+    static let tableCellVerticalPadding = CGFloat(ThemeStyleResources.defaults.length("--inflow-tableCellVerticalPadding") ?? 0)
 
-    static let bodyFontFamilyCSS = "\"Open Sans\", \"Helvetica Neue\", Helvetica, Arial, \"PingFang SC\", sans-serif"
+    static let bodyFontFamilyCSS = ThemeStyleResources.defaults.value("font-family") ?? "system-ui"
 
+    @MainActor
     static func bodyFont(size: CGFloat) -> NSFont {
-        NSFont(name: "OpenSans", size: size)
-            ?? NSFont(name: "Helvetica Neue", size: size)
-            ?? NSFont.systemFont(ofSize: size)
+        ThemeStyleResources.defaults.font(size: size, fallback: NSFont.systemFont(ofSize: size))
     }
 
     static func headingLineHeight(level: Int) -> Double {
-        switch level {
-        case 1: 1.2
-        case 2: 1.225
-        case 3: 1.43
-        default: 1.4
-        }
+        Double(ThemeStyleResources.defaults.value("line-height", on: "h\(min(6, max(1, level)))") ?? "") ?? 1
     }
 
     static func heading(level: Int) -> MarkdownHeadingStyle {
-        let scale: Double = switch level {
-        case 1: 2.25
-        case 2: 1.75
-        case 3: 1.5
-        case 4: 1.25
-        default: 1.0
-        }
-        return MarkdownHeadingStyle(scale: scale, spacingBefore: 1, spacingAfter: 1)
+        let element = "h\(min(6, max(1, level)))"
+        let css = ThemeStyleResources.defaults
+        return MarkdownHeadingStyle(scale: Double(css.length("font-size", on: element, relativeTo: 1) ?? 1),
+            spacingBefore: Double(css.length("margin-top", on: element, relativeTo: 1) ?? 0),
+            spacingAfter: Double(css.length("margin-bottom", on: element, relativeTo: 1) ?? 0))
     }
 }
 
 struct MarkdownRenderPalette: Equatable, Sendable {
-    static let light = Self(
-        canvas: "#ffffff",
-        text: "#333333",
-        heading: "#333333",
-        secondaryText: "#737982",
-        accent: "#2f6fda",
-        border: "#dfe3e8",
-        quoteBar: "#c3cad5",
-        subtleSurface: "#f8f8f8",
-        mutedSurface: "#eef1f5",
-        tableStripe: "#fafbfc",
-        inlineCode: "#edf0f4",
-        keyword: "#b42318",
-        type: "#6941c6",
-        string: "#175cd3",
-        number: "#026aa2",
-        comment: "#697386",
-        tag: "#067647",
-        warning: "#9a6700"
-    )
+    static let light = fromCSS(ThemeStyleResources.styles("light"))
 
-    static let dark = Self(
-        canvas: "#0f1115",
-        text: "#dfe4ea",
-        heading: "#f1f4f7",
-        secondaryText: "#9ba7b4",
-        accent: "#79a8ff",
-        border: "#303744",
-        quoteBar: "#4a5565",
-        subtleSurface: "#171b22",
-        mutedSurface: "#202630",
-        tableStripe: "#141820",
-        inlineCode: "#252b35",
-        keyword: "#ff8a80",
-        type: "#c4a7ff",
-        string: "#9cc2ff",
-        number: "#7cd4fd",
-        comment: "#9ba7b4",
-        tag: "#75e0a7",
-        warning: "#e0b450"
-    )
+    static let dark = fromCSS(ThemeStyleResources.styles("dark"))
 
     var canvas: String
     var text: String
@@ -120,17 +74,36 @@ struct MarkdownRenderPalette: Equatable, Sendable {
     var tag: String
     var warning: String
 
+    private static func fromCSS(_ css: NativeCSSStyles) -> Self {
+        Self(
+            canvas: css.value("--md-canvas") ?? "transparent",
+            text: css.value("--md-text") ?? "transparent",
+            heading: css.value("--md-heading") ?? "transparent",
+            secondaryText: css.value("--md-secondary") ?? "transparent",
+            accent: css.value("--md-accent") ?? "transparent",
+            border: css.value("--md-border") ?? "transparent",
+            quoteBar: css.value("--md-quote-bar") ?? "transparent",
+            subtleSurface: css.value("--md-surface") ?? "transparent",
+            mutedSurface: css.value("--md-surface-strong") ?? "transparent",
+            tableStripe: css.value("--md-table-stripe") ?? "transparent",
+            inlineCode: css.value("--md-inline-code") ?? "transparent",
+            keyword: css.value("--md-keyword") ?? "transparent",
+            type: css.value("--md-type") ?? "transparent",
+            string: css.value("--md-string") ?? "transparent",
+            number: css.value("--md-number") ?? "transparent",
+            comment: css.value("--md-comment") ?? "transparent",
+            tag: css.value("--md-tag") ?? "transparent",
+            warning: css.value("--md-warning") ?? "transparent"
+        )
+    }
+
     @MainActor
     static func resolved(for appearance: NSAppearance, theme: PreviewTheme = .standard) -> Self {
         let scheme = theme.styles.value("color-scheme")
         let isDark = scheme == "dark" || (scheme != "light" && appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
         var palette: Self = isDark ? .dark : .light
         if theme == .highContrast {
-            palette.text = isDark ? "#ffffff" : "#111111"
-            palette.heading = palette.text
-            palette.secondaryText = isDark ? "#dddddd" : "#444444"
-            palette.border = isDark ? "#a0a0a0" : "#666666"
-            palette.quoteBar = palette.border
+            palette = ThemeStyleResources.styles(isDark ? "contrast-dark" : "contrast-light").applying(to: palette)
         }
         return theme.styles.applying(to: palette)
     }

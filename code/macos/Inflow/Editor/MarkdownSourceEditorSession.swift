@@ -896,7 +896,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
         textView.renderedHeadingDividerRanges = plan.contentStyles.compactMap { style in
             guard case let .heading(level) = style.kind,
-                  level <= 2,
+                  renderedTheme.styles.headingDividerWidth(level: level) > 0,
                   !rangesOverlap(style.sourceRange.utf16Range, editingRange)
             else { return nil }
             return (source as NSString).paragraphRange(for: style.sourceRange.utf16Range)
@@ -1059,12 +1059,16 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                     ],
                     range: parts.content
                 )
+                let codeSize = min(72, max(6, renderedTheme.styles.length("font-size", on: "pre", relativeTo: baseFont.pointSize)
+                    ?? baseFont.pointSize * CGFloat(MarkdownRenderMetrics.inlineCodeScale)))
+                storage.addAttribute(.font, value: renderedTheme.styles.font(on: "pre", size: codeSize,
+                    fallback: NSFont.monospacedSystemFont(ofSize: codeSize, weight: .regular)), range: parts.content)
                 let codeParagraph = NSMutableParagraphStyle()
-                codeParagraph.lineHeightMultiple = MarkdownRenderMetrics.codeBlockLineHeight
+                codeParagraph.lineHeightMultiple = CGFloat(Double(renderedTheme.styles.value("line-height", on: "pre") ?? "") ?? 1)
                 codeParagraph.lineBreakMode = .byCharWrapping
-                codeParagraph.firstLineHeadIndent = MarkdownRenderMetrics.tableCellHorizontalPadding
-                codeParagraph.headIndent = MarkdownRenderMetrics.tableCellHorizontalPadding
-                codeParagraph.tailIndent = -MarkdownRenderMetrics.tableCellHorizontalPadding
+                codeParagraph.firstLineHeadIndent = renderedTheme.styles.length("padding-left", on: "pre") ?? 0
+                codeParagraph.headIndent = codeParagraph.firstLineHeadIndent
+                codeParagraph.tailIndent = -(renderedTheme.styles.length("padding-right", on: "pre") ?? 0)
                 storage.addAttribute(
                     .paragraphStyle,
                     value: codeParagraph,

@@ -199,9 +199,9 @@ enum RenderedMarkdownQuoteGeometry {
             + baselineOffset
             - font.ascender
         return NSRect(
-            x: textContainerOrigin.x + lineFragment.minX + 4,
+            x: textContainerOrigin.x + lineFragment.minX + ThemeStyleResources.defaults.token("quote-bar-offset"),
             y: fontBoxMinY,
-            width: 3,
+            width: ThemeStyleResources.defaults.token("quote-bar-width"),
             height: textHeight
         )
     }
@@ -213,10 +213,10 @@ enum RenderedMarkdownInlineCodeGeometry {
         lineFragment: NSRect,
         textContainerOrigin: NSPoint,
         font: NSFont,
-        baselineOffset: CGFloat
+        baselineOffset: CGFloat,
+        horizontalPadding: CGFloat = MarkdownRenderMetrics.inlineCodeHorizontalPadding,
+        verticalPadding: CGFloat = MarkdownRenderMetrics.inlineCodeVerticalPadding
     ) -> NSRect {
-        let horizontalPadding = MarkdownRenderMetrics.inlineCodeHorizontalPadding
-        let verticalPadding = MarkdownRenderMetrics.inlineCodeVerticalPadding
         let textHeight = max(1, ceil(font.ascender - font.descender))
         let textMinY = textContainerOrigin.y
             + lineFragment.minY

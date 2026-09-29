@@ -88,9 +88,9 @@ final class AppPreferencesTests: XCTestCase {
     }
 
     func testCSSThemesReachNativeFontsColorsHeadingsAndKeepMarkdownIntact() async throws {
-        let source = "# Heading 标题\n\n正文 **bold** 与 `code`。\n\n| A | B |\n| --- | --- |\n| 甲 | 乙 |"
+        let source = "# Heading 标题\n\n正文排版 Typography：这是同一份 Markdown，用来比较字体、字号与行距。**重点内容**与 `inline code`。\n\n## Section 章节\n\n> 引用文字：安静地阅读，专注于内容。 A thoughtful quotation.\n\n### Detail 细节\n\n- 列表项目 List item\n- 第二个项目 Another item\n\n[阅读链接](https://example.com)\n\n| A | B |\n| --- | --- |\n| 甲 | 乙 |\n| 丙 | 丁 |\n\n```swift\nlet theme = \"Inflow\"\nprint(theme)\n```"
         let editor = MarkdownSourceEditorSession(role: .renderedProjection)
-        editor.scrollView.frame = NSRect(x: 0, y: 0, width: 900, height: 700)
+        editor.scrollView.frame = NSRect(x: 0, y: 0, width: 920, height: 1100)
         editor.textView.frame = editor.scrollView.bounds
         editor.textView.string = source
         for theme in PreviewTheme.allCases {
@@ -111,6 +111,11 @@ final class AppPreferencesTests: XCTestCase {
             let headingRange = (source as NSString).range(of: "Heading")
             let headingFont = try XCTUnwrap(editor.textView.textStorage?.attribute(.font, at: headingRange.location, effectiveRange: nil) as? NSFont)
             XCTAssertGreaterThan(headingFont.pointSize, configuration.fontSize)
+            let headingParagraph = try XCTUnwrap(editor.textView.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
+            XCTAssertEqual(headingParagraph.alignment, ["whitey", "gothic"].contains(theme.id) ? .center : .left, theme.label)
+            XCTAssertEqual(editor.textView.renderedHeadingDividerRanges.count,
+                theme.id == "github" ? 2 : ["whitey", "newsprint"].contains(theme.id) ? 1 : 0, theme.label)
+            XCTAssertEqual(table.usesRowBorders, ["whitey", "pixyll", "gothic"].contains(theme.id), theme.label)
             if let path = ProcessInfo.processInfo.environment["INFLOW_THEME_SNAPSHOTS"] {
                 let directory = URL(fileURLWithPath: path)
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -133,6 +138,84 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertTrue(font.fontName.contains("Menlo"))
         XCTAssertEqual(editor.textView.textStorage?.attribute(.foregroundColor, at: heading, effectiveRange: nil) as? NSColor, NativeCSSStyles.color("#ff0000"))
         XCTAssertEqual(editor.textView.string, source)
+    }
+
+    func testBuiltinThemeMigrationUpdatesDefaultsAndPreservesUserEdits() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let originalWhitey = #"""
+/* Inflow Whitey — original CSS, inspired by the named Typora theme style. */
+:root {
+  --bg-color: #fafafa;
+  --text-color: #444444;
+  --primary-color: #4a789c;
+  --md-heading: #222222;
+  --md-secondary: #777777;
+  --md-border: #dddddd;
+  --md-quote-bar: #dddddd;
+  --md-surface: #f0f0f0;
+  --md-surface-strong: #eeeeee;
+  --md-table-stripe: #f0f0f0;
+  --md-inline-code: #eeeeee;
+}
+body {
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  font-family: "Helvetica Neue", "PingFang SC", sans-serif;
+  line-height: 1.7;
+  color-scheme: light;
+}
+h1, h2, h3, h4, h5, h6 { color: var(--md-heading); }
+a { color: var(--primary-color); }
+blockquote { color: var(--md-secondary); border-left-color: var(--md-quote-bar); }
+pre { background-color: var(--md-surface); border-color: var(--md-border); }
+code { background-color: var(--md-inline-code); }
+th, td { border-color: var(--md-border); }
+th { background-color: var(--md-surface); }
+tr:nth-child(even) { background-color: var(--md-table-stripe); }
+h1 { font-size: 2em; font-weight: 500; }
+h2 { font-weight: 500; }
+"""# + "\n"
+        let whitey = directory.appendingPathComponent("whitey.css")
+        try originalWhitey.write(to: whitey, atomically: true, encoding: .utf8)
+        let userCSS = "body { color: #123456; } /* my custom GitHub */"
+        let github = directory.appendingPathComponent("github.css")
+        try userCSS.write(to: github, atomically: true, encoding: .utf8)
+        let oldNight = Data("body { color: white; background: black; }".utf8)
+        try oldNight.write(to: directory.appendingPathComponent("night.css"))
+        try JSONEncoder().encode(["night": ThemeCatalog.fingerprint(oldNight)])
+            .write(to: directory.appendingPathComponent(".builtin-versions.json"))
+        let catalog = ThemeCatalog(directory: directory)
+        let loaded = try catalog.load()
+        XCTAssertTrue(loaded.issues.isEmpty)
+        XCTAssertEqual(try String(contentsOf: whitey, encoding: .utf8), PreviewTheme.allCases[1].css)
+        XCTAssertEqual(try String(contentsOf: github, encoding: .utf8), userCSS)
+        XCTAssertEqual(loaded.themes.first { $0.id == "night" }?.css, PreviewTheme.allCases[2].css)
+        let modified = try whitey.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        _ = try catalog.load()
+        XCTAssertEqual(try whitey.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, modified)
+    }
+
+    func testThemeDefaultsAndCustomOverridesComeFromCSS() {
+        XCTAssertEqual(ThemeStyleResources.defaults.metric("bodyFontSize"), 16)
+        XCTAssertEqual(MarkdownRenderPalette.light.canvas, "#ffffff")
+        XCTAssertEqual(MarkdownRenderPalette.dark.canvas, "#0f1115")
+        let theme = PreviewTheme(id: "custom", label: "Custom", css: """
+        :root { --inflow-paragraphGap: 23; }
+        body { font-family: Georgia, "Songti SC", serif; }
+        h1 { border-bottom: 3px solid #123456; }
+        """)
+        XCTAssertEqual(theme.styles.metric("paragraphGap"), 23, "CSS custom property names are case sensitive")
+        XCTAssertEqual(theme.styles.headingDividerWidth(level: 1), 3)
+        XCTAssertEqual(theme.styles.value("border-bottom-color", on: "h1"), "#123456")
+        let font = theme.styles.font(size: 18, fallback: .systemFont(ofSize: 18))
+        let cascade = font.fontDescriptor.object(forKey: .cascadeList) as? [NSFontDescriptor]
+        XCTAssertTrue(cascade?.contains { ($0.object(forKey: .family) as? String) == "Songti SC" } == true,
+            "Chinese text must keep the serif fallback supplied by CSS")
+        let fonts = PreviewTheme.allCases.map { $0.styles.font(size: 18, fallback: .systemFont(ofSize: 18)).familyName }
+        XCTAssertGreaterThan(Set(fonts).count, 3)
+        XCTAssertEqual(Set(PreviewTheme.allCases.map { $0.styles.value("font-size", on: "h1") }).count, 6)
     }
 
     func testDefaultsMatchLaunchContract() {
@@ -839,7 +922,7 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertTrue(html.contains("max-width: 1020.00px"))
         XCTAssertTrue(html.contains("font-size: 24.00px"))
         XCTAssertTrue(html.contains("color-scheme: dark"))
-        XCTAssertTrue(html.contains("ui-serif"))
+        XCTAssertTrue(html.contains("PT Serif"))
         XCTAssertTrue(html.contains("animation: none !important"))
         XCTAssertTrue(html.contains(":focus-visible"))
         XCTAssertTrue(html.contains("default-src 'none'"))
@@ -847,7 +930,7 @@ final class AppPreferencesTests: XCTestCase {
 
         let nativeAppearance = configuration.nativeRenderedAppearance(spellingEnabled: true)
         XCTAssertEqual(nativeAppearance.fontSize, 24)
-        XCTAssertEqual(nativeAppearance.lineHeight, 1.82)
+        XCTAssertEqual(nativeAppearance.lineHeight, 1.5)
         XCTAssertTrue(nativeAppearance.spellingEnabled)
         XCTAssertTrue(nativeAppearance.wrapsLines)
         XCTAssertFalse(nativeAppearance.showsLineNumbers)
