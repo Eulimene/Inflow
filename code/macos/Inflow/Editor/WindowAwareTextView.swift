@@ -2,6 +2,23 @@ import AppKit
 
 @MainActor
 final class WindowAwareTextView: NSTextView {
+    private let centeredLineLayout = MarkdownCenteredLineLayout()
+
+    override init(frame: NSRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+        layoutManager?.delegate = centeredLineLayout
+    }
+
+    override init(frame: NSRect = .zero) {
+        super.init(frame: frame)
+        layoutManager?.delegate = centeredLineLayout
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        layoutManager?.delegate = centeredLineLayout
+    }
+
 
     private final class RenderedImageViewState {
         var sourceRange: NSRange

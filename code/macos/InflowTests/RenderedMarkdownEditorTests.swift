@@ -1,9 +1,79 @@
 import AppKit
+import CoreText
 import SwiftUI
 import XCTest
 @testable import Inflow
 
 final class RenderedMarkdownEditorTests: XCTestCase {
+    @MainActor
+    func testRenderedTextBaselinesCenterAcrossBlocksThemesAndLineHeights() async throws {
+        let source = "# 中文 Heading\n\n正文 English 😀 和 **粗体**、`code`。\n\n> 引用文字 Quote\n\n- 列表 Item\n- 第二项\n\n1. 有序列表\n2. 第二项\n\n- [ ] 任务 Task\n\n```swift\nlet value = 1\n```"
+        for theme in PreviewTheme.allCases {
+            for height in [1.2, 1.6, 2.0] {
+                let editor = MarkdownSourceEditorSession()
+                editor.scrollView.frame = NSRect(x: 0, y: 0, width: 480, height: 700)
+                editor.textView.frame = editor.scrollView.bounds
+                editor.textView.string = source
+                let configuration = PreviewAppearanceConfiguration(contentWidth: 800, zoom: 1,
+                    colorScheme: .light, theme: theme, increasedContrast: false,
+                    reduceMotion: true, fontSize: 20, lineHeight: height)
+                editor.applySourceAppearance(configuration.nativeRenderedAppearance(spellingEnabled: false), force: true)
+                _ = await editor.deriveContent(for: source, configuration: configuration)
+                editor.setPresentation(.rendered, source: source, onLinkClick: nil, theme: theme)
+                let selection = editor.textView.selectedRange()
+                try assertCenteredTextLines(in: editor.textView)
+                XCTAssertEqual(editor.textView.string, source)
+                XCTAssertEqual(editor.textView.selectedRange(), selection)
+            }
+        }
+    }
+
+    @MainActor
+    func testTableTextCentersWithinLinesAndUnequalHeightRows() async throws {
+        let source = "| 中文 Heading | Second |\n| --- | --- |\n| 短字 | 多行内容<br>第二行 English<br>第三行 |"
+        let editor = MarkdownSourceEditorSession()
+        editor.scrollView.frame = NSRect(x: 0, y: 0, width: 640, height: 400)
+        editor.textView.frame = editor.scrollView.bounds
+        editor.textView.string = source
+        _ = await editor.deriveContent(for: source, configuration: .default)
+        editor.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let table = try XCTUnwrap(editor.textView.renderedTable(atUTF16Location: 0))
+        let cells = table.subviews.compactMap { $0 as? RenderedMarkdownTableCellTextView }
+        XCTAssertEqual(cells.count, 4)
+        for cell in cells {
+            try assertCenteredTextLines(in: cell)
+            let manager = try XCTUnwrap(cell.layoutManager)
+            let height = max(manager.usedRect(for: try XCTUnwrap(cell.textContainer)).maxY,
+                manager.extraLineFragmentRect.maxY)
+            XCTAssertEqual(cell.textContainerOrigin.y + height / 2, cell.bounds.midY, accuracy: 0.6, cell.string)
+        }
+        XCTAssertEqual(editor.textView.string, source)
+    }
+
+    @MainActor
+    private func assertCenteredTextLines(in view: NSTextView) throws {
+        let manager = try XCTUnwrap(view.layoutManager)
+        let container = try XCTUnwrap(view.textContainer)
+        let storage = try XCTUnwrap(view.textStorage)
+        manager.ensureLayout(for: container)
+        var checked = 0
+        manager.enumerateLineFragments(forGlyphRange: NSRange(location: 0, length: manager.numberOfGlyphs)) { line, used, _, glyphs, _ in
+            guard used.height > 1 else { return }
+            let range = manager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+            let text = storage.attributedSubstring(from: range)
+            var ascent: CGFloat = 0
+            var descent: CGFloat = 0
+            CTLineGetTypographicBounds(CTLineCreateWithAttributedString(text), &ascent, &descent, nil)
+            guard ascent + descent > 1 else { return }
+            let baseline = line.minY + manager.location(forGlyphAt: glyphs.location).y
+            let upperSpace = baseline - ascent - used.minY
+            let lowerSpace = used.maxY - baseline - descent
+            XCTAssertEqual(upperSpace, lowerSpace, accuracy: 0.6, text.string)
+            checked += 1
+        }
+        XCTAssertGreaterThan(checked, 0)
+    }
+
     @MainActor
     private func resolvedDiagramPlan(for source: String) async throws -> RenderedMarkdownPlan {
         let plan = RenderedMarkdownEditor.plan(for: source)

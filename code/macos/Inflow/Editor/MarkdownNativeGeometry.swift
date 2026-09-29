@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 
 enum MarkdownNativeTypography {
     static func paragraphStyle(font: NSFont, lineHeight: CGFloat) -> NSMutableParagraphStyle {
@@ -6,6 +7,44 @@ enum MarkdownNativeTypography {
         style.minimumLineHeight = max(font.pointSize * lineHeight,
             ceil(font.ascender - font.descender + font.leading))
         return style
+    }
+}
+
+/// TextKit places extra minimum-line-height space above the baseline. Keep the
+/// actual glyph metrics (including CJK/emoji fallback fonts) centered in the
+/// used line box, leaving paragraph gaps and overlay anchors unchanged.
+@MainActor
+final class MarkdownCenteredLineLayout: NSObject, @preconcurrency NSLayoutManagerDelegate {
+    func layoutManager(
+        _ manager: NSLayoutManager,
+        shouldSetLineFragmentRect line: UnsafeMutablePointer<NSRect>,
+        lineFragmentUsedRect used: UnsafeMutablePointer<NSRect>,
+        baselineOffset baseline: UnsafeMutablePointer<CGFloat>,
+        in container: NSTextContainer,
+        forGlyphRange glyphRange: NSRange
+    ) -> Bool {
+        guard used.pointee.height > 1, glyphRange.length > 0,
+              let storage = manager.textStorage else { return false }
+        let range = manager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+        guard NSMaxRange(range) <= storage.length else { return false }
+        let text = storage.attributedSubstring(from: range)
+        // Attachments carry their own baseline and height. Display-only overlay
+        // anchors and collapsed Markdown markers must keep their native layout.
+        var hasAttachment = false
+        var visibleFontSize: CGFloat = 0
+        text.enumerateAttributes(in: NSRange(location: 0, length: text.length)) { attributes, _, _ in
+            hasAttachment = hasAttachment || attributes[.attachment] != nil
+            visibleFontSize = max(visibleFontSize, (attributes[.font] as? NSFont)?.pointSize ?? 0)
+        }
+        guard !hasAttachment, visibleFontSize > 1 else { return false }
+        let shapedLine = CTLineCreateWithAttributedString(text)
+        var ascent: CGFloat = 0
+        var descent: CGFloat = 0
+        CTLineGetTypographicBounds(shapedLine, &ascent, &descent, nil)
+        guard ascent + descent > 1 else { return false }
+        baseline.pointee = used.pointee.minY - line.pointee.minY
+            + (used.pointee.height + ascent - descent) / 2
+        return true
     }
 }
 

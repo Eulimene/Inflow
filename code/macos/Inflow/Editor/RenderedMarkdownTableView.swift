@@ -231,7 +231,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
                         range: link.visibleRange
                     )
                 }
-                let textView = RenderedMarkdownTableCellTextView()
+                let textView = RenderedMarkdownTableCellTextView(frame: .zero)
                 textView.font = font
                 textView.defaultParagraphStyle = paragraph
                 textView.caretFont = font
@@ -574,7 +574,13 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
                 width: max(1, columnWidths[cell.column] - horizontalPadding * 2),
                 height: max(1, rowHeights[cell.row] - verticalPadding * 2)
             )
-            cell.mathPreview?.frame = cell.textView.frame
+            cell.textView.centerContentVertically()
+            if let preview = cell.mathPreview {
+                let contentHeight = preview.height(for: cell.textView.frame.width)
+                preview.frame = NSRect(x: cell.textView.frame.minX,
+                    y: cell.textView.frame.midY - contentHeight / 2,
+                    width: cell.textView.frame.width, height: contentHeight)
+            }
         }
     }
 
@@ -920,6 +926,34 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
 
 @MainActor
 final class RenderedMarkdownTableCellTextView: NSTextView {
+    private let centeredLineLayout = MarkdownCenteredLineLayout()
+
+    override init(frame: NSRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+        layoutManager?.delegate = centeredLineLayout
+    }
+
+    override init(frame: NSRect = .zero) {
+        super.init(frame: frame)
+        layoutManager?.delegate = centeredLineLayout
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        layoutManager?.delegate = centeredLineLayout
+    }
+
+    func centerContentVertically() {
+        guard let manager = layoutManager, let container = textContainer else { return }
+        manager.ensureLayout(for: container)
+        let used = manager.usedRect(for: container)
+        let contentHeight = max(used.maxY, manager.extraLineFragmentRect.maxY)
+        let inset = max(0, (bounds.height - contentHeight) / 2)
+        if abs(textContainerInset.height - inset) > 0.01 {
+            textContainerInset = NSSize(width: 0, height: inset)
+        }
+    }
+
     var caretFont = NSFont.systemFont(ofSize: 16)
 
     func renderedInsertionRect(_ rect: NSRect) -> NSRect {
