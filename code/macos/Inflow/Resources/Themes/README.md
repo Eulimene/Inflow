@@ -34,6 +34,8 @@ GitHub、Whitey、Night、Newsprint、Pixyll、Gothic 均来自同目录下的 C
 
 `Base` 是应用自带的公共资源，不单独出现在主题菜单。自定义主题覆盖公共默认规则；Swift 中保留 CSS 解析、TextKit 属性映射、几何计算及长度安全范围。操作系统原生窗口和菜单仍由 AppKit 绘制。
 
+选区配色也从 CSS 读取：`--md-selection-background` 控制正文与表格的选中背景，`--md-selection-text` 控制选中文字，`--md-selection-overlay` 控制图片和图表的半透明选中遮罩。自定义主题可使用 `::selection`、`#write::selection` 或 `#write ::selection` 的 `background-color`／`color` 覆盖文字选区颜色；源码编辑保留系统选区配色。整段选择会同步标记其中的表格和图片，表格内多格选择则覆盖完整单元格。
+
 ## 一个可以直接使用的例子
 
 创建 `my-paper.css`：

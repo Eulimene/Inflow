@@ -17,4 +17,7 @@
   --md-comment: #9ba7b4;
   --md-tag: #75e0a7;
   --md-warning: #e0b450;
+  --md-selection-background: #285f98;
+  --md-selection-text: #ffffff;
+  --md-selection-overlay: #69aaff66;
 }

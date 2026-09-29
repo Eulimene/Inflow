@@ -73,6 +73,9 @@ struct MarkdownRenderPalette: Equatable, Sendable {
     var comment: String
     var tag: String
     var warning: String
+    var selectionBackground: String
+    var selectionText: String
+    var selectionOverlay: String
 
     private static func fromCSS(_ css: NativeCSSStyles) -> Self {
         Self(
@@ -93,7 +96,10 @@ struct MarkdownRenderPalette: Equatable, Sendable {
             number: css.value("--md-number") ?? "transparent",
             comment: css.value("--md-comment") ?? "transparent",
             tag: css.value("--md-tag") ?? "transparent",
-            warning: css.value("--md-warning") ?? "transparent"
+            warning: css.value("--md-warning") ?? "transparent",
+            selectionBackground: css.value("--md-selection-background") ?? "transparent",
+            selectionText: css.value("--md-selection-text") ?? "transparent",
+            selectionOverlay: css.value("--md-selection-overlay") ?? "transparent"
         )
     }
 
@@ -117,6 +123,8 @@ struct MarkdownRenderPalette: Equatable, Sendable {
         --md-inline-code: \(inlineCode); --md-keyword: \(keyword); --md-type: \(type);
         --md-string: \(string); --md-number: \(number); --md-comment: \(comment);
         --md-tag: \(tag); --md-warning: \(warning);
+        --md-selection-background: \(selectionBackground); --md-selection-text: \(selectionText);
+        --md-selection-overlay: \(selectionOverlay);
         """
     }
 
@@ -131,6 +139,12 @@ struct MarkdownRenderPalette: Equatable, Sendable {
     var mutedSurfaceColor: NSColor { color(mutedSurface) }
     var tableStripeColor: NSColor { color(tableStripe) }
     var inlineCodeColor: NSColor { color(inlineCode) }
+    var selectionBackgroundColor: NSColor { color(selectionBackground) }
+    var selectionTextColor: NSColor { color(selectionText) }
+    var selectionOverlayColor: NSColor { color(selectionOverlay) }
+    var selectedTextAttributes: [NSAttributedString.Key: Any] {
+        [.backgroundColor: selectionBackgroundColor, .foregroundColor: selectionTextColor]
+    }
 
     private func color(_ value: String) -> NSColor {
         NativeCSSStyles.color(value) ?? .textColor

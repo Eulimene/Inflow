@@ -46,6 +46,12 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
     private var maximumWidth: CGFloat
     private var needsContentMeasurement = false
     private var currentPalette: MarkdownRenderPalette
+    var isDocumentSelected = false {
+        didSet {
+            guard oldValue != isDocumentSelected else { return }
+            needsDisplay = true
+        }
+    }
     private var contextCell = (row: 0, column: 0)
     private var contextLinkTarget: String?
     private(set) var renderedSize: NSSize
@@ -252,6 +258,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
                 textView.isSelectable = true
                 textView.isRichText = true
                 textView.drawsBackground = false
+                textView.selectedTextAttributes = palette.selectedTextAttributes
                 textView.textContainerInset = .zero
                 textView.textContainer?.lineFragmentPadding = 0
                 textView.textContainer?.widthTracksTextView = true
@@ -437,6 +444,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
         guard palette != currentPalette else { return }
         currentPalette = palette
         for cell in cells {
+            cell.textView.selectedTextAttributes = palette.selectedTextAttributes
             guard let storage = cell.textView.textStorage, storage.length > 0 else { continue }
             cell.textView.linkTextAttributes = MarkdownLinkVisualStyle.restingAttributes(
                 foregroundColor: palette.accentColor
@@ -625,6 +633,20 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
             rowRect.fill()
             y += height
         }
+        // Paint the whole cell, including its padding. Child text views are
+        // transparent, so table backgrounds cannot obscure a document selection.
+        currentPalette.selectionBackgroundColor.setFill()
+        y = visibleToolbarHeight
+        for (row, height) in rowHeights.enumerated() {
+            var x = CGFloat.zero
+            for (column, width) in columnWidths.enumerated() {
+                if isDocumentSelected || isCellSelected(row: row, column: column) {
+                    NSRect(x: x, y: y, width: width, height: height).fill()
+                }
+                x += width
+            }
+            y += height
+        }
         currentPalette.borderColor.setStroke()
         let gridBounds = NSRect(x: 0, y: visibleToolbarHeight, width: renderedSize.width,
             height: renderedSize.height - visibleToolbarHeight)
@@ -693,10 +715,17 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
     private(set) var selectionAnchor: (Int, Int)?
     private(set) var selectionEnd: (Int, Int)?
 
+    private func isCellSelected(row: Int, column: Int) -> Bool {
+        guard let anchor = selectionAnchor, let end = selectionEnd else { return false }
+        return (min(anchor.0, end.0)...max(anchor.0, end.0)).contains(row)
+            && (min(anchor.1, end.1)...max(anchor.1, end.1)).contains(column)
+    }
+
     func clearCellSelection() {
         selectionAnchor = nil
         selectionEnd = nil
         for cell in cells { cell.textView.drawsBackground = false }
+        needsDisplay = true
         updateMathPreviewVisibility()
     }
 
@@ -707,11 +736,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
         selectionAnchor = anchor
         selectionEnd = end
         _ = focusCell(row: end.0, column: end.1, selection: NSRange(location: 0, length: 0), scroll: scroll)
-        for cell in cells {
-            cell.textView.drawsBackground = (min(anchor.0, end.0)...max(anchor.0, end.0)).contains(cell.row)
-                && (min(anchor.1, end.1)...max(anchor.1, end.1)).contains(cell.column)
-            cell.textView.backgroundColor = NSColor.selectedTextBackgroundColor.withAlphaComponent(0.3)
-        }
+        needsDisplay = true
         updateMathPreviewVisibility()
     }
 

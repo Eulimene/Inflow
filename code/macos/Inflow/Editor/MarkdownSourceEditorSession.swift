@@ -638,6 +638,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             textView.backgroundColor = .textBackgroundColor
             scrollView.backgroundColor = .textBackgroundColor
             textView.insertionPointColor = .textColor
+            textView.selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor,
+                                               .foregroundColor: NSColor.selectedTextColor]
         }
         textView.linkActivation = linkActivation
         renderedResourceContext = resourceContext
@@ -972,6 +974,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.backgroundColor = palette.canvasColor
         scrollView.backgroundColor = palette.canvasColor
         textView.insertionPointColor = palette.textColor
+        textView.selectedTextAttributes = palette.selectedTextAttributes
         if textView.string.isEmpty { textView.font = baseFont }
         textView.defaultParagraphStyle = baseParagraph
         textView.linkTextAttributes = MarkdownLinkVisualStyle.restingAttributes(

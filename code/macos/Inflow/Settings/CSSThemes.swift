@@ -168,7 +168,7 @@ struct NativeCSSStyles: Hashable, Sendable {
         var escaped = false
         var valid = true
         var unsupported = false
-        let supported = Set([":root", "html", "body", "#write", "p", "h1", "h2", "h3", "h4", "h5", "h6", "a", "blockquote", "pre", "code", "table", "th", "td", "tr:nth-child(even)", "tr:nth-child(2n)", "strong", "em", "li", "ul", "ol", "hr", "math"])
+        let supported = Set([":root", "html", "body", "#write", "p", "h1", "h2", "h3", "h4", "h5", "h6", "a", "blockquote", "pre", "code", "table", "th", "td", "tr:nth-child(even)", "tr:nth-child(2n)", "strong", "em", "li", "ul", "ol", "hr", "math", "::selection", "#write::selection"])
         for c in clean {
             if escaped { if depth > 0 { body.append(c) } else { header.append(c) }; escaped = false; continue }
             if c == "\\" { if depth > 0 { body.append(c) } else { header.append(c) }; escaped = true; continue }
@@ -231,7 +231,7 @@ struct NativeCSSStyles: Hashable, Sendable {
     }
 
     func value(_ property: String, on element: String = "body") -> String? {
-        let selectors: Set<String> = element == "body" ? [":root", "html", "body", "#write"] : [element, "#write " + element]
+        let selectors: Set<String> = element == "body" ? [":root", "html", "body", "#write"] : [element, "#write " + element, element == "::selection" ? "#write::selection" : element]
         guard let rule = rules.enumerated().filter({ selectors.contains($0.element.selector) && $0.element.property == property }).max(by: {
             let leftScope = ["body", "#write"].contains($0.element.selector) ? 1 : 0
             let rightScope = ["body", "#write"].contains($1.element.selector) ? 1 : 0
@@ -336,7 +336,9 @@ extension NativeCSSStyles {
             ("--md-quote-bar", \.quoteBar), ("--md-surface", \.subtleSurface), ("--md-surface-strong", \.mutedSurface),
             ("--md-table-stripe", \.tableStripe), ("--md-inline-code", \.inlineCode), ("--md-keyword", \.keyword),
             ("--md-type", \.type), ("--md-string", \.string), ("--md-number", \.number),
-            ("--md-comment", \.comment), ("--md-tag", \.tag), ("--md-warning", \.warning)
+            ("--md-comment", \.comment), ("--md-tag", \.tag), ("--md-warning", \.warning),
+            ("--md-selection-background", \.selectionBackground), ("--md-selection-text", \.selectionText),
+            ("--md-selection-overlay", \.selectionOverlay)
         ]
         for (token, key) in tokens { if let color = Self.colorHex(value(token)) { palette[keyPath: key] = color } }
         let properties: [(String, String, String?, WritableKeyPath<MarkdownRenderPalette, String>)] = [
@@ -346,7 +348,9 @@ extension NativeCSSStyles {
             ("pre", "background-color", nil, \.subtleSurface), ("code", "background-color", nil, \.inlineCode),
             ("th", "background-color", nil, \.mutedSurface),
             ("td", "border-color", nil, \.border), ("tr:nth-child(even)", "background-color", nil, \.tableStripe),
-            ("tr:nth-child(2n)", "background-color", nil, \.tableStripe)
+            ("tr:nth-child(2n)", "background-color", nil, \.tableStripe),
+            ("::selection", "background-color", "--select-text-bg-color", \.selectionBackground),
+            ("::selection", "color", nil, \.selectionText)
         ]
         for (element, property, fallback, key) in properties {
             let declaration = value(property, on: element)

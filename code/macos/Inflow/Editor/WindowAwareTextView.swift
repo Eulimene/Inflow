@@ -138,6 +138,23 @@ final class WindowAwareTextView: NSTextView {
         super.setSelectedRange(charRange)
         sourceSelectionHandler?(charRange)
     }
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting flag: Bool) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: flag)
+        updateRenderedSelection()
+    }
+
+    private func updateRenderedSelection(isFocused: Bool? = nil) {
+        let focused = isFocused ?? (window == nil || window?.firstResponder === self)
+        let ranges = focused ? selectedRanges.map(\.rangeValue).filter { $0.length > 0 } : []
+        for state in renderedTableViews.values {
+            state.tableView.isDocumentSelected = ranges.contains { NSIntersectionRange($0, state.sourceRange).length > 0 }
+        }
+        for state in renderedImageViews.values {
+            state.imageView.isDocumentSelected = ranges.contains { NSIntersectionRange($0, state.sourceRange).length > 0 }
+        }
+        needsDisplay = true
+    }
     private var tableFocusRestorations: [Int: (row: Int, column: Int, selection: NSRange)] = [:]
     private var tableSelectionRestorations: [Int: (anchor: (Int, Int), end: (Int, Int))] = [:]
     private var retainedRenderedOverlayKeys: Set<Int>?
@@ -277,13 +294,19 @@ final class WindowAwareTextView: NSTextView {
 
     override func becomeFirstResponder() -> Bool {
         let becameFirstResponder = super.becomeFirstResponder()
-        if becameFirstResponder { focusDidChangeHandler?() }
+        if becameFirstResponder {
+            updateRenderedSelection(isFocused: true)
+            focusDidChangeHandler?()
+        }
         return becameFirstResponder
     }
 
     override func resignFirstResponder() -> Bool {
         let resignedFirstResponder = super.resignFirstResponder()
-        if resignedFirstResponder { focusDidChangeHandler?() }
+        if resignedFirstResponder {
+            updateRenderedSelection(isFocused: false)
+            focusDidChangeHandler?()
+        }
         return resignedFirstResponder
     }
 
@@ -309,6 +332,7 @@ final class WindowAwareTextView: NSTextView {
             renderedTableViews.removeValue(forKey: key)?.tableView.removeFromSuperview()
         }
         self.retainedRenderedOverlayKeys = nil
+        updateRenderedSelection()
         scheduleRenderedImageLayout()
     }
 
@@ -360,6 +384,7 @@ final class WindowAwareTextView: NSTextView {
         imageView.presentsDiagram = alternative == "Mermaid 图表"
         imageView.setFrameSize(renderedSize)
         imageView.setAccessibilityLabel(alternative.isEmpty ? "图片" : alternative)
+        updateRenderedSelection()
         scheduleRenderedImageLayout()
         return renderedSize
     }
@@ -1458,6 +1483,7 @@ final class WindowAwareTextView: NSTextView {
 
     @objc func copyAsMarkdown(_ sender: Any?) {
         guard selectedRange().length > 0 else { return }
+        normalizeExtendedSelection()
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString((string as NSString).substring(with: selectedRange()), forType: .string)
     }
@@ -1486,6 +1512,7 @@ final class WindowAwareTextView: NSTextView {
             return
         }
         super.mouseDown(with: event)
+        normalizeExtendedSelection()
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {

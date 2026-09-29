@@ -6,6 +6,91 @@ import XCTest
 
 final class RenderedMarkdownEditorTests: XCTestCase {
     @MainActor
+    func testRenderedSelectionIsVisibleAcrossThemesAndCopiesTheSelectedSource() async throws {
+        let source = "# 选区检查\n\n普通段落 English 和 **粗体**、`inline code`。\n\n> 引用文字 Quote\n\n- 第一条列表 Item\n- 第二条列表\n\n```swift\nlet value = 1\n```\n\n| 表头 | 内容 |\n| --- | --- |\n| 第一格 | 第二格 |"
+        let board = NSPasteboard.general
+        let saved = (board.pasteboardItems ?? []).map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types { if let data = item.data(forType: type) { copy.setData(data, forType: type) } }
+            return copy
+        }
+        defer { board.clearContents(); board.writeObjects(saved) }
+        let activationPolicy = NSApp.activationPolicy()
+        NSApp.setActivationPolicy(.regular)
+        defer { NSApp.setActivationPolicy(activationPolicy) }
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 700, height: 700),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        for theme in PreviewTheme.allCases {
+            let editor = MarkdownSourceEditorSession()
+            window.contentView = editor.scrollView
+            editor.textView.appearance = NSAppearance(named: theme.styles.value("color-scheme") == "dark" ? .darkAqua : .aqua)
+            editor.textView.string = source
+            _ = await editor.deriveContent(for: source, configuration: .default)
+            editor.setPresentation(.rendered, source: source, onLinkClick: nil, theme: theme)
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            try await Task.sleep(for: .milliseconds(100))
+            window.makeFirstResponder(editor.textView)
+            let tableRange = try XCTUnwrap(RenderedMarkdownEditor.plan(for: source).tables.first?.sourceRange.utf16Range)
+            let table = try XCTUnwrap(editor.textView.renderedTable(atUTF16Location: tableRange.location))
+            let unselected = try selectionSnapshot(table)
+            let all = NSRange(location: 0, length: source.utf16.count)
+            // NSTextView's drag/keyboard path calls the plural selection setter.
+            editor.textView.setSelectedRanges([NSValue(range: all)], affinity: .downstream, stillSelecting: true)
+            XCTAssertTrue(table.isDocumentSelected, theme.label)
+            XCTAssertNotEqual(try selectionSnapshot(table), unselected, "The opaque table must visibly participate: \(theme.label)")
+            editor.textView.copy(nil)
+            XCTAssertEqual(board.string(forType: .string), source)
+            XCTAssertEqual(editor.textView.selectedRange(), all)
+            editor.setPresentation(.rendered, source: source, onLinkClick: nil, theme: theme)
+            XCTAssertTrue(table.isDocumentSelected, "Render refresh must retain selection")
+            if let directory = ProcessInfo.processInfo.environment["INFLOW_SELECTION_SCREENSHOTS"] {
+                try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+                try selectionSnapshot(editor.scrollView).write(to: URL(fileURLWithPath: directory).appendingPathComponent(theme.rawValue + ".png"))
+            }
+            XCTAssertTrue(table.focusCell(row: 1, column: 0))
+            XCTAssertFalse(table.isDocumentSelected, "Cell focus must clear the stale document overlay")
+            table.selectCells(from: (0, 0), to: (1, 1))
+            XCTAssertNotEqual(try selectionSnapshot(table), unselected)
+            XCTAssertTrue(table.handleCellClipboard("copy"))
+            XCTAssertEqual(board.string(forType: .string), "表头\t内容\n第一格\t第二格")
+            XCTAssertEqual(table.selectedCellTexts, [["表头", "内容"], ["第一格", "第二格"]])
+            table.clearCellSelection()
+            window.makeFirstResponder(editor.textView)
+            editor.textView.setSelectedRange(NSRange(location: tableRange.location, length: 1))
+            XCTAssertTrue(table.isDocumentSelected)
+            editor.textView.copyAsMarkdown(nil)
+            XCTAssertEqual(board.string(forType: .string), (source as NSString).substring(with: tableRange))
+            editor.textView.setSelectedRange(NSRange(location: 0, length: 0))
+            XCTAssertFalse(table.isDocumentSelected)
+            XCTAssertEqual(editor.textView.string, source)
+
+            let image = NSImage(size: NSSize(width: 80, height: 40), flipped: false) { rect in
+                NSColor.white.setFill(); rect.fill(); return true
+            }
+            _ = editor.textView.setRenderedImage(image, alternative: "selection fixture", sourceRange: tableRange, fillsAvailableWidth: false)
+            let imageView = try XCTUnwrap(editor.textView.subviews.compactMap { $0 as? RenderedMarkdownImageView }.first)
+            let plainImage = try selectionSnapshot(imageView)
+            editor.textView.setSelectedRange(tableRange)
+            XCTAssertTrue(imageView.isDocumentSelected)
+            XCTAssertNotEqual(try selectionSnapshot(imageView), plainImage)
+            editor.textView.setSelectedRange(NSRange(location: 0, length: 0))
+            XCTAssertFalse(imageView.isDocumentSelected)
+        }
+    }
+
+    @MainActor
+    private func selectionSnapshot(_ view: NSView) throws -> Data {
+        view.layoutSubtreeIfNeeded()
+        view.displayIfNeeded()
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        return try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+    }
+
+    @MainActor
     func testRenderedTextBaselinesCenterAcrossBlocksThemesAndLineHeights() async throws {
         let source = "# 中文 Heading\n\n正文 English 😀 和 **粗体**、`code`。\n\n> 引用文字 Quote\n\n- 列表 Item\n- 第二项\n\n1. 有序列表\n2. 第二项\n\n- [ ] 任务 Task\n\n```swift\nlet value = 1\n```"
         for theme in PreviewTheme.allCases {

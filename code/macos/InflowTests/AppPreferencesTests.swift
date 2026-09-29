@@ -4,6 +4,37 @@ import XCTest
 
 @MainActor
 final class AppPreferencesTests: XCTestCase {
+    func testCSSSelectionColorsReachNativeTextAndTableCells() async throws {
+        let theme = PreviewTheme(id: "selection", label: "Selection", css: """
+        :root { --selection-color: #abcdee; --md-selection-overlay: #11223355; }
+        ::selection { background: #ffdddd; color: #112233; }
+        #write::selection { background-color: var(--selection-color); }
+        """)
+        let palette = MarkdownRenderPalette.resolved(for: try XCTUnwrap(NSAppearance(named: .aqua)), theme: theme)
+        XCTAssertEqual(palette.selectionBackground, "#abcdee")
+        XCTAssertEqual(palette.selectionText, "#112233")
+        XCTAssertEqual(palette.selectionOverlay, "#11223355")
+        let source = "正文\n\n| A | B |\n| --- | --- |\n| one | two |"
+        let editor = MarkdownSourceEditorSession()
+        editor.textView.string = source
+        _ = await editor.deriveContent(for: source, configuration: .default)
+        editor.setPresentation(.rendered, source: source, onLinkClick: nil, theme: theme)
+        XCTAssertEqual(editor.textView.selectedTextAttributes[.backgroundColor] as? NSColor, palette.selectionBackgroundColor)
+        let model = try XCTUnwrap(RenderedMarkdownEditor.plan(for: source).tables.first)
+        let table = try XCTUnwrap(editor.textView.renderedTable(atUTF16Location: model.sourceRange.utf16Range.location))
+        for cell in table.subviews.compactMap({ $0 as? NSTextView }) {
+            XCTAssertEqual(cell.selectedTextAttributes[.backgroundColor] as? NSColor, palette.selectionBackgroundColor)
+        }
+        editor.setPresentation(.source, source: source, onLinkClick: nil)
+        XCTAssertEqual(editor.textView.selectedTextAttributes[.backgroundColor] as? NSColor, .selectedTextBackgroundColor)
+        for builtin in PreviewTheme.allCases {
+            let colors = MarkdownRenderPalette.resolved(for: try XCTUnwrap(NSAppearance(named: .aqua)), theme: builtin)
+            XCTAssertNotEqual(colors.selectionBackground, colors.canvas, builtin.label)
+            XCTAssertNotEqual(colors.selectionBackground, colors.subtleSurface, builtin.label)
+            XCTAssertEqual(colors.selectionBackgroundColor.alphaComponent, 1)
+        }
+    }
+
     func testCSSThemeCatalogInstallsSixEditableFilesAndDiscoversCustomThemes() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

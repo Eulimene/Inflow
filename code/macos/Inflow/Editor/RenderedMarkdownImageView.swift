@@ -1,7 +1,19 @@
 import AppKit
 
 final class RenderedMarkdownImageView: NSImageView {
-    var renderedTheme = PreviewTheme.standard { didSet { updateDiagramFrame() } }
+    var isDocumentSelected = false {
+        didSet { if oldValue != isDocumentSelected { needsDisplay = true } }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        if isDocumentSelected {
+            MarkdownRenderPalette.resolved(for: effectiveAppearance, theme: renderedTheme).selectionOverlayColor.setFill()
+            bounds.intersection(dirtyRect).fill(using: .sourceOver)
+        }
+    }
+
+    var renderedTheme = PreviewTheme.standard { didSet { updateDiagramFrame(); needsDisplay = true } }
     var presentsDiagram = false {
         didSet { updateDiagramFrame() }
     }
@@ -18,6 +30,7 @@ final class RenderedMarkdownImageView: NSImageView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         updateDiagramFrame()
+        needsDisplay = true
     }
 
     private func updateDiagramFrame() {
@@ -36,4 +49,3 @@ final class RenderedMarkdownImageView: NSImageView {
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
-
