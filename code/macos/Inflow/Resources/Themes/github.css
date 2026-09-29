@@ -1,0 +1,29 @@
+/* Inflow Github — original CSS, inspired by the named Typora theme style. */
+:root {
+  --bg-color: #ffffff;
+  --text-color: #24292f;
+  --primary-color: #0969da;
+  --md-heading: #24292f;
+  --md-secondary: #57606a;
+  --md-border: #d0d7de;
+  --md-quote-bar: #d0d7de;
+  --md-surface: #f6f8fa;
+  --md-surface-strong: #eff1f3;
+  --md-table-stripe: #f6f8fa;
+  --md-inline-code: #eff1f3;
+}
+body {
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  font-family: "Helvetica Neue", Arial, "PingFang SC", sans-serif;
+  line-height: 1.6;
+  color-scheme: light;
+}
+h1, h2, h3, h4, h5, h6 { color: var(--md-heading); }
+a { color: var(--primary-color); }
+blockquote { color: var(--md-secondary); border-left-color: var(--md-quote-bar); }
+pre { background-color: var(--md-surface); border-color: var(--md-border); }
+code { background-color: var(--md-inline-code); }
+th, td { border-color: var(--md-border); }
+th { background-color: var(--md-surface); }
+tr:nth-child(even) { background-color: var(--md-table-stripe); }

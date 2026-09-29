@@ -1,0 +1,32 @@
+/* Inflow Pixyll — original CSS, inspired by the named Typora theme style. */
+:root {
+  --bg-color: #ffffff;
+  --text-color: #333333;
+  --primary-color: #d14b6a;
+  --md-heading: #111111;
+  --md-secondary: #777777;
+  --md-border: #e6e6e6;
+  --md-quote-bar: #e6e6e6;
+  --md-surface: #f7f7f7;
+  --md-surface-strong: #f1f1f1;
+  --md-table-stripe: #f7f7f7;
+  --md-inline-code: #f1f1f1;
+}
+body {
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  font-family: Georgia, "Songti SC", serif;
+  line-height: 1.8;
+  color-scheme: light;
+}
+h1, h2, h3, h4, h5, h6 { color: var(--md-heading); }
+a { color: var(--primary-color); }
+blockquote { color: var(--md-secondary); border-left-color: var(--md-quote-bar); }
+pre { background-color: var(--md-surface); border-color: var(--md-border); }
+code { background-color: var(--md-inline-code); }
+th, td { border-color: var(--md-border); }
+th { background-color: var(--md-surface); }
+tr:nth-child(even) { background-color: var(--md-table-stripe); }
+h1, h2, h3 { font-family: "Avenir Next", sans-serif; }
+h1 { font-size: 2.4em; }
+a { text-decoration: underline; }

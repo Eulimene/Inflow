@@ -2057,7 +2057,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             storage.attribute(.foregroundColor, at: contentLocation, effectiveRange: nil)
                 as? NSColor
         )
-        XCTAssertEqual(darkColor, MarkdownRenderPalette.dark.secondaryTextColor)
+        XCTAssertEqual(darkColor, MarkdownRenderPalette.resolved(for: session.textView.effectiveAppearance).secondaryTextColor)
         XCTAssertEqual(session.textView.string, source)
     }
 

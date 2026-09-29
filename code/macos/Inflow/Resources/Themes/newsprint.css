@@ -1,0 +1,31 @@
+/* Inflow Newsprint — original CSS, inspired by the named Typora theme style. */
+:root {
+  --bg-color: #f5f1e8;
+  --text-color: #37352f;
+  --primary-color: #9a5935;
+  --md-heading: #29251e;
+  --md-secondary: #787167;
+  --md-border: #d7cfbf;
+  --md-quote-bar: #d7cfbf;
+  --md-surface: #ede6d9;
+  --md-surface-strong: #e9e1d2;
+  --md-table-stripe: #ede6d9;
+  --md-inline-code: #e9e1d2;
+}
+body {
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  font-family: ui-serif, Georgia, "Songti SC", serif;
+  line-height: 1.82;
+  color-scheme: light;
+}
+h1, h2, h3, h4, h5, h6 { color: var(--md-heading); }
+a { color: var(--primary-color); }
+blockquote { color: var(--md-secondary); border-left-color: var(--md-quote-bar); }
+pre { background-color: var(--md-surface); border-color: var(--md-border); }
+code { background-color: var(--md-inline-code); }
+th, td { border-color: var(--md-border); }
+th { background-color: var(--md-surface); }
+tr:nth-child(even) { background-color: var(--md-table-stripe); }
+h1 { font-size: 2.2em; }
+h2 { font-size: 1.65em; }

@@ -101,28 +101,29 @@ struct MarkdownRenderPalette: Equatable, Sendable {
         warning: "#e0b450"
     )
 
-    let canvas: String
+    var canvas: String
     var text: String
     var heading: String
     var secondaryText: String
-    let accent: String
+    var accent: String
     var border: String
     var quoteBar: String
-    let subtleSurface: String
-    let mutedSurface: String
-    let tableStripe: String
-    let inlineCode: String
-    let keyword: String
-    let type: String
-    let string: String
-    let number: String
-    let comment: String
-    let tag: String
-    let warning: String
+    var subtleSurface: String
+    var mutedSurface: String
+    var tableStripe: String
+    var inlineCode: String
+    var keyword: String
+    var type: String
+    var string: String
+    var number: String
+    var comment: String
+    var tag: String
+    var warning: String
 
     @MainActor
     static func resolved(for appearance: NSAppearance, theme: PreviewTheme = .standard) -> Self {
-        let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let scheme = theme.styles.value("color-scheme")
+        let isDark = scheme == "dark" || (scheme != "light" && appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
         var palette: Self = isDark ? .dark : .light
         if theme == .highContrast {
             palette.text = isDark ? "#ffffff" : "#111111"
@@ -131,7 +132,7 @@ struct MarkdownRenderPalette: Equatable, Sendable {
             palette.border = isDark ? "#a0a0a0" : "#666666"
             palette.quoteBar = palette.border
         }
-        return palette
+        return theme.styles.applying(to: palette)
     }
 
     var cssVariables: String {
@@ -159,16 +160,7 @@ struct MarkdownRenderPalette: Equatable, Sendable {
     var inlineCodeColor: NSColor { color(inlineCode) }
 
     private func color(_ value: String) -> NSColor {
-        let hex = value.dropFirst()
-        guard hex.count == 6, let number = UInt32(hex, radix: 16) else {
-            return .textColor
-        }
-        return NSColor(
-            srgbRed: CGFloat((number >> 16) & 0xFF) / 255,
-            green: CGFloat((number >> 8) & 0xFF) / 255,
-            blue: CGFloat(number & 0xFF) / 255,
-            alpha: 1
-        )
+        NativeCSSStyles.color(value) ?? .textColor
     }
 }
 
@@ -226,24 +218,6 @@ enum PreviewColorScheme: String, CaseIterable, Identifiable, Sendable {
         case .system: "跟随系统"
         case .light: "浅色"
         case .dark: "深色"
-        }
-    }
-}
-
-enum PreviewTheme: String, CaseIterable, Identifiable, Sendable {
-    case standard
-    case longform
-    case code
-    case highContrast
-
-    var id: Self { self }
-
-    var label: String {
-        switch self {
-        case .standard: "标准"
-        case .longform: "长文阅读"
-        case .code: "代码优先"
-        case .highContrast: "高对比度"
         }
     }
 }
@@ -383,8 +357,9 @@ struct PreviewAppearanceConfiguration: Equatable, Sendable {
         fontSize: Double = MarkdownRenderMetrics.bodyFontSize,
         lineHeight: Double? = nil
     ) {
-        self.fontSize = fontSize
-        self.lineHeight = lineHeight ?? (theme == .longform ? 1.82 : theme == .code ? 1.58 : MarkdownRenderMetrics.bodyLineHeight)
+        let themeSize = min(72, max(6, Double(theme.styles.length("font-size") ?? CGFloat(MarkdownRenderMetrics.bodyFontSize))))
+        self.fontSize = fontSize * themeSize / MarkdownRenderMetrics.bodyFontSize
+        self.lineHeight = lineHeight ?? min(2.5, max(1, Double(theme.styles.value("line-height") ?? "") ?? MarkdownRenderMetrics.bodyLineHeight))
         self.contentWidth = contentWidth
         self.zoom = zoom
         self.colorScheme = colorScheme
@@ -625,6 +600,11 @@ final class AppPreferences: ObservableObject {
     private let defaults: UserDefaults
     private let persistence: any AppPreferencePersistence
     private var accessibilityObserver: AnyCancellable?
+    private var themeRefreshTimer: AnyCancellable?
+    let themeDirectory: URL
+    @Published private(set) var availableThemes: [PreviewTheme] = PreviewTheme.allCases
+    @Published private(set) var themeLoadMessage: String?
+
     @Published private(set) var persistenceFailure: SettingsPersistenceFailure?
 
     @Published var renderedFontSize: Double {
@@ -846,9 +826,11 @@ final class AppPreferences: ObservableObject {
 
     init(
         defaults: UserDefaults = .standard,
-        persistence: (any AppPreferencePersistence)? = nil
+        persistence: (any AppPreferencePersistence)? = nil,
+        themeDirectory: URL? = nil
     ) {
         self.defaults = defaults
+        self.themeDirectory = themeDirectory ?? ThemeCatalog.defaultDirectory
         self.persistence = persistence ?? UserDefaultsAppPreferencePersistence(defaults: defaults)
         Registry.migrate(defaults)
         persistenceFailure = nil
@@ -956,6 +938,16 @@ final class AppPreferences: ObservableObject {
         autosaveDelay = LaunchFixed.autosaveDelay
         existingImagePlacement = LaunchFixed.existingImagePlacement
 
+        if defaults === UserDefaults.standard || themeDirectory != nil {
+            reloadThemes()
+            if defaults === UserDefaults.standard {
+                themeRefreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect().sink { [weak self] _ in
+                    self?.reloadThemes()
+                }
+            }
+        } else if previewTheme.css.isEmpty && previewTheme != .highContrast {
+            previewTheme = .standard
+        }
         persistCurrentValues()
         accessibilityObserver = NSWorkspace.shared.notificationCenter
             .publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification)
@@ -964,6 +956,23 @@ final class AppPreferences: ObservableObject {
                     self?.objectWillChange.send()
                 }
             }
+    }
+
+    func reloadThemes() {
+        do {
+            let result = try ThemeCatalog(directory: themeDirectory).load()
+            if availableThemes != result.themes { availableThemes = result.themes }
+            let selected = result.themes.first { $0.rawValue == previewTheme.rawValue }
+                ?? ([PreviewTheme.code, .highContrast].first { $0.rawValue == previewTheme.rawValue }) ?? .standard
+            if previewTheme != selected { previewTheme = selected }
+            let message = result.issues.isEmpty ? nil : result.issues.joined(separator: "\n")
+            if themeLoadMessage != message { themeLoadMessage = message }
+        } catch { themeLoadMessage = "无法读取主题目录；继续使用当前主题。" }
+    }
+
+    func openThemeDirectory() {
+        reloadThemes()
+        NSWorkspace.shared.open(themeDirectory)
     }
 
     var sourceEditorAppearance: SourceEditorAppearance {
@@ -993,7 +1002,7 @@ final class AppPreferences: ObservableObject {
             mathRenderingEnabled: mathRenderingEnabled,
             mermaidRenderingEnabled: mermaidRenderingEnabled,
             fontSize: renderedFontSize,
-            lineHeight: editorLineHeight
+            lineHeight: editorLineHeight == MarkdownRenderMetrics.bodyLineHeight ? nil : editorLineHeight
         )
     }
 

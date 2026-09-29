@@ -8,6 +8,7 @@ struct MarkdownNativeStyleSheet {
     let palette: MarkdownRenderPalette
     let sourceAppearance: SourceEditorAppearance
     let isEditable: Bool
+    var theme: PreviewTheme = .standard
 
     func hideRenderedMarker(
         _ range: NSRange,
@@ -115,6 +116,7 @@ struct MarkdownNativeStyleSheet {
         storage: NSTextStorage,
         baseFont: NSFont
     ) {
+        defer { applyCSS(kind: kind, range: range, storage: storage, baseFont: baseFont) }
         switch kind {
         case .paragraph:
             break
@@ -275,6 +277,55 @@ struct MarkdownNativeStyleSheet {
         paragraphStyle.paragraphSpacingBefore = 1
         paragraphStyle.lineHeightMultiple = max(paragraphStyle.lineHeightMultiple, 1.25)
         storage.addAttribute(.paragraphStyle, value: paragraphStyle, range: range)
+    }
+
+    private func applyCSS(kind: RenderedMarkdownContentStyleKind, range: NSRange, storage: NSTextStorage, baseFont: NSFont) {
+        let element: String
+        switch kind {
+        case .paragraph: element = "p"
+        case .heading(let level): element = "h\(level)"
+        case .blockQuote: element = "blockquote"
+        case .inlineCode: element = "code"
+        case .strong: element = "strong"
+        case .emphasis: element = "em"
+        case .unorderedListItem, .orderedListItem, .taskListItem: element = "li"
+        default: return
+        }
+        guard range.length > 0, NSMaxRange(range) <= storage.length else { return }
+        let css = theme.styles
+        guard css.rules.contains(where: { $0.selector == element || $0.selector == "#write " + element }) else { return }
+        let existingFont = storage.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont ?? baseFont
+        let size = min(120, max(6, css.length("font-size", on: element, relativeTo: baseFont.pointSize) ?? existingFont.pointSize))
+        var font = css.font(on: element, size: size, fallback: NSFont(descriptor: existingFont.fontDescriptor, size: size) ?? existingFont)
+        let weight = css.value("font-weight", on: element)
+        if weight == "bold" || (Double(weight ?? "") ?? 0) >= 600
+            || (weight == nil && NSFontManager.shared.traits(of: existingFont).contains(.boldFontMask)) {
+            font = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+        }
+        else if weight != nil { font = NSFontManager.shared.convert(font, toNotHaveTrait: .boldFontMask) }
+        if ["font-family", "font-size", "font-weight"].contains(where: { css.value($0, on: element) != nil }) {
+            storage.addAttribute(.font, value: font, range: range)
+        }
+        if let raw = css.value("color", on: element), let color = NativeCSSStyles.color(raw) {
+            storage.addAttribute(.foregroundColor, value: color, range: range)
+        }
+        if let spacing = css.length("letter-spacing", on: element, relativeTo: size) {
+            storage.addAttribute(.kern, value: min(20, max(-2, spacing)), range: range)
+        }
+        let paragraph = (storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+        if case .heading(let level) = kind {
+            paragraph.minimumLineHeight = size * CGFloat(MarkdownRenderMetrics.headingLineHeight(level: level))
+        }
+        if let line = css.value("line-height", on: element) {
+            let height = Double(line).map { size * CGFloat($0) } ?? css.length("line-height", on: element, relativeTo: size) ?? 0
+            if height.isFinite && height > 0 { paragraph.minimumLineHeight = min(240, max(size, height)); paragraph.lineHeightMultiple = 1 }
+        }
+        if let before = css.length("margin-top", on: element, relativeTo: baseFont.pointSize) { paragraph.paragraphSpacingBefore = min(200, max(0, before)) }
+        if let after = css.length("margin-bottom", on: element, relativeTo: baseFont.pointSize) { paragraph.paragraphSpacing = min(200, max(0, after)) }
+        if let alignment = css.value("text-align", on: element) {
+            paragraph.alignment = alignment == "center" ? .center : alignment == "right" ? .right : alignment == "justify" ? .justified : .left
+        }
+        storage.addAttribute(.paragraphStyle, value: paragraph, range: range)
     }
 
     private func transformFonts(

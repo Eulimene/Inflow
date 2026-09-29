@@ -1,0 +1,30 @@
+/* Inflow Night — original CSS, inspired by the named Typora theme style. */
+:root {
+  --bg-color: #20242b;
+  --text-color: #d5d9df;
+  --primary-color: #80b7ff;
+  --md-heading: #f0f3f6;
+  --md-secondary: #9da7b5;
+  --md-border: #414955;
+  --md-quote-bar: #414955;
+  --md-surface: #292f38;
+  --md-surface-strong: #343c48;
+  --md-table-stripe: #292f38;
+  --md-inline-code: #343c48;
+}
+body {
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  font-family: "Helvetica Neue", "PingFang SC", sans-serif;
+  line-height: 1.7;
+  color-scheme: dark;
+}
+h1, h2, h3, h4, h5, h6 { color: var(--md-heading); }
+a { color: var(--primary-color); }
+blockquote { color: var(--md-secondary); border-left-color: var(--md-quote-bar); }
+pre { background-color: var(--md-surface); border-color: var(--md-border); }
+code { background-color: var(--md-inline-code); }
+th, td { border-color: var(--md-border); }
+th { background-color: var(--md-surface); }
+tr:nth-child(even) { background-color: var(--md-table-stripe); }
+:root { --md-keyword: #ff8a80; --md-type: #c4a7ff; --md-string: #9cc2ff; --md-number: #7cd4fd; --md-comment: #9ba7b4; --md-tag: #75e0a7; --md-warning: #e0b450; }

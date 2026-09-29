@@ -4,6 +4,137 @@ import XCTest
 
 @MainActor
 final class AppPreferencesTests: XCTestCase {
+    func testCSSThemeCatalogInstallsSixEditableFilesAndDiscoversCustomThemes() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let catalog = ThemeCatalog(directory: directory)
+        let initial = try catalog.load()
+        XCTAssertEqual(initial.themes.map(\.label), ["GitHub", "Whitey", "Night", "Newsprint", "Pixyll", "Gothic"])
+        XCTAssertTrue(initial.issues.isEmpty)
+        XCTAssertTrue(initial.themes.allSatisfy { !$0.css.isEmpty && $0.styles.isValid })
+        XCTAssertEqual(Set(initial.themes.map(\.css)).count, 6)
+        let custom = directory.appendingPathComponent("my-paper.css")
+        try "body { color: #123456; background: #fff; }".write(to: custom, atomically: true, encoding: .utf8)
+        let edited = directory.appendingPathComponent("whitey.css")
+        try "body { color: #654321; }".write(to: edited, atomically: true, encoding: .utf8)
+        let loaded = try catalog.load()
+        XCTAssertEqual(loaded.themes.last?.label, "My Paper")
+        XCTAssertEqual(loaded.themes.first { $0.id == "whitey" }?.styles.value("color"), "#654321")
+        try "body {".write(to: custom, atomically: true, encoding: .utf8)
+        let invalid = try catalog.load()
+        XCTAssertEqual(invalid.themes.count, 6)
+        XCTAssertEqual(invalid.issues.count, 1)
+        XCTAssertEqual(try String(contentsOf: custom, encoding: .utf8), "body {", "Invalid user CSS is never overwritten")
+    }
+
+    func testCSSCascadeVariablesUnitsAndUnsupportedRulesStayBounded() {
+        let css = NativeCSSStyles(css: """
+        /* body { color: red } */
+        :root { --ink: #123; --cycle: var(--cycle); color: red !important; }
+        body { color: var(--ink); font-family: Georgia, serif; padding: 20px 32px; }
+        #write h1 { color: #abc; font-size: 2em; margin: 1rem 0 .5rem; }
+        h1 { color: #fed; color: rgb(20, 30, 40) !important; }
+        a { color: var(--missing, #369); }
+        pre { color: var(--cycle); }
+        @media (max-width: 600px) { body { color: #ff0000; } }
+        """)
+        XCTAssertTrue(css.isValid)
+        XCTAssertTrue(css.hasUnsupportedRules)
+        XCTAssertEqual(css.value("color"), "#123", "Body declarations override inherited root color")
+        XCTAssertEqual(NativeCSSStyles.colorHex(css.value("color", on: "h1")), "#141e28")
+        XCTAssertEqual(css.length("font-size", on: "h1", relativeTo: 18), 36)
+        XCTAssertEqual(css.length("margin-bottom", on: "h1", relativeTo: 18), 9)
+        XCTAssertEqual(css.length("padding-left"), 32)
+        XCTAssertEqual(NativeCSSStyles.colorHex(css.value("color", on: "a")), "#336699")
+        XCTAssertNil(css.value("color", on: "pre"), "Cyclic variables must not hang rendering")
+        XCTAssertEqual(NativeCSSStyles.colorHex("rgba(10,20,30,0.5)"), "#0a141e80")
+        XCTAssertFalse(NativeCSSStyles(css: "body { color: red;").isValid)
+    }
+
+    func testCSSThemeReloadPersistsSelectionAndFreezesExportSnapshot() throws {
+        let suite = "inflow-css-tests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: directory) }
+        let preferences = AppPreferences(defaults: defaults, themeDirectory: directory)
+        let file = directory.appendingPathComponent("custom.css")
+        try "body { color: #123456; font-family: Georgia; }".write(to: file, atomically: true, encoding: .utf8)
+        preferences.reloadThemes()
+        preferences.previewTheme = try XCTUnwrap(preferences.availableThemes.first { $0.id == "custom" })
+        let frozen = preferences.previewConfiguration
+        try "body { color: #654321; font-family: Menlo; }".write(to: file, atomically: true, encoding: .utf8)
+        preferences.reloadThemes()
+        XCTAssertEqual(preferences.previewTheme.styles.value("color"), "#654321")
+        XCTAssertEqual(frozen.theme.styles.value("color"), "#123456")
+        let reloaded = AppPreferences(defaults: defaults, themeDirectory: directory)
+        XCTAssertEqual(reloaded.previewTheme.id, "custom")
+        XCTAssertEqual(reloaded.previewTheme.styles.value("color"), "#654321")
+        try FileManager.default.removeItem(at: file)
+        preferences.reloadThemes()
+        XCTAssertEqual(preferences.previewTheme.id, "github")
+        XCTAssertNil(preferences.themeLoadMessage)
+    }
+
+    func testCSSThemeHTMLUsesWriteSelectorWithoutAllowingStyleTagEscape() {
+        let theme = PreviewTheme(id: "custom", label: "Custom", css: "#write h1 { color: #abcdef; } /* </style><script>alert(1)</script> */")
+        let configuration = PreviewAppearanceConfiguration(contentWidth: 1200, zoom: 1, colorScheme: .light,
+            theme: theme, increasedContrast: false, reduceMotion: true)
+        let html = MarkdownRenderer.htmlDocument(for: "# Hello", configuration: configuration)
+        XCTAssertTrue(html.contains("<body id=\"write\">"))
+        XCTAssertTrue(html.contains("#write h1 { color: #abcdef; }"))
+        XCTAssertFalse(html.contains("<script>"))
+        XCTAssertFalse(html.contains("</style><script>"))
+        XCTAssertTrue(html.contains("default-src 'none'"))
+    }
+
+    func testCSSThemesReachNativeFontsColorsHeadingsAndKeepMarkdownIntact() async throws {
+        let source = "# Heading 标题\n\n正文 **bold** 与 `code`。\n\n| A | B |\n| --- | --- |\n| 甲 | 乙 |"
+        let editor = MarkdownSourceEditorSession(role: .renderedProjection)
+        editor.scrollView.frame = NSRect(x: 0, y: 0, width: 900, height: 700)
+        editor.textView.frame = editor.scrollView.bounds
+        editor.textView.string = source
+        for theme in PreviewTheme.allCases {
+            let configuration = PreviewAppearanceConfiguration(contentWidth: 1200, zoom: 1, colorScheme: .system,
+                theme: theme, increasedContrast: false, reduceMotion: true)
+            editor.applySourceAppearance(configuration.nativeRenderedAppearance(spellingEnabled: false), force: true)
+            _ = await editor.deriveContent(for: source, configuration: configuration)
+            editor.setPresentation(.rendered, source: source, onLinkClick: nil, theme: theme)
+            let palette = MarkdownRenderPalette.resolved(for: NSAppearance(named: .aqua)!, theme: theme)
+            XCTAssertEqual(editor.textView.backgroundColor, palette.canvasColor, theme.label)
+            XCTAssertEqual(editor.textView.string, source)
+            let table = try XCTUnwrap(editor.textView.renderedTable(atUTF16Location: (source as NSString).range(of: "| A").location))
+            XCTAssertEqual(table.backgroundColor(forRow: 0), palette.mutedSurfaceColor, theme.label)
+            XCTAssertEqual(table.backgroundColor(forRow: 1), palette.canvasColor, theme.label)
+            let cell = try XCTUnwrap(table.subviews.compactMap { $0 as? RenderedMarkdownTableCellTextView }.first { $0.string == "甲" })
+            let expectedFont = theme.styles.font(size: CGFloat(configuration.fontSize), fallback: MarkdownRenderMetrics.bodyFont(size: CGFloat(configuration.fontSize)))
+            XCTAssertEqual(cell.caretFont.familyName, expectedFont.familyName, theme.label)
+            let headingRange = (source as NSString).range(of: "Heading")
+            let headingFont = try XCTUnwrap(editor.textView.textStorage?.attribute(.font, at: headingRange.location, effectiveRange: nil) as? NSFont)
+            XCTAssertGreaterThan(headingFont.pointSize, configuration.fontSize)
+            if let path = ProcessInfo.processInfo.environment["INFLOW_THEME_SNAPSHOTS"] {
+                let directory = URL(fileURLWithPath: path)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                editor.textView.layoutManager?.ensureLayout(for: try XCTUnwrap(editor.textView.textContainer))
+                editor.scrollView.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(editor.scrollView.bitmapImageRepForCachingDisplay(in: editor.scrollView.bounds))
+                editor.scrollView.cacheDisplay(in: editor.scrollView.bounds, to: bitmap)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent(theme.id + ".png"))
+            }
+        }
+        let custom = PreviewTheme(id: "custom", label: "Custom", css: "body { font-family: Menlo; color: #112233; } #write h1 { font-size: 3em; color: #ff0000; }")
+        let config = PreviewAppearanceConfiguration(contentWidth: 1200, zoom: 1, colorScheme: .light, theme: custom,
+            increasedContrast: false, reduceMotion: true)
+        editor.applySourceAppearance(config.nativeRenderedAppearance(spellingEnabled: false), force: true)
+        _ = await editor.deriveContent(for: source, configuration: config)
+        editor.setPresentation(.rendered, source: source, onLinkClick: nil, theme: custom)
+        let heading = (source as NSString).range(of: "Heading").location
+        let font = try XCTUnwrap(editor.textView.textStorage?.attribute(.font, at: heading, effectiveRange: nil) as? NSFont)
+        XCTAssertEqual(font.pointSize, 48, accuracy: 0.1)
+        XCTAssertTrue(font.fontName.contains("Menlo"))
+        XCTAssertEqual(editor.textView.textStorage?.attribute(.foregroundColor, at: heading, effectiveRange: nil) as? NSColor, NativeCSSStyles.color("#ff0000"))
+        XCTAssertEqual(editor.textView.string, source)
+    }
+
     func testDefaultsMatchLaunchContract() {
         withDefaults { defaults in
             defaults.set(760, forKey: "preferences.preview.contentWidth")

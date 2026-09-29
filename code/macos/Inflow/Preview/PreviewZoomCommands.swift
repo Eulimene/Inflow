@@ -77,11 +77,14 @@ struct AppearanceCommands: Commands {
     var body: some Commands {
         CommandMenu("主题") {
             Picker("主题", selection: $preferences.previewTheme) {
-                ForEach(PreviewTheme.allCases) { theme in
+                ForEach(preferences.availableThemes) { theme in
                     Text(theme.label).tag(theme)
                 }
             }
             .pickerStyle(.inline)
+            Divider()
+            Button("打开主题目录…") { preferences.openThemeDirectory() }
+            Button("重新加载主题") { preferences.reloadThemes() }
             Divider()
             Picker("外观", selection: $preferences.previewColorScheme) {
                 ForEach(PreviewColorScheme.allCases) { scheme in

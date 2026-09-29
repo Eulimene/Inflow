@@ -41,7 +41,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
     private var cells: [CellLayout]
     private let onLinkClick: (String) -> Void
     private var onEdit: (RenderedMarkdownTableEdit) -> Void
-    private let baseFont: NSFont
+    private var baseFont: NSFont
     private let layoutStrategy: any RenderedMarkdownTableLayoutStrategy
     private var maximumWidth: CGFloat
     private var needsContentMeasurement = false
@@ -73,7 +73,8 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
     }
 
     func backgroundColor(forRow index: Int) -> NSColor {
-        Self.backgroundColor(forRow: index, appearance: effectiveAppearance)
+        index == 0 ? currentPalette.mutedSurfaceColor
+            : index.isMultiple(of: 2) ? currentPalette.tableStripeColor : currentPalette.canvasColor
     }
 
     func restingLinkUnderlineStyles() -> [Int] {
@@ -321,7 +322,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
                   old.map(\.markdown) == new.map(\.markdown) && old.map(\.text) == new.map(\.text)
               }) else { return false }
         let added = Self.makeCells(table: updated, widths: columnWidths, baseFont: baseFont,
-            palette: MarkdownRenderPalette.resolved(for: effectiveAppearance), startingRow: table.rows.count)
+            palette: currentPalette, startingRow: table.rows.count)
         let editable = cells.first?.textView.isEditable ?? false
         cells += added
         for cell in added { configure(cell); cell.textView.isEditable = editable }
@@ -401,6 +402,27 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
         }
     }
 
+    func applyFont(_ font: NSFont) {
+        guard font != baseFont, !cells.contains(where: { $0.textView.hasMarkedText() }) else { return }
+        baseFont = font
+        for cell in cells {
+            let selected = cell.textView.selectedRange()
+            let cellFont = cell.row == 0 ? NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) : font
+            cell.textView.caretFont = cellFont
+            cell.textView.typingAttributes[.font] = cellFont
+            guard let storage = cell.textView.textStorage else { continue }
+            let fullRange = NSRange(location: 0, length: storage.length)
+            let paragraph = (cell.textView.defaultParagraphStyle?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+            paragraph.minimumLineHeight = cellFont.pointSize * MarkdownRenderMetrics.bodyLineHeight
+            cell.textView.defaultParagraphStyle = paragraph
+            cell.textView.typingAttributes[.paragraphStyle] = paragraph
+            storage.addAttributes([.font: cellFont, .paragraphStyle: paragraph], range: fullRange)
+            MarkdownInlineProjection(table.rows[cell.row][cell.column].markdown).applyStyles(to: storage, font: cellFont)
+            cell.textView.setSelectedRange(selected)
+        }
+        needsContentMeasurement = true
+    }
+
     func applyPalette(_ palette: MarkdownRenderPalette) {
         guard palette != currentPalette else { return }
         currentPalette = palette
@@ -462,7 +484,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
             dark: effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
         if mathPreviewState == state { updateMathPreviewVisibility(); return renderedSize }
         mathPreviewState = state
-        let palette = MarkdownRenderPalette.resolved(for: effectiveAppearance)
+        let palette = currentPalette
         var heights = Self.rowHeights(for: table, widths: columnWidths, baseFont: baseFont)
         for cell in cells {
             cell.mathPreview?.removeFromSuperview()
@@ -593,7 +615,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
             rowRect.fill()
             y += height
         }
-        MarkdownRenderPalette.resolved(for: effectiveAppearance).borderColor.setStroke()
+        currentPalette.borderColor.setStroke()
         let gridBounds = NSRect(x: 0, y: visibleToolbarHeight, width: renderedSize.width,
             height: renderedSize.height - visibleToolbarHeight)
         let path = NSBezierPath(rect: gridBounds.insetBy(dx: 0.5, dy: 0.5))

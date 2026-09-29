@@ -1,6 +1,7 @@
 import AppKit
 
 final class RenderedMarkdownImageView: NSImageView {
+    var renderedTheme = PreviewTheme.standard { didSet { updateDiagramFrame() } }
     var presentsDiagram = false {
         didSet { updateDiagramFrame() }
     }
@@ -26,7 +27,7 @@ final class RenderedMarkdownImageView: NSImageView {
             layer?.backgroundColor = nil
             return
         }
-        let palette = MarkdownRenderPalette.resolved(for: effectiveAppearance)
+        let palette = MarkdownRenderPalette.resolved(for: effectiveAppearance, theme: renderedTheme)
         layer?.borderWidth = 0
         layer?.borderColor = nil
         layer?.cornerRadius = 0

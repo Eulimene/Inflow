@@ -98,6 +98,8 @@
 		B10000000000000000000028 /* MarkdownNativeStyleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000028 /* MarkdownNativeStyleSheet.swift */; };
 		86BD0B38137448F78DBA0DFC /* MarkdownBlockSpacingPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98AE260274C7498AB145B240 /* MarkdownBlockSpacingPlan.swift */; };
 		B10000000000000000000029 /* MarkdownLayoutPlanCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000029 /* MarkdownLayoutPlanCache.swift */; };
+        E51000000000000000000001 /* CSSThemes.swift in Sources */ = {isa = PBXBuildFile; fileRef = E52000000000000000000001; };
+        E51000000000000000000002 /* Themes in Resources */ = {isa = PBXBuildFile; fileRef = E52000000000000000000002; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -209,6 +211,8 @@
 		B20000000000000000000028 /* MarkdownNativeStyleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownNativeStyleSheet.swift; sourceTree = "<group>"; };
 		98AE260274C7498AB145B240 /* MarkdownBlockSpacingPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownBlockSpacingPlan.swift; sourceTree = "<group>"; };
 		B20000000000000000000029 /* MarkdownLayoutPlanCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownLayoutPlanCache.swift; sourceTree = "<group>"; };
+        E52000000000000000000001 /* CSSThemes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings/CSSThemes.swift; sourceTree = "<group>"; };
+        E52000000000000000000002 /* Themes */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/Themes; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -293,6 +297,8 @@
 				A2000000000000000000000D /* MarkdownRenderer.swift */,
                 D20000000000000000000001,
                 D20000000000000000000002,
+                E52000000000000000000001,
+                E52000000000000000000002,
 				A20000000000000000000023 /* LocalImageResolver.swift */,
 				A20000000000000000000036 /* PreviewLinkNavigation.swift */,
 				A20000000000000000000037 /* MarkdownHighlighter.swift */,
@@ -442,6 +448,7 @@
 			files = (
 				A1000000000000000000003D /* Assets.xcassets in Resources */,
                 D10000000000000000000002,
+                E51000000000000000000002,
 				A1000000000000000000003E /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -573,6 +580,7 @@
 				B10000000000000000000003 /* RenderedMarkdownEditor.swift in Sources */,
 				A10000000000000000000029 /* DocumentRelocationView.swift in Sources */,
 				A1000000000000000000002B /* AppPreferences.swift in Sources */,
+                E51000000000000000000001,
 				A1000000000000000000002C /* InflowSettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

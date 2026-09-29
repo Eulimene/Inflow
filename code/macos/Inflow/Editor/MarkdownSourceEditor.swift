@@ -96,7 +96,9 @@ struct MarkdownSourceEditor: NSViewRepresentable {
             textView.isEditable = parent.isEditable
             textView.isSelectable = true
             textView.appearance = parent.presentation == .rendered
-                ? parent.renderedColorScheme.nativeAppearance
+                ? (parent.renderedColorScheme.nativeAppearance
+                    ?? (parent.renderedTheme.styles.value("color-scheme") == "dark" ? NSAppearance(named: .darkAqua)
+                        : parent.renderedTheme.styles.value("color-scheme") == "light" ? NSAppearance(named: .aqua) : nil))
                 : nil
             textView.pasteImageHandler = parent.onPasteImage
             textView.dropImageHandler = parent.onDropImage

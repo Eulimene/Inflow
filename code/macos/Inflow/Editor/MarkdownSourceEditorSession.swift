@@ -290,7 +290,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         configuration: PreviewAppearanceConfiguration
     ) async -> EditorEngineDerivedContent? {
         latestRenderConfiguration = configuration
-        textView.readingColumnWidth = CGFloat(configuration.contentWidth)
+        textView.readingColumnWidth = min(CGFloat(configuration.contentWidth),
+            max(240, configuration.theme.styles.length("max-width") ?? CGFloat(configuration.contentWidth)))
         cancelDeferredMermaidRendering()
         contentDerivationGeneration &+= 1
         let contentGeneration = contentDerivationGeneration
@@ -633,6 +634,11 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         renderedLinkActivation = linkActivation
         renderedTheme = theme
         textView.renderedTheme = theme
+        if presentation == .source {
+            textView.backgroundColor = .textBackgroundColor
+            scrollView.backgroundColor = .textBackgroundColor
+            textView.insertionPointColor = .textColor
+        }
         textView.linkActivation = linkActivation
         renderedResourceContext = resourceContext
         switch presentation {
@@ -963,6 +969,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         let baseParagraph = MarkdownNativeTypography.paragraphStyle(font: baseFont, lineHeight: CGFloat(sourceAppearance.lineHeight))
         baseParagraph.paragraphSpacing = 0
         let palette = MarkdownRenderPalette.resolved(for: textView.effectiveAppearance, theme: renderedTheme)
+        textView.backgroundColor = palette.canvasColor
+        scrollView.backgroundColor = palette.canvasColor
+        textView.insertionPointColor = palette.textColor
         if textView.string.isEmpty { textView.font = baseFont }
         textView.defaultParagraphStyle = baseParagraph
         textView.linkTextAttributes = MarkdownLinkVisualStyle.restingAttributes(
@@ -994,7 +1003,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             range: fullRange
         )
         let styleSheet = MarkdownNativeStyleSheet(baseFont: baseFont, palette: palette,
-            sourceAppearance: sourceAppearance, isEditable: textView.isEditable)
+            sourceAppearance: sourceAppearance, isEditable: textView.isEditable, theme: renderedTheme)
         styleSheet.applyCompactParagraphGaps(blockSpacing.separatorLines, storage: storage)
         for style in plan.contentStyles {
             let range = style.sourceRange.utf16Range
@@ -1794,18 +1803,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
 
     private func renderedBaseFont() -> NSFont {
         let size = max(6, CGFloat(sourceAppearance.fontSize))
-        switch renderedTheme {
-        case .code:
-            return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
-        case .longform:
-            let fallback = NSFont.systemFont(ofSize: size)
-            guard let descriptor = fallback.fontDescriptor.withDesign(.serif) else {
-                return fallback
-            }
-            return NSFont(descriptor: descriptor, size: size) ?? fallback
-        case .standard, .highContrast:
-            return MarkdownRenderMetrics.bodyFont(size: size)
-        }
+        return renderedTheme.styles.font(size: size, fallback: MarkdownRenderMetrics.bodyFont(size: size))
     }
 
     func setWritingModes(

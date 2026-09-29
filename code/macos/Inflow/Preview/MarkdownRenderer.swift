@@ -224,7 +224,7 @@ enum MarkdownRenderer {
           </style>
           \(PreviewAppearanceCSS.styleElement(for: configuration))
         </head>
-        <body>
+        <body id="write">
         \(fragment)
         </body>
         </html>
@@ -259,16 +259,12 @@ enum PreviewAppearanceCSS {
     static func styleElement(for configuration: PreviewAppearanceConfiguration) -> String {
         let width = decimal(configuration.contentWidth)
         let fontSize = decimal(configuration.fontSize * configuration.zoom)
-        let themeRules: String = switch configuration.theme {
-        case .standard:
-            ""
-        case .longform:
-            "body { font-family: ui-serif, Georgia, 'Songti SC', serif; line-height: 1.82; }"
-        case .code:
-            "body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.58; } h1, h2, h3, h4, h5, h6 { font-family: -apple-system, BlinkMacSystemFont, sans-serif; }"
-        case .highContrast:
-            highContrastRules
-        }
+        let theme = configuration.theme
+        let scheme = theme.styles.value("color-scheme")
+        let dark = scheme == "dark" || (scheme != "light" && configuration.colorScheme == .dark)
+        let palette = theme.styles.applying(to: dark ? MarkdownRenderPalette.dark : .light)
+        let themeRules = theme == .highContrast ? highContrastRules
+            : ":root { \(palette.cssVariables) }\n" + theme.safeStyleContent
 
         let colorRules: String = switch configuration.colorScheme {
         case .system:
@@ -290,7 +286,7 @@ enum PreviewAppearanceCSS {
           body { max-width: \(width)px; }
           \(colorRules)
           \(themeRules)
-          body { line-height: \(decimal(configuration.lineHeight)); }
+          body { font-size: \(fontSize)px; line-height: \(decimal(configuration.lineHeight)); }
           \(contrastRules)
           \(motionRules)
         </style>

@@ -112,7 +112,7 @@ final class WindowAwareTextView: NSTextView {
         }
     }
     var isLiveMarkdown = false { didSet { updateReadingColumn() } }
-    var renderedTheme = PreviewTheme.standard
+    var renderedTheme = PreviewTheme.standard { didSet { updateReadingColumn() } }
     var readingColumnWidth = CGFloat(MarkdownRenderMetrics.previewReadingWidth) { didSet { updateReadingColumn() } }
     var structuralEditDidApply: (() -> Void)?
     var selectionVisibilityHandler: (() -> Void)?
@@ -202,7 +202,9 @@ final class WindowAwareTextView: NSTextView {
     }
 
     private func updateReadingColumn() {
-        let inset = isLiveMarkdown ? max(MarkdownRenderMetrics.renderedHorizontalInset,
+        let themeInset = renderedTheme.styles.length("padding-left") ?? renderedTheme.styles.length("padding-right")
+            ?? MarkdownRenderMetrics.renderedHorizontalInset
+        let inset = isLiveMarkdown ? max(min(120, max(8, themeInset)),
             (bounds.width - readingColumnWidth) / 2) : MarkdownRenderMetrics.editorHorizontalInset
         guard abs(textContainerInset.width - inset) > 0.5 else { return }
         textContainerInset = NSSize(width: inset, height: textContainerInset.height)
@@ -354,6 +356,7 @@ final class WindowAwareTextView: NSTextView {
         }
         imageView.image = image
         imageView.contentTintColor = image.isTemplate ? .labelColor : nil
+        imageView.renderedTheme = renderedTheme
         imageView.presentsDiagram = alternative == "Mermaid 图表"
         imageView.setFrameSize(renderedSize)
         imageView.setAccessibilityLabel(alternative.isEmpty ? "图片" : alternative)
@@ -420,6 +423,7 @@ final class WindowAwareTextView: NSTextView {
                 existing.tableView.applyPalette(
                     MarkdownRenderPalette.resolved(for: effectiveAppearance, theme: renderedTheme)
                 )
+                existing.tableView.applyFont(baseFont)
                 existing.tableView.setEditingEnabled(isEditable)
                 existing.tableView.update(table: table, onEdit: onEdit)
                 existing.tableView.updateMaximumWidth(maximumWidth)
@@ -437,6 +441,7 @@ final class WindowAwareTextView: NSTextView {
             reusable.value.tableView.applyPalette(
                 MarkdownRenderPalette.resolved(for: effectiveAppearance, theme: renderedTheme)
             )
+            reusable.value.tableView.applyFont(baseFont)
             reusable.value.tableView.setEditingEnabled(isEditable)
             reusable.value.tableView.update(table: table, onEdit: onEdit)
             reusable.value.tableView.updateMaximumWidth(maximumWidth)

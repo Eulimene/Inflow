@@ -248,12 +248,19 @@ struct InflowSettingsView: View {
             Text("正文随窗口伸缩，默认最宽 1200 点；宽窗口保持居中，窄窗口两侧保留少量留白。")
                 .font(.caption).foregroundStyle(.secondary)
             Picker("主题", selection: $preferences.previewTheme) {
-                ForEach(PreviewTheme.allCases) { theme in
+                ForEach(preferences.availableThemes) { theme in
                     Text(theme.label).tag(theme)
                 }
             }
-            Text("标准：无衬线 · 长文阅读：衬线 · 代码优先：等宽 · 高对比度：强化文字与边界")
+            HStack {
+                Button("打开主题目录…") { preferences.openThemeDirectory() }
+                Button("重新加载主题") { preferences.reloadThemes() }
+            }
+            Text("将 .css 文件放入主题目录即可使用，文件修改后会自动刷新。支持常用字体、颜色和块样式；复杂网页布局仅用于 HTML 导出。")
                 .font(.caption).foregroundStyle(.secondary)
+            if let message = preferences.themeLoadMessage {
+                Text(message).font(.caption).foregroundStyle(.secondary)
+            }
             Picker("外观", selection: $preferences.previewColorScheme) {
                 ForEach(PreviewColorScheme.allCases) { scheme in
                     Text(scheme.label).tag(scheme)
