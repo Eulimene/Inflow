@@ -6,6 +6,7 @@ import XCTest
 @MainActor
 private final class EdgeVisibilityTestModel: ObservableObject {
     @Published var isVisible = true
+    var edge = WorkspaceSplitEdge.leading
     var width = 264.0
 }
 
@@ -15,7 +16,7 @@ private struct EdgeVisibilityTestView: View {
 
     var body: some View {
         PersistentEdgeSplitView(
-            edge: .leading,
+            edge: model.edge,
             width: Binding(
                 get: { model.width },
                 set: { model.width = $0 }
@@ -24,7 +25,7 @@ private struct EdgeVisibilityTestView: View {
             allowedWidth: 200 ... 300,
             accessibilityLabel: "Animated test edge split"
         ) {
-            Text("Sidebar")
+            Text("Sidebar").frame(minWidth: 200)
         } trailing: {
             Text("Workspace")
         }
@@ -170,40 +171,56 @@ final class EditorViewModeCommandsTests: XCTestCase {
         XCTAssertEqual(edgeSplit.subviews[0].frame.width, 300, accuracy: 1)
         XCTAssertEqual(storedLeadingWidth, 300, accuracy: 1)
 
-        let visibilityModel = EdgeVisibilityTestModel()
-        let visibilityHost = NSHostingView(
-            rootView: EdgeVisibilityTestView(model: visibilityModel)
-        )
-        visibilityHost.frame = NSRect(x: 0, y: 0, width: 1_002, height: 500)
-        visibilityHost.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
-        let persistentSplit = try XCTUnwrap(
-            descendants(of: visibilityHost).compactMap { $0 as? NSSplitView }.first
-        )
-        XCTAssertEqual(persistentSplit.subviews[0].frame.width, 264, accuracy: 1)
+        for edge in [WorkspaceSplitEdge.leading, .trailing] {
+            let edgeIndex = edge == .leading ? 0 : 1
+            let contentIndex = 1 - edgeIndex
+            let visibilityModel = EdgeVisibilityTestModel()
+            visibilityModel.edge = edge
+            let visibilityHost = NSHostingView(
+                rootView: EdgeVisibilityTestView(model: visibilityModel)
+            )
+            visibilityHost.frame = NSRect(x: 0, y: 0, width: 1_002, height: 500)
+            visibilityHost.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+            let persistentSplit = try XCTUnwrap(
+                descendants(of: visibilityHost).compactMap { $0 as? NSSplitView }.first
+            )
+            XCTAssertEqual(persistentSplit.subviews[edgeIndex].frame.width, 264, accuracy: 1)
 
-        visibilityModel.isVisible = false
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.25))
-        let collapsedSplit = try XCTUnwrap(
-            descendants(of: visibilityHost).compactMap { $0 as? NSSplitView }.first
-        )
-        XCTAssertTrue(collapsedSplit === persistentSplit)
-        XCTAssertEqual(collapsedSplit.subviews[0].frame.width, 0, accuracy: 1)
-        XCTAssertEqual(
-            collapsedSplit.subviews[1].frame.width,
-            collapsedSplit.bounds.width,
-            accuracy: 1
-        )
-        XCTAssertEqual(visibilityModel.width, 264, accuracy: 0.01)
+            visibilityModel.isVisible = false
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.25))
+            let collapsedSplit = try XCTUnwrap(
+                descendants(of: visibilityHost).compactMap { $0 as? NSSplitView }.first
+            )
+            XCTAssertTrue(collapsedSplit === persistentSplit)
+            XCTAssertEqual(collapsedSplit.subviews[edgeIndex].frame.width, 0, accuracy: 1)
+            XCTAssertTrue(collapsedSplit.subviews[edgeIndex].isHidden)
+            XCTAssertTrue(collapsedSplit.subviews.allSatisfy(\.clipsToBounds))
+            XCTAssertEqual(collapsedSplit.dividerThickness, 0)
+            XCTAssertEqual(collapsedSplit.delegate?.splitView?(collapsedSplit, shouldHideDividerAt: 0), true)
+            XCTAssertEqual(collapsedSplit.delegate?.splitView?(collapsedSplit,
+                effectiveRect: NSRect(x: 0, y: 0, width: 10, height: 500),
+                forDrawnRect: .zero, ofDividerAt: 0), .zero,
+                "A collapsed divider must not intercept clicks at the editor edge")
+            XCTAssertEqual(
+                collapsedSplit.subviews[contentIndex].frame.width,
+                collapsedSplit.bounds.width,
+                accuracy: 1
+            )
+            XCTAssertEqual(visibilityModel.width, 264, accuracy: 0.01)
 
-        visibilityModel.isVisible = true
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.25))
-        let expandedSplit = try XCTUnwrap(
-            descendants(of: visibilityHost).compactMap { $0 as? NSSplitView }.first
-        )
-        XCTAssertTrue(expandedSplit === persistentSplit)
-        XCTAssertEqual(expandedSplit.subviews[0].frame.width, 264, accuracy: 1)
-        XCTAssertEqual(visibilityModel.width, 264, accuracy: 0.01)
+            visibilityModel.isVisible = true
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.25))
+            let expandedSplit = try XCTUnwrap(
+                descendants(of: visibilityHost).compactMap { $0 as? NSSplitView }.first
+            )
+            XCTAssertTrue(expandedSplit === persistentSplit)
+            XCTAssertEqual(expandedSplit.subviews[edgeIndex].frame.width, 264, accuracy: 1)
+            XCTAssertFalse(expandedSplit.subviews[edgeIndex].isHidden)
+            XCTAssertGreaterThan(expandedSplit.dividerThickness, 0)
+            XCTAssertEqual(expandedSplit.delegate?.splitView?(expandedSplit, shouldHideDividerAt: 0), false)
+            XCTAssertEqual(visibilityModel.width, 264, accuracy: 0.01)
+        }
 
         var storedTrailingWidth = 236.0
         let trailingRoot = PersistentEdgeSplitView(

@@ -1873,6 +1873,12 @@ struct FolderBrowserSidebar: View {
 
     @discardableResult
     private func activateItem(withID itemID: String?) -> Bool {
+        if let itemID, case .directory = controller.selection(forItemID: itemID) {
+            if !expandedDirectoryIDs.insert(itemID).inserted {
+                expandedDirectoryIDs.remove(itemID)
+            }
+            return true
+        }
         guard let url = FolderBrowserActivation.markdownURL(
             forSelectedItemID: itemID,
             in: controller.items
@@ -1924,19 +1930,31 @@ private struct FolderProjectTreeRows: View {
     }
 
     private func row(for item: FolderProjectItem) -> some View {
-        FolderProjectItemRow(
+        let content = FolderProjectItemRow(
             item: item,
             isCurrentDocument: isCurrentDocument(item),
             isModified: isModifiedDocument(item),
             onActivate: { onActivate(item) }
         )
-        .contentShape(Rectangle())
-        .onTapGesture {
-            selectedItemID = item.id
+        return Group {
             if item.isDirectory {
-                expansionBinding(for: item.id).wrappedValue.toggle()
-            } else if item.isMarkdown {
-                onActivate(item)
+                // A real button participates in List/DisclosureGroup event
+                // routing; a label tap gesture can be consumed by row selection.
+                Button {
+                    selectedItemID = item.id
+                    expansionBinding(for: item.id).wrappedValue.toggle()
+                } label: {
+                    content.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(expandedDirectoryIDs.contains(item.id) ? "已展开" : "已折叠")
+            } else {
+                content
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        selectedItemID = item.id
+                        if item.isMarkdown { onActivate(item) }
+                    }
             }
         }
         .contextMenu {

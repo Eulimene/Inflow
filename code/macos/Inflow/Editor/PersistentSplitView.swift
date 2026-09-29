@@ -117,12 +117,19 @@ private final class EdgeWidthSplitView: NSSplitView {
         isEdgeVisible ? super.dividerThickness : 0
     }
 
+    override func drawDivider(in rect: NSRect) {
+        guard isEdgeVisible else { return }
+        super.drawDivider(in: rect)
+    }
+
     func applyDesiredWidth(animated: Bool = false) {
         let totalWidth = max(0, bounds.width)
         let totalHeight = max(0, bounds.height)
         guard subviews.count == 2, totalWidth > dividerThickness else { return }
         isApplyingDesiredWidth = true
         defer { isApplyingDesiredWidth = false }
+        let edgeView = subviews[edge == .leading ? 0 : 1]
+        if isEdgeVisible { edgeView.isHidden = false }
 
         let position = WorkspaceEdgeSplitLayout.position(
             for: desiredEdgeWidth,
@@ -154,6 +161,7 @@ private final class EdgeWidthSplitView: NSSplitView {
             isAnimatingDesiredWidth = false
             subviews[0].frame = leadingFrame
             subviews[1].frame = trailingFrame
+            edgeView.isHidden = !isEdgeVisible
             return
         }
         widthAnimationTask?.cancel()
@@ -268,6 +276,10 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
         let trailingHost = NSHostingView(
             rootView: PersistentHostingRoot(relay: trailingRelay)
         )
+        // The sidebar has a minimum content width. Clip that content during
+        // collapse so it cannot paint beyond its shrinking hosting view.
+        leadingHost.clipsToBounds = true
+        trailingHost.clipsToBounds = true
         splitView.addArrangedSubview(leadingHost)
         splitView.addArrangedSubview(trailingHost)
         context.coordinator.install(
@@ -428,6 +440,19 @@ struct PersistentEdgeSplitView<Leading: View, Trailing: View>: NSViewRepresentab
 
         func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
             false
+        }
+
+        func splitView(_ splitView: NSSplitView, shouldHideDividerAt dividerIndex: Int) -> Bool {
+            (splitView as? EdgeWidthSplitView)?.isEdgeVisible == false
+        }
+
+        func splitView(
+            _ splitView: NSSplitView,
+            effectiveRect proposedEffectiveRect: NSRect,
+            forDrawnRect drawnRect: NSRect,
+            ofDividerAt dividerIndex: Int
+        ) -> NSRect {
+            (splitView as? EdgeWidthSplitView)?.isEdgeVisible == false ? .zero : proposedEffectiveRect
         }
 
         func splitViewDidResizeSubviews(_ notification: Notification) {
