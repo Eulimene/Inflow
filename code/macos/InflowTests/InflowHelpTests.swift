@@ -3,6 +3,41 @@ import XCTest
 @testable import Inflow
 
 final class InflowHelpTests: XCTestCase {
+    @MainActor
+    func testTestRunnerAutomaticallyUsesTheHostApplicationIcon() throws {
+        // Do not invoke the bootstrap here: this verifies XCTest's real startup
+        // hook, including direct runs where Bundle.main belongs to xctest.
+        let testBundle = Bundle(for: InflowTestBootstrap.self)
+        XCTAssertEqual(testBundle.object(forInfoDictionaryKey: "NSPrincipalClass") as? String,
+                       NSStringFromClass(InflowTestBootstrap.self))
+        let host = try XCTUnwrap(InflowTestBootstrap.hostApplicationBundle)
+        let iconURL = try XCTUnwrap(host.url(forResource: "AppIcon", withExtension: "icns"))
+        let expected = try iconPixels(XCTUnwrap(NSImage(contentsOf: iconURL)))
+        let actual = try iconPixels(XCTUnwrap(NSApplication.shared.applicationIconImage))
+        // AppKit may rasterize the Dock icon at a different resolution and
+        // color profile. Compare normalized pixels, allowing small color shifts.
+        let meanDifference = zip(actual, expected).reduce(0.0) {
+            $0 + Double(abs(Int($1.0) - Int($1.1)))
+        } / Double(expected.count)
+        XCTAssertLessThan(meanDifference, 10, "The test process must display the Inflow artwork")
+    }
+
+    @MainActor
+    private func iconPixels(_ image: NSImage) throws -> [UInt8] {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 64, pixelsHigh: 64,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 256, bitsPerPixel: 32
+        ))
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: bitmap))
+        image.draw(in: NSRect(x: 0, y: 0, width: 64, height: 64), from: .zero,
+                   operation: .copy, fraction: 1)
+        let pixels = try XCTUnwrap(bitmap.bitmapData)
+        return Array(UnsafeBufferPointer(start: pixels, count: 64 * 256))
+    }
+
     func testBundledHelpCoversTheOfflineCoreWorkflow() {
         let sections = InflowHelpContent.sections
         XCTAssertEqual(Set(sections.map(\.id)).count, sections.count)

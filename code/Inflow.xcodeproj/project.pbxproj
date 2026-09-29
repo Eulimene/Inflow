@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		069C71A03B2B4AD78C77A8C2 /* InflowTestBootstrap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61EBDC3D8E9549FEB7B18BD3 /* InflowTestBootstrap.swift */; };
 		A10000000000000000000001 /* InflowApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* InflowApp.swift */; };
 		A10000000000000000000002 /* MarkdownEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* MarkdownEditorView.swift */; };
 		A10000000000000000000003 /* InflowCoreBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* InflowCoreBridge.swift */; };
@@ -114,6 +115,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		61EBDC3D8E9549FEB7B18BD3 /* InflowTestBootstrap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InflowTestBootstrap.swift; sourceTree = "<group>"; };
 		A20000000000000000000001 /* InflowApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InflowApp.swift; sourceTree = "<group>"; };
 		A20000000000000000000002 /* MarkdownEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownEditorView.swift; sourceTree = "<group>"; };
 		A20000000000000000000003 /* InflowCoreBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InflowCoreBridge.swift; sourceTree = "<group>"; };
@@ -356,6 +358,7 @@
 				A2000000000000000000003A /* WritingModeTests.swift */,
 				A2000000000000000000003C /* PreviewZoomCommandsTests.swift */,
 				A2000000000000000000003E /* InflowHelpTests.swift */,
+				61EBDC3D8E9549FEB7B18BD3 /* InflowTestBootstrap.swift */,
 				A20000000000000000000040 /* RecentDocumentsTests.swift */,
 				A20000000000000000000044 /* LaunchJourneyTests.swift */,
 				A20000000000000000000046 /* FolderBrowserTests.swift */,
@@ -610,6 +613,7 @@
 				A10000000000000000000035 /* WritingModeTests.swift in Sources */,
 				A10000000000000000000037 /* PreviewZoomCommandsTests.swift in Sources */,
 				A10000000000000000000039 /* InflowHelpTests.swift in Sources */,
+				069C71A03B2B4AD78C77A8C2 /* InflowTestBootstrap.swift in Sources */,
 				A1000000000000000000003B /* RecentDocumentsTests.swift in Sources */,
 				A1000000000000000000003F /* LaunchJourneyTests.swift in Sources */,
 				A10000000000000000000041 /* FolderBrowserTests.swift in Sources */,
@@ -761,6 +765,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSPrincipalClass = InflowTestBootstrap;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/core/include",
@@ -779,6 +784,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSPrincipalClass = InflowTestBootstrap;
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/core/include",

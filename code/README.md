@@ -98,6 +98,8 @@ Inflow 是一款本地优先的 Markdown 写作工作台。当前代码只为产
 
 也可使用 `--release` 构建 Release 配置。`--output-dir` 未指定时默认使用当前项目下的 `Build`，App 位于所选目录的 `Products/<配置>/Inflow.app`。`--open` 会以新进程启动这一确切产物，避免 macOS 激活同 Bundle ID 的旧构建。
 
+Debug、Release 和测试进程共用 `Resources/Assets.xcassets/AppIcon.appiconset` 中的图标。直接运行 `xcrun xctest` 时，测试启动入口会读取其所在 `Inflow.app` 的编译后图标并设置 Dock 图标，进程名仍为 `xctest`。界面测试使用构建产物的完整路径启动，不按应用名称查找，也不另外创建改名副本，以免混入同名的旧应用。
+
 等价的底层构建命令：
 
     xcodebuild \
