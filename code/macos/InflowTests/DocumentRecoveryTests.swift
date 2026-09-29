@@ -1,9 +1,44 @@
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 @testable import Inflow
 
 final class DocumentRecoveryTests: XCTestCase {
+    @MainActor
+    func testBackgroundCheckpointsDoNotPublishUnchangedPresentationState() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot, usesPlaintext: true)
+        let record = recoveryRecord(text: "draft remains durable while a menu is open", updatedAt: Date())
+        coordinator.update(record)
+        defer { coordinator.close(record.id) }
+        var notifications = 0
+        let subscription = coordinator.objectWillChange.sink { notifications += 1 }
+        defer { subscription.cancel() }
+        for _ in 0..<3 { await coordinator.flush(record.id) }
+        XCTAssertEqual(notifications, 0, "A successful checkpoint must not rebuild the scene and native Window menu")
+        let loaded = try await PlaintextDocumentRecoveryStore(rootURL: fixture.recoveryRoot).load()
+        XCTAssertEqual(loaded.records.map(\.text), [record.text])
+
+        let blockedRoot = fixture.root.appendingPathComponent("blocked")
+        try Data("not a directory".utf8).write(to: blockedRoot)
+        let blocked = DocumentRecoveryCoordinator(rootURL: blockedRoot, usesPlaintext: true)
+        blocked.update(record)
+        var repeatedWarnings = 0
+        let warningSubscription = blocked.objectWillChange.sink { repeatedWarnings += 1 }
+        defer { warningSubscription.cancel() }
+        for _ in 0..<3 { blocked.update(record) }
+        XCTAssertEqual(repeatedWarnings, 0, "An unchanged failure must not refresh menus every checkpoint")
+        XCTAssertNotNil(blocked.protectionErrorMessage)
+        try FileManager.default.removeItem(at: blockedRoot)
+        blocked.update(record)
+        await blocked.flush(record.id)
+        XCTAssertNil(blocked.protectionErrorMessage)
+        XCTAssertEqual(repeatedWarnings, 1, "A real recovery must still clear the warning in the UI")
+        blocked.close(record.id)
+    }
+
     @MainActor
     func testStartupShowsEmptyTabsBeforeReadingAndSelectedDraftBypassesSlowRead() async throws {
         let fixture = try RecoveryFixture()

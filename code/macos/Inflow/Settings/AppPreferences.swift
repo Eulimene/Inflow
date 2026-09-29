@@ -954,7 +954,10 @@ final class AppPreferences: ObservableObject {
             if previewTheme != selected { previewTheme = selected }
             let message = result.issues.isEmpty ? nil : result.issues.joined(separator: "\n")
             if themeLoadMessage != message { themeLoadMessage = message }
-        } catch { themeLoadMessage = "无法读取主题目录；继续使用当前主题。" }
+        } catch {
+            let message = "无法读取主题目录；继续使用当前主题。"
+            if themeLoadMessage != message { themeLoadMessage = message }
+        }
     }
 
     func openThemeDirectory() {

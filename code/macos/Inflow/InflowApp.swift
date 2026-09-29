@@ -1730,6 +1730,8 @@ private struct InflowDocumentScene: View {
                 )
             }
         }
+        .preferredColorScheme(preferences.previewColorScheme == .system ? nil :
+            preferences.previewColorScheme == .dark ? .dark : .light)
         .background {
             DocumentWindowResolver { window in
                 guard let resolved = window.windowController?.document as? NSDocument else {
@@ -2093,6 +2095,13 @@ enum InflowTerminationPolicy {
 
 @MainActor
 final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
+    // Own services for the process lifetime without observing them at App level.
+    // Background checkpoints must not invalidate the scene/Commands tree while
+    // AppKit is tracking its dynamically inserted Window arrangement items.
+    // Views and individual Commands observe only the services they display.
+    lazy var recoveryCoordinator = DocumentRecoveryRuntime.makeCoordinator()
+    lazy var preferences = AppPreferences()
+    let failureLog = LocalFailureLogController.shared
     let recentDocuments: RecentDocumentsController
     let folderBrowser: FolderBrowserController
     let projectCoordinator: LightweightProjectCoordinator
@@ -2324,9 +2333,6 @@ private struct InflowEditingCommands: Commands {
 struct InflowApp: App {
     @NSApplicationDelegateAdaptor(InflowApplicationDelegate.self)
     private var applicationDelegate
-    @StateObject private var recoveryCoordinator = DocumentRecoveryRuntime.makeCoordinator()
-    @StateObject private var preferences = AppPreferences()
-    @StateObject private var failureLog = LocalFailureLogController.shared
 
     var body: some Scene {
         DocumentGroup(newDocument: MarkdownDocument()) { configuration in
@@ -2335,15 +2341,13 @@ struct InflowApp: App {
                     document: configuration.$document,
                     fileURL: configuration.fileURL,
                     isEditable: configuration.isEditable,
-                    recoveryCoordinator: recoveryCoordinator,
-                    preferences: preferences,
+                    recoveryCoordinator: applicationDelegate.recoveryCoordinator,
+                    preferences: applicationDelegate.preferences,
                     recentDocuments: applicationDelegate.recentDocuments,
                     folderBrowser: applicationDelegate.folderBrowser,
                     projectCoordinator: applicationDelegate.projectCoordinator
                 )
             }
-            .preferredColorScheme(preferences.previewColorScheme == .system ? nil :
-                preferences.previewColorScheme == .dark ? .dark : .light)
             .background(DocumentWindowControls())
             .frame(
                 minWidth: EditorWorkspaceMetrics.minimumWindowWidth,
@@ -2360,12 +2364,12 @@ struct InflowApp: App {
                 recentDocuments: applicationDelegate.recentDocuments,
                 folderBrowser: applicationDelegate.folderBrowser
             )
-            InflowEditingCommands(failureLog: failureLog)
-            AppearanceCommands(preferences: preferences)
+            InflowEditingCommands(failureLog: applicationDelegate.failureLog)
+            AppearanceCommands(preferences: applicationDelegate.preferences)
         }
 
         Settings {
-            InflowSettingsView(preferences: preferences)
+            InflowSettingsView(preferences: applicationDelegate.preferences)
         }
 
         Window("Inflow 帮助", id: InflowHelpWindow.identifier) {

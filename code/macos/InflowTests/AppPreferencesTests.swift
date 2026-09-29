@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import XCTest
 @testable import Inflow
 
@@ -104,6 +105,20 @@ final class AppPreferencesTests: XCTestCase {
         preferences.reloadThemes()
         XCTAssertEqual(preferences.previewTheme.id, "github")
         XCTAssertNil(preferences.themeLoadMessage)
+
+        var updates = 0
+        let subscription = preferences.objectWillChange.sink { updates += 1 }
+        defer { subscription.cancel() }
+        preferences.reloadThemes()
+        XCTAssertEqual(updates, 0, "Unchanged theme polling must not invalidate Commands")
+        try FileManager.default.removeItem(at: directory)
+        try Data("unavailable theme directory".utf8).write(to: directory)
+        preferences.reloadThemes()
+        XCTAssertEqual(updates, 1, "The first error must still be visible")
+        XCTAssertNotNil(preferences.themeLoadMessage)
+        preferences.reloadThemes()
+        preferences.reloadThemes()
+        XCTAssertEqual(updates, 1, "Repeated polling failures must not rebuild an open menu")
     }
 
     func testCSSThemeHTMLUsesWriteSelectorWithoutAllowingStyleTagEscape() {

@@ -2189,16 +2189,20 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         }
 
         while let session = activeSessions[id] {
-            guard store.canWrite else { protectionErrorMessage = nil; return }
+            guard store.canWrite else {
+                if protectionErrorMessage != nil { protectionErrorMessage = nil }
+                return
+            }
             let record = session.latestRecord
             do {
                 try store.markSessionActive(id, generation: session.generation)
                 _ = try await store.reconcile(record)
-                if let sourceID = record.transferSourceRecordID {
+                if let sourceID = record.transferSourceRecordID,
+                   recoveredRecords.contains(where: { $0.id == sourceID }) {
                     recoveredRecords.removeAll { $0.id == sourceID }
                 }
                 isDegradedProtectionWarningDismissed = false
-                protectionErrorMessage = nil
+                if protectionErrorMessage != nil { protectionErrorMessage = nil }
             } catch {
                 showDegradedProtectionWarning()
                 return
@@ -2358,7 +2362,8 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     }
 
     private func showDegradedProtectionWarning() {
-        guard store?.canWrite != false, !isDegradedProtectionWarningDismissed else { return }
+        guard store?.canWrite != false, !isDegradedProtectionWarningDismissed,
+              protectionErrorMessage != Self.degradedProtectionMessage else { return }
         protectionErrorMessage = Self.degradedProtectionMessage
     }
 
