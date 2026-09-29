@@ -100,6 +100,7 @@
 		B10000000000000000000029 /* MarkdownLayoutPlanCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000029 /* MarkdownLayoutPlanCache.swift */; };
         E51000000000000000000001 /* CSSThemes.swift in Sources */ = {isa = PBXBuildFile; fileRef = E52000000000000000000001; };
         E51000000000000000000002 /* Themes in Resources */ = {isa = PBXBuildFile; fileRef = E52000000000000000000002; };
+        E61000000000000000000001 /* RecoveryStartup.swift in Sources */ = {isa = PBXBuildFile; fileRef = E62000000000000000000001; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -213,6 +214,7 @@
 		B20000000000000000000029 /* MarkdownLayoutPlanCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownLayoutPlanCache.swift; sourceTree = "<group>"; };
         E52000000000000000000001 /* CSSThemes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings/CSSThemes.swift; sourceTree = "<group>"; };
         E52000000000000000000002 /* Themes */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/Themes; sourceTree = "<group>"; };
+        E62000000000000000000001 /* RecoveryStartup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Recovery/RecoveryStartup.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -298,6 +300,7 @@
                 D20000000000000000000001,
                 D20000000000000000000002,
                 E52000000000000000000001,
+                E62000000000000000000001,
                 E52000000000000000000002,
 				A20000000000000000000023 /* LocalImageResolver.swift */,
 				A20000000000000000000036 /* PreviewLinkNavigation.swift */,
@@ -581,6 +584,7 @@
 				A10000000000000000000029 /* DocumentRelocationView.swift in Sources */,
 				A1000000000000000000002B /* AppPreferences.swift in Sources */,
                 E51000000000000000000001,
+                E61000000000000000000001,
 				A1000000000000000000002C /* InflowSettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

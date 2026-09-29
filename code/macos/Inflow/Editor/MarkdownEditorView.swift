@@ -456,11 +456,9 @@ struct MarkdownEditorView: View {
             synchronizeEngineMode()
             if let recoveryCoordinator {
                 Task {
-                    await recoveryCoordinator.loadIfNeeded()
-                    let restoredDrafts = await recoveryCoordinator
-                        .claimDraftsForAutomaticRestoration()
-                    for restoredDraft in restoredDrafts {
-                        newDocument(restoredDraft)
+                    await Task.yield()
+                    await recoveryCoordinator.beginStartupRestoration(anchor: sourceEditorSession.textView.window) { placeholder in
+                        newDocument(placeholder)
                     }
                 }
             }

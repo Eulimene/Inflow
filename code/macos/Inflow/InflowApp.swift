@@ -1701,7 +1701,9 @@ private struct InflowDocumentScene: View {
 
     var body: some View {
         Group {
-            if projectCoordinator.isProjectHostDocument(nativeDocument) {
+            if let placeholder = document.recoveryPlaceholder {
+                RecoveryPlaceholderView(document: $document, placeholder: placeholder, coordinator: recoveryCoordinator)
+            } else if projectCoordinator.isProjectHostDocument(nativeDocument) {
                 ProjectWorkspaceScene(
                     shellDocument: $document,
                     hostDocument: nativeDocument,

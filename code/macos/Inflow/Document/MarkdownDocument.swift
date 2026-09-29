@@ -354,7 +354,7 @@ enum ManualSaveDocumentHostPolicy {
     }
 }
 
-struct MarkdownDocument: FileDocument {
+struct MarkdownDocument: FileDocument, Sendable {
     static let readableContentTypes: [UTType] = [.inflowMarkdown]
     static let writableContentTypes: [UTType] = [.inflowMarkdown]
 
@@ -367,6 +367,7 @@ struct MarkdownDocument: FileDocument {
     private(set) var capabilityTier: MarkdownDocumentCapabilityTier
     var restorationState: MarkdownRestorationState?
     var recoveryTransfer: DocumentRecoveryTransfer?
+    var recoveryPlaceholder: RecoveryDraftPlaceholder?
     var initialHeadingFragment: String?
     var openedFileData: Data?
     let writeGuard: MarkdownWriteGuard
@@ -376,6 +377,7 @@ struct MarkdownDocument: FileDocument {
         properties: MarkdownFileProperties = .newDocument,
         restorationState: MarkdownRestorationState? = nil,
         recoveryTransfer: DocumentRecoveryTransfer? = nil,
+        recoveryPlaceholder: RecoveryDraftPlaceholder? = nil,
         initialHeadingFragment: String? = nil,
         openedFileData: Data? = nil,
         writeGuard: MarkdownWriteGuard = MarkdownWriteGuard()
@@ -385,6 +387,7 @@ struct MarkdownDocument: FileDocument {
         capabilityTier = MarkdownDocumentSizePolicy.tier(for: text.utf8.count)
         self.restorationState = restorationState
         self.recoveryTransfer = recoveryTransfer
+        self.recoveryPlaceholder = recoveryPlaceholder
         self.initialHeadingFragment = initialHeadingFragment
         self.openedFileData = openedFileData
         self.writeGuard = writeGuard
@@ -400,6 +403,7 @@ struct MarkdownDocument: FileDocument {
         capabilityTier = tier
         restorationState = nil
         recoveryTransfer = nil
+        recoveryPlaceholder = nil
         initialHeadingFragment = nil
         openedFileData = fileData
         writeGuard = MarkdownWriteGuard()
@@ -413,7 +417,8 @@ struct MarkdownDocument: FileDocument {
     }
 
     func encodedFileData() throws -> Data {
-        try MarkdownCodec.encode(text, properties: properties)
+        guard recoveryPlaceholder == nil else { throw RecoveryPlaceholderSaveError.notLoaded }
+        return try MarkdownCodec.encode(text, properties: properties)
     }
 
     mutating func chooseLineEnding(_ lineEnding: MarkdownLineEnding) {
@@ -438,10 +443,16 @@ struct MarkdownDocument: FileDocument {
     }
 }
 
+enum RecoveryPlaceholderSaveError: LocalizedError {
+    case notLoaded
+    var errorDescription: String? { "草稿尚未载入，请等待内容显示后再保存。" }
+}
+
 enum MarkdownDocumentModificationProjection {
     /// A single byte-level definition feeds AppKit, project tabs and the folder
     /// tree. `NSTextView.string` and individual views never invent dirty state.
     static func isModified(_ document: MarkdownDocument) -> Bool {
+        guard document.recoveryPlaceholder == nil else { return false }
         guard let current = try? document.encodedFileData() else { return true }
         return current != (document.openedFileData ?? Data())
     }
@@ -449,7 +460,7 @@ enum MarkdownDocumentModificationProjection {
 
 /// A last synchronous checkpoint before AppKit is allowed to close a document.
 /// These files are drafts; they never replace the user's original Markdown file.
-struct TemporaryDocumentDraftStore {
+struct TemporaryDocumentDraftStore: Sendable {
     let rootURL: URL
 
     static var defaultRoot: URL {

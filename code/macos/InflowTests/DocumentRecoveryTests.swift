@@ -4,6 +4,222 @@ import XCTest
 @testable import Inflow
 
 final class DocumentRecoveryTests: XCTestCase {
+    @MainActor
+    func testStartupShowsEmptyTabsBeforeReadingAndSelectedDraftBypassesSlowRead() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let temporary = TemporaryDocumentDraftStore(rootURL: fixture.root.appendingPathComponent("SessionDrafts"))
+        let first = recoveryRecord(text: "slow background draft", updatedAt: Date())
+        let second = recoveryRecord(text: "selected draft 😀", updatedAt: Date())
+        try temporary.write(second)
+        try temporary.write(first)
+        let gate = RecoveryReconcileGate()
+        let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot,
+            temporaryDraftStore: temporary, usesPlaintext: true,
+            beforeStartupRead: { placeholder in
+                XCTAssertFalse(Thread.isMainThread)
+                if placeholder.id == first.id { await gate.suspendFirstCommit() }
+            })
+        var tabs: [MarkdownDocument] = []
+        await coordinator.beginStartupRestoration { tabs.append($0) }
+        await gate.waitUntilSuspended()
+        XCTAssertEqual(tabs.count, 2)
+        XCTAssertTrue(tabs.allSatisfy { $0.text.isEmpty && $0.recoveryPlaceholder != nil })
+        XCTAssertFalse(MarkdownDocumentModificationProjection.isModified(tabs[0]))
+        XCTAssertThrowsError(try tabs[0].encodedFileData())
+        XCTAssertEqual(try temporary.records().count, 2, "Discovery must not consume checkpoints")
+        var editable = MarkdownDocument()
+        editable.text = "typing while recovery is suspended"
+        XCTAssertEqual(try editable.encodedFileData(), Data(editable.text.utf8))
+        let selected = try XCTUnwrap(tabs.compactMap(\.recoveryPlaceholder).first { $0.id == second.id })
+        let completed = expectation(description: "Selection bypasses suspended background read")
+        let selection = Task { @MainActor in
+            let document = await coordinator.materializeStartupDraft(selected)
+            completed.fulfill()
+            return document
+        }
+        await fulfillment(of: [completed], timeout: 2)
+        await gate.resume()
+        let restored = await selection.value
+        XCTAssertEqual(restored?.text, second.text)
+        XCTAssertEqual(restored?.recoveryTransfer?.targetRecordID, selected.targetID)
+        XCTAssertEqual(try temporary.records().map(\.id), [first.id])
+        let heads = try await PlaintextDocumentRecoveryStore(rootURL: fixture.recoveryRoot).load()
+        XCTAssertEqual(heads.records.map(\.text), [second.text], "Keep a durable source before consuming temporary copy")
+        coordinator.completeStartupDraft(second.id)
+        _ = await coordinator.prepareStartupDraft(selected)
+        XCTAssertEqual(coordinator.startupPhases[second.id], .opened)
+        await coordinator.beginStartupRestoration { _ in XCTFail("Startup must run once") }
+        for tab in tabs { coordinator.dismissStartupDraft(try XCTUnwrap(tab.recoveryPlaceholder).id) }
+    }
+
+    @MainActor
+    func testStartupClosingPendingTabPreservesCheckpointAndPreventsLateRecovery() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let temporary = TemporaryDocumentDraftStore(rootURL: fixture.root.appendingPathComponent("SessionDrafts"))
+        let record = recoveryRecord(text: "keep on close", updatedAt: Date())
+        try temporary.write(record)
+        let gate = RecoveryReconcileGate()
+        let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot,
+            temporaryDraftStore: temporary, usesPlaintext: true,
+            beforeStartupRead: { _ in await gate.suspendFirstCommit() })
+        await coordinator.beginStartupRestoration { _ in }
+        await gate.waitUntilSuspended()
+        let placeholder = try XCTUnwrap(coordinator.startupDrafts.first)
+        coordinator.dismissStartupDraft(record.id)
+        await gate.resume()
+        let restored = await coordinator.materializeStartupDraft(placeholder)
+        XCTAssertNil(restored)
+        XCTAssertEqual(coordinator.startupPhases[record.id], .unnecessary)
+        XCTAssertEqual(try temporary.records(), [record])
+    }
+
+    @MainActor
+    func testStartupCorruptDraftDoesNotBlockGoodDraftAndCanRetry() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let temporary = TemporaryDocumentDraftStore(rootURL: fixture.root.appendingPathComponent("SessionDrafts"))
+        let good = recoveryRecord(text: "good draft", updatedAt: Date())
+        let repaired = recoveryRecord(text: "repaired draft", updatedAt: Date())
+        try temporary.write(good)
+        let corruptURL = temporary.rootURL.appendingPathComponent(repaired.id.uuidString + ".json")
+        try Data("unfinished JSON".utf8).write(to: corruptURL)
+        let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot,
+            temporaryDraftStore: temporary, usesPlaintext: true)
+        await coordinator.beginStartupRestoration { _ in }
+        let invalid = try XCTUnwrap(coordinator.startupDrafts.first { $0.id == repaired.id })
+        let failed = await coordinator.materializeStartupDraft(invalid)
+        XCTAssertNil(failed)
+        guard case .failed = coordinator.startupPhases[repaired.id] else { return XCTFail("Per-tab error required") }
+        XCTAssertEqual(try Data(contentsOf: corruptURL), Data("unfinished JSON".utf8))
+        let valid = try XCTUnwrap(coordinator.startupDrafts.first { $0.id == good.id })
+        let restored = await coordinator.materializeStartupDraft(valid)
+        XCTAssertEqual(restored?.text, good.text)
+        XCTAssertNil(coordinator.protectionErrorMessage)
+        try temporary.write(repaired)
+        coordinator.retryStartupDraft(invalid)
+        let retried = await coordinator.materializeStartupDraft(invalid)
+        XCTAssertEqual(retried?.text, repaired.text)
+    }
+
+    @MainActor
+    func testStartupConcurrentSelectionsShareOneClaim() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let temporary = TemporaryDocumentDraftStore(rootURL: fixture.root.appendingPathComponent("SessionDrafts"))
+        let record = recoveryRecord(text: "one claim", updatedAt: Date())
+        try temporary.write(record)
+        let gate = RecoveryReconcileGate()
+        let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot,
+            temporaryDraftStore: temporary, usesPlaintext: true,
+            beforeStartupRead: { _ in await gate.suspendFirstCommit() })
+        await coordinator.beginStartupRestoration { _ in }
+        await gate.waitUntilSuspended()
+        let placeholder = try XCTUnwrap(coordinator.startupDrafts.first)
+        let first = Task { await coordinator.materializeStartupDraft(placeholder) }
+        let second = Task { await coordinator.materializeStartupDraft(placeholder) }
+        await gate.resume()
+        let a = await first.value, b = await second.value
+        XCTAssertEqual(a?.text, record.text)
+        XCTAssertEqual(b?.text, record.text)
+        XCTAssertEqual(a?.recoveryTransfer, b?.recoveryTransfer)
+        XCTAssertEqual(coordinator.startupPhases[record.id], .ready)
+        XCTAssertTrue(try temporary.records().isEmpty)
+    }
+
+    func testStartupClaimCannotOverwriteAClaimMadeAfterBackgroundRead() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let record = recoveryRecord(text: "do not reclaim", updatedAt: Date())
+        let store = PlaintextDocumentRecoveryStore(rootURL: fixture.recoveryRoot)
+        try await store.importTemporaryDraft(record)
+        let target = UUID()
+        _ = try await store.claim(record, targetRecordID: target)
+        do {
+            _ = try await store.claimStartup(record, targetRecordID: UUID())
+            XCTFail("A background snapshot must not overwrite another claim")
+        } catch { XCTAssertEqual(error as? DocumentRecoveryError, .staleClaim) }
+        let loaded = try await store.load()
+        XCTAssertEqual(loaded.records.first?.transferTargetRecordID, target)
+    }
+
+    func testStartupDiscoveryDeduplicatesFilesAndKeepsSavedDraftUntouched() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let temporary = TemporaryDocumentDraftStore(rootURL: fixture.root.appendingPathComponent("SessionDrafts"))
+        let store = PlaintextDocumentRecoveryStore(rootURL: fixture.recoveryRoot)
+        let original = fixture.root.appendingPathComponent("saved.md")
+        let record = DocumentRecoveryRecord(id: UUID(), document: MarkdownDocument(text: "saved"), originalURL: original,
+            selectedUTF16Range: NSRange(location: 0, length: 0), viewMode: .source, verticalScrollOffset: 0)
+        try Data(record.text.utf8).write(to: original)
+        try temporary.write(record)
+        try await store.importTemporaryDraft(record)
+        let closed = recoveryRecord(text: "closed", updatedAt: Date())
+        try await store.importTemporaryDraft(closed)
+        _ = try store.markSessionClosed(closed.id, generation: 1)
+        let loader = RecoveryStartupLoader(recoveryRoot: fixture.recoveryRoot, temporaryRoot: temporary.rootURL, witness: nil)
+        let placeholders = try loader.discover()
+        XCTAssertEqual(placeholders.count, 1)
+        XCTAssertEqual(placeholders.first?.locations.count, 2)
+        XCTAssertNil(try loader.prepare(XCTUnwrap(placeholders.first)))
+        XCTAssertEqual(try temporary.records(), [record])
+        XCTAssertEqual(try String(contentsOf: original, encoding: .utf8), "saved")
+    }
+
+
+    @MainActor
+    func testStartupClearAllCancelsPendingReadsWithoutRecreatingDrafts() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let temporary = TemporaryDocumentDraftStore(rootURL: fixture.root.appendingPathComponent("SessionDrafts"))
+        let record = recoveryRecord(text: "clear pending draft", updatedAt: Date())
+        try temporary.write(record)
+        let gate = RecoveryReconcileGate()
+        let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot,
+            temporaryDraftStore: temporary, usesPlaintext: true,
+            beforeStartupRead: { _ in await gate.suspendFirstCommit() })
+        await coordinator.beginStartupRestoration { _ in }
+        await gate.waitUntilSuspended()
+        let placeholder = try XCTUnwrap(coordinator.startupDrafts.first)
+        try await coordinator.removeAllRecoveryContent()
+        await gate.resume()
+        let restored = await coordinator.materializeStartupDraft(placeholder)
+        XCTAssertNil(restored)
+        XCTAssertTrue(try temporary.records().isEmpty)
+        let loaded = try await PlaintextDocumentRecoveryStore(rootURL: fixture.recoveryRoot).load()
+        XCTAssertTrue(loaded.records.isEmpty)
+    }
+
+    @MainActor
+    func testStartupPlaceholderJoinsNativeTabsAndPreservesCurrentSelection() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        _ = NSApplication.shared
+        let temporary = TemporaryDocumentDraftStore(rootURL: fixture.root.appendingPathComponent("SessionDrafts"))
+        try temporary.write(recoveryRecord(text: "background tab", updatedAt: Date()))
+        let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot,
+            temporaryDraftStore: temporary, usesPlaintext: true)
+        let anchor = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let pending = NSWindow(contentRect: anchor.frame,
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let anchorDocument = NSDocument(), pendingDocument = NSDocument()
+        anchorDocument.addWindowController(NSWindowController(window: anchor))
+        pendingDocument.addWindowController(NSWindowController(window: pending))
+        defer { anchor.orderOut(nil); pending.orderOut(nil) }
+        anchor.makeKeyAndOrderFront(nil)
+        await coordinator.beginStartupRestoration(anchor: anchor) { document in
+            guard let placeholder = document.recoveryPlaceholder else { return XCTFail("Missing placeholder") }
+            pending.makeKeyAndOrderFront(nil)
+            coordinator.attachStartupWindow(pending, placeholder: placeholder)
+        }
+        XCTAssertEqual(anchor.tabbedWindows?.count, 2)
+        XCTAssertTrue(anchor.tabGroup?.selectedWindow === anchor)
+        XCTAssertEqual(pending.title, "恢复草稿 1")
+        for placeholder in coordinator.startupDrafts { coordinator.dismissStartupDraft(placeholder.id) }
+    }
+
     func testProcessActivationTakesPriorityWithoutWaitingForLivePeer() throws {
         let fixture = try RecoveryFixture()
         defer { fixture.remove() }

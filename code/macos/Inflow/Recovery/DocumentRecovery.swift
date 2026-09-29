@@ -1857,6 +1857,18 @@ actor PlaintextDocumentRecoveryStore: DocumentRecoveryStoring {
             targetEpoch: current.effectiveEpoch &+ 1, committedContentHash: current.committedContentHash)
     }
 
+    /// Keep importing a close checkpoint and claiming it in one actor turn.
+    /// A newer or already claimed head must never be replaced by a stale read.
+    func claimStartup(_ record: DocumentRecoveryRecord, targetRecordID: UUID) throws -> DocumentRecoveryTransfer {
+        try requireWriter()
+        if let current = try? read(record.id), current != record {
+            guard current.updatedAt < record.updatedAt,
+                  current.transferTargetRecordID == nil else { throw DocumentRecoveryError.staleClaim }
+        }
+        try importTemporaryDraft(record)
+        return try claim(record, targetRecordID: targetRecordID)
+    }
+
     func remove(_ id: UUID) throws {
         try requireWriter()
         try DurableRecoveryWriter.removeIfPresent(at: url(id))
@@ -1884,6 +1896,24 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         let task: Task<Void, Never>
     }
 
+    @Published private(set) var startupDrafts: [RecoveryDraftPlaceholder] = []
+    @Published private(set) var startupPhases: [UUID: RecoveryStartupPhase] = [:]
+    private var startupLoader: RecoveryStartupLoader?
+    private var startupStarted = false
+    private var startupPrefetch: Task<Void, Never>?
+    private var startupReadTasks: [UUID: Task<PreparedStartupDraft?, Error>] = [:]
+    private var preparedStartupDrafts: [UUID: PreparedStartupDraft] = [:]
+    private var startupMaterializationTasks: [UUID: Task<MarkdownDocument?, Never>] = [:]
+    private var materializedStartupDrafts: [UUID: MarkdownDocument] = [:]
+    private var dismissedStartupDrafts: Set<UUID> = []
+    private weak var startupAnchor: NSWindow?
+    private final class WeakStartupWindow {
+        weak var value: NSWindow?
+        init(_ value: NSWindow?) { self.value = value }
+    }
+    private var startupReturnWindows: [UUID: WeakStartupWindow] = [:]
+    private let beforeStartupRead: (@Sendable (RecoveryDraftPlaceholder) async -> Void)?
+
     private let store: (any DocumentRecoveryStoring)?
     private let temporaryDraftStore: TemporaryDocumentDraftStore?
     private let processOwnership: DocumentProcessOwnership?
@@ -1905,8 +1935,10 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         temporaryDraftStore: TemporaryDocumentDraftStore? = nil,
         processOwnership: DocumentProcessOwnership? = nil,
         processWitness: DocumentProcessWitness? = nil,
-        usesPlaintext: Bool = false
+        usesPlaintext: Bool = false,
+        beforeStartupRead: (@Sendable (RecoveryDraftPlaceholder) async -> Void)? = nil
     ) {
+        self.beforeStartupRead = beforeStartupRead
         self.temporaryDraftStore = temporaryDraftStore
         self.processOwnership = processOwnership
         defer { observeProcessOwnership() }
@@ -1919,6 +1951,8 @@ final class DocumentRecoveryCoordinator: ObservableObject {
                     appropriateFor: nil, create: true).appendingPathComponent("Inflow/Recovery")
             }
             if usesPlaintext || processOwnership != nil || processWitness != nil {
+                startupLoader = RecoveryStartupLoader(recoveryRoot: resolvedRoot, temporaryRoot: temporaryDraftStore?.rootURL,
+                    witness: processOwnership?.witness ?? processWitness)
                 store = PlaintextDocumentRecoveryStore(rootURL: resolvedRoot,
                     witness: processOwnership?.witness ?? processWitness, beforeReconcileCommit: beforeReconcileCommit)
             } else {
@@ -1939,12 +1973,154 @@ final class DocumentRecoveryCoordinator: ObservableObject {
                         guard let self else { return }
                         self.protectionErrorMessage = nil
                         if self.store?.canWrite == true {
-                            await self.retryProtection()
+                            if self.startupLoader == nil { await self.retryProtection() }
                             for id in Array(self.activeSessions.keys) { await self.flush(id) }
                         }
                     }
                 }
         }
+    }
+
+    /// Opens lightweight document shells first; the original window stays usable.
+    func beginStartupRestoration(anchor: NSWindow? = nil, open: @escaping @MainActor (MarkdownDocument) -> Void) async {
+        guard !startupStarted, store?.canWrite == true else { return }
+        startupStarted = true
+        guard let loader = startupLoader else {
+            await loadIfNeeded()
+            for document in await claimDraftsForAutomaticRestoration() { open(document); await Task.yield() }
+            return
+        }
+        hasClaimedAutomaticRestoration = true
+        startupAnchor = anchor ?? NSApp?.keyWindow
+        do {
+            let placeholders = try await Task.detached(priority: .utility) { try loader.discover() }.value
+            startupDrafts = placeholders
+            for placeholder in placeholders {
+                guard !Task.isCancelled else { return }
+                startupPhases[placeholder.id] = .queued
+                startupReturnWindows[placeholder.id] = WeakStartupWindow(NSApp?.keyWindow ?? anchor)
+                open(MarkdownDocument(recoveryPlaceholder: placeholder))
+                // Let AppKit attach each lightweight tab and process user events.
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            startupPrefetch = Task(priority: .utility) { [weak self] in
+                for placeholder in placeholders {
+                    guard !Task.isCancelled, let self else { return }
+                    _ = await self.prepareStartupDraft(placeholder, priority: .utility)
+                    await Task.yield()
+                }
+                self?.isLoaded = true
+            }
+            if placeholders.isEmpty { isLoaded = true }
+        } catch {
+            protectionErrorMessage = "暂未能载入上次的草稿。你可以继续编辑，并稍后重试恢复。"
+        }
+    }
+
+    func attachStartupWindow(_ window: NSWindow, placeholder: RecoveryDraftPlaceholder) {
+        window.title = placeholder.title
+        guard let anchor = startupAnchor, anchor !== window,
+              anchor.windowController?.document != nil else { return }
+        let returnWindow = startupReturnWindows.removeValue(forKey: placeholder.id)?.value
+        let becameKey = window.isKeyWindow
+        window.tabbingIdentifier = anchor.tabbingIdentifier
+        anchor.addTabbedWindow(window, ordered: .above)
+        if becameKey || window.isKeyWindow, let returnWindow, returnWindow.windowController?.document != nil {
+            returnWindow.tabGroup?.selectedWindow = returnWindow
+            returnWindow.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    func prepareStartupDraft(_ placeholder: RecoveryDraftPlaceholder, priority: TaskPriority = .utility) async -> PreparedStartupDraft? {
+        guard !dismissedStartupDrafts.contains(placeholder.id) else { return nil }
+        if let prepared = preparedStartupDrafts[placeholder.id] { return prepared }
+        if startupPhases[placeholder.id] == .unnecessary || startupPhases[placeholder.id] == .opened { return nil }
+        guard let loader = startupLoader else { return nil }
+        let task: Task<PreparedStartupDraft?, Error>
+        if let existing = startupReadTasks[placeholder.id] { task = existing }
+        else {
+            let beforeRead = beforeStartupRead
+            task = Task.detached(priority: priority) {
+                try Task.checkCancellation()
+                await beforeRead?(placeholder)
+                try Task.checkCancellation()
+                return try loader.prepare(placeholder)
+            }
+            startupReadTasks[placeholder.id] = task
+            startupPhases[placeholder.id] = .loading
+        }
+        do {
+            let prepared = try await task.value
+            guard !dismissedStartupDrafts.contains(placeholder.id) else { return nil }
+            // Both prefetch and selection may await this read; publish its result once.
+            guard startupPhases[placeholder.id] == .loading else { return prepared }
+            startupReadTasks.removeValue(forKey: placeholder.id)
+            if let prepared {
+                preparedStartupDrafts[placeholder.id] = prepared
+                startupPhases[placeholder.id] = .ready
+                if !recoveredRecords.contains(where: { $0.id == prepared.record.id }) { recoveredRecords.append(prepared.record) }
+            } else { startupPhases[placeholder.id] = .unnecessary }
+            return prepared
+        } catch {
+            startupReadTasks.removeValue(forKey: placeholder.id)
+            if !dismissedStartupDrafts.contains(placeholder.id) {
+                startupPhases[placeholder.id] = .failed("这份草稿暂时无法读取，原文件仍然保留；其他标签页不受影响。")
+            }
+            return nil
+        }
+    }
+
+    func materializeStartupDraft(_ placeholder: RecoveryDraftPlaceholder) async -> MarkdownDocument? {
+        if let restored = materializedStartupDrafts[placeholder.id] { return restored }
+        if let task = startupMaterializationTasks[placeholder.id] { return await task.value }
+        let task = Task { await self.claimPreparedStartupDraft(placeholder) }
+        startupMaterializationTasks[placeholder.id] = task
+        let result = await task.value
+        startupMaterializationTasks.removeValue(forKey: placeholder.id)
+        return result
+    }
+
+    private func claimPreparedStartupDraft(_ placeholder: RecoveryDraftPlaceholder) async -> MarkdownDocument? {
+        guard let prepared = await prepareStartupDraft(placeholder, priority: .userInitiated),
+              !dismissedStartupDrafts.contains(placeholder.id),
+              let store = store as? PlaintextDocumentRecoveryStore, let loader = startupLoader else { return nil }
+        do {
+            // The source remains durable until the editor writes its own new head.
+            let transfer = try await store.claimStartup(prepared.record, targetRecordID: placeholder.targetID)
+            let document: MarkdownDocument
+            if prepared.document.recoveryTransfer == transfer { document = prepared.document }
+            else { document = try await Task.detached(priority: .userInitiated) { try prepared.record.restoredDocument(transfer: transfer) }.value }
+            try? await Task.detached(priority: .utility) { try loader.removeImportedCheckpoint(matching: prepared.record) }.value
+            guard !dismissedStartupDrafts.contains(placeholder.id) else { return nil }
+            materializedStartupDrafts[placeholder.id] = document
+            recoveredRecords.removeAll { $0.id == prepared.record.id }
+            return document
+        } catch {
+            guard !dismissedStartupDrafts.contains(placeholder.id) else { return nil }
+            startupPhases[placeholder.id] = .failed("暂未能恢复这份草稿，原内容仍然保留。请重新激活此窗口后重试。")
+            return nil
+        }
+    }
+
+    func completeStartupDraft(_ id: UUID) {
+        startupPhases[id] = .opened
+        preparedStartupDrafts.removeValue(forKey: id)
+        materializedStartupDrafts.removeValue(forKey: id)
+    }
+
+    func dismissStartupDraft(_ id: UUID) {
+        dismissedStartupDrafts.insert(id)
+        startupReadTasks.removeValue(forKey: id)?.cancel()
+        startupPhases[id] = .unnecessary
+        preparedStartupDrafts.removeValue(forKey: id)
+        materializedStartupDrafts.removeValue(forKey: id)
+        startupReturnWindows.removeValue(forKey: id)
+    }
+
+    func retryStartupDraft(_ placeholder: RecoveryDraftPlaceholder) {
+        guard !dismissedStartupDrafts.contains(placeholder.id) else { return }
+        preparedStartupDrafts.removeValue(forKey: placeholder.id)
+        startupPhases[placeholder.id] = .queued
     }
 
     func loadIfNeeded() async {
@@ -2065,6 +2241,13 @@ final class DocumentRecoveryCoordinator: ObservableObject {
             return
         }
         do {
+            if startupPhases[record.id] != nil {
+                dismissStartupDraft(record.id)
+                _ = await startupMaterializationTasks[record.id]?.value
+                if let temporaryDraftStore {
+                    try await Task.detached(priority: .utility) { try temporaryDraftStore.remove(record.id) }.value
+                }
+            }
             try await store.remove(record.id)
             recoveredRecords.removeAll { $0.id == record.id }
         } catch {
@@ -2083,6 +2266,15 @@ final class DocumentRecoveryCoordinator: ObservableObject {
             clearedContentIdentities[record.id] = record.recoveryContentIdentity
         }
         do {
+            startupPrefetch?.cancel()
+            let pendingIDs = startupDrafts.map(\.id)
+            for id in pendingIDs { dismissStartupDraft(id) }
+            for task in Array(startupMaterializationTasks.values) { _ = await task.value }
+            if let temporaryDraftStore {
+                try await Task.detached(priority: .utility) {
+                    for id in pendingIDs { try temporaryDraftStore.remove(id) }
+                }.value
+            }
             try await store.removeAll()
         } catch {
             clearedContentIdentities = priorClearedContentIdentities
@@ -2101,7 +2293,8 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         guard let store else { throw DocumentRecoveryError.unavailableStorage }
         let targetID = UUID()
         let transfer = try await store.claim(record, targetRecordID: targetID)
-        let document = try record.restoredDocument(transfer: transfer)
+        let document = try await Task.detached(priority: .userInitiated) { try record.restoredDocument(transfer: transfer) }.value
+        if startupPhases[record.id] != nil { dismissStartupDraft(record.id) }
         recoveredRecords.removeAll { $0.id == record.id }
         return document
     }
@@ -2143,10 +2336,11 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         guard store.canWrite else { isLoaded = true; protectionErrorMessage = nil; return }
         do {
             if let temporaryDraftStore {
-                for record in try temporaryDraftStore.records() {
+                let checkpoints = try await Task.detached(priority: .utility) { try temporaryDraftStore.records() }.value
+                for record in checkpoints {
                     if processOwnership?.witness?.isLiveRecovery(record.id) == true { continue }
                     try await store.importTemporaryDraft(record)
-                    try temporaryDraftStore.remove(record.id)
+                    try await Task.detached(priority: .utility) { try temporaryDraftStore.remove(record.id) }.value
                 }
             }
             let result = try await store.load()
