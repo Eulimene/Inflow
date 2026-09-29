@@ -175,7 +175,7 @@ enum MarkdownRenderer {
             blockquote { margin: .85em 0; padding: .08em 0 .08em 1em; color: var(--md-secondary); border-left: 4px solid var(--md-quote-bar); line-height: inherit; }
             blockquote > :first-child { margin-top: 0; } blockquote > :last-child { margin-bottom: 0; }
             ul, ol { margin: .65em 0; padding-left: 1.7em; }
-            li { margin: .18em 0; padding-left: .1em; }
+            li { margin: \(MarkdownRenderMetrics.listItemGap / CGFloat(MarkdownRenderMetrics.bodyFontSize))em 0; padding-left: .1em; }
             li > p { margin: .35em 0; }
             code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace; font-size: \(MarkdownRenderMetrics.inlineCodeScale)em; line-height: inherit; background: var(--md-inline-code); border-radius: 4px; padding: 0; }
             pre { margin: 1em 0; overflow: auto; padding: 15px 16px; color: var(--md-text); background: var(--md-surface); border: 1px solid var(--md-border); border-radius: \(MarkdownRenderMetrics.blockCornerRadius)px; line-height: \(MarkdownRenderMetrics.codeBlockLineHeight); }

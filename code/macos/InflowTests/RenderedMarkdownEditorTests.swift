@@ -733,6 +733,8 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                 ) as? NSParagraphStyle
             )
             XCTAssertEqual(style.paragraphSpacing, 0, accuracy: 0.001)
+            XCTAssertEqual(style.paragraphSpacingBefore, text == "第一段" ? 0 : MarkdownRenderMetrics.paragraphGap
+                * CGFloat(session.sourceAppearance.fontSize / MarkdownRenderMetrics.bodyFontSize), accuracy: 0.001)
         }
         let defaultStyle = try XCTUnwrap(session.textView.defaultParagraphStyle)
         XCTAssertEqual(defaultStyle.paragraphSpacing, 0, accuracy: 0.001)
@@ -761,7 +763,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                         let plan = RenderedMarkdownEditor.plan(for: source)
                         XCTAssertEqual(plan.blockSpacingBoundaries.count, 2, source)
                         XCTAssertEqual(plan.blockSpacing.collapsedLines,
-                            [NSRange(location: before.utf16.count + newline.utf16.count, length: newline.utf16.count)], source)
+                        [NSRange(location: before.utf16.count + newline.utf16.count, length: newline.utf16.count)], source)
                     }
                 }
             }
@@ -787,6 +789,10 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                     let manager = try XCTUnwrap(editor.textView.layoutManager)
                     manager.ensureLayout(for: try XCTUnwrap(editor.textView.textContainer))
                     let location = (source as NSString).range(of: right).location
+                    let paragraph = try XCTUnwrap(editor.textView.textStorage?.attribute(.paragraphStyle,
+                        at: location, effectiveRange: nil) as? NSParagraphStyle)
+                    XCTAssertEqual(paragraph.paragraphSpacingBefore, MarkdownRenderMetrics.paragraphGap
+                        * CGFloat(editor.sourceAppearance.fontSize / MarkdownRenderMetrics.bodyFontSize), accuracy: 0.001)
                     let y = manager.lineFragmentRect(forGlyphAt: manager.glyphIndexForCharacter(at: location), effectiveRange: nil).minY
                     let lineHeight = editable ? editor.sourceAppearance.fontSize * editor.sourceAppearance.lineHeight
                         : Double(MarkdownRenderMetrics.paragraphGap) * editor.sourceAppearance.fontSize / MarkdownRenderMetrics.bodyFontSize
@@ -1747,6 +1753,33 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(baselineRect.height, ceil(font.ascender - font.descender + font.leading))
         let tiny = RenderedMarkdownCaretStyleResolver.adjustedInsertionRect(NSRect(x: 10, y: 100, width: 1, height: 1), font: font)
         XCTAssertEqual(tiny.height, baselineRect.height, "A temporarily collapsed native line must not shrink the caret")
+
+        // TextKit includes paragraphSpacing in the full fragment, but the caret
+        // must stay centred on the used text line for every heading/list level.
+        for prefix in ["# ", "## ", "### ", "#### ", "##### ", "###### ", "- ", "1. ", "- [ ] "] {
+            let sample = prefix + "标题 Heading\n\n后段"
+            let editor = MarkdownSourceEditorSession()
+            editor.scrollView.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+            editor.textView.string = sample
+            _ = await editor.deriveContent(for: sample, configuration: .default)
+            editor.setPresentation(.rendered, source: sample, onLinkClick: nil)
+            let location = prefix.utf16.count
+            editor.textView.setSelectedRange(NSRange(location: location, length: 0))
+            let manager = try XCTUnwrap(editor.textView.layoutManager)
+            manager.ensureLayout(for: try XCTUnwrap(editor.textView.textContainer))
+            let glyph = manager.glyphIndexForCharacter(at: location)
+            let used = manager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+            let full = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            let caret = editor.textView.renderedInsertionRect(NSRect(x: 0, y: full.minY, width: 1, height: full.height))
+            XCTAssertEqual(caret.midY, editor.textView.textContainerOrigin.y + used.midY, accuracy: 0.001, prefix)
+            XCTAssertGreaterThan(full.height, used.height, prefix)
+            if !prefix.hasPrefix("#") {
+                let paragraph = try XCTUnwrap(editor.textView.textStorage?.attribute(.paragraphStyle,
+                    at: location, effectiveRange: nil) as? NSParagraphStyle)
+                XCTAssertEqual(paragraph.paragraphSpacing, MarkdownRenderMetrics.listItemGap
+                    * CGFloat(editor.sourceAppearance.fontSize / MarkdownRenderMetrics.bodyFontSize), accuracy: 0.001)
+            }
+        }
 
         for initial in ["正文", "# 标题", "> 引用", "- 列表", "- [ ] 任务", "**粗体**", "`代码`", "$$x$$"] {
             let editor = MarkdownSourceEditorSession()

@@ -784,7 +784,7 @@ final class WindowAwareTextView: NSTextView {
                 layoutManager.numberOfGlyphs - 1,
                 NSMaxRange(glyphRange) - 1
             )
-            let lineRect = layoutManager.lineFragmentRect(
+            let lineRect = layoutManager.lineFragmentUsedRect(
                 forGlyphAt: lastGlyph,
                 effectiveRange: nil,
                 withoutAdditionalLayout: true

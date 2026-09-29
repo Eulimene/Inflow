@@ -45,7 +45,9 @@ enum RenderedMarkdownCaretStyleResolver {
             }
             let glyph = manager.glyphIndexForCharacter(at: character)
             guard glyph < manager.numberOfGlyphs else { return adjustedInsertionRect(nativeRect, font: font) }
-            line = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
+            // The full fragment includes paragraphSpacing below the text. Using
+            // it moves heading/list carets down as block spacing increases.
+            line = manager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil, withoutAdditionalLayout: true)
         } else { return adjustedInsertionRect(nativeRect, font: font) }
         guard line.height > 0 else { return adjustedInsertionRect(nativeRect, font: font) }
         return adjustedInsertionRect(NSRect(x: nativeRect.minX, y: textView.textContainerOrigin.y + line.minY,

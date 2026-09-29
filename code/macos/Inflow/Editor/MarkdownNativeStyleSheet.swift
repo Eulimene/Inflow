@@ -124,7 +124,8 @@ struct MarkdownNativeStyleSheet {
                 storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
                     as? NSParagraphStyle
             )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
-            paragraph.paragraphSpacing = max(paragraph.paragraphSpacing, 2)
+            paragraph.paragraphSpacing = max(paragraph.paragraphSpacing,
+                MarkdownRenderMetrics.listItemGap * baseFont.pointSize / CGFloat(MarkdownRenderMetrics.bodyFontSize))
             storage.addAttribute(.paragraphStyle, value: paragraph, range: paragraphRange)
         case let .heading(level):
             let metrics = MarkdownRenderMetrics.heading(level: level)
@@ -134,7 +135,9 @@ struct MarkdownNativeStyleSheet {
                     as? NSParagraphStyle
             )?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
             paragraph.minimumLineHeight = baseFont.pointSize * CGFloat(metrics.scale * MarkdownRenderMetrics.headingLineHeight(level: level))
-            paragraph.maximumLineHeight = paragraph.minimumLineHeight
+            // Fallback glyphs (especially Chinese headings) may need a taller
+            // line than the Latin font. Do not clip them to a fixed line box.
+            paragraph.maximumLineHeight = 0
             paragraph.lineHeightMultiple = 1
             paragraph.paragraphSpacingBefore = baseFont.pointSize * CGFloat(metrics.spacingBefore)
             paragraph.paragraphSpacing = baseFont.pointSize * CGFloat(metrics.spacingAfter)
@@ -298,6 +301,25 @@ struct MarkdownNativeStyleSheet {
             paragraph.lineHeightMultiple = 0.001
             storage.addAttributes([.font: NSFont.systemFont(ofSize: 0.1),
                 .foregroundColor: NSColor.clear, .paragraphStyle: paragraph], range: range)
+        }
+    }
+
+    /// Semantic block separation is independent of optional source blank lines.
+    /// Apply after overlay layout so tables/diagrams retain the same outer gap.
+    func applyBlockSpacing(_ boundaries: [NSRange], storage: NSTextStorage) {
+        let gap = MarkdownRenderMetrics.paragraphGap * baseFont.pointSize
+            / CGFloat(MarkdownRenderMetrics.bodyFontSize)
+        for block in boundaries.dropFirst() where block.length > 0 && block.location < storage.length {
+            let range = storage.mutableString.paragraphRange(for: NSRange(location: block.location, length: 0))
+            let paragraph = (storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
+                as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+            paragraph.paragraphSpacingBefore = max(paragraph.paragraphSpacingBefore, gap)
+            // Overlay anchors intentionally use a different style from the rest
+            // of their source paragraph. Only update its leading attribute run.
+            var effectiveRange = NSRange()
+            _ = storage.attribute(.paragraphStyle, at: range.location, effectiveRange: &effectiveRange)
+            storage.addAttribute(.paragraphStyle, value: paragraph,
+                range: NSIntersectionRange(range, effectiveRange))
         }
     }
 

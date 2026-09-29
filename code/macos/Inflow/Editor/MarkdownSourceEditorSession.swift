@@ -1216,6 +1216,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             )
         }
         applyJavaScriptResources(plan, editingRange: editingRange, storage: storage)
+        styleSheet.applyBlockSpacing(plan.blockSpacingBoundaries, storage: storage)
         textView.endRenderedOverlayUpdate()
         storage.endEditing()
         renderedAttributePatchRanges = RenderedAttributePatch.apply(storage, to: liveStorage)

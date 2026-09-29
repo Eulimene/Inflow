@@ -13,6 +13,7 @@ enum MarkdownRenderMetrics {
     static let bodyFontSize = 16.0
     static let bodyLineHeight = 1.6
     static let paragraphGap = CGFloat(12.8)
+    static let listItemGap = CGFloat(5)
     static let unorderedListMarkerScale = CGFloat(1.22)
     static let listMarkerExtraSpacing = CGFloat(6)
     static let editorHorizontalInset = CGFloat(28)
