@@ -150,11 +150,18 @@ struct DocumentWindowControls: NSViewRepresentable {
 
         func configureWindow() {
             guard let window else { return }
-            window.styleMask.insert(.miniaturizable)
+            // AppKit setters can invalidate native window commands even when the
+            // assigned value is unchanged. SwiftUI can refresh this view while
+            // the Window menu is open, so only write actual policy changes.
+            if !window.styleMask.contains(.miniaturizable) {
+                window.styleMask.insert(.miniaturizable)
+            }
             var behavior = window.collectionBehavior
             behavior.remove([.fullScreenPrimary, .fullScreenAuxiliary])
             behavior.insert(.fullScreenNone)
-            window.collectionBehavior = behavior
+            if window.collectionBehavior != behavior {
+                window.collectionBehavior = behavior
+            }
         }
     }
 }

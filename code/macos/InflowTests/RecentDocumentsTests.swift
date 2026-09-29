@@ -6,6 +6,11 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class RecentDocumentsTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        _ = NSApplication.shared
+    }
+
     func testTerminationDelegateNeverCancelsAnApprovedDisposableDraftQuit() throws {
         XCTAssertEqual(
             InflowTerminationPolicy.replyAfterDocumentCloseApproval,
@@ -111,6 +116,42 @@ final class RecentDocumentsTests: XCTestCase {
         // Repeated SwiftUI updates must preserve the same window policy.
         controls.configureWindow()
         XCTAssertTrue(minimize.isEnabled)
+    }
+
+    func testDocumentWindowRefreshDoesNotInvalidateNativeWindowCommands() {
+        let window = WindowConfigurationProbe(
+            contentRect: NSRect(x: 100, y: 100, width: 640, height: 480),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.collectionBehavior = [.managed, .fullScreenPrimary, .fullScreenAllowsTiling]
+        let controls = DocumentWindowControls.WindowView()
+        window.contentView = controls
+        XCTAssertTrue(window.styleMask.contains(.miniaturizable))
+        XCTAssertTrue(window.collectionBehavior.contains(.fullScreenNone))
+        XCTAssertTrue(window.collectionBehavior.contains(.fullScreenAllowsTiling))
+        XCTAssertTrue(window.collectionBehavior.contains(.managed))
+
+        window.styleWrites = 0
+        window.behaviorWrites = 0
+        // Editing, recovery and preference updates can all refresh this view
+        // while AppKit is tracking its dynamically populated Window menu.
+        for _ in 0..<20 { controls.configureWindow() }
+        XCTAssertEqual(window.styleWrites, 0, "Unchanged style must not invalidate AppKit window commands")
+        XCTAssertEqual(window.behaviorWrites, 0, "Unchanged behavior must not invalidate AppKit tiling commands")
+
+        // Reattachment must still configure a different document window.
+        let other = WindowConfigurationProbe(
+            contentRect: window.frame, styleMask: [.titled, .resizable],
+            backing: .buffered, defer: false
+        )
+        other.isReleasedWhenClosed = false
+        defer { other.close() }
+        other.contentView = controls
+        XCTAssertTrue(other.styleMask.contains(.miniaturizable))
+        XCTAssertTrue(other.collectionBehavior.contains(.fullScreenNone))
     }
 
     func testProjectDocumentsReuseTheSelectedFolderSecurityScope() {
@@ -1513,5 +1554,19 @@ private final class DraftQuitReviewProbe: NSObject {
     var approved: Bool?
     @objc func reviewed(_ controller: NSDocumentController, approved: Bool, context: UnsafeMutableRawPointer?) {
         self.approved = approved
+    }
+}
+
+@MainActor
+private final class WindowConfigurationProbe: NSWindow {
+    var styleWrites = 0
+    var behaviorWrites = 0
+
+    override var styleMask: NSWindow.StyleMask {
+        didSet { styleWrites += 1 }
+    }
+
+    override var collectionBehavior: NSWindow.CollectionBehavior {
+        didSet { behaviorWrites += 1 }
     }
 }
