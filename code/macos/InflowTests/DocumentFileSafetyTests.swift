@@ -3,6 +3,44 @@ import XCTest
 @testable import Inflow
 
 final class DocumentFileSafetyTests: XCTestCase {
+    func testSupersededProcessCannotSerializeOrAuthorizeDocumentSave() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = DocumentProcessWitness(directory: root, instance: UUID(), isAlive: { _ in true })
+        let second = DocumentProcessWitness(directory: root, instance: UUID(), isAlive: { _ in true })
+        try first.publish(DocumentProcessClaim(instance: first.instance, pid: 1, activatedAt: 1, recoveryIDs: []))
+        let guardrail = MarkdownWriteGuard()
+        guardrail.setProcessWitness(first)
+        let data = Data("current content".utf8)
+        XCTAssertEqual(try guardrail.fileDocumentSerializationData(fallback: data), data)
+        try second.publish(DocumentProcessClaim(instance: second.instance, pid: 2, activatedAt: 2, recoveryIDs: []))
+        XCTAssertThrowsError(try guardrail.fileDocumentSerializationData(fallback: data)) {
+            XCTAssertEqual($0 as? MarkdownWriteGuardError, .supersededProcess)
+        }
+        XCTAssertThrowsError(try guardrail.authorize(existingFile: nil, proposedData: data)) {
+            XCTAssertEqual($0 as? MarkdownWriteGuardError, .supersededProcess)
+        }
+        try first.publish(DocumentProcessClaim(instance: first.instance, pid: 1, activatedAt: 3, recoveryIDs: []))
+        XCTAssertEqual(try guardrail.fileDocumentSerializationData(fallback: data), data)
+    }
+
+    func testPeerReloadPreservesDirtyTextBeforeAdoptingDiskContent() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TemporaryDocumentDraftStore(rootURL: root)
+        let url = root.appendingPathComponent("notes.md")
+        let snapshot = DocumentFileConflictSnapshot(url: url, baselineData: Data("base".utf8), baselineText: "base",
+            localData: Data("my draft".utf8), localText: "my draft", diskData: Data("peer saved".utf8), diskText: "peer saved", diskExists: true)
+        XCTAssertTrue(DocumentPeerReloadPolicy.shouldReload(snapshot, isOwner: false, takingOwnership: false))
+        XCTAssertTrue(DocumentPeerReloadPolicy.shouldReload(snapshot, isOwner: true, takingOwnership: true))
+        XCTAssertFalse(DocumentPeerReloadPolicy.shouldReload(snapshot, isOwner: true, takingOwnership: false))
+        try DocumentPeerReloadPolicy.preserveLocalChanges(snapshot, document: MarkdownDocument(text: "my draft"), viewMode: .preview, store: store)
+        let copies = try store.records()
+        XCTAssertEqual(copies.map(\.text), ["my draft"])
+        XCTAssertEqual(copies.first?.originalURL, url)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "Preserving a draft must not write back to the document")
+    }
+
     func testReadOnlyPromptUsesFrozenSafeExitCopy() {
         XCTAssertEqual(
             ReadOnlyDocumentPrompt.title(filename: "notes.md"),

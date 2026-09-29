@@ -1,3 +1,6 @@
+import AppKit
+import Combine
+import Darwin
 import CryptoKit
 import Foundation
 
@@ -6,6 +9,7 @@ enum MarkdownWriteGuardError: Error, Equatable, LocalizedError, Sendable {
     case deletedTarget
     case readOnlyTarget
     case targetChanged
+    case supersededProcess
 
     var errorDescription: String? {
         switch self {
@@ -15,6 +19,8 @@ enum MarkdownWriteGuardError: Error, Equatable, LocalizedError, Sendable {
             "原文件已从磁盘删除。Inflow 不会自动重建它。"
         case .readOnlyTarget:
             "原文件当前不可写。原文件和当前编辑均未被丢弃。"
+        case .supersededProcess:
+            "文件已由当前使用的 Inflow 进程接管，请切换到此窗口后继续。"
         case .targetChanged:
             "文档或目标已变化。请重新检查后再继续。"
         }
@@ -105,6 +111,11 @@ final class MarkdownWriteGuard: @unchecked Sendable {
     }
 
     private let lock = NSLock()
+    private var processWitness: DocumentProcessWitness?
+
+    func setProcessWitness(_ witness: DocumentProcessWitness?) {
+        lock.withLock { processWitness = witness }
+    }
     private var currentURL: URL?
     private var baselineData: Data?
     private var preparedEnvelope: SaveEnvelope?
@@ -174,6 +185,7 @@ final class MarkdownWriteGuard: @unchecked Sendable {
     func fileDocumentSerializationData(fallback currentData: Data) throws -> Data {
         lock.lock()
         defer { lock.unlock() }
+        guard processWitness?.isCurrentWriter != false else { throw MarkdownWriteGuardError.supersededProcess }
         guard let preparedEnvelope else { return currentData }
         guard preparedEnvelope.hasValidHash else {
             throw MarkdownWriteGuardError.targetChanged
@@ -213,6 +225,7 @@ final class MarkdownWriteGuard: @unchecked Sendable {
     func authorize(existingFile: FileWrapper?, proposedData: Data) throws {
         lock.lock()
         defer { lock.unlock() }
+        guard processWitness?.isCurrentWriter != false else { throw MarkdownWriteGuardError.supersededProcess }
         let existingData = existingFile?.regularFileContents
 
         if let authorization = relocationAuthorization,
@@ -893,5 +906,144 @@ final class DocumentFileSafetySession: ObservableObject {
         baselineText = text
         writeGuard?.adopt(data)
         state = .safe
+    }
+}
+
+// Each process publishes only its own metadata. Activation is a monotonic
+// priority, not a lock or lease: a newly activated process never waits for a peer.
+struct DocumentProcessClaim: Codable, Sendable {
+    let instance: UUID
+    let pid: Int32
+    var activatedAt: TimeInterval
+    var recoveryIDs: Set<UUID>
+}
+
+struct DocumentProcessWitness: Sendable {
+    let directory: URL
+    let instance: UUID
+    var isAlive: @Sendable (Int32) -> Bool = { pid in
+        pid > 0 && (Darwin.kill(pid, 0) == 0 || errno == EPERM)
+    }
+
+    func liveClaims() -> [DocumentProcessClaim] {
+        let urls = (try? FileManager.default.contentsOfDirectory(at: directory,
+            includingPropertiesForKeys: nil)) ?? []
+        return urls.filter { $0.pathExtension == "owner" }.compactMap { url in
+            guard let data = try? Data(contentsOf: url), data.count < 1_048_576,
+                  let claim = try? JSONDecoder().decode(DocumentProcessClaim.self, from: data),
+                  claim.activatedAt.isFinite, isAlive(claim.pid) else { return nil }
+            return claim
+        }
+    }
+
+    var currentOwner: UUID? {
+        liveClaims().max {
+            $0.activatedAt == $1.activatedAt
+                ? $0.instance.uuidString < $1.instance.uuidString
+                : $0.activatedAt < $1.activatedAt
+        }?.instance
+    }
+
+    var isCurrentWriter: Bool { currentOwner == instance }
+
+    func isLiveRecovery(_ id: UUID) -> Bool {
+        liveClaims().contains { $0.recoveryIDs.contains(id) }
+    }
+
+    func publish(_ claim: DocumentProcessClaim) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+        let url = directory.appendingPathComponent(instance.uuidString).appendingPathExtension("owner")
+        try JSONEncoder().encode(claim).write(to: url, options: .atomic)
+    }
+}
+
+@MainActor
+final class DocumentProcessOwnership: ObservableObject {
+    static let shared = DocumentProcessOwnership()
+    static let didChange = Notification.Name("InflowProcessOwnershipDidChange")
+    @Published private(set) var isOwner = true
+    @Published private(set) var generation: UInt64 = 0
+    let witness: DocumentProcessWitness?
+    private var claim: DocumentProcessClaim
+    private var observers: [NSObjectProtocol] = []
+    private var monitor: Task<Void, Never>?
+
+    private init() {
+        let instance = UUID()
+        claim = DocumentProcessClaim(instance: instance, pid: ProcessInfo.processInfo.processIdentifier,
+            activatedAt: -1, recoveryIDs: [])
+        if DocumentRecoveryRuntime.profile() == .automatedTest || ProcessInfo.processInfo.processName == "xctest" {
+            witness = nil
+            return
+        }
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        witness = DocumentProcessWitness(directory: base.appendingPathComponent("Inflow/ProcessOwners"), instance: instance)
+        observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.activate() }
+            })
+        // Keep a private draft before another instance takes over. This never
+        // saves or overwrites the user's Markdown file.
+        observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification,
+            object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { try? TemporaryDocumentDrafts.checkpoint() }
+            })
+        if NSApp?.isActive == true || witness?.currentOwner == nil { activate() }
+        else { refresh() }
+        monitor = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self, !Task.isCancelled else { return }
+                self.refresh()
+            }
+        }
+    }
+
+    func activate() {
+        guard let witness else { return }
+        claim.activatedAt = ProcessInfo.processInfo.systemUptime
+        do { try witness.publish(claim) }
+        catch { return }
+        refresh(force: true)
+    }
+
+    func registerRecovery(_ id: UUID) {
+        guard let witness, claim.recoveryIDs.insert(id).inserted else { return }
+        try? witness.publish(claim)
+    }
+
+    func unregisterRecovery(_ id: UUID) {
+        guard let witness, claim.recoveryIDs.remove(id) != nil else { return }
+        try? witness.publish(claim)
+    }
+
+    func refresh(force: Bool = false) {
+        guard let witness else { return }
+        let owner = witness.isCurrentWriter
+        guard force || owner != isOwner else { return }
+        isOwner = owner
+        generation &+= 1
+        NotificationCenter.default.post(name: Self.didChange, object: self)
+    }
+}
+
+
+/// Shared by the observation path and tests: only a passive instance or an
+/// explicit activation handoff can replace locally edited text automatically.
+enum DocumentPeerReloadPolicy {
+    static func shouldReload(_ snapshot: DocumentFileConflictSnapshot, isOwner: Bool, takingOwnership: Bool) -> Bool {
+        snapshot.diskText != nil && (!isOwner || takingOwnership)
+    }
+
+    static func preserveLocalChanges(_ snapshot: DocumentFileConflictSnapshot,
+        document: MarkdownDocument, viewMode: EditorViewMode, store: TemporaryDocumentDraftStore) throws {
+        guard snapshot.localHasChanges else { return }
+        let backup = MarkdownDocument(text: snapshot.localText, properties: document.properties,
+            openedFileData: document.openedFileData)
+        let record = DocumentRecoveryRecord(id: UUID(), document: backup, originalURL: snapshot.url,
+            selectedUTF16Range: NSRange(location: 0, length: 0), viewMode: viewMode, verticalScrollOffset: 0)
+        try store.write(record)
     }
 }

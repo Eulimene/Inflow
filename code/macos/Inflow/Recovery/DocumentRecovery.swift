@@ -305,7 +305,7 @@ struct DocumentRecoveryRecord: Codable, Equatable, Identifiable, Sendable {
         self.updatedAt = updatedAt
     }
 
-    private var encodedDocumentData: Data {
+    fileprivate var encodedDocumentData: Data {
         guard let lineEnding = MarkdownLineEnding(rawValue: lineEndingRawValue),
               let data = try? MarkdownCodec.encode(
                   text,
@@ -363,6 +363,7 @@ enum DocumentRecoveryFileAccess {
 }
 
 enum DocumentRecoveryError: Error, Equatable, LocalizedError, Sendable {
+    case supersededProcess
     case unavailableStorage
     case unavailableKey
     case invalidRecord
@@ -373,6 +374,8 @@ enum DocumentRecoveryError: Error, Equatable, LocalizedError, Sendable {
 
     var errorDescription: String? {
         switch self {
+        case .supersededProcess:
+            "恢复保护已由当前使用的 Inflow 进程接管。"
         case .unavailableStorage:
             "恢复保护目录暂时不可用。"
         case .unavailableKey:
@@ -710,45 +713,21 @@ enum DocumentRecoveryRuntime {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default
     ) -> DocumentRecoveryCoordinator {
-        switch profile(environment: environment) {
-        case .production:
-            return DocumentRecoveryCoordinator(fileManager: fileManager,
-                temporaryDraftStore: TemporaryDocumentDraftStore(rootURL: TemporaryDocumentDraftStore.defaultRoot))
-        case .automatedTest:
-            let root = fileManager.temporaryDirectory
-                .appendingPathComponent("InflowTests", isDirectory: true)
-                .appendingPathComponent(UUID().uuidString, isDirectory: true)
-                .appendingPathComponent("Recovery", isDirectory: true)
-            return DocumentRecoveryCoordinator(
-                rootURL: root,
-                fileManager: fileManager,
-                keyProvider: FixedDocumentRecoveryKeyProvider()
-            )
-        case .development:
-#if DEBUG
-            let base = (try? fileManager.url(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask,
-                appropriateFor: nil,
-                create: true
-            )) ?? fileManager.temporaryDirectory
-            let root = base
-                .appendingPathComponent("Inflow", isDirectory: true)
-                .appendingPathComponent("DevelopmentRecovery", isDirectory: true)
-            return DocumentRecoveryCoordinator(
-                rootURL: root,
-                fileManager: fileManager,
-                keyProvider: DevelopmentDocumentRecoveryKeyProvider(
-                    keyURL: root.appendingPathComponent(".development-recovery-key"),
-                    fileManager: fileManager
-                ),
-                temporaryDraftStore: TemporaryDocumentDraftStore(rootURL: TemporaryDocumentDraftStore.defaultRoot)
-            )
-#else
-            return DocumentRecoveryCoordinator(fileManager: fileManager,
-                temporaryDraftStore: TemporaryDocumentDraftStore(rootURL: TemporaryDocumentDraftStore.defaultRoot))
-#endif
+        let runtimeProfile = profile(environment: environment)
+        let base = (try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask,
+            appropriateFor: nil, create: true)) ?? fileManager.temporaryDirectory
+        let root: URL
+        if runtimeProfile == .automatedTest {
+            root = fileManager.temporaryDirectory.appendingPathComponent("InflowTests/\(UUID().uuidString)/Drafts")
+        } else {
+            root = base.appendingPathComponent(runtimeProfile == .development
+                ? "Inflow/DevelopmentDrafts" : "Inflow/RecoveryDrafts")
         }
+        return DocumentRecoveryCoordinator(rootURL: root, fileManager: fileManager,
+            temporaryDraftStore: runtimeProfile == .automatedTest ? nil
+                : TemporaryDocumentDraftStore(rootURL: TemporaryDocumentDraftStore.defaultRoot),
+            processOwnership: runtimeProfile == .automatedTest ? nil : .shared,
+            usesPlaintext: true)
     }
 }
 
@@ -893,7 +872,8 @@ private final class DocumentRecoverySessionGate: @unchecked Sendable {
     }
 }
 
-actor DocumentRecoveryStore {
+actor DocumentRecoveryStore: DocumentRecoveryStoring {
+    nonisolated var canWrite: Bool { true }
     enum Limits {
         static let recordBytes = 64 * 1_024 * 1_024
         // The encrypted envelope is JSON and its ciphertext is base64 encoded.
@@ -1713,6 +1693,185 @@ private extension JSONEncoder {
     }
 }
 
+
+protocol DocumentRecoveryStoring: Sendable {
+    var canWrite: Bool { get }
+    nonisolated func markSessionActive(_ id: UUID, generation: UInt64) throws
+    nonisolated func markSessionClosed(_ id: UUID, generation: UInt64) throws -> Bool
+    func reconcile(_ record: DocumentRecoveryRecord, now: Date) async throws -> DocumentRecoveryReconcileOutcome
+    func load(now: Date) async throws -> DocumentRecoveryLoadResult
+    func claim(_ record: DocumentRecoveryRecord, targetRecordID: UUID, now: Date) async throws -> DocumentRecoveryTransfer
+    func importTemporaryDraft(_ record: DocumentRecoveryRecord) async throws
+    func remove(_ id: UUID) async throws
+    func removeAll() async throws
+}
+
+extension DocumentRecoveryStoring {
+    func reconcile(_ record: DocumentRecoveryRecord) async throws -> DocumentRecoveryReconcileOutcome {
+        try await reconcile(record, now: Date())
+    }
+    func load() async throws -> DocumentRecoveryLoadResult { try await load(now: Date()) }
+    func claim(_ record: DocumentRecoveryRecord, targetRecordID: UUID) async throws -> DocumentRecoveryTransfer {
+        try await claim(record, targetRecordID: targetRecordID, now: Date())
+    }
+}
+
+/// The current product stores private, readable JSON drafts. No keys, database,
+/// lock files or cross-process waiting are involved. Older encrypted stores are
+/// left untouched; their reader remains available for legacy component tests.
+actor PlaintextDocumentRecoveryStore: DocumentRecoveryStoring {
+    nonisolated let rootURL: URL
+    nonisolated let witness: DocumentProcessWitness?
+    private let beforeReconcileCommit: (@Sendable (DocumentRecoveryRecord) async -> Void)?
+    nonisolated var canWrite: Bool { witness?.isCurrentWriter ?? true }
+
+    init(rootURL: URL, witness: DocumentProcessWitness? = nil,
+        beforeReconcileCommit: (@Sendable (DocumentRecoveryRecord) async -> Void)? = nil) {
+        self.rootURL = rootURL
+        self.witness = witness
+        self.beforeReconcileCommit = beforeReconcileCommit
+    }
+
+    private nonisolated func requireWriter() throws {
+        guard canWrite else { throw DocumentRecoveryError.supersededProcess }
+    }
+
+    private nonisolated func url(_ id: UUID) -> URL {
+        rootURL.appendingPathComponent(id.uuidString).appendingPathExtension("json")
+    }
+
+    nonisolated func markSessionActive(_ id: UUID, generation: UInt64) throws {
+        try requireWriter()
+        try DurableRecoveryWriter.removeIfPresent(at: closedURL(id))
+    }
+
+    private nonisolated func closedURL(_ id: UUID) -> URL {
+        rootURL.appendingPathComponent(id.uuidString).appendingPathExtension("closed")
+    }
+
+    nonisolated func markSessionClosed(_ id: UUID, generation: UInt64) throws -> Bool {
+        try requireWriter()
+        // A tiny close marker also hides any already-in-flight write.
+        // The independent close checkpoint remains in SessionDrafts.
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+        try DurableRecoveryWriter.replace(Data(String(generation).utf8), at: closedURL(id))
+        try DurableRecoveryWriter.removeIfPresent(at: url(id))
+        return true
+    }
+
+    private func write(_ record: DocumentRecoveryRecord) throws {
+        try record.validate()
+        let bytes = try JSONEncoder.sorted.encode(record)
+        guard bytes.count <= DocumentRecoveryStore.Limits.recordBytes else { throw DocumentRecoveryError.quotaExceeded }
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+        try requireWriter()
+        try DurableRecoveryWriter.replace(bytes, at: url(record.id))
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url(record.id).path)
+    }
+
+    private func read(_ id: UUID) throws -> DocumentRecoveryRecord {
+        let data = try Data(contentsOf: url(id))
+        guard data.count <= DocumentRecoveryStore.Limits.recordBytes else { throw DocumentRecoveryError.invalidRecord }
+        let record = try JSONDecoder().decode(DocumentRecoveryRecord.self, from: data)
+        try record.validate()
+        guard record.id == id else { throw DocumentRecoveryError.invalidRecord }
+        return record
+    }
+
+    func reconcile(_ record: DocumentRecoveryRecord, now: Date = Date()) async throws -> DocumentRecoveryReconcileOutcome {
+        try requireWriter()
+        await beforeReconcileCommit?(record)
+        try requireWriter()
+        guard !FileManager.default.fileExists(atPath: closedURL(record.id).path) else {
+            return .discardedBecauseClosed
+        }
+        if record.originalURL == nil && record.text.isEmpty {
+            try remove(record.id)
+            return .removedBecauseEmpty
+        }
+        if record.originalURL != nil,
+           let disk = try? DocumentRecoveryFileAccess.withResolvedURL(for: record, { try Data(contentsOf: $0) }),
+           disk == record.encodedDocumentData {
+            try remove(record.id)
+            return .removedBecauseSaved
+        }
+        if let current = try? read(record.id), current.updatedAt > record.updatedAt { return .stored }
+        try write(record)
+        if let source = record.transferSourceRecordID,
+           let previous = try? read(source), previous.transferTargetRecordID == record.id {
+            try remove(source)
+        }
+        return .stored
+    }
+
+    func importTemporaryDraft(_ record: DocumentRecoveryRecord) throws {
+        try requireWriter()
+        if let existing = try? read(record.id), existing.updatedAt > record.updatedAt { return }
+        try DurableRecoveryWriter.removeIfPresent(at: closedURL(record.id))
+        try write(record)
+    }
+
+    func load(now: Date = Date()) throws -> DocumentRecoveryLoadResult {
+        try requireWriter()
+        guard FileManager.default.fileExists(atPath: rootURL.path) else {
+            return DocumentRecoveryLoadResult(records: [], quarantinedRecordCount: 0)
+        }
+        var records: [DocumentRecoveryRecord] = []
+        var invalid = 0
+        var consumed: Set<UUID> = []
+        for file in try FileManager.default.contentsOfDirectory(at: rootURL, includingPropertiesForKeys: nil)
+        where file.pathExtension == "json" {
+            guard let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent),
+                  !consumed.contains(id), witness?.isLiveRecovery(id) != true,
+                  !FileManager.default.fileExists(atPath: closedURL(id).path) else { continue }
+            do {
+                let record = try read(id)
+                if let target = record.transferTargetRecordID, witness?.isLiveRecovery(target) == true { continue }
+                if (record.originalURL == nil && record.text.isEmpty)
+                    || (record.originalURL != nil
+                        && (try? DocumentRecoveryFileAccess.withResolvedURL(for: record, { try Data(contentsOf: $0) })) == record.encodedDocumentData) {
+                    try remove(id)
+                    continue
+                }
+                if let source = record.transferSourceRecordID,
+                   let previous = try? read(source), previous.transferTargetRecordID == record.id {
+                    consumed.insert(source)
+                    try remove(source)
+                }
+                records.append(record)
+            } catch { invalid += 1 } // Keep unreadable drafts in place for inspection.
+        }
+        return DocumentRecoveryLoadResult(records: records.filter { !consumed.contains($0.id) }.sorted { $0.updatedAt > $1.updatedAt },
+            quarantinedRecordCount: invalid)
+    }
+
+    func claim(_ input: DocumentRecoveryRecord, targetRecordID: UUID, now: Date = Date()) throws -> DocumentRecoveryTransfer {
+        try requireWriter()
+        let current = try read(input.id)
+        guard current == input else { throw DocumentRecoveryError.staleClaim }
+        try write(current.claimed(by: targetRecordID, at: now))
+        return DocumentRecoveryTransfer(sourceRecordID: current.id, targetRecordID: targetRecordID,
+            lineageID: current.effectiveLineageID, sourceEpoch: current.effectiveEpoch,
+            targetEpoch: current.effectiveEpoch &+ 1, committedContentHash: current.committedContentHash)
+    }
+
+    func remove(_ id: UUID) throws {
+        try requireWriter()
+        try DurableRecoveryWriter.removeIfPresent(at: url(id))
+    }
+
+    func removeAll() throws {
+        try requireWriter()
+        guard FileManager.default.fileExists(atPath: rootURL.path) else { return }
+        for file in try FileManager.default.contentsOfDirectory(at: rootURL, includingPropertiesForKeys: nil)
+        where file.pathExtension == "json" {
+            if let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent) { try remove(id) }
+        }
+    }
+}
+
 @MainActor
 final class DocumentRecoveryCoordinator: ObservableObject {
     @Published private(set) var recoveredRecords: [DocumentRecoveryRecord] = []
@@ -1725,8 +1884,10 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         let task: Task<Void, Never>
     }
 
-    private let store: DocumentRecoveryStore?
+    private let store: (any DocumentRecoveryStoring)?
     private let temporaryDraftStore: TemporaryDocumentDraftStore?
+    private let processOwnership: DocumentProcessOwnership?
+    private var ownershipObserver: NSObjectProtocol?
     private let intervalNanoseconds: UInt64
     private var activeSessions: [UUID: ActiveSession] = [:]
     private var sessionGenerations: [UUID: UInt64] = [:]
@@ -1741,36 +1902,48 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         fileManager: FileManager = .default,
         keyProvider: (any DocumentRecoveryKeyProviding)? = nil,
         beforeReconcileCommit: (@Sendable (DocumentRecoveryRecord) async -> Void)? = nil,
-        temporaryDraftStore: TemporaryDocumentDraftStore? = nil
+        temporaryDraftStore: TemporaryDocumentDraftStore? = nil,
+        processOwnership: DocumentProcessOwnership? = nil,
+        processWitness: DocumentProcessWitness? = nil,
+        usesPlaintext: Bool = false
     ) {
         self.temporaryDraftStore = temporaryDraftStore
+        self.processOwnership = processOwnership
+        defer { observeProcessOwnership() }
         self.intervalNanoseconds = intervalNanoseconds
-        if let rootURL {
-            store = DocumentRecoveryStore(
-                rootURL: rootURL,
-                keyProvider: keyProvider,
-                beforeReconcileCommit: beforeReconcileCommit
-            )
-            return
-        }
-
         do {
-            let applicationSupport = try fileManager.url(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask,
-                appropriateFor: nil,
-                create: true
-            )
-            store = DocumentRecoveryStore(
-                rootURL: applicationSupport
-                    .appendingPathComponent("Inflow", isDirectory: true)
-                    .appendingPathComponent("Recovery", isDirectory: true),
-                keyProvider: keyProvider,
-                beforeReconcileCommit: beforeReconcileCommit
-            )
+            let resolvedRoot: URL
+            if let rootURL { resolvedRoot = rootURL }
+            else {
+                resolvedRoot = try fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                    appropriateFor: nil, create: true).appendingPathComponent("Inflow/Recovery")
+            }
+            if usesPlaintext || processOwnership != nil || processWitness != nil {
+                store = PlaintextDocumentRecoveryStore(rootURL: resolvedRoot,
+                    witness: processOwnership?.witness ?? processWitness, beforeReconcileCommit: beforeReconcileCommit)
+            } else {
+                store = DocumentRecoveryStore(rootURL: resolvedRoot, keyProvider: keyProvider,
+                    beforeReconcileCommit: beforeReconcileCommit)
+            }
         } catch {
             store = nil
             protectionErrorMessage = Self.degradedProtectionMessage
+        }
+    }
+
+    private func observeProcessOwnership() {
+        if processOwnership != nil {
+            ownershipObserver = NotificationCenter.default.addObserver(forName: DocumentProcessOwnership.didChange,
+                object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.protectionErrorMessage = nil
+                        if self.store?.canWrite == true {
+                            await self.retryProtection()
+                            for id in Array(self.activeSessions.keys) { await self.flush(id) }
+                        }
+                    }
+                }
         }
     }
 
@@ -1790,6 +1963,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     }
 
     func update(_ record: DocumentRecoveryRecord) {
+        processOwnership?.registerRecovery(record.id)
         if let clearedIdentity = clearedContentIdentities[record.id] {
             guard record.recoveryContentIdentity != clearedIdentity else { return }
             clearedContentIdentities.removeValue(forKey: record.id)
@@ -1808,7 +1982,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
             return
         }
         do {
-            try store.markSessionActive(id, generation: generation)
+            if store.canWrite { try store.markSessionActive(id, generation: generation) }
         } catch {
             showDegradedProtectionWarning()
             return
@@ -1839,8 +2013,10 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         }
 
         while let session = activeSessions[id] {
+            guard store.canWrite else { protectionErrorMessage = nil; return }
             let record = session.latestRecord
             do {
+                try store.markSessionActive(id, generation: session.generation)
                 _ = try await store.reconcile(record)
                 if let sourceID = record.transferSourceRecordID {
                     recoveredRecords.removeAll { $0.id == sourceID }
@@ -1863,6 +2039,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     }
 
     func close(_ id: UUID) {
+        processOwnership?.unregisterRecovery(id)
         guard let closedSession = activeSessions.removeValue(forKey: id) else { return }
         closedSession.task.cancel()
         clearedContentIdentities.removeValue(forKey: id)
@@ -1870,6 +2047,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
             showDegradedProtectionWarning()
             return
         }
+        guard store.canWrite else { return }
         let closingGeneration = closedSession.generation
         do {
             guard try store.markSessionClosed(id, generation: closingGeneration) else {
@@ -1942,7 +2120,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     /// launch. Callers open the returned documents directly; recovery is a
     /// silent continuation of the interrupted workspace, not a modal decision.
     func claimDraftsForAutomaticRestoration() async -> [MarkdownDocument] {
-        guard isLoaded, !hasClaimedAutomaticRestoration else { return [] }
+        guard store?.canWrite == true, isLoaded, !hasClaimedAutomaticRestoration else { return [] }
         hasClaimedAutomaticRestoration = true
         let candidates = recoveredRecords
         var restored: [MarkdownDocument] = []
@@ -1962,9 +2140,11 @@ final class DocumentRecoveryCoordinator: ObservableObject {
             isLoaded = true
             return
         }
+        guard store.canWrite else { isLoaded = true; protectionErrorMessage = nil; return }
         do {
             if let temporaryDraftStore {
                 for record in try temporaryDraftStore.records() {
+                    if processOwnership?.witness?.isLiveRecovery(record.id) == true { continue }
                     try await store.importTemporaryDraft(record)
                     try temporaryDraftStore.remove(record.id)
                 }
@@ -1984,7 +2164,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     }
 
     private func showDegradedProtectionWarning() {
-        guard !isDegradedProtectionWarningDismissed else { return }
+        guard store?.canWrite != false, !isDegradedProtectionWarningDismissed else { return }
         protectionErrorMessage = Self.degradedProtectionMessage
     }
 

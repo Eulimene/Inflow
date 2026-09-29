@@ -201,8 +201,14 @@ struct MarkdownEditorView: View {
         nonmutating set { storedStatisticMode = newValue.rawValue }
     }
 
+    @ObservedObject private var processOwnership = DocumentProcessOwnership.shared
+    @State private var isRefreshingPeerFile = false
+    @State private var peerRefreshGeneration: UInt64 = 0
+
     private var canEditDocument: Bool {
         isEditable
+            && processOwnership.isOwner
+            && !isRefreshingPeerFile
             && !isProjectShell
             && !document.properties.requiresLineEndingChoice
             && !fileSafetySession.state.blocksEditing
@@ -615,8 +621,18 @@ struct MarkdownEditorView: View {
         SecurityScopedDocumentLeaseRegistry.releaseAccess(for: nativeDocument)
     }
 
-    private var interactionObservationLayer: some View {
+    private var processObservationLayer: some View {
         documentObservationLayer
+        .onChange(of: processOwnership.generation) { _, _ in
+            refreshFromPeerProcess(takingOwnership: processOwnership.isOwner)
+        }
+        .onChange(of: fileSafetySession.state.conflictSnapshot?.id) { _, _ in
+            if !processOwnership.isOwner { refreshFromPeerProcess(takingOwnership: false) }
+        }
+    }
+
+    private var interactionObservationLayer: some View {
+        processObservationLayer
         .onChange(of: sourceEditorSession.selectedUTF16Range) { _, _ in
             updateRecoveryProtection()
         }
@@ -1415,6 +1431,7 @@ struct MarkdownEditorView: View {
     }
 
     private func updateRecoveryProtection(originalURL: URL? = nil) {
+        document.writeGuard.setProcessWitness(processOwnership.witness)
         TemporaryDocumentDrafts.register(recoveryRecordID, owner: nativeDocument, windowOwner: workspaceWindowDocument) {
             let view = sourceEditorSession.textView
             view.finishPendingInputForCheckpoint()
@@ -1440,8 +1457,37 @@ struct MarkdownEditorView: View {
         )
     }
 
+    private func refreshFromPeerProcess(takingOwnership: Bool) {
+        guard fileURL != nil else { return }
+        peerRefreshGeneration &+= 1
+        let generation = peerRefreshGeneration
+        isRefreshingPeerFile = true
+        Task { @MainActor in
+            defer {
+                if generation == peerRefreshGeneration { isRefreshingPeerFile = false }
+            }
+            await fileSafetySession.inspectNow()
+            guard generation == peerRefreshGeneration,
+                  let snapshot = fileSafetySession.state.conflictSnapshot,
+                  DocumentPeerReloadPolicy.shouldReload(snapshot, isOwner: processOwnership.isOwner,
+                    takingOwnership: takingOwnership) else { return }
+            // Preserve a separate recovery copy before replacing a passive
+            // instance's uncommitted text. Never overwrite the user file here.
+            do {
+                try DocumentPeerReloadPolicy.preserveLocalChanges(snapshot, document: document,
+                    viewMode: viewMode, store: TemporaryDocumentDraftStore(rootURL: TemporaryDocumentDraftStore.defaultRoot))
+                guard generation == peerRefreshGeneration else { return }
+                try await reloadFromDisk(snapshot)
+                deferredFileSafetySnapshotID = nil
+            } catch {
+                // Keep the original text and recovery copy. The existing
+                // conflict banner remains available for a manual retry.
+            }
+        }
+    }
+
     private func reloadFromDisk(_ snapshot: DocumentFileConflictSnapshot) async throws {
-        guard let nativeDocument = NativeDocumentSaveCoordinator.activeDocument(
+        guard let nativeDocument = nativeDocument ?? NativeDocumentSaveCoordinator.activeDocument(
             sourceURL: snapshot.url
         ), NativeDocumentSaveCoordinator.represents(
             nativeDocument,

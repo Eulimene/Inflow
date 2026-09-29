@@ -4,6 +4,156 @@ import XCTest
 @testable import Inflow
 
 final class DocumentRecoveryTests: XCTestCase {
+    func testProcessActivationTakesPriorityWithoutWaitingForLivePeer() throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let directory = fixture.root.appendingPathComponent("Owners")
+        let first = DocumentProcessWitness(directory: directory, instance: UUID(), isAlive: { $0 != 99 })
+        let second = DocumentProcessWitness(directory: directory, instance: UUID(), isAlive: { $0 != 99 })
+        let recordID = UUID()
+        try first.publish(DocumentProcessClaim(instance: first.instance, pid: 1, activatedAt: 1, recoveryIDs: [recordID]))
+        XCTAssertTrue(first.isCurrentWriter)
+        try second.publish(DocumentProcessClaim(instance: second.instance, pid: 2, activatedAt: 2, recoveryIDs: []))
+        XCTAssertFalse(first.isCurrentWriter)
+        XCTAssertTrue(second.isCurrentWriter)
+        XCTAssertTrue(second.isLiveRecovery(recordID))
+        try first.publish(DocumentProcessClaim(instance: first.instance, pid: 1, activatedAt: 3, recoveryIDs: [recordID]))
+        XCTAssertTrue(first.isCurrentWriter)
+        // Publishing old metadata cannot steal priority from a newer activation.
+        try second.publish(DocumentProcessClaim(instance: second.instance, pid: 2, activatedAt: 2, recoveryIDs: [UUID()]))
+        XCTAssertTrue(first.isCurrentWriter)
+        let dead = DocumentProcessWitness(directory: directory, instance: UUID())
+        try dead.publish(DocumentProcessClaim(instance: dead.instance, pid: 99, activatedAt: 100, recoveryIDs: []))
+        XCTAssertTrue(first.isCurrentWriter)
+    }
+
+    func testSupersededRecoveryWriteCannotOverwriteNewOwner() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let directory = fixture.root.appendingPathComponent("Owners")
+        let first = DocumentProcessWitness(directory: directory, instance: UUID(), isAlive: { _ in true })
+        let second = DocumentProcessWitness(directory: directory, instance: UUID(), isAlive: { _ in true })
+        try first.publish(DocumentProcessClaim(instance: first.instance, pid: 1, activatedAt: 1, recoveryIDs: []))
+        let gate = RecoveryReconcileGate()
+        let older = PlaintextDocumentRecoveryStore(rootURL: fixture.recoveryRoot, witness: first,
+            beforeReconcileCommit: { _ in await gate.suspendFirstCommit() })
+        let newer = PlaintextDocumentRecoveryStore(rootURL: fixture.recoveryRoot, witness: second)
+        let id = UUID()
+        let stale = DocumentRecoveryRecord(id: id, document: MarkdownDocument(text: "old process"), originalURL: nil,
+            selectedUTF16Range: NSRange(location: 0, length: 0), viewMode: .source, verticalScrollOffset: 0)
+        let current = DocumentRecoveryRecord(id: id, document: MarkdownDocument(text: "new owner"), originalURL: nil,
+            selectedUTF16Range: NSRange(location: 0, length: 0), viewMode: .source, verticalScrollOffset: 0)
+        let write = Task { try await older.reconcile(stale) }
+        await gate.waitUntilSuspended()
+        try second.publish(DocumentProcessClaim(instance: second.instance, pid: 2, activatedAt: 2, recoveryIDs: []))
+        _ = try await newer.reconcile(current)
+        await gate.resume()
+        do { _ = try await write.value; XCTFail("The old writer must stand down") }
+        catch { XCTAssertEqual(error as? DocumentRecoveryError, .supersededProcess) }
+        let loaded = try await newer.load()
+        XCTAssertEqual(loaded.records.map(\.text), ["new owner"])
+        do { try await older.remove(id); XCTFail("Old process must not delete the new head") }
+        catch { XCTAssertEqual(error as? DocumentRecoveryError, .supersededProcess) }
+    }
+
+    @MainActor
+    func testPassiveRecoveryDoesNotWarnOrClaimLivePeerDrafts() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let directory = fixture.root.appendingPathComponent("Owners")
+        let first = DocumentProcessWitness(directory: directory, instance: UUID(), isAlive: { _ in true })
+        let second = DocumentProcessWitness(directory: directory, instance: UUID(), isAlive: { _ in true })
+        let record = DocumentRecoveryRecord(id: UUID(), document: MarkdownDocument(text: "live peer text"), originalURL: nil,
+            selectedUTF16Range: NSRange(location: 0, length: 0), viewMode: .source, verticalScrollOffset: 0)
+        try first.publish(DocumentProcessClaim(instance: first.instance, pid: 1, activatedAt: 1, recoveryIDs: [record.id]))
+        let store = PlaintextDocumentRecoveryStore(rootURL: fixture.recoveryRoot, witness: first)
+        _ = try await store.reconcile(record)
+        try second.publish(DocumentProcessClaim(instance: second.instance, pid: 2, activatedAt: 2, recoveryIDs: []))
+        let passive = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot, keyProvider: fixture.keyProvider, processWitness: first)
+        passive.update(record)
+        await passive.loadIfNeeded()
+        await passive.flush(record.id)
+        XCTAssertNil(passive.protectionErrorMessage)
+        let owner = PlaintextDocumentRecoveryStore(rootURL: fixture.recoveryRoot, witness: second)
+        let whileLive = try await owner.load()
+        XCTAssertTrue(whileLive.records.isEmpty)
+        // Once the peer closes its document, its retained draft can be restored.
+        try first.publish(DocumentProcessClaim(instance: first.instance, pid: 1, activatedAt: 1, recoveryIDs: []))
+        let afterClose = try await owner.load()
+        XCTAssertEqual(afterClose.records.map(\.text), [record.text])
+        passive.close(record.id)
+    }
+
+    func testPlaintextRecoveryRoundTripsAndRejectsLateClosedWrites() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let gate = RecoveryReconcileGate()
+        let store = PlaintextDocumentRecoveryStore(rootURL: fixture.recoveryRoot,
+            beforeReconcileCommit: { _ in await gate.suspendFirstCommit() })
+        let record = DocumentRecoveryRecord(id: UUID(), document: MarkdownDocument(text: "明文草稿"), originalURL: nil,
+            selectedUTF16Range: NSRange(location: 0, length: 0), viewMode: .source, verticalScrollOffset: 0)
+        try await store.importTemporaryDraft(record)
+        let file = fixture.recoveryRoot.appendingPathComponent(record.id.uuidString).appendingPathExtension("json")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        XCTAssertEqual(json["text"] as? String, record.text)
+        let loaded = try await store.load()
+        XCTAssertEqual(loaded.records, [record])
+        try store.markSessionActive(record.id, generation: 1)
+        let pending = Task { try await store.reconcile(record) }
+        await gate.waitUntilSuspended()
+        XCTAssertTrue(try store.markSessionClosed(record.id, generation: 1))
+        await gate.resume()
+        let result = try await pending.value
+        XCTAssertEqual(result, .discardedBecauseClosed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        let afterClose = try await store.load()
+        XCTAssertTrue(afterClose.records.isEmpty)
+        try await store.importTemporaryDraft(record)
+        let restored = try await store.load()
+        XCTAssertEqual(restored.records, [record])
+    }
+
+    @MainActor
+    func testPlaintextCoordinatorRestoresOnceAndConsumesSavedDrafts() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let store = PlaintextDocumentRecoveryStore(rootURL: fixture.recoveryRoot)
+        let record = DocumentRecoveryRecord(id: UUID(), document: MarkdownDocument(text: "restore without keys"), originalURL: nil,
+            selectedUTF16Range: NSRange(location: 0, length: 0), viewMode: .source, verticalScrollOffset: 0)
+        _ = try await store.reconcile(record)
+        let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot, usesPlaintext: true)
+        await coordinator.loadIfNeeded()
+        XCTAssertNil(coordinator.protectionErrorMessage)
+        let documents = await coordinator.claimDraftsForAutomaticRestoration()
+        let document = try XCTUnwrap(documents.first)
+        XCTAssertEqual(document.text, record.text)
+        let repeated = await coordinator.claimDraftsForAutomaticRestoration()
+        XCTAssertTrue(repeated.isEmpty)
+        let targetID = try XCTUnwrap(document.recoveryTransfer?.targetRecordID)
+        let target = DocumentRecoveryRecord(id: targetID, document: document, originalURL: nil,
+            selectedUTF16Range: NSRange(location: 0, length: 0), viewMode: .source, verticalScrollOffset: 0)
+        coordinator.update(target)
+        await coordinator.flush(targetID)
+        let transferred = try await store.load()
+        XCTAssertEqual(transferred.records.map(\.id), [targetID])
+        coordinator.close(targetID)
+        let closed = try await store.load()
+        XCTAssertTrue(closed.records.isEmpty)
+        let file = fixture.root.appendingPathComponent("saved.md")
+        let saved = DocumentRecoveryRecord(id: UUID(), document: MarkdownDocument(text: "now saved"), originalURL: file,
+            selectedUTF16Range: NSRange(location: 0, length: 0), viewMode: .source, verticalScrollOffset: 0)
+        _ = try await store.reconcile(saved)
+        try Data(saved.text.utf8).write(to: file)
+        let afterSave = try await store.load()
+        XCTAssertTrue(afterSave.records.isEmpty)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), saved.text)
+        let corrupt = fixture.recoveryRoot.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+        try Data("unfinished JSON".utf8).write(to: corrupt)
+        let invalid = try await store.load()
+        XCTAssertEqual(invalid.quarantinedRecordCount, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: corrupt.path))
+    }
+
     func testRuntimeProfileKeepsTestsAndDebugBuildsOffTheProductionKeychain() {
         XCTAssertEqual(
             DocumentRecoveryRuntime.profile(
@@ -1231,7 +1381,9 @@ final class DocumentRecoveryTests: XCTestCase {
         for _ in 0 ..< 20 { await Task.yield() }
 
         let afterStaleClose = try await fixture.makeStore().load()
-        XCTAssertEqual(afterStaleClose.records.map(\.id), [id])
+        // Close retires the old head synchronously. Reactivation must not revive it
+        // before the new session has flushed its own content.
+        XCTAssertTrue(afterStaleClose.records.isEmpty)
         await coordinator.flush(id)
         let persistedReactivated = try await fixture.makeStore().load()
         XCTAssertEqual(persistedReactivated.records, [reactivated])
