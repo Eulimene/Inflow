@@ -10,6 +10,8 @@ struct MarkdownHeadingStyle: Equatable, Sendable {
 
 enum MarkdownRenderMetrics {
     static let readingWidth = 800.0
+    static let previewReadingWidth = 1_200.0
+    static let renderedHorizontalInset = CGFloat(24)
     static let bodyFontSize = 16.0
     static let bodyLineHeight = 1.6
     static let paragraphGap = CGFloat(12.8)
@@ -335,7 +337,7 @@ enum AppPreferenceGroup: String, CaseIterable, Identifiable, Sendable {
 
 struct PreviewAppearanceConfiguration: Equatable, Sendable {
     static let `default` = Self(
-        contentWidth: MarkdownRenderMetrics.readingWidth,
+        contentWidth: MarkdownRenderMetrics.previewReadingWidth,
         zoom: 1,
         colorScheme: .system,
         theme: .standard,
@@ -467,7 +469,7 @@ final class AppPreferences: ObservableObject {
         static let scrollSyncEnabled = "preferences.preview.scrollSyncEnabled"
         static let headingNavigationEnabled = "preferences.preview.headingNavigationEnabled"
         static let previewContentWidth = "preferences.preview.contentWidth"
-        static let previewWidthMigration = "preferences.preview.widthMigration2"
+        static let previewWidthMigration = "preferences.preview.widthMigration3"
         static let previewZoom = "preferences.preview.zoom"
         static let previewColorScheme = "preferences.preview.colorScheme"
         static let previewTheme = "preferences.preview.theme"
@@ -880,6 +882,12 @@ final class AppPreferences: ObservableObject {
             defaultValue: true
         )
         if defaults.object(forKey: Key.previewWidthMigration) == nil {
+            // Upgrade the two historical defaults once. Subsequent explicit
+            // narrow-width choices survive relaunch, as do other custom widths.
+            let previousWidth = defaults.double(forKey: Key.previewContentWidth)
+            if previousWidth == 760 || previousWidth == 800 {
+                defaults.set(MarkdownRenderMetrics.previewReadingWidth, forKey: Key.previewContentWidth)
+            }
             defaults.set(true, forKey: Key.previewWidthMigration)
         }
         previewContentWidth = Self.number(

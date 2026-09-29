@@ -113,7 +113,7 @@ final class WindowAwareTextView: NSTextView {
     }
     var isLiveMarkdown = false { didSet { updateReadingColumn() } }
     var renderedTheme = PreviewTheme.standard
-    var readingColumnWidth = CGFloat(MarkdownRenderMetrics.readingWidth) { didSet { updateReadingColumn() } }
+    var readingColumnWidth = CGFloat(MarkdownRenderMetrics.previewReadingWidth) { didSet { updateReadingColumn() } }
     var structuralEditDidApply: (() -> Void)?
     var selectionVisibilityHandler: (() -> Void)?
     var retryRenderingHandler: (() -> Void)?
@@ -202,7 +202,7 @@ final class WindowAwareTextView: NSTextView {
     }
 
     private func updateReadingColumn() {
-        let inset = isLiveMarkdown ? max(MarkdownRenderMetrics.editorHorizontalInset,
+        let inset = isLiveMarkdown ? max(MarkdownRenderMetrics.renderedHorizontalInset,
             (bounds.width - readingColumnWidth) / 2) : MarkdownRenderMetrics.editorHorizontalInset
         guard abs(textContainerInset.width - inset) > 0.5 else { return }
         textContainerInset = NSSize(width: inset, height: textContainerInset.height)

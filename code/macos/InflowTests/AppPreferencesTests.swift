@@ -7,7 +7,7 @@ final class AppPreferencesTests: XCTestCase {
     func testDefaultsMatchLaunchContract() {
         withDefaults { defaults in
             defaults.set(760, forKey: "preferences.preview.contentWidth")
-            XCTAssertEqual(AppPreferences(defaults: defaults).previewContentWidth, 760)
+            XCTAssertEqual(AppPreferences(defaults: defaults).previewContentWidth, 1_200)
             defaults.set(760, forKey: "preferences.preview.contentWidth")
             XCTAssertEqual(AppPreferences(defaults: defaults).previewContentWidth, 760,
                 "A later explicit width choice must survive relaunch")
@@ -33,7 +33,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertFalse(preferences.showsLineNumbers)
             XCTAssertTrue(preferences.scrollSyncEnabled)
             XCTAssertTrue(preferences.headingNavigationEnabled)
-            XCTAssertEqual(preferences.previewContentWidth, 800)
+            XCTAssertEqual(preferences.previewContentWidth, 1_200)
             XCTAssertEqual(preferences.previewZoom, 1)
             XCTAssertEqual(preferences.previewColorScheme, .system)
             XCTAssertEqual(preferences.previewTheme, .standard)
@@ -56,7 +56,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(NSDocumentController.shared.autosavingDelay, 0)
             XCTAssertEqual(
                 preferences.previewConfiguration.contentWidth,
-                MarkdownRenderMetrics.readingWidth
+                MarkdownRenderMetrics.previewReadingWidth
             )
             XCTAssertEqual(
                 preferences.previewConfiguration.nativeRenderedAppearance(
@@ -344,7 +344,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertFalse(preferences.showsLineNumbers)
             XCTAssertTrue(preferences.scrollSyncEnabled)
             XCTAssertTrue(preferences.headingNavigationEnabled)
-            XCTAssertEqual(preferences.previewContentWidth, 800)
+            XCTAssertEqual(preferences.previewContentWidth, 1_200)
             XCTAssertEqual(preferences.previewZoom, 1)
             XCTAssertEqual(preferences.previewColorScheme, .system)
             XCTAssertEqual(preferences.previewTheme, .standard)
@@ -459,7 +459,7 @@ final class AppPreferencesTests: XCTestCase {
                 persistence: persistence
             )
             XCTAssertNil(preferences.persistenceFailure)
-            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 800)
+            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 1_200)
 
             persistence.shouldFail = true
             preferences.previewContentWidth = 900
@@ -467,7 +467,7 @@ final class AppPreferencesTests: XCTestCase {
 
             XCTAssertEqual(preferences.previewContentWidth, 900)
             XCTAssertTrue(preferences.workspaceOutlineVisible)
-            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 800)
+            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 1_200)
             XCTAssertFalse(defaults.bool(forKey: "preferences.workspace.outlineVisible"))
             XCTAssertNotNil(preferences.persistenceFailure)
             XCTAssertEqual(SettingsPersistencePrompt.title, "暂时无法保存设置")

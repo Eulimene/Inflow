@@ -245,6 +245,8 @@ struct InflowSettingsView: View {
                 step: 20,
                 valueText: "\(Int(preferences.previewContentWidth.rounded())) 点"
             )
+            Text("正文随窗口伸缩，默认最宽 1200 点；宽窗口保持居中，窄窗口两侧保留少量留白。")
+                .font(.caption).foregroundStyle(.secondary)
             Picker("主题", selection: $preferences.previewTheme) {
                 ForEach(PreviewTheme.allCases) { theme in
                     Text(theme.label).tag(theme)
