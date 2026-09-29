@@ -13,7 +13,7 @@ enum InflowSettingsSection: String, CaseIterable, Identifiable, Sendable {
         case .general: "通用"
         case .workspace: "工作区"
         case .writing: "写作"
-        case .preview: "预览"
+        case .preview: "外观与预览"
         }
     }
 
@@ -69,7 +69,7 @@ struct InflowSettingsView: View {
                 .tag(InflowSettingsSection.writing)
 
             previewSettings
-                .tabItem { Label("预览", systemImage: "doc.richtext") }
+                .tabItem { Label("外观与预览", systemImage: "doc.richtext") }
                 .tag(InflowSettingsSection.preview)
 
         }
@@ -212,15 +212,26 @@ struct InflowSettingsView: View {
     private var writingSettings: some View {
         Form {
             SettingSliderRow(
-                title: "编辑器字号",
+                title: "源码字号",
                 value: $preferences.editorFontSize,
                 range: AppPreferences.Limits.editorFontSize,
                 step: 1,
                 valueText: "\(Int(preferences.editorFontSize.rounded())) 磅"
             )
+            SettingSliderRow(title: "正文字号", value: $preferences.renderedFontSize,
+                range: AppPreferences.Limits.editorFontSize, step: 1,
+                valueText: "\(Int(preferences.renderedFontSize)) 磅")
+            SettingSliderRow(title: "行高倍数", value: $preferences.editorLineHeight,
+                range: AppPreferences.Limits.editorLineHeight, step: 0.05,
+                valueText: String(format: "%.2f", preferences.editorLineHeight))
+            Text("正文字号用于即时编辑和预览；行高用于全部写作视图。字体随主题切换，代码始终使用等宽字体。")
+                .font(.caption).foregroundStyle(.secondary)
             Toggle("Markdown 语法高亮", isOn: $preferences.syntaxHighlightingEnabled)
+                .help("只改变源码的视觉样式，不会修改 Markdown 正文。")
             Toggle("即时编辑自动配对括号与反引号", isOn: $preferences.autoPairEnabled)
-                .help("只改变源码编辑器的视觉样式，不会修改 Markdown 正文。")
+            Toggle("检查拼写", isOn: $preferences.spellingEnabled)
+            Toggle("源码自动换行", isOn: $preferences.wrapsLines)
+            Toggle("源码显示行号", isOn: $preferences.showsLineNumbers)
         }
         .formStyle(.grouped)
     }
@@ -232,8 +243,15 @@ struct InflowSettingsView: View {
                 value: $preferences.previewContentWidth,
                 range: AppPreferences.Limits.previewContentWidth,
                 step: 20,
-                valueText: "\(Int(preferences.previewContentWidth.rounded())) 像素"
+                valueText: "\(Int(preferences.previewContentWidth.rounded())) 点"
             )
+            Picker("主题", selection: $preferences.previewTheme) {
+                ForEach(PreviewTheme.allCases) { theme in
+                    Text(theme.label).tag(theme)
+                }
+            }
+            Text("标准：无衬线 · 长文阅读：衬线 · 代码优先：等宽 · 高对比度：强化文字与边界")
+                .font(.caption).foregroundStyle(.secondary)
             Picker("外观", selection: $preferences.previewColorScheme) {
                 ForEach(PreviewColorScheme.allCases) { scheme in
                     Text(scheme.label).tag(scheme)
@@ -248,7 +266,7 @@ struct InflowSettingsView: View {
                     Text(behavior.label).tag(behavior)
                 }
             }
-            Text("单击打开是默认行为；选择右键菜单后，单击只会定位光标。")
+            Text("默认在预览中单击打开，编辑中使用 ⌘+单击；也可设为仅右键菜单打开。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

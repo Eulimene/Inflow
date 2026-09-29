@@ -7,7 +7,7 @@ final class AppPreferencesTests: XCTestCase {
     func testDefaultsMatchLaunchContract() {
         withDefaults { defaults in
             defaults.set(760, forKey: "preferences.preview.contentWidth")
-            XCTAssertEqual(AppPreferences(defaults: defaults).previewContentWidth, 1_080)
+            XCTAssertEqual(AppPreferences(defaults: defaults).previewContentWidth, 760)
             defaults.set(760, forKey: "preferences.preview.contentWidth")
             XCTAssertEqual(AppPreferences(defaults: defaults).previewContentWidth, 760,
                 "A later explicit width choice must survive relaunch")
@@ -33,7 +33,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertFalse(preferences.showsLineNumbers)
             XCTAssertTrue(preferences.scrollSyncEnabled)
             XCTAssertTrue(preferences.headingNavigationEnabled)
-            XCTAssertEqual(preferences.previewContentWidth, 1_080)
+            XCTAssertEqual(preferences.previewContentWidth, 800)
             XCTAssertEqual(preferences.previewZoom, 1)
             XCTAssertEqual(preferences.previewColorScheme, .system)
             XCTAssertEqual(preferences.previewTheme, .standard)
@@ -87,6 +87,7 @@ final class AppPreferencesTests: XCTestCase {
     func testWorkspacePreferencesPersistAcrossPreferenceInstancesAndClampToBounds() {
         withDefaults { defaults in
             let first = AppPreferences(defaults: defaults)
+            first.renderedFontSize = 21
             first.editorFontSize = 24
             first.editorLineHeight = 1.9
             first.syntaxHighlightingEnabled = false
@@ -118,18 +119,21 @@ final class AppPreferencesTests: XCTestCase {
 
             let second = AppPreferences(defaults: defaults)
             second.applyAutosavePolicy()
+            XCTAssertEqual(second.renderedFontSize, 21)
+            XCTAssertEqual(second.previewConfiguration.nativeRenderedAppearance(spellingEnabled: false).fontSize, 21 * 1.65, accuracy: 0.001)
+            XCTAssertEqual(second.previewConfiguration.nativeRenderedAppearance(spellingEnabled: false).lineHeight, 1.9)
             XCTAssertEqual(second.editorFontSize, 24)
-            XCTAssertEqual(second.editorLineHeight, 1.6)
+            XCTAssertEqual(second.editorLineHeight, 1.9)
             XCTAssertFalse(second.syntaxHighlightingEnabled)
-            XCTAssertTrue(second.spellingEnabled)
-            XCTAssertTrue(second.wrapsLines)
-            XCTAssertFalse(second.showsLineNumbers)
+            XCTAssertFalse(second.spellingEnabled)
+            XCTAssertFalse(second.wrapsLines)
+            XCTAssertTrue(second.showsLineNumbers)
             XCTAssertFalse(second.scrollSyncEnabled)
             XCTAssertFalse(second.headingNavigationEnabled)
             XCTAssertEqual(second.previewContentWidth, 1_040)
-            XCTAssertEqual(second.previewZoom, 1)
+            XCTAssertEqual(second.previewZoom, 1.65)
             XCTAssertEqual(second.previewColorScheme, .dark)
-            XCTAssertEqual(second.previewTheme, .standard)
+            XCTAssertEqual(second.previewTheme, .longform)
             XCTAssertTrue(second.mathRenderingEnabled)
             XCTAssertTrue(second.mermaidRenderingEnabled)
             XCTAssertEqual(second.linkActivation, .contextMenu)
@@ -167,9 +171,9 @@ final class AppPreferencesTests: XCTestCase {
 
             let third = AppPreferences(defaults: defaults)
             XCTAssertEqual(third.editorFontSize, 28)
-            XCTAssertEqual(third.editorLineHeight, 1.6)
+            XCTAssertEqual(third.editorLineHeight, 1.2)
             XCTAssertEqual(third.previewContentWidth, 600)
-            XCTAssertEqual(third.previewZoom, 1)
+            XCTAssertEqual(third.previewZoom, 2)
             XCTAssertEqual(third.workspaceViewMode, .preview)
             XCTAssertFalse(third.workspaceProjectSidebarVisible)
             XCTAssertTrue(third.workspaceOutlineVisible)
@@ -207,7 +211,7 @@ final class AppPreferencesTests: XCTestCase {
 
             let preferences = AppPreferences(defaults: defaults)
             XCTAssertEqual(preferences.editorFontSize, 15)
-            XCTAssertEqual(preferences.editorLineHeight, 1.6)
+            XCTAssertEqual(preferences.editorLineHeight, 1.2)
             XCTAssertEqual(preferences.previewContentWidth, 1_800)
             XCTAssertEqual(preferences.previewTheme, .standard)
             XCTAssertEqual(preferences.linkActivation, .singleClick)
@@ -340,7 +344,7 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertFalse(preferences.showsLineNumbers)
             XCTAssertTrue(preferences.scrollSyncEnabled)
             XCTAssertTrue(preferences.headingNavigationEnabled)
-            XCTAssertEqual(preferences.previewContentWidth, 1_080)
+            XCTAssertEqual(preferences.previewContentWidth, 800)
             XCTAssertEqual(preferences.previewZoom, 1)
             XCTAssertEqual(preferences.previewColorScheme, .system)
             XCTAssertEqual(preferences.previewTheme, .standard)
@@ -400,12 +404,12 @@ final class AppPreferencesTests: XCTestCase {
 
             let preferences = AppPreferences(defaults: defaults)
 
-            XCTAssertEqual(preferences.previewZoom, 1)
+            XCTAssertEqual(preferences.previewZoom, 1.7)
             XCTAssertEqual(preferences.workspaceViewMode, .preview)
             XCTAssertFalse(preferences.workspaceProjectSidebarVisible)
             XCTAssertTrue(preferences.workspaceOutlineVisible)
             XCTAssertEqual(preferences.workspaceSplitFraction, 0.65)
-            XCTAssertEqual(defaults.double(forKey: "preferences.preview.zoom"), 1)
+            XCTAssertEqual(defaults.double(forKey: "preferences.preview.zoom"), 1.7)
             XCTAssertEqual(
                 defaults.integer(forKey: AppPreferences.Registry.schemaVersionKey),
                 AppPreferences.Registry.currentSchemaVersion
@@ -455,7 +459,7 @@ final class AppPreferencesTests: XCTestCase {
                 persistence: persistence
             )
             XCTAssertNil(preferences.persistenceFailure)
-            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 1_080)
+            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 800)
 
             persistence.shouldFail = true
             preferences.previewContentWidth = 900
@@ -463,7 +467,7 @@ final class AppPreferencesTests: XCTestCase {
 
             XCTAssertEqual(preferences.previewContentWidth, 900)
             XCTAssertTrue(preferences.workspaceOutlineVisible)
-            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 1_080)
+            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 800)
             XCTAssertFalse(defaults.bool(forKey: "preferences.workspace.outlineVisible"))
             XCTAssertNotNil(preferences.persistenceFailure)
             XCTAssertEqual(SettingsPersistencePrompt.title, "暂时无法保存设置")
@@ -716,6 +720,9 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertTrue(nativeAppearance.spellingEnabled)
         XCTAssertTrue(nativeAppearance.wrapsLines)
         XCTAssertFalse(nativeAppearance.showsLineNumbers)
+        let highContrast = MarkdownRenderPalette.resolved(for: NSAppearance(named: .aqua)!, theme: .highContrast)
+        XCTAssertEqual(highContrast.text, "#111111")
+        XCTAssertNotEqual(highContrast.border, MarkdownRenderPalette.light.border)
         XCTAssertNil(PreviewColorScheme.system.nativeAppearance)
         XCTAssertEqual(PreviewColorScheme.dark.nativeAppearance?.name, .darkAqua)
     }

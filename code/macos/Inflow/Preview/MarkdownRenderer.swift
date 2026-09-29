@@ -258,7 +258,7 @@ enum MarkdownRenderer {
 enum PreviewAppearanceCSS {
     static func styleElement(for configuration: PreviewAppearanceConfiguration) -> String {
         let width = decimal(configuration.contentWidth)
-        let fontSize = decimal(MarkdownRenderMetrics.bodyFontSize * configuration.zoom)
+        let fontSize = decimal(configuration.fontSize * configuration.zoom)
         let themeRules: String = switch configuration.theme {
         case .standard:
             ""
@@ -290,6 +290,7 @@ enum PreviewAppearanceCSS {
           body { max-width: \(width)px; }
           \(colorRules)
           \(themeRules)
+          body { line-height: \(decimal(configuration.lineHeight)); }
           \(contrastRules)
           \(motionRules)
         </style>

@@ -61,12 +61,14 @@ struct WritingModeCommands: Commands {
                 "专注模式",
                 isOn: actions?.focusModeBinding ?? .constant(false)
             )
+            .keyboardShortcut("f", modifiers: [.command, .control, .shift])
             .disabled(actions?.canToggleFocusMode != true)
 
             Toggle(
                 "打字机模式",
                 isOn: actions?.typewriterModeBinding ?? .constant(false)
             )
+            .keyboardShortcut("t", modifiers: [.command, .control, .shift])
             .disabled(actions?.canToggleTypewriterMode != true)
         }
     }

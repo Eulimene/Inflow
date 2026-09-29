@@ -69,3 +69,31 @@ struct PreviewZoomCommands: Commands {
         }
     }
 }
+
+/// Menu and Settings share the same durable preferences.
+struct AppearanceCommands: Commands {
+    @ObservedObject var preferences: AppPreferences
+
+    var body: some Commands {
+        CommandMenu("主题") {
+            Picker("主题", selection: $preferences.previewTheme) {
+                ForEach(PreviewTheme.allCases) { theme in
+                    Text(theme.label).tag(theme)
+                }
+            }
+            .pickerStyle(.inline)
+            Divider()
+            Picker("外观", selection: $preferences.previewColorScheme) {
+                ForEach(PreviewColorScheme.allCases) { scheme in
+                    Text(scheme.label).tag(scheme)
+                }
+            }
+            .pickerStyle(.inline)
+        }
+        CommandGroup(after: .sidebar) {
+            Divider()
+            Toggle("源码自动换行", isOn: $preferences.wrapsLines)
+            Toggle("源码显示行号", isOn: $preferences.showsLineNumbers)
+        }
+    }
+}

@@ -693,7 +693,7 @@ final class MarkdownFormatterTests: XCTestCase {
     }
 
     @MainActor
-    func testFormatMenuExposesPersonalCommandsAndHidesDeferredCommands() throws {
+    func testFormatMenuExposesWritingCommands() throws {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
         let items = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu))
         for (format, shortcut) in [
@@ -713,13 +713,13 @@ final class MarkdownFormatterTests: XCTestCase {
         let strikethroughItems = items.filter {
             $0.title == MarkdownInlineFormat.strikethrough.label
         }
-        XCTAssertTrue(strikethroughItems.isEmpty)
+        XCTAssertEqual(strikethroughItems.count, 1)
 
         XCTAssertEqual(items.filter { $0.title == "标题" }.count, 1)
         for level in MarkdownHeadingLevel.allCases {
             let matches = items.filter { $0.title == level.label }
             XCTAssertEqual(matches.count, 1)
-            XCTAssertEqual(matches.first?.keyEquivalent, "")
+            XCTAssertEqual(matches.first?.keyEquivalent, String(level.rawValue))
         }
 
         let quoteItems = items.filter { $0.title == "引用" }
@@ -735,13 +735,13 @@ final class MarkdownFormatterTests: XCTestCase {
 
         let inlineCodeItems = items.filter { $0.title == "行内代码" }
         XCTAssertEqual(inlineCodeItems.count, 1)
-        XCTAssertEqual(inlineCodeItems.first?.keyEquivalent, "")
+        XCTAssertEqual(inlineCodeItems.first?.keyEquivalent, "`")
 
         let codeBlockItems = items.filter { $0.title == "代码块" }
-        XCTAssertTrue(codeBlockItems.isEmpty)
+        XCTAssertEqual(codeBlockItems.count, 1)
 
-        let clearItems = items.filter { $0.title == "清除格式标记" }
-        XCTAssertTrue(clearItems.isEmpty)
+        let clearItems = items.filter { $0.title == "清除格式" }
+        XCTAssertEqual(clearItems.count, 1)
     }
 
     @MainActor

@@ -2293,6 +2293,8 @@ private struct InflowPrimaryCommands: Commands {
             }
         }
         EditorViewModeCommands()
+        PreviewZoomCommands()
+        WritingModeCommands()
         CommandGroup(after: .sidebar) {
             Toggle(
                 "显示目录树",
@@ -2338,6 +2340,8 @@ struct InflowApp: App {
                     projectCoordinator: applicationDelegate.projectCoordinator
                 )
             }
+            .preferredColorScheme(preferences.previewColorScheme == .system ? nil :
+                preferences.previewColorScheme == .dark ? .dark : .light)
             .background(DocumentWindowControls())
             .frame(
                 minWidth: EditorWorkspaceMetrics.minimumWindowWidth,
@@ -2355,6 +2359,7 @@ struct InflowApp: App {
                 folderBrowser: applicationDelegate.folderBrowser
             )
             InflowEditingCommands(failureLog: failureLog)
+            AppearanceCommands(preferences: preferences)
         }
 
         Settings {

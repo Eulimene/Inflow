@@ -9,7 +9,7 @@ struct MarkdownHeadingStyle: Equatable, Sendable {
 }
 
 enum MarkdownRenderMetrics {
-    static let readingWidth = 1_080.0
+    static let readingWidth = 800.0
     static let bodyFontSize = 16.0
     static let bodyLineHeight = 1.6
     static let paragraphGap = CGFloat(12.8)
@@ -100,12 +100,12 @@ struct MarkdownRenderPalette: Equatable, Sendable {
     )
 
     let canvas: String
-    let text: String
-    let heading: String
-    let secondaryText: String
+    var text: String
+    var heading: String
+    var secondaryText: String
     let accent: String
-    let border: String
-    let quoteBar: String
+    var border: String
+    var quoteBar: String
     let subtleSurface: String
     let mutedSurface: String
     let tableStripe: String
@@ -119,8 +119,17 @@ struct MarkdownRenderPalette: Equatable, Sendable {
     let warning: String
 
     @MainActor
-    static func resolved(for appearance: NSAppearance) -> Self {
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
+    static func resolved(for appearance: NSAppearance, theme: PreviewTheme = .standard) -> Self {
+        let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        var palette: Self = isDark ? .dark : .light
+        if theme == .highContrast {
+            palette.text = isDark ? "#ffffff" : "#111111"
+            palette.heading = palette.text
+            palette.secondaryText = isDark ? "#dddddd" : "#444444"
+            palette.border = isDark ? "#a0a0a0" : "#666666"
+            palette.quoteBar = palette.border
+        }
+        return palette
     }
 
     var cssVariables: String {
@@ -349,6 +358,8 @@ struct PreviewAppearanceConfiguration: Equatable, Sendable {
         mermaidRenderingEnabled: true
     )
 
+    let fontSize: Double
+    let lineHeight: Double
     let contentWidth: Double
     let zoom: Double
     let colorScheme: PreviewColorScheme
@@ -366,8 +377,12 @@ struct PreviewAppearanceConfiguration: Equatable, Sendable {
         increasedContrast: Bool,
         reduceMotion: Bool,
         mathRenderingEnabled: Bool = true,
-        mermaidRenderingEnabled: Bool = true
+        mermaidRenderingEnabled: Bool = true,
+        fontSize: Double = MarkdownRenderMetrics.bodyFontSize,
+        lineHeight: Double? = nil
     ) {
+        self.fontSize = fontSize
+        self.lineHeight = lineHeight ?? (theme == .longform ? 1.82 : theme == .code ? 1.58 : MarkdownRenderMetrics.bodyLineHeight)
         self.contentWidth = contentWidth
         self.zoom = zoom
         self.colorScheme = colorScheme
@@ -379,13 +394,8 @@ struct PreviewAppearanceConfiguration: Equatable, Sendable {
     }
 
     func nativeRenderedAppearance(spellingEnabled: Bool, autoPairEnabled: Bool = true) -> SourceEditorAppearance {
-        let lineHeight = switch theme {
-        case .standard, .highContrast: MarkdownRenderMetrics.bodyLineHeight
-        case .longform: 1.82
-        case .code: 1.58
-        }
         return SourceEditorAppearance(
-            fontSize: MarkdownRenderMetrics.bodyFontSize * zoom,
+            fontSize: fontSize * zoom,
             lineHeight: lineHeight,
             spellingEnabled: spellingEnabled,
             wrapsLines: true,
@@ -446,6 +456,7 @@ final class AppPreferences: ObservableObject {
     }
 
     private enum Key {
+        static let renderedFontSize = "preferences.rendered.fontSize"
         static let editorFontSize = "preferences.editor.fontSize"
         static let editorLineHeight = "preferences.editor.lineHeight"
         static let autoPairEnabled = "preferences.editor.autoPairEnabled"
@@ -490,6 +501,7 @@ final class AppPreferences: ObservableObject {
         static let schemaVersionKey = "preferences.schemaVersion"
         static let knownKeys: Set<String> = [
             schemaVersionKey,
+            Key.renderedFontSize,
             Key.editorFontSize,
             Key.editorLineHeight,
             Key.syntaxHighlightingEnabled,
@@ -612,6 +624,14 @@ final class AppPreferences: ObservableObject {
     private let persistence: any AppPreferencePersistence
     private var accessibilityObserver: AnyCancellable?
     @Published private(set) var persistenceFailure: SettingsPersistenceFailure?
+
+    @Published var renderedFontSize: Double {
+        didSet {
+            let value = Self.clamped(renderedFontSize, range: Limits.editorFontSize)
+            if renderedFontSize != value { renderedFontSize = value }
+            persist(value, forKey: Key.renderedFontSize)
+        }
+    }
 
     @Published var editorFontSize: Double {
         didSet {
@@ -830,22 +850,25 @@ final class AppPreferences: ObservableObject {
         self.persistence = persistence ?? UserDefaultsAppPreferencePersistence(defaults: defaults)
         Registry.migrate(defaults)
         persistenceFailure = nil
+        renderedFontSize = Self.number(forKey: Key.renderedFontSize, in: defaults,
+            defaultValue: MarkdownRenderMetrics.bodyFontSize, range: Limits.editorFontSize)
         editorFontSize = Self.number(
             forKey: Key.editorFontSize,
             in: defaults,
             defaultValue: SourceEditorAppearance.default.fontSize,
             range: Limits.editorFontSize
         )
-        editorLineHeight = LaunchFixed.editorLineHeight
+        editorLineHeight = Self.number(forKey: Key.editorLineHeight, in: defaults,
+            defaultValue: LaunchFixed.editorLineHeight, range: Limits.editorLineHeight)
         autoPairEnabled = Self.bool(forKey: Key.autoPairEnabled, in: defaults, defaultValue: true)
         syntaxHighlightingEnabled = Self.bool(
             forKey: Key.syntaxHighlightingEnabled,
             in: defaults,
             defaultValue: true
         )
-        spellingEnabled = LaunchFixed.spellingEnabled
-        wrapsLines = LaunchFixed.wrapsLines
-        showsLineNumbers = LaunchFixed.showsLineNumbers
+        spellingEnabled = Self.bool(forKey: Key.spellingEnabled, in: defaults, defaultValue: LaunchFixed.spellingEnabled)
+        wrapsLines = Self.bool(forKey: Key.wrapsLines, in: defaults, defaultValue: LaunchFixed.wrapsLines)
+        showsLineNumbers = Self.bool(forKey: Key.showsLineNumbers, in: defaults, defaultValue: LaunchFixed.showsLineNumbers)
         scrollSyncEnabled = Self.bool(
             forKey: Key.scrollSyncEnabled,
             in: defaults,
@@ -857,9 +880,6 @@ final class AppPreferences: ObservableObject {
             defaultValue: true
         )
         if defaults.object(forKey: Key.previewWidthMigration) == nil {
-            if defaults.double(forKey: Key.previewContentWidth) == 760 {
-                defaults.set(MarkdownRenderMetrics.readingWidth, forKey: Key.previewContentWidth)
-            }
             defaults.set(true, forKey: Key.previewWidthMigration)
         }
         previewContentWidth = Self.number(
@@ -868,14 +888,16 @@ final class AppPreferences: ObservableObject {
             defaultValue: PreviewAppearanceConfiguration.default.contentWidth,
             range: Limits.previewContentWidth
         )
-        previewZoom = LaunchFixed.previewZoom
+        previewZoom = Self.number(forKey: Key.previewZoom, in: defaults,
+            defaultValue: LaunchFixed.previewZoom, range: Limits.previewZoom)
         previewColorScheme = Self.enumeration(
             PreviewColorScheme.self,
             forKey: Key.previewColorScheme,
             in: defaults,
             defaultValue: .system
         )
-        previewTheme = LaunchFixed.previewTheme
+        previewTheme = Self.enumeration(PreviewTheme.self, forKey: Key.previewTheme,
+            in: defaults, defaultValue: .standard)
         mathRenderingEnabled = LaunchFixed.mathRenderingEnabled
         mermaidRenderingEnabled = LaunchFixed.mermaidRenderingEnabled
         linkActivation = Self.enumeration(
@@ -961,7 +983,9 @@ final class AppPreferences: ObservableObject {
                 systemValue: workspace.accessibilityDisplayShouldReduceMotion
             ),
             mathRenderingEnabled: mathRenderingEnabled,
-            mermaidRenderingEnabled: mermaidRenderingEnabled
+            mermaidRenderingEnabled: mermaidRenderingEnabled,
+            fontSize: renderedFontSize,
+            lineHeight: editorLineHeight
         )
     }
 
@@ -1013,6 +1037,7 @@ final class AppPreferences: ObservableObject {
     }
 
     private func resetWriting() {
+        renderedFontSize = MarkdownRenderMetrics.bodyFontSize
         editorFontSize = SourceEditorAppearance.default.fontSize
         editorLineHeight = SourceEditorAppearance.default.lineHeight
         syntaxHighlightingEnabled = true
@@ -1036,6 +1061,7 @@ final class AppPreferences: ObservableObject {
 
     private func persistCurrentValues() {
         let succeeded = persistence.persist([
+                Key.renderedFontSize: renderedFontSize,
                 Key.editorFontSize: editorFontSize,
                 Key.editorLineHeight: editorLineHeight,
                 Key.syntaxHighlightingEnabled: syntaxHighlightingEnabled,

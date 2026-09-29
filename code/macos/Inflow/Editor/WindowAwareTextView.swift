@@ -95,6 +95,7 @@ final class WindowAwareTextView: NSTextView {
         }
     }
     var isLiveMarkdown = false { didSet { updateReadingColumn() } }
+    var renderedTheme = PreviewTheme.standard
     var readingColumnWidth = CGFloat(MarkdownRenderMetrics.readingWidth) { didSet { updateReadingColumn() } }
     var structuralEditDidApply: (() -> Void)?
     var selectionVisibilityHandler: (() -> Void)?
@@ -400,7 +401,7 @@ final class WindowAwareTextView: NSTextView {
                 || existing.tableView.appendRowsIfPossible(table, onEdit: onEdit)
             {
                 existing.tableView.applyPalette(
-                    MarkdownRenderPalette.resolved(for: effectiveAppearance)
+                    MarkdownRenderPalette.resolved(for: effectiveAppearance, theme: renderedTheme)
                 )
                 existing.tableView.setEditingEnabled(isEditable)
                 existing.tableView.update(table: table, onEdit: onEdit)
@@ -417,7 +418,7 @@ final class WindowAwareTextView: NSTextView {
         }) {
             renderedTableViews.removeValue(forKey: reusable.key)
             reusable.value.tableView.applyPalette(
-                MarkdownRenderPalette.resolved(for: effectiveAppearance)
+                MarkdownRenderPalette.resolved(for: effectiveAppearance, theme: renderedTheme)
             )
             reusable.value.tableView.setEditingEnabled(isEditable)
             reusable.value.tableView.update(table: table, onEdit: onEdit)
@@ -435,7 +436,7 @@ final class WindowAwareTextView: NSTextView {
             baseFont: baseFont,
             maximumWidth: maximumWidth,
             linkActivation: linkActivation,
-            palette: MarkdownRenderPalette.resolved(for: effectiveAppearance),
+            palette: MarkdownRenderPalette.resolved(for: effectiveAppearance, theme: renderedTheme),
             onLinkClick: onLinkClick,
             onEdit: onEdit
         )
@@ -703,7 +704,7 @@ final class WindowAwareTextView: NSTextView {
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
         guard let layoutManager, let textContainer else { return }
-        let palette = MarkdownRenderPalette.resolved(for: effectiveAppearance)
+        let palette = MarkdownRenderPalette.resolved(for: effectiveAppearance, theme: renderedTheme)
         palette.inlineCodeColor.setFill()
         for characterRange in renderedInlineCodeRanges where characterRange.length > 0 {
             let glyphRange = layoutManager.glyphRange(

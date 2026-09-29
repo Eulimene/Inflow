@@ -632,6 +632,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         renderedLinkHandler = onLinkClick
         renderedLinkActivation = linkActivation
         renderedTheme = theme
+        textView.renderedTheme = theme
         textView.linkActivation = linkActivation
         renderedResourceContext = resourceContext
         switch presentation {
@@ -961,7 +962,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         }
         let baseParagraph = MarkdownNativeTypography.paragraphStyle(font: baseFont, lineHeight: CGFloat(sourceAppearance.lineHeight))
         baseParagraph.paragraphSpacing = 0
-        let palette = MarkdownRenderPalette.resolved(for: textView.effectiveAppearance)
+        let palette = MarkdownRenderPalette.resolved(for: textView.effectiveAppearance, theme: renderedTheme)
         if textView.string.isEmpty { textView.font = baseFont }
         textView.defaultParagraphStyle = baseParagraph
         textView.linkTextAttributes = MarkdownLinkVisualStyle.restingAttributes(
@@ -1281,7 +1282,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
 
     private func applyCodeMirrorTokens(_ plan: RenderedMarkdownPlan, storage: NSTextStorage?) {
         guard let storage, !textView.hasActiveComposition else { return }
-        let palette = MarkdownRenderPalette.resolved(for: textView.effectiveAppearance)
+        let palette = MarkdownRenderPalette.resolved(for: textView.effectiveAppearance, theme: renderedTheme)
         let undo = textView.undoManager
         let undoEnabled = undo?.isUndoRegistrationEnabled == true
         if undoEnabled { undo?.disableUndoRegistration() }
@@ -1792,7 +1793,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     }
 
     private func renderedBaseFont() -> NSFont {
-        let size = max(15, CGFloat(sourceAppearance.fontSize))
+        let size = max(6, CGFloat(sourceAppearance.fontSize))
         switch renderedTheme {
         case .code:
             return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
@@ -1874,9 +1875,14 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         let caretMidpoint = active.convert(caretRect.offsetBy(dx: active.textContainerOrigin.x,
             dy: active.textContainerOrigin.y), to: textView).midY
         let clipView = scrollView.contentView
-        let maximumOffset = max(0, textView.bounds.height - clipView.bounds.height)
+        // AppKit can move the document view origin (for example with content
+        // insets). Center in clip-view coordinates, not document coordinates.
+        let caretInClip = clipView.convert(NSPoint(x: 0, y: caretMidpoint), from: textView).y
+        let documentBounds = clipView.convert(textView.bounds, from: textView)
+        let minimumOffset = documentBounds.minY
+        let maximumOffset = max(minimumOffset, documentBounds.maxY - clipView.bounds.height)
         let targetOffset = min(
-            max(0, caretMidpoint - clipView.bounds.height / 2),
+            max(minimumOffset, caretInClip - clipView.bounds.height / 2),
             maximumOffset
         )
         clipView.scroll(to: NSPoint(x: clipView.bounds.origin.x, y: targetOffset))

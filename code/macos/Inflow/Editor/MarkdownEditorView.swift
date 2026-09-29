@@ -71,12 +71,11 @@ struct MarkdownEditorView: View {
 
     @SceneStorage("editorStatisticMode") private var storedStatisticMode =
         EditorStatisticMode.words.rawValue
-    // These keys existed in development previews. The launch product does not expose
-    // either writing mode, so restored true values are cleared and never become effective.
+    // Writing modes belong to each window; read-only documents suppress them.
     @SceneStorage("isFocusModeEnabled") private var restoredFocusModeEnabled = false
     @SceneStorage("isTypewriterModeEnabled") private var restoredTypewriterModeEnabled = false
-    private var isFocusModeEnabled: Bool { false }
-    private var isTypewriterModeEnabled: Bool { false }
+    private var isFocusModeEnabled: Bool { canEditDocument && restoredFocusModeEnabled }
+    private var isTypewriterModeEnabled: Bool { canEditDocument && restoredTypewriterModeEnabled }
     @StateObject private var editorStore: EditorStore
     @State private var previewLinkGeneration = 0
     @State private var previewLinkTask: Task<Void, Never>?
@@ -437,8 +436,6 @@ struct MarkdownEditorView: View {
             updateRecoveryProtection()
             fileSafetySession.update(document: document, fileURL: fileURL)
             consumePendingLinkedHeadingNavigation()
-            restoredFocusModeEnabled = false
-            restoredTypewriterModeEnabled = false
             if canEditDocument {
                 sourceEditorSession.setWritingModes(
                     focusModeEnabled: isFocusModeEnabled,
@@ -590,12 +587,10 @@ struct MarkdownEditorView: View {
                 requestPreviewScroll()
             }
         }
-        .onChange(of: restoredFocusModeEnabled) { _, isEnabled in
-            if isEnabled { restoredFocusModeEnabled = false }
+        .onChange(of: restoredFocusModeEnabled) { _, _ in
             applyWritingModes()
         }
-        .onChange(of: restoredTypewriterModeEnabled) { _, isEnabled in
-            if isEnabled { restoredTypewriterModeEnabled = false }
+        .onChange(of: restoredTypewriterModeEnabled) { _, _ in
             applyWritingModes()
         }
         .onChange(of: canEditDocument) { _, _ in
@@ -1354,12 +1349,12 @@ struct MarkdownEditorView: View {
             isFocusModeEnabled: isFocusModeEnabled,
             isTypewriterModeEnabled: isTypewriterModeEnabled,
             canEdit: canEditDocument,
-            setFocusMode: { _ in
-                restoredFocusModeEnabled = false
+            setFocusMode: { enabled in
+                restoredFocusModeEnabled = enabled
                 applyWritingModes()
             },
-            setTypewriterMode: { _ in
-                restoredTypewriterModeEnabled = false
+            setTypewriterMode: { enabled in
+                restoredTypewriterModeEnabled = enabled
                 applyWritingModes()
             }
         )
@@ -1377,7 +1372,6 @@ struct MarkdownEditorView: View {
             typewriterModeEnabled: isTypewriterModeEnabled
         )
         if isFocusModeEnabled || isTypewriterModeEnabled {
-            revealSourceSurface()
             Task { @MainActor in
                 await Task.yield()
                 _ = sourceEditorSession.focusEditor()

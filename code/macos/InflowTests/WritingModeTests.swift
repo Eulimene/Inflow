@@ -69,6 +69,7 @@ final class WritingModeTests: XCTestCase {
         let selection = NSRange(location: location, length: 0)
         session.textView.setSelectedRange(selection)
 
+        XCTAssertTrue(window.makeFirstResponder(session.textView))
         session.setWritingModes(focusModeEnabled: false, typewriterModeEnabled: true)
 
         XCTAssertTrue(UTF8Text.isExactlyEqual(session.textView.string, source))
@@ -127,11 +128,11 @@ final class WritingModeTests: XCTestCase {
     }
 
     @MainActor
-    func testLaunchMenuDoesNotExposeGrowthWritingModes() throws {
+    func testLaunchMenuExposesWritingModes() throws {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
         let items = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu))
         for title in ["专注模式", "打字机模式"] {
-            XCTAssertTrue(items.filter { $0.title == title }.isEmpty)
+            XCTAssertEqual(items.filter { $0.title == title }.count, 1)
         }
     }
 

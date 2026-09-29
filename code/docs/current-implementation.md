@@ -77,7 +77,7 @@
 - 即时编辑始终挂载同一个 MarkdownSourceEditor。Rust Engine 从同一份 `DocumentIr` 一次生成 HTML、分析、高亮、引用、块 IR 与 `NativeRenderPlan`；Swift 已删除手写 Markdown planner，只把已验证的 UTF-8 DTO 范围映射为 TextKit 属性。普通文字、行内代码与引用在渲染态直接输入；Markdown 标记由显示属性折叠，隐藏范围不作为光标样式来源。CaretStyleResolver 按当前输入字体绘制完整高度的光标；AppKit 暂时返回过小的行框时不缩小光标。围栏代码正文可直接编辑并保持等宽样式，进入围栏行才显示完整源码；图表编辑时显示源码和下方预览。保存内容和 undo 始终属于原始 Markdown。
 - 分栏右侧直接安装与即时编辑相同的 `NativeRenderPlan`，并把 NSTextView 设为只读。Mermaid `flowchart` 支持普通连线和仓库已有的 `-.文字.->` 带标签虚线；同一次 Engine 派生源码请求，再由离线 JavaScript 适配层生成自包含 SVG，并由两个 TextKit 表面共用的原生覆盖层呈现，不存在 Mermaid 专用 C ABI 或第二预览分支。进入即时编辑中的 Mermaid 源码块时将预览放在源码下方，移出后恢复图表呈现；只读表面始终保持渲染态。
 - 展示属性与 Engine patch 回写都不登记 AppKit 正文 undo；三种视图间切换时保持同一正文、修改状态、保存路径和 Rust 撤销历史。
-- 即时编辑中的链接默认单击定位并编辑，⌘+单击执行导航；只读预览默认单击导航，“设置 > 预览”可改为只从右键菜单打开，此时单击只定位光标；文本与表格中的链接共享 Hover 高亮反馈。表格使用 AdaptiveRenderedMarkdownTableLayoutStrategy 按内容测量列宽，再随编辑区扩张或压缩；单元格可编辑，右键提供行列增删和列对齐。链接导航、本地图片和失败降级继续受当前内容快照与封闭宿主消息约束。
+- 即时编辑中的链接默认单击定位并编辑，⌘+单击执行导航；只读预览默认单击导航，“设置 > 外观与预览”可改为只从右键菜单打开，此时单击只定位光标；文本与表格中的链接共享 Hover 高亮反馈。表格使用 AdaptiveRenderedMarkdownTableLayoutStrategy 按内容测量列宽，再随编辑区扩张或压缩；单元格可编辑，右键提供行列增删和列对齐。链接导航、本地图片和失败降级继续受当前内容快照与封闭宿主消息约束。
 
 引用样式覆盖显式前缀行、无前缀的合法续行和仅有 `>` 的空行；相邻引用段落合并为连续竖线，真正的空白分隔段落仍分成独立引用块。正文与表格单元格共用光标几何计算：高度按输入字体度量，纵向按当前 TextKit 行框居中，擦除时使用上一次绘制的位置。空单元格显式设置字体、段落样式和输入属性；行高测量包含末尾换行产生的空行。隐藏语法的微小字体和透明颜色不再直接继承为输入属性。
 
@@ -188,3 +188,7 @@
 - 同一 NSTextView 宿主：[../macos/Inflow/Editor/MarkdownSourceEditor.swift](../macos/Inflow/Editor/MarkdownSourceEditor.swift)
 
 渲染排版参考 Typora GitHub 主题：正文 16pt、目标行高 1.6，段落空行 0.8em，H1–H6 为 36/28/24/20/16/16pt。默认正文字体优先选择本机 Open Sans，其次 Helvetica Neue，中文由系统回退；不复制或依赖 Typora 的字体资源。原生标题保留独立行高和 1em 段前段后间距，HTML 预览与导出采用相同字号层级。源码编辑器的字体设置保持独立。
+
+## 写作界面与主题
+
+默认正文宽度为 800 点，正文 16 磅、源码 15 磅、行高 1.6 倍。设置提供独立字号、行高和编辑辅助选项，显示菜单接入缩放、专注与打字机模式，主题菜单提供四个原生内置主题与明暗选择。偏好会持久化，既有用户宽度不被覆盖。菜单、默认值、快捷键和限制见 [Typora 参考界面优化](typora-interface-implementation.md)。

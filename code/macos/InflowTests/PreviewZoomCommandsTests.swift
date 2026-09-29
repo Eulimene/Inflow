@@ -39,11 +39,11 @@ final class PreviewZoomCommandsTests: XCTestCase {
     }
 
     @MainActor
-    func testLaunchMenuDoesNotExposeGrowthZoomCommands() throws {
+    func testLaunchMenuExposesZoomCommands() throws {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
         let items = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu))
         for title in ["放大", "缩小", "实际大小"] {
-            XCTAssertTrue(items.filter { $0.title == title }.isEmpty)
+            XCTAssertEqual(items.filter { $0.title == title }.count, 1)
         }
     }
 
