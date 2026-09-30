@@ -1757,6 +1757,7 @@ actor PlaintextDocumentRecoveryStore: DocumentRecoveryStoring {
 
     nonisolated func markSessionActive(_ id: UUID, generation: UInt64) throws {
         try requireWriter()
+        guard !Self.isExplicitlyClosed(id, in: rootURL) else { throw DocumentRecoveryError.staleClaim }
         try DurableRecoveryWriter.removeIfPresent(at: closedURL(id))
     }
 
@@ -1766,6 +1767,7 @@ actor PlaintextDocumentRecoveryStore: DocumentRecoveryStoring {
 
     nonisolated func markSessionClosed(_ id: UUID, generation: UInt64) throws -> Bool {
         try requireWriter()
+        if Self.isExplicitlyClosed(id, in: rootURL) { return true }
         // A tiny close marker also hides any already-in-flight write.
         // The independent close checkpoint remains in SessionDrafts.
         try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true,
@@ -1773,6 +1775,20 @@ actor PlaintextDocumentRecoveryStore: DocumentRecoveryStoring {
         try DurableRecoveryWriter.replace(Data(String(generation).utf8), at: closedURL(id))
         try DurableRecoveryWriter.removeIfPresent(at: url(id))
         return true
+    }
+
+    nonisolated static func isExplicitlyClosed(_ id: UUID, in root: URL) -> Bool {
+        (try? String(contentsOf: root.appendingPathComponent(id.uuidString + ".closed"), encoding: .utf8)) == "discarded"
+    }
+
+    /// Persist user intent before removing either recovery copy. The same marker
+    /// prevents a late background read/claim/write from reopening a closed tab.
+    nonisolated func discardSession(_ id: UUID) throws {
+        try requireWriter()
+        try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+        try DurableRecoveryWriter.replace(Data("discarded".utf8), at: closedURL(id))
+        try DurableRecoveryWriter.removeIfPresent(at: url(id))
     }
 
     private func write(_ record: DocumentRecoveryRecord) throws {
@@ -1823,6 +1839,7 @@ actor PlaintextDocumentRecoveryStore: DocumentRecoveryStoring {
 
     func importTemporaryDraft(_ record: DocumentRecoveryRecord) throws {
         try requireWriter()
+        guard !Self.isExplicitlyClosed(record.id, in: rootURL) else { throw DocumentRecoveryError.staleClaim }
         if let existing = try? read(record.id), existing.updatedAt > record.updatedAt { return }
         try DurableRecoveryWriter.removeIfPresent(at: closedURL(record.id))
         try write(record)
@@ -1864,6 +1881,8 @@ actor PlaintextDocumentRecoveryStore: DocumentRecoveryStoring {
 
     func claim(_ input: DocumentRecoveryRecord, targetRecordID: UUID, now: Date = Date()) throws -> DocumentRecoveryTransfer {
         try requireWriter()
+        guard !Self.isExplicitlyClosed(input.id, in: rootURL),
+              !Self.isExplicitlyClosed(targetRecordID, in: rootURL) else { throw DocumentRecoveryError.staleClaim }
         let current = try read(input.id)
         guard current == input else { throw DocumentRecoveryError.staleClaim }
         try write(current.claimed(by: targetRecordID, at: now))
@@ -2113,6 +2132,25 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         materializedStartupDrafts.removeValue(forKey: id)
     }
 
+    @discardableResult
+    func closeStartupDraft(_ id: UUID) -> Bool {
+        guard let store = store as? PlaintextDocumentRecoveryStore else { return false }
+        do {
+            try store.discardSession(id)
+            if let targetID = startupDrafts.first(where: { $0.id == id })?.targetID {
+                try store.discardSession(targetID)
+                try temporaryDraftStore?.remove(targetID)
+            }
+            try temporaryDraftStore?.remove(id)
+            dismissStartupDraft(id)
+            recoveredRecords.removeAll { $0.id == id }
+            return true
+        } catch {
+            protectionErrorMessage = "未能关闭这份恢复草稿，请重试。原内容仍然保留。"
+            return false
+        }
+    }
+
     func dismissStartupDraft(_ id: UUID) {
         dismissedStartupDrafts.insert(id)
         startupReadTasks.removeValue(forKey: id)?.cancel()
@@ -2225,7 +2263,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         }
     }
 
-    func close(_ id: UUID) {
+    func close(_ id: UUID, discardingDraft: Bool = false) {
         processOwnership?.unregisterRecovery(id)
         guard let closedSession = activeSessions.removeValue(forKey: id) else { return }
         closedSession.task.cancel()
@@ -2237,6 +2275,15 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         guard store.canWrite else { return }
         let closingGeneration = closedSession.generation
         do {
+            if discardingDraft, let plaintext = store as? PlaintextDocumentRecoveryStore {
+                try plaintext.discardSession(id)
+                try temporaryDraftStore?.remove(id)
+                if let source = closedSession.latestRecord.transferSourceRecordID {
+                    try plaintext.discardSession(source)
+                    try temporaryDraftStore?.remove(source)
+                }
+                return
+            }
             guard try store.markSessionClosed(id, generation: closingGeneration) else {
                 showDegradedProtectionWarning()
                 return

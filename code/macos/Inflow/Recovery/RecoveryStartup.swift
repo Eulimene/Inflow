@@ -36,6 +36,7 @@ struct RecoveryStartupLoader: Sendable {
             for file in try manager.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]) {
                 try Task.checkCancellation()
                 guard file.pathExtension == "json", let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent), !liveIDs.contains(id) else { continue }
+                if PlaintextDocumentRecoveryStore.isExplicitlyClosed(id, in: recoveryRoot) { continue }
                 if root == recoveryRoot && manager.fileExists(atPath: root.appendingPathComponent(id.uuidString + ".closed").path) { continue }
                 locations[id, default: []].append(file)
                 let date = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
@@ -62,7 +63,8 @@ struct RecoveryStartupLoader: Sendable {
 
     func prepare(_ placeholder: RecoveryDraftPlaceholder) throws -> PreparedStartupDraft? {
         try Task.checkCancellation()
-        if witness?.isLiveRecovery(placeholder.id) == true { return nil }
+        if witness?.isLiveRecovery(placeholder.id) == true
+            || PlaintextDocumentRecoveryStore.isExplicitlyClosed(placeholder.id, in: recoveryRoot) { return nil }
         var records: [DocumentRecoveryRecord] = []
         for file in placeholder.locations {
             if let record = try? read(file), record.id == placeholder.id { records.append(record) }
@@ -142,7 +144,10 @@ struct RecoveryPlaceholderView: View {
         .onChange(of: phase) { _, _ in installIfSelected() }
         .onChange(of: tabs.selected) { _, _ in installIfSelected() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { event in
-            if let window, event.object as? NSWindow === window { coordinator.dismissStartupDraft(placeholder.id) }
+            if let window, event.object as? NSWindow === window {
+                if TemporaryDocumentDrafts.isTerminating { coordinator.dismissStartupDraft(placeholder.id) }
+                else { _ = coordinator.closeStartupDraft(placeholder.id) }
+            }
         }
     }
 

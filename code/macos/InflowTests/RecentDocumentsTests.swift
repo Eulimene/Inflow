@@ -19,7 +19,7 @@ final class RecentDocumentsTests: XCTestCase {
         let drafts = (0..<100).map { index in
             RecoveryDraftPlaceholder(id: UUID(), targetID: UUID(), locations: [], title: "Draft \(index)")
         }
-        for draft in drafts { tabs.addPending(draft, dismiss: { dismissals += 1 }) { opens += 1 } }
+        for draft in drafts { tabs.addPending(draft, dismiss: { dismissals += 1; return true }) { opens += 1 } }
         XCTAssertEqual(tabs.pending.count, 100)
         XCTAssertEqual(opens, 0)
         XCTAssertEqual(NSApp.windows.count, windowCount, "Startup must not allocate one window/editor per draft")
@@ -121,6 +121,7 @@ final class RecentDocumentsTests: XCTestCase {
                 selectedUTF16Range: NSRange(location: latest.utf16.count, length: 0), viewMode: .preview, verticalScrollOffset: 0)
         }
         defer {
+            TemporaryDocumentDrafts.cancelTermination()
             TemporaryDocumentDrafts.unregister(id)
             TemporaryDocumentDrafts.store = previousStore
             try? FileManager.default.removeItem(at: root)
@@ -131,6 +132,7 @@ final class RecentDocumentsTests: XCTestCase {
         NSDocumentController.shared.reviewUnsavedDocuments(withAlertTitle: "Must not present a save review", cancellable: true,
             delegate: probe, didReviewAllSelector: #selector(DraftQuitReviewProbe.reviewed(_:approved:context:)), contextInfo: nil)
         XCTAssertEqual(probe.approved, true)
+        XCTAssertTrue(TemporaryDocumentDrafts.isTerminating)
         XCTAssertEqual(try TemporaryDocumentDrafts.store.records().first(where: { $0.id == id })?.text, latest)
         // A failed checkpoint must preserve the last successful draft.
         let stagedStore = TemporaryDocumentDrafts.store

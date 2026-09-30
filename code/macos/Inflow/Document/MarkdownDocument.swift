@@ -501,6 +501,7 @@ enum TemporaryDocumentDrafts {
     }
     private static var providers: [UUID: Provider] = [:]
     private static var installed = false
+    private(set) static var isTerminating = false
     private static var writtenSnapshots: [UUID: DocumentRecoveryRecord] = [:]
     static var store = TemporaryDocumentDraftStore(rootURL: TemporaryDocumentDraftStore.defaultRoot)
 
@@ -533,11 +534,19 @@ enum TemporaryDocumentDrafts {
     static func approveClose(owner: NSDocument? = nil) -> Bool {
         do { try checkpoint(owner: owner); return true }
         catch {
+            cancelTermination()
             NSApp.presentError(NSError(domain: "Inflow.DraftCheckpoint", code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "未能暂存未保存内容，已取消退出以保留编辑。", NSUnderlyingErrorKey: error]))
             return false
         }
     }
+
+    static func approveTermination() -> Bool {
+        isTerminating = approveClose()
+        return isTerminating
+    }
+
+    static func cancelTermination() { isTerminating = false }
 
     /// AppKit's multi-document Quit review runs before individual canClose callbacks.
     static func installQuitReview() {
@@ -547,7 +556,7 @@ enum TemporaryDocumentDrafts {
         guard let method = class_getInstanceMethod(controllerClass, selector), let encoding = method_getTypeEncoding(method) else { return }
         let review: @convention(block) (NSDocumentController, NSString?, Bool, AnyObject?, Selector?, UnsafeMutableRawPointer?) -> Void = {
             controller, _, _, delegate, callbackSelector, context in
-            let approved = approveClose()
+            let approved = approveTermination()
             guard let delegate, let callbackSelector,
                   let callbackMethod = class_getInstanceMethod(type(of: delegate), callbackSelector) else { return }
             typealias Callback = @convention(c) (AnyObject, Selector, NSDocumentController, Bool, UnsafeMutableRawPointer?) -> Void

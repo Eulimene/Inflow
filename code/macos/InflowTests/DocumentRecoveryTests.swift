@@ -119,11 +119,11 @@ final class DocumentRecoveryTests: XCTestCase {
     }
 
     @MainActor
-    func testStartupClosingPendingTabPreservesCheckpointAndPreventsLateRecovery() async throws {
+    func testStartupClosingPendingTabDiscardsCheckpointAndPreventsLateRecovery() async throws {
         let fixture = try RecoveryFixture()
         defer { fixture.remove() }
         let temporary = TemporaryDocumentDraftStore(rootURL: fixture.root.appendingPathComponent("SessionDrafts"))
-        let record = recoveryRecord(text: "keep on close", updatedAt: Date())
+        let record = recoveryRecord(text: "discard on explicit close", updatedAt: Date())
         try temporary.write(record)
         let gate = RecoveryReconcileGate()
         let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot,
@@ -132,12 +132,25 @@ final class DocumentRecoveryTests: XCTestCase {
         await coordinator.beginStartupRestoration { _ in }
         await gate.waitUntilSuspended()
         let placeholder = try XCTUnwrap(coordinator.startupDrafts.first)
-        coordinator.dismissStartupDraft(record.id)
+        XCTAssertTrue(coordinator.closeStartupDraft(record.id))
         await gate.resume()
         let restored = await coordinator.materializeStartupDraft(placeholder)
         XCTAssertNil(restored)
         XCTAssertEqual(coordinator.startupPhases[record.id], .unnecessary)
-        XCTAssertEqual(try temporary.records(), [record])
+        XCTAssertTrue(try temporary.records().isEmpty)
+        let loader = RecoveryStartupLoader(recoveryRoot: fixture.recoveryRoot,
+            temporaryRoot: temporary.rootURL, witness: nil)
+        XCTAssertTrue(try loader.discover().isEmpty, "Closed placeholders must stay closed after relaunch")
+        // Even a previously captured snapshot must not resurrect the dismissed tab.
+        try temporary.write(record)
+        XCTAssertTrue(try loader.discover().isEmpty)
+        XCTAssertNil(try loader.prepare(placeholder))
+        let store = PlaintextDocumentRecoveryStore(rootURL: fixture.recoveryRoot)
+        do {
+            _ = try await store.claimStartup(record, targetRecordID: placeholder.targetID)
+            XCTFail("A delayed claim must not resurrect an explicitly closed draft")
+        } catch { XCTAssertEqual(error as? DocumentRecoveryError, .staleClaim) }
+        XCTAssertTrue(try loader.discover().isEmpty)
     }
 
     @MainActor
@@ -402,7 +415,9 @@ final class DocumentRecoveryTests: XCTestCase {
         let record = DocumentRecoveryRecord(id: UUID(), document: MarkdownDocument(text: "restore without keys"), originalURL: nil,
             selectedUTF16Range: NSRange(location: 0, length: 0), viewMode: .source, verticalScrollOffset: 0)
         _ = try await store.reconcile(record)
-        let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot, usesPlaintext: true)
+        let temporary = TemporaryDocumentDraftStore(rootURL: fixture.root.appendingPathComponent("SessionDrafts"))
+        let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot,
+            temporaryDraftStore: temporary, usesPlaintext: true)
         await coordinator.loadIfNeeded()
         XCTAssertNil(coordinator.protectionErrorMessage)
         let documents = await coordinator.claimDraftsForAutomaticRestoration()
@@ -417,7 +432,39 @@ final class DocumentRecoveryTests: XCTestCase {
         await coordinator.flush(targetID)
         let transferred = try await store.load()
         XCTAssertEqual(transferred.records.map(\.id), [targetID])
-        coordinator.close(targetID)
+        try temporary.write(target)
+        coordinator.close(targetID, discardingDraft: true)
+        XCTAssertTrue(try temporary.records().isEmpty)
+        let loader = RecoveryStartupLoader(recoveryRoot: fixture.recoveryRoot,
+            temporaryRoot: temporary.rootURL, witness: nil)
+        XCTAssertTrue(try loader.discover().isEmpty)
+
+        // Closing immediately after restoration must also retire the claimed
+        // source, even before the new editor has flushed its first revision.
+        let earlySource = recoveryRecord(text: "close before first save", updatedAt: Date())
+        try await store.importTemporaryDraft(earlySource)
+        let earlyTargetID = UUID()
+        let earlyTransfer = try await store.claim(earlySource, targetRecordID: earlyTargetID)
+        let earlyDocument = try earlySource.restoredDocument(transfer: earlyTransfer)
+        let earlyTarget = DocumentRecoveryRecord(id: earlyTargetID, document: earlyDocument, originalURL: nil,
+            selectedUTF16Range: NSRange(location: 0, length: 0), viewMode: .source, verticalScrollOffset: 0)
+        try temporary.write(earlySource)
+        try temporary.write(earlyTarget)
+        coordinator.update(earlyTarget)
+        coordinator.close(earlyTargetID, discardingDraft: true)
+        XCTAssertTrue(try loader.discover().isEmpty)
+        XCTAssertTrue(try temporary.records().isEmpty)
+
+        // Quit preserves the tabs that were still open, including the latest
+        // synchronous checkpoint rather than the older background snapshot.
+        let retained = recoveryRecord(text: "still open on quit", updatedAt: Date())
+        coordinator.update(retained)
+        await coordinator.flush(retained.id)
+        try temporary.write(retained)
+        coordinator.close(retained.id)
+        let reopened = try loader.discover()
+        XCTAssertEqual(reopened.map(\.id), [retained.id])
+        XCTAssertEqual(try loader.prepare(XCTUnwrap(reopened.first))?.document.text, retained.text)
         let closed = try await store.load()
         XCTAssertTrue(closed.records.isEmpty)
         let file = fixture.root.appendingPathComponent("saved.md")

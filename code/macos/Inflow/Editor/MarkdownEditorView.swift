@@ -435,7 +435,7 @@ struct MarkdownEditorView: View {
                     await Task.yield()
                     await recoveryCoordinator.beginStartupRestoration(anchor: sourceEditorSession.textView.window) { placeholder in
                         if let pending = placeholder.recoveryPlaceholder {
-                            DocumentWindowTabs.shared.addPending(pending, dismiss: { recoveryCoordinator.dismissStartupDraft(pending.id) }) { newDocument(placeholder) }
+                            DocumentWindowTabs.shared.addPending(pending, dismiss: { recoveryCoordinator.closeStartupDraft(pending.id) }) { newDocument(placeholder) }
                         }
                     }
                 }
@@ -1923,7 +1923,7 @@ struct MarkdownEditorView: View {
         pendingFindNavigation.removeAll()
         findSession.cancelSearch()
         fileSafetySession.stopMonitoring()
-        recoveryCoordinator?.close(recoveryRecordID)
+        recoveryCoordinator?.close(recoveryRecordID, discardingDraft: !TemporaryDocumentDrafts.isTerminating)
     }
 
     private func activatePreviewLink(_ target: String) {

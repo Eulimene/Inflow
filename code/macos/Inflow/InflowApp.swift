@@ -2106,7 +2106,7 @@ private struct DocumentTitlebarContent: View {
                             .help("恢复草稿：" + draft.title)
                             .disabled(draft.isOpening)
                             Button { tabs.closePending(draft.id) } label: { Image(systemName: "xmark") }
-                                .help("关闭恢复标签页，保留草稿")
+                                .help("关闭恢复标签页，下次启动不再恢复")
                                 .accessibilityLabel("关闭恢复标签页：" + draft.title)
                         }
                         .buttonStyle(.borderless)
@@ -2341,7 +2341,7 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
-        guard TemporaryDocumentDrafts.approveClose() else { return .terminateCancel }
+        guard TemporaryDocumentDrafts.approveTermination() else { return .terminateCancel }
         return InflowTerminationPolicy.replyAfterDocumentCloseApproval
     }
 }
