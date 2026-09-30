@@ -11,6 +11,60 @@ final class RecentDocumentsTests: XCTestCase {
         _ = NSApplication.shared
     }
 
+    func testRecoveryTabPlaceholdersOpenOnlyWhenSelected() {
+        let tabs = DocumentWindowTabs()
+        var opens = 0
+        var dismissals = 0
+        let windowCount = NSApp.windows.count
+        let drafts = (0..<100).map { index in
+            RecoveryDraftPlaceholder(id: UUID(), targetID: UUID(), locations: [], title: "Draft \(index)")
+        }
+        for draft in drafts { tabs.addPending(draft, dismiss: { dismissals += 1 }) { opens += 1 } }
+        XCTAssertEqual(tabs.pending.count, 100)
+        XCTAssertEqual(opens, 0)
+        XCTAssertEqual(NSApp.windows.count, windowCount, "Startup must not allocate one window/editor per draft")
+        tabs.openPending(drafts[70].id)
+        tabs.openPending(drafts[70].id)
+        XCTAssertEqual(opens, 1)
+        tabs.closePending(drafts[0].id)
+        XCTAssertEqual(dismissals, 1)
+        XCTAssertEqual(opens, 1, "Closing an unloaded draft must not load it")
+        tabs.removePending(drafts[70].id)
+        XCTAssertEqual(tabs.pending.count, 98)
+    }
+
+    func testTitlebarTabsShareWindowControlRowAndPreserveWindowGeometry() async throws {
+        let first = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 900, height: 600),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        let second = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 820, height: 520),
+            styleMask: first.styleMask, backing: .buffered, defer: false)
+        first.isReleasedWhenClosed = false; second.isReleasedWhenClosed = false
+        defer { first.close(); second.close() }
+        first.contentView = NSHostingView(rootView: DocumentTitlebar(isEnabled: true) {
+            HStack { Button("目录树") {}; Text("Untitled"); Spacer(); Button("+") {} }
+        })
+        first.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(150))
+        first.contentView?.layoutSubtreeIfNeeded()
+        let accessory = try XCTUnwrap(first.titlebarAccessoryViewControllers.first)
+        XCTAssertEqual(accessory.layoutAttribute, .left)
+        let close = try XCTUnwrap(first.standardWindowButton(.closeButton))
+        let controlRect = close.convert(close.bounds, to: nil)
+        let titlebarRect = accessory.view.convert(accessory.view.bounds, to: nil)
+        XCTAssertEqual(controlRect.midY, titlebarRect.midY, accuracy: 12)
+        XCTAssertGreaterThanOrEqual(titlebarRect.minX, controlRect.maxX)
+        XCTAssertEqual(first.tabbingMode, .disallowed)
+        let tabs = DocumentWindowTabs.shared
+        tabs.register(second)
+        let item = try XCTUnwrap(tabs.items.first { $0.window === second })
+        let frame = first.frame
+        tabs.select(item)
+        XCTAssertFalse(first.isVisible)
+        XCTAssertTrue(second.isVisible)
+        XCTAssertEqual(second.frame, frame)
+        XCTAssertFalse(second.tabGroup?.isTabBarVisible == true)
+    }
+
     func testTerminationDelegateNeverCancelsAnApprovedDisposableDraftQuit() throws {
         XCTAssertEqual(
             InflowTerminationPolicy.replyAfterDocumentCloseApproval,
@@ -91,14 +145,14 @@ final class RecentDocumentsTests: XCTestCase {
         window.contentView = controls
         window.makeKeyAndOrderFront(nil)
         defer { window.close() }
-        XCTAssertTrue(window.collectionBehavior.contains(.fullScreenNone))
-        XCTAssertFalse(window.collectionBehavior.contains(.fullScreenPrimary))
+        XCTAssertFalse(window.collectionBehavior.contains(.fullScreenNone))
+        XCTAssertTrue(window.collectionBehavior.contains(.fullScreenPrimary))
         XCTAssertTrue(window.collectionBehavior.contains(.managed))
         let minimize = try XCTUnwrap(window.standardWindowButton(.miniaturizeButton))
         let zoom = try XCTUnwrap(window.standardWindowButton(.zoomButton))
         XCTAssertTrue(zoom.isEnabled)
         let originalFrame = window.frame
-        zoom.performClick(nil)
+        window.performZoom(nil)
         XCTAssertFalse(window.styleMask.contains(.fullScreen))
         XCTAssertNotEqual(window.frame, originalFrame)
         XCTAssertTrue(minimize.isEnabled)
@@ -111,7 +165,7 @@ final class RecentDocumentsTests: XCTestCase {
         await fulfillment(of: [restored], timeout: 5)
         XCTAssertFalse(window.isMiniaturized)
         XCTAssertTrue(minimize.isEnabled)
-        zoom.performClick(nil)
+        window.performZoom(nil)
         XCTAssertEqual(window.frame, originalFrame)
         // Repeated SwiftUI updates must preserve the same window policy.
         controls.configureWindow()
@@ -126,11 +180,12 @@ final class RecentDocumentsTests: XCTestCase {
         )
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        window.collectionBehavior = [.managed, .fullScreenPrimary, .fullScreenAllowsTiling]
+        window.collectionBehavior = [.managed, .fullScreenNone, .fullScreenAllowsTiling]
         let controls = DocumentWindowControls.WindowView()
         window.contentView = controls
         XCTAssertTrue(window.styleMask.contains(.miniaturizable))
-        XCTAssertTrue(window.collectionBehavior.contains(.fullScreenNone))
+        XCTAssertTrue(window.collectionBehavior.contains(.fullScreenPrimary))
+        XCTAssertFalse(window.collectionBehavior.contains(.fullScreenNone))
         XCTAssertTrue(window.collectionBehavior.contains(.fullScreenAllowsTiling))
         XCTAssertTrue(window.collectionBehavior.contains(.managed))
 
@@ -151,7 +206,7 @@ final class RecentDocumentsTests: XCTestCase {
         defer { other.close() }
         other.contentView = controls
         XCTAssertTrue(other.styleMask.contains(.miniaturizable))
-        XCTAssertTrue(other.collectionBehavior.contains(.fullScreenNone))
+        XCTAssertTrue(other.collectionBehavior.contains(.fullScreenPrimary))
     }
 
     func testProjectDocumentsReuseTheSelectedFolderSecurityScope() {

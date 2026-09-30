@@ -501,22 +501,32 @@ enum TemporaryDocumentDrafts {
     }
     private static var providers: [UUID: Provider] = [:]
     private static var installed = false
+    private static var writtenSnapshots: [UUID: DocumentRecoveryRecord] = [:]
     static var store = TemporaryDocumentDraftStore(rootURL: TemporaryDocumentDraftStore.defaultRoot)
 
     static func register(_ id: UUID, owner: NSDocument?, windowOwner: NSDocument? = nil, snapshot: @escaping () -> DocumentRecoveryRecord) {
         providers[id] = Provider(owners: Set([owner, windowOwner].compactMap { $0.map(ObjectIdentifier.init) }), snapshot: snapshot)
     }
 
-    static func unregister(_ id: UUID) { providers.removeValue(forKey: id) }
+    static func unregister(_ id: UUID) {
+        providers.removeValue(forKey: id)
+        writtenSnapshots.removeValue(forKey: id)
+    }
 
     static func checkpoint(owner: NSDocument? = nil) throws {
         for provider in Array(providers.values) where owner == nil || owner.map({ provider.owners.contains(ObjectIdentifier($0)) }) == true {
             let record = provider.snapshot()
             if record.originalURL == nil && record.text.isEmpty {
                 try store.remove(record.id)
+                writtenSnapshots.removeValue(forKey: record.id)
+                continue
+            }
+            if let previous = writtenSnapshots[record.id], record.hasSameSnapshot(as: previous),
+               FileManager.default.fileExists(atPath: store.rootURL.appendingPathComponent(record.id.uuidString + ".json").path) {
                 continue
             }
             try store.write(record)
+            writtenSnapshots[record.id] = record
         }
     }
 

@@ -1,6 +1,10 @@
 /* Shared visual defaults for native rendering and theme inheritance.
    Editor code reads these values; theme files override element rules or --md-* tokens. */
 :root {
+  --md-titlebar-controls-width: 96px;
+  --md-titlebar-height: 36px;
+  --md-titlebar-tab-height: 28px;
+  --md-titlebar-tab-radius: 6px;
   --inflow-readingWidth: 800.0;
   --inflow-previewReadingWidth: 1200.0;
   --inflow-renderedHorizontalInset: 24;

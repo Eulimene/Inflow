@@ -99,10 +99,15 @@ struct RecoveryPlaceholderView: View {
     @Binding var document: MarkdownDocument
     let placeholder: RecoveryDraftPlaceholder
     @ObservedObject var coordinator: DocumentRecoveryCoordinator
+    @ObservedObject private var tabs = DocumentWindowTabs.shared
     @State private var window: NSWindow?
     @State private var isInstalling = false
 
     private var phase: RecoveryStartupPhase { coordinator.startupPhases[placeholder.id] ?? .queued }
+    private var isSelected: Bool {
+        guard let window else { return false }
+        return window.isKeyWindow || tabs.selected == ObjectIdentifier(window)
+    }
 
     var body: some View {
         VStack(spacing: 12) {
@@ -135,19 +140,20 @@ struct RecoveryPlaceholderView: View {
             installIfSelected()
         }
         .onChange(of: phase) { _, _ in installIfSelected() }
+        .onChange(of: tabs.selected) { _, _ in installIfSelected() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { event in
             if let window, event.object as? NSWindow === window { coordinator.dismissStartupDraft(placeholder.id) }
         }
     }
 
     private func installIfSelected() {
-        guard !isInstalling, window?.isKeyWindow == true, document.recoveryPlaceholder?.id == placeholder.id else { return }
+        guard !isInstalling, isSelected, document.recoveryPlaceholder?.id == placeholder.id else { return }
         switch phase { case .failed, .unnecessary, .opened: return; default: break }
         isInstalling = true
         Task { @MainActor in
             defer { isInstalling = false }
             guard let restored = await coordinator.materializeStartupDraft(placeholder),
-                  window?.isKeyWindow == true, document.recoveryPlaceholder?.id == placeholder.id else { return }
+                  isSelected, document.recoveryPlaceholder?.id == placeholder.id else { return }
             document = restored
             coordinator.completeStartupDraft(placeholder.id)
         }

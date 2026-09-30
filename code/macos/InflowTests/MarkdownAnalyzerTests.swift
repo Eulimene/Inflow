@@ -179,7 +179,11 @@ final class MarkdownAnalyzerTests: XCTestCase {
 
         let textView = session.textView
         textView.setSelectedRange(NSRange(location: 4, length: 0))
+        // Wait for the asynchronous engine to seed the document before editing;
+        // a fixed number of main-actor yields does not guarantee that work ran.
+        _ = await session.authoritativeSnapshot()
         textView.insertText("!", replacementRange: textView.selectedRange())
+        _ = await session.authoritativeSnapshot()
         renderPendingUI()
         for _ in 0..<20 where !textView.engineCanUndo {
             await Task.yield()

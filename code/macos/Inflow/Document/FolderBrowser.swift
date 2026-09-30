@@ -1584,12 +1584,6 @@ struct FolderBrowserSidebar: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            WorkspacePaneVisibilityButton(
-                paneName: "目录树",
-                systemImage: "sidebar.left",
-                isExpanded: true,
-                action: onCollapse
-            )
             Image(systemName: "folder.fill")
                 .foregroundStyle(.secondary)
             Text(controller.folderURL?.lastPathComponent ?? "项目")

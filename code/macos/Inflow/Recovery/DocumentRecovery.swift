@@ -181,6 +181,21 @@ struct DocumentRecoveryRecord: Codable, Equatable, Identifiable, Sendable {
     var effectiveRevision: UInt64 { revision ?? 1 }
     var recoveryContentIdentity: Data { contentHash ?? Self.hash(encodedDocumentData) }
 
+    /// Timestamps, revisions and regenerated bookmarks do not make a new draft.
+    func hasSameSnapshot(as other: Self) -> Bool {
+        id == other.id && effectiveLineageID == other.effectiveLineageID
+            && effectiveEpoch == other.effectiveEpoch && contentHash == other.contentHash
+            && text == other.text && originalURL == other.originalURL
+            && committedContentHash == other.committedContentHash
+            && transferSourceRecordID == other.transferSourceRecordID
+            && transferTargetRecordID == other.transferTargetRecordID
+            && hasUTF8BOM == other.hasUTF8BOM && lineEndingRawValue == other.lineEndingRawValue
+            && requiresLineEndingChoice == other.requiresLineEndingChoice
+            && selectedUTF16Location == other.selectedUTF16Location
+            && selectedUTF16Length == other.selectedUTF16Length
+            && viewModeRawValue == other.viewModeRawValue && verticalScrollOffset == other.verticalScrollOffset
+    }
+
     func relationship(toDiskData data: Data) -> DocumentRecoveryDiskRelationship {
         let diskHash = Self.hash(data)
         if diskHash == contentHash {
@@ -1892,6 +1907,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
 
     private struct ActiveSession {
         var latestRecord: DocumentRecoveryRecord
+        var lastWrittenRecord: DocumentRecoveryRecord? = nil
         let generation: UInt64
         let task: Task<Void, Never>
     }
@@ -1906,12 +1922,6 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     private var startupMaterializationTasks: [UUID: Task<MarkdownDocument?, Never>] = [:]
     private var materializedStartupDrafts: [UUID: MarkdownDocument] = [:]
     private var dismissedStartupDrafts: Set<UUID> = []
-    private weak var startupAnchor: NSWindow?
-    private final class WeakStartupWindow {
-        weak var value: NSWindow?
-        init(_ value: NSWindow?) { self.value = value }
-    }
-    private var startupReturnWindows: [UUID: WeakStartupWindow] = [:]
     private let beforeStartupRead: (@Sendable (RecoveryDraftPlaceholder) async -> Void)?
 
     private let store: (any DocumentRecoveryStoring)?
@@ -1928,7 +1938,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
 
     init(
         rootURL: URL? = nil,
-        intervalNanoseconds: UInt64 = 5_000_000_000,
+        intervalNanoseconds: UInt64 = 500_000_000,
         fileManager: FileManager = .default,
         keyProvider: (any DocumentRecoveryKeyProviding)? = nil,
         beforeReconcileCommit: (@Sendable (DocumentRecoveryRecord) async -> Void)? = nil,
@@ -1991,17 +2001,16 @@ final class DocumentRecoveryCoordinator: ObservableObject {
             return
         }
         hasClaimedAutomaticRestoration = true
-        startupAnchor = anchor ?? NSApp?.keyWindow
         do {
             let placeholders = try await Task.detached(priority: .utility) { try loader.discover() }.value
             startupDrafts = placeholders
             for placeholder in placeholders {
                 guard !Task.isCancelled else { return }
                 startupPhases[placeholder.id] = .queued
-                startupReturnWindows[placeholder.id] = WeakStartupWindow(NSApp?.keyWindow ?? anchor)
                 open(MarkdownDocument(recoveryPlaceholder: placeholder))
-                // Let AppKit attach each lightweight tab and process user events.
-                try await Task.sleep(for: .milliseconds(25))
+                // Production adds a lightweight titlebar item; no editor/window
+                // is allocated until that tab is selected.
+                await Task.yield()
             }
             startupPrefetch = Task(priority: .utility) { [weak self] in
                 for placeholder in placeholders {
@@ -2018,17 +2027,9 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     }
 
     func attachStartupWindow(_ window: NSWindow, placeholder: RecoveryDraftPlaceholder) {
-        window.title = placeholder.title
-        guard let anchor = startupAnchor, anchor !== window,
-              anchor.windowController?.document != nil else { return }
-        let returnWindow = startupReturnWindows.removeValue(forKey: placeholder.id)?.value
-        let becameKey = window.isKeyWindow
-        window.tabbingIdentifier = anchor.tabbingIdentifier
-        anchor.addTabbedWindow(window, ordered: .above)
-        if becameKey || window.isKeyWindow, let returnWindow, returnWindow.windowController?.document != nil {
-            returnWindow.tabGroup?.selectedWindow = returnWindow
-            returnWindow.makeKeyAndOrderFront(nil)
-        }
+        window.title = preparedStartupDrafts[placeholder.id]?.record.displayName ?? placeholder.title
+        window.tabbingMode = .disallowed
+        DocumentWindowTabs.shared.removePending(placeholder.id)
     }
 
     func prepareStartupDraft(_ placeholder: RecoveryDraftPlaceholder, priority: TaskPriority = .utility) async -> PreparedStartupDraft? {
@@ -2058,8 +2059,12 @@ final class DocumentRecoveryCoordinator: ObservableObject {
             if let prepared {
                 preparedStartupDrafts[placeholder.id] = prepared
                 startupPhases[placeholder.id] = .ready
+                DocumentWindowTabs.shared.namePending(placeholder.id, title: prepared.record.displayName)
                 if !recoveredRecords.contains(where: { $0.id == prepared.record.id }) { recoveredRecords.append(prepared.record) }
-            } else { startupPhases[placeholder.id] = .unnecessary }
+            } else {
+                startupPhases[placeholder.id] = .unnecessary
+                DocumentWindowTabs.shared.removePending(placeholder.id)
+            }
             return prepared
         } catch {
             startupReadTasks.removeValue(forKey: placeholder.id)
@@ -2114,7 +2119,6 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         startupPhases[id] = .unnecessary
         preparedStartupDrafts.removeValue(forKey: id)
         materializedStartupDrafts.removeValue(forKey: id)
-        startupReturnWindows.removeValue(forKey: id)
     }
 
     func retryStartupDraft(_ placeholder: RecoveryDraftPlaceholder) {
@@ -2145,6 +2149,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
             clearedContentIdentities.removeValue(forKey: record.id)
         }
         if var existing = activeSessions[record.id] {
+            guard !record.hasSameSnapshot(as: existing.latestRecord) else { return }
             existing.latestRecord = record.nextRevision(after: existing.latestRecord)
             activeSessions[record.id] = existing
             return
@@ -2189,6 +2194,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         }
 
         while let session = activeSessions[id] {
+            if session.lastWrittenRecord == session.latestRecord { return }
             guard store.canWrite else {
                 if protectionErrorMessage != nil { protectionErrorMessage = nil }
                 return
@@ -2214,6 +2220,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
             else {
                 continue
             }
+            activeSessions[id]?.lastWrittenRecord = record
             return
         }
     }

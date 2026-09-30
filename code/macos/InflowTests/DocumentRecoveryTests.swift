@@ -6,6 +6,36 @@ import XCTest
 
 final class DocumentRecoveryTests: XCTestCase {
     @MainActor
+    func testPlaintextCheckpointArrivesPromptlyAndUnchangedSnapshotsDoNotRewrite() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot, usesPlaintext: true)
+        let record = recoveryRecord(text: "first draft", updatedAt: Date())
+        coordinator.update(record)
+        defer { coordinator.close(record.id) }
+        let path = fixture.recoveryRoot.appendingPathComponent(record.id.uuidString + ".json")
+        for _ in 0..<150 where !FileManager.default.fileExists(atPath: path.path) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path.path), "First checkpoint must not wait for the old five-second timer")
+        let before = try Data(contentsOf: path)
+        let modified = try path.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        let repeated = DocumentRecoveryRecord(id: record.id, document: MarkdownDocument(text: record.text),
+            originalURL: nil, selectedUTF16Range: NSRange(location: record.selectedUTF16Location, length: record.selectedUTF16Length),
+            viewMode: try XCTUnwrap(EditorViewMode(rawValue: record.viewModeRawValue)),
+            verticalScrollOffset: record.verticalScrollOffset, updatedAt: Date(timeIntervalSinceNow: 1))
+        coordinator.update(repeated)
+        for _ in 0..<3 { await coordinator.flush(record.id) }
+        XCTAssertEqual(try Data(contentsOf: path), before)
+        XCTAssertEqual(try path.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, modified)
+        let changed = DocumentRecoveryRecord(id: record.id, document: MarkdownDocument(text: "newer draft"),
+            originalURL: nil, selectedUTF16Range: NSRange(location: 0, length: 0), viewMode: .source, verticalScrollOffset: 0)
+        coordinator.update(changed)
+        await coordinator.flush(record.id)
+        XCTAssertEqual(try JSONDecoder().decode(DocumentRecoveryRecord.self, from: Data(contentsOf: path)).text, "newer draft")
+    }
+
+    @MainActor
     func testBackgroundCheckpointsDoNotPublishUnchangedPresentationState() async throws {
         let fixture = try RecoveryFixture()
         defer { fixture.remove() }
@@ -227,7 +257,7 @@ final class DocumentRecoveryTests: XCTestCase {
     }
 
     @MainActor
-    func testStartupPlaceholderJoinsNativeTabsAndPreservesCurrentSelection() async throws {
+    func testSelectedRecoveryDoesNotCreateASecondNativeTabStrip() async throws {
         let fixture = try RecoveryFixture()
         defer { fixture.remove() }
         _ = NSApplication.shared
@@ -249,8 +279,8 @@ final class DocumentRecoveryTests: XCTestCase {
             pending.makeKeyAndOrderFront(nil)
             coordinator.attachStartupWindow(pending, placeholder: placeholder)
         }
-        XCTAssertEqual(anchor.tabbedWindows?.count, 2)
-        XCTAssertTrue(anchor.tabGroup?.selectedWindow === anchor)
+        XCTAssertNil(anchor.tabbedWindows)
+        XCTAssertEqual(pending.tabbingMode, .disallowed)
         XCTAssertEqual(pending.title, "恢复草稿 1")
         for placeholder in coordinator.startupDrafts { coordinator.dismissStartupDraft(placeholder.id) }
     }

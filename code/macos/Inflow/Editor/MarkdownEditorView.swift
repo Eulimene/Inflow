@@ -277,7 +277,9 @@ struct MarkdownEditorView: View {
                 \.documentSaveActions,
                 isWorkspaceSurfaceActive ? documentSaveCommandActions : nil
             )
-            .toolbar { editorToolbar }
+        .onChange(of: canEditDocument) { _, editable in
+            if editable { prepareFreshUntitledDocumentForEditingIfNeeded() }
+        }
     }
 
     private var editorFocusedSurface: some View {
@@ -383,31 +385,6 @@ struct MarkdownEditorView: View {
         .background(Color(nsColor: .textBackgroundColor))
     }
 
-    @ToolbarContentBuilder
-    private var editorToolbar: some ToolbarContent {
-        if isWorkspaceSurfaceActive {
-            ToolbarItem {
-                Picker(
-                    "写作视图",
-                    selection: Binding(
-                        get: { viewMode },
-                        set: { mode in selectViewMode(mode) }
-                    )
-                ) {
-                    ForEach(EditorViewMode.allCases) { mode in
-                        Label(mode.label, systemImage: mode.systemImage)
-                            .accessibilityLabel(mode.label)
-                            .tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 300)
-                .accessibilityLabel("写作视图")
-                .disabled(usesSourceOnlyExperience)
-            }
-        }
-    }
-
     private var documentObservationLayer: some View {
         editorSurface
         .onAppear {
@@ -458,7 +435,9 @@ struct MarkdownEditorView: View {
                 Task {
                     await Task.yield()
                     await recoveryCoordinator.beginStartupRestoration(anchor: sourceEditorSession.textView.window) { placeholder in
-                        newDocument(placeholder)
+                        if let pending = placeholder.recoveryPlaceholder {
+                            DocumentWindowTabs.shared.addPending(pending, dismiss: { recoveryCoordinator.dismissStartupDraft(pending.id) }) { newDocument(placeholder) }
+                        }
                     }
                 }
             }
@@ -1005,30 +984,6 @@ struct MarkdownEditorView: View {
                 documentContent
             }
         }
-        .overlay(alignment: .topLeading) {
-            if showsProjectSidebar && hasProjectContext && !isProjectSidebarVisible {
-                WorkspacePaneVisibilityButton(
-                    paneName: "目录树",
-                    systemImage: "sidebar.left",
-                    isExpanded: false
-                ) {
-                    isProjectSidebarVisible = true
-                }
-                .padding(7)
-            }
-        }
-        .overlay(alignment: .topTrailing) {
-            if !isProjectShell && !usesSourceOnlyExperience && !isOutlineVisible {
-                WorkspacePaneVisibilityButton(
-                    paneName: "文档大纲",
-                    systemImage: "sidebar.right",
-                    isExpanded: false
-                ) {
-                    isOutlineVisible = true
-                }
-                .padding(7)
-            }
-        }
     }
 
     private var hasProjectContext: Bool {
@@ -1412,7 +1367,6 @@ struct MarkdownEditorView: View {
 
     private func prepareFreshUntitledDocumentForEditingIfNeeded() {
         guard !didPrepareFreshUntitledDocument else { return }
-        didPrepareFreshUntitledDocument = true
         guard InflowLaunchPolicy.shouldFocusFreshUntitledDocument(
             fileURL: fileURL,
             text: document.text,
@@ -1421,10 +1375,16 @@ struct MarkdownEditorView: View {
         ) else {
             return
         }
+        didPrepareFreshUntitledDocument = true
 
         Task { @MainActor in
-            await Task.yield()
-            _ = sourceEditorSession.focusEditor()
+            // Rendered mode mounts the text view after its first derived plan.
+            // A single yield can run too early and leave the blank tab unfocused.
+            for _ in 0..<100 {
+                guard !Task.isCancelled else { return }
+                if sourceEditorSession.focusEditor() { return }
+                try? await Task.sleep(for: .milliseconds(20))
+            }
         }
     }
 

@@ -133,8 +133,7 @@ struct MarkdownEditorNativeDocumentResolver: NSViewRepresentable {
     }
 }
 
-/// Keep document zoom on the current desktop. Native full-screen creates a
-/// separate Space whose system-provided minimize button is unavailable.
+/// Preserve standard macOS close, minimize and full-screen behavior.
 struct DocumentWindowControls: NSViewRepresentable {
     func makeNSView(context _: Context) -> WindowView { WindowView() }
 
@@ -157,11 +156,187 @@ struct DocumentWindowControls: NSViewRepresentable {
                 window.styleMask.insert(.miniaturizable)
             }
             var behavior = window.collectionBehavior
-            behavior.remove([.fullScreenPrimary, .fullScreenAuxiliary])
-            behavior.insert(.fullScreenNone)
+            behavior.remove([.fullScreenNone, .fullScreenAuxiliary])
+            behavior.insert(.fullScreenPrimary)
             if window.collectionBehavior != behavior {
                 window.collectionBehavior = behavior
             }
+        }
+    }
+}
+
+/// Document ownership stays with NSDocument. Only the visible window changes
+/// when selecting a tab, so native Save, close review and undo remain intact.
+@MainActor
+final class DocumentWindowTabs: ObservableObject {
+    static let shared = DocumentWindowTabs()
+    struct Item: Identifiable {
+        let id: ObjectIdentifier
+        weak var window: NSWindow?
+    }
+    struct Pending: Identifiable {
+        let id: UUID
+        var title: String
+        let dismiss: () -> Void
+        let open: () -> Void
+        var isOpening = false
+    }
+    @Published private(set) var items: [Item] = []
+    @Published private(set) var pending: [Pending] = []
+    @Published private(set) var selected: ObjectIdentifier?
+    private var titleObservers: [ObjectIdentifier: NSKeyValueObservation] = [:]
+    private var observers: [NSObjectProtocol] = []
+
+    init() {
+        observers = [NSWindow.didBecomeKeyNotification, NSWindow.willCloseNotification].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] event in
+                guard let window = event.object as? NSWindow else { return }
+                MainActor.assumeIsolated {
+                    if name == NSWindow.willCloseNotification { self?.remove(window, selectingNeighbor: true) }
+                    else { self?.activate(window) }
+                }
+            }
+        }
+    }
+
+    func register(_ window: NSWindow) {
+        let id = ObjectIdentifier(window)
+        guard !items.contains(where: { $0.id == id }) else { return }
+        window.tabbingMode = .disallowed
+        items.append(Item(id: id, window: window))
+        titleObservers[id] = window.observe(\.title) { [weak self] _, _ in
+            Task { @MainActor in self?.objectWillChange.send() }
+        }
+        if window.isVisible || selected == nil { activate(window) }
+    }
+
+    func activate(_ window: NSWindow) {
+        let id = ObjectIdentifier(window)
+        guard items.contains(where: { $0.id == id }) else { return }
+        if selected != id {
+            if let previous = items.first(where: { $0.id == selected })?.window,
+               !previous.styleMask.contains(.fullScreen), !window.styleMask.contains(.fullScreen) {
+                window.setFrame(previous.frame, display: true)
+            }
+            selected = id
+        }
+        for item in items where item.id != id { item.window?.orderOut(nil) }
+    }
+
+    func select(_ item: Item) {
+        guard items.contains(where: { $0.id == item.id }), let window = item.window else { return }
+        activate(window)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func remove(_ window: NSWindow, selectingNeighbor: Bool = false) {
+        let id = ObjectIdentifier(window)
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        items.remove(at: index)
+        titleObservers.removeValue(forKey: id)
+        guard selected == id else { return }
+        selected = nil
+        if selectingNeighbor, !items.isEmpty {
+            let next = items[min(index, items.count - 1)]
+            Task { @MainActor [weak self] in self?.select(next) }
+        }
+    }
+
+    func addPending(_ placeholder: RecoveryDraftPlaceholder, dismiss: @escaping () -> Void = {}, open: @escaping () -> Void) {
+        guard !pending.contains(where: { $0.id == placeholder.id }) else { return }
+        pending.append(Pending(id: placeholder.id, title: placeholder.title, dismiss: dismiss, open: open))
+    }
+
+    func openPending(_ id: UUID) {
+        guard let index = pending.firstIndex(where: { $0.id == id }), !pending[index].isOpening else { return }
+        pending[index].isOpening = true
+        pending[index].open()
+    }
+
+    func removePending(_ id: UUID) {
+        if pending.contains(where: { $0.id == id }) { pending.removeAll { $0.id == id } }
+    }
+
+    func closePending(_ id: UUID) {
+        pending.first(where: { $0.id == id })?.dismiss()
+        removePending(id)
+    }
+
+    func namePending(_ id: UUID, title: String) {
+        guard let index = pending.firstIndex(where: { $0.id == id }), pending[index].title != title else { return }
+        pending[index].title = title
+    }
+}
+
+/// A public AppKit titlebar accessory shares the traffic-light row. The custom
+/// tabs replace the extra native tab strip rather than hiding private AppKit views.
+struct DocumentTitlebar<Content: View>: NSViewRepresentable {
+    var isEnabled: Bool
+    @ViewBuilder var content: () -> Content
+
+    func makeNSView(context: Context) -> TitlebarView { TitlebarView() }
+    func updateNSView(_ view: TitlebarView, context: Context) {
+        view.content = AnyView(content())
+        view.isEnabled = isEnabled
+        view.configure()
+    }
+    static func dismantleNSView(_ view: TitlebarView, coordinator: ()) { view.detach() }
+
+    final class TitlebarView: NSView {
+        var content = AnyView(EmptyView())
+        var isEnabled = true
+        private weak var attachedWindow: NSWindow?
+        private var accessory: NSTitlebarAccessoryViewController?
+        private var host: NSHostingView<AnyView>?
+        private var resizeObserver: NSObjectProtocol?
+        private var configurationTask: Task<Void, Never>?
+
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); configure() }
+        func configure() {
+            configurationTask?.cancel()
+            configurationTask = Task { @MainActor [weak self] in
+                await Task.yield()
+                guard !Task.isCancelled, let self, let window = self.window else { return }
+                guard self.isEnabled else { self.detach(); return }
+                if self.attachedWindow !== window {
+                    self.detach()
+                    self.attachedWindow = window
+                    window.tabbingMode = .disallowed
+                    window.titleVisibility = .hidden
+                    let controller = NSTitlebarAccessoryViewController()
+                    controller.layoutAttribute = .left
+                    let host = NSHostingView(rootView: self.content)
+                    host.sizingOptions = []
+                    controller.view = host
+                    self.host = host
+                    self.accessory = controller
+                    self.resize()
+                    window.addTitlebarAccessoryViewController(controller)
+                    self.resizeObserver = NotificationCenter.default.addObserver(
+                        forName: NSWindow.didResizeNotification, object: window, queue: .main
+                    ) { [weak self] _ in MainActor.assumeIsolated { self?.resize() } }
+                    DocumentWindowTabs.shared.register(window)
+                }
+                self.host?.rootView = self.content
+                self.resize()
+            }
+        }
+        private func resize() {
+            guard let window = attachedWindow else { return }
+            let reserved = ThemeStyleResources.defaults.token("titlebar-controls-width")
+            host?.setFrameSize(NSSize(width: max(0, window.frame.width - reserved),
+                height: ThemeStyleResources.defaults.token("titlebar-height")))
+        }
+        func detach() {
+            if let resizeObserver { NotificationCenter.default.removeObserver(resizeObserver) }
+            resizeObserver = nil
+            if let window = attachedWindow {
+                DocumentWindowTabs.shared.remove(window)
+                if let accessory, let index = window.titlebarAccessoryViewControllers.firstIndex(of: accessory) {
+                    window.removeTitlebarAccessoryViewController(at: index)
+                }
+            }
+            attachedWindow = nil; accessory = nil; host = nil
         }
     }
 }
