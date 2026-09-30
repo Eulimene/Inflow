@@ -165,6 +165,88 @@ struct DocumentWindowControls: NSViewRepresentable {
     }
 }
 
+/// SwiftUI reconciles its generated Window submenu when focused commands
+/// change. AppKit's dynamically inserted tiling items are not in that model,
+/// so give AppKit a separate submenu whose contents SwiftUI never reconciles.
+@MainActor
+final class NativeWindowMenuController {
+    private(set) var menu: NSMenu?
+    private var windowMenuTitle: String?
+    private var observers: [NSObjectProtocol] = []
+    private var menuObservations: [NSKeyValueObservation] = []
+    private var installationTask: Task<Void, Never>?
+
+    func install() {
+        guard observers.isEmpty else { return }
+        observers = [NSMenu.didAddItemNotification, NSMenu.didChangeItemNotification,
+            NSMenu.didRemoveItemNotification].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) {
+                [weak self] notification in
+                guard let changedMenu = notification.object as? NSMenu else { return }
+                let changedID = ObjectIdentifier(changedMenu)
+                MainActor.assumeIsolated {
+                    guard NSApp.mainMenu.map(ObjectIdentifier.init) == changedID else { return }
+                    self?.scheduleInstallation()
+                }
+            }
+        }
+        menuObservations = [
+            NSApp.observe(\.mainMenu) { [weak self] _, _ in
+                Task { @MainActor in self?.scheduleInstallation() }
+            },
+            NSApp.observe(\.windowsMenu) { [weak self] _, _ in
+                Task { @MainActor in self?.scheduleInstallation() }
+            },
+        ]
+        scheduleInstallation()
+    }
+
+    func stop() {
+        installationTask?.cancel()
+        installationTask = nil
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
+        observers.removeAll()
+        menuObservations.removeAll()
+    }
+
+    private func scheduleInstallation() {
+        guard !observers.isEmpty, installationTask == nil else { return }
+        installationTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard !Task.isCancelled, let self else { return }
+            self.installationTask = nil
+            self.attachToMainMenu()
+        }
+    }
+
+    func attachToMainMenu() {
+        guard let mainMenu = NSApp.mainMenu,
+              let item = mainMenu.items.first(where: { item in
+                  guard let submenu = item.submenu else { return false }
+                  return submenu === menu || submenu === NSApp.windowsMenu
+                      || (windowMenuTitle != nil && item.title == windowMenuTitle)
+                      || submenu.items.contains { $0.action == #selector(NSWindow.performMiniaturize(_:)) }
+              }) else { return }
+        if menu == nil {
+            windowMenuTitle = item.title
+            let nativeMenu = NSMenu(title: item.title)
+            nativeMenu.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+            nativeMenu.addItem(withTitle: "缩放", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+            nativeMenu.addItem(.separator())
+            nativeMenu.addItem(withTitle: "前置全部窗口", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+            menu = nativeMenu
+        }
+        guard let menu else { return }
+        if item.submenu !== menu { item.submenu = menu }
+        if NSApp.windowsMenu !== menu {
+            NSApp.windowsMenu = menu
+            for window in NSApp.windows where window.isVisible && !window.isExcludedFromWindowsMenu {
+                NSApp.updateWindowsItem(window)
+            }
+        }
+    }
+}
+
 /// Document ownership stays with NSDocument. Only the visible window changes
 /// when selecting a tab, so native Save, close review and undo remain intact.
 @MainActor

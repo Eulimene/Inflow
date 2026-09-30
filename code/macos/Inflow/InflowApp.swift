@@ -2184,6 +2184,7 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     // Views and individual Commands observe only the services they display.
     lazy var recoveryCoordinator = DocumentRecoveryRuntime.makeCoordinator()
     lazy var preferences = AppPreferences()
+    private let nativeWindowMenu = NativeWindowMenuController()
     let failureLog = LocalFailureLogController.shared
     let recentDocuments: RecentDocumentsController
     let folderBrowser: FolderBrowserController
@@ -2265,6 +2266,7 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
         hasInstalledLaunchIntegrations = true
         NSWindow.allowsAutomaticWindowTabbing = false
         installLaunchIntegrations(recentDocuments)
+        nativeWindowMenu.install()
         scheduleInitialDocumentIfNeeded()
     }
 
