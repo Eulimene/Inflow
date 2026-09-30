@@ -2191,6 +2191,7 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     let projectCoordinator: LightweightProjectCoordinator
     private let createUntitledDocument: (Any?) -> Void
     private let hasOpenDocuments: () -> Bool
+    private let restoreDocumentWindow: () -> Bool
     private let installLaunchIntegrations: (RecentDocumentsController) -> Void
     private var hasInstalledLaunchIntegrations = false
     private var hasReceivedExternalOpenRequest = false
@@ -2225,6 +2226,9 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
         hasOpenDocuments: @escaping () -> Bool = {
             !NSDocumentController.shared.documents.isEmpty
         },
+        restoreDocumentWindow: @escaping () -> Bool = {
+            DocumentWindowTabs.shared.restoreSelectedWindow()
+        },
         installLaunchIntegrations: ((RecentDocumentsController) -> Void)? = nil
     ) {
         let folderBrowser = FolderBrowserController(restoresSavedFolder: false)
@@ -2253,6 +2257,7 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
         self.projectCoordinator = projectCoordinator
         self.createUntitledDocument = createUntitledDocument
         self.hasOpenDocuments = hasOpenDocuments
+        self.restoreDocumentWindow = restoreDocumentWindow
         self.installLaunchIntegrations = installLaunchIntegrations ?? { controller in
             TemporaryDocumentDrafts.installQuitReview()
             NSDocumentController.shared.autosavingDelay = 0
@@ -2327,8 +2332,12 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
         hasVisibleWindows: Bool
     ) -> Bool {
         guard !hasVisibleWindows else { return true }
+        if restoreDocumentWindow() { return false }
+        // A document may still be mounting its window during asynchronous open.
+        // Let AppKit finish reopening it instead of creating an unrelated blank.
+        guard !hasOpenDocuments() else { return true }
         createUntitledDocument(nil)
-        return true
+        return false
     }
 
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {

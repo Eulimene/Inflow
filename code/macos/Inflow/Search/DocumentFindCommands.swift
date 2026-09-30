@@ -8,191 +8,119 @@ struct DocumentFindCommandActions {
     let showReplace: () -> Void
     let next: () -> Void
     let previous: () -> Void
-}
-
-private struct DocumentFindActionsFocusedKey: FocusedValueKey {
-    typealias Value = DocumentFindCommandActions
-}
-
-extension FocusedValues {
-    var documentFindActions: DocumentFindCommandActions? {
-        get { self[DocumentFindActionsFocusedKey.self] }
-        set { self[DocumentFindActionsFocusedKey.self] = newValue }
-    }
+    let useSelection: (String) -> Void
 }
 
 struct DocumentFindCommands: Commands {
-    @FocusedValue(\.documentFindActions) private var actions
+    var body: some Commands { TextEditingCommands() }
+}
 
-    var body: some Commands {
-        CommandGroup(replacing: .textEditing) {
-            Menu("查找") {
-                Button("查找…") {
-                    actions?.showFind()
-                }
-                .keyboardShortcut("f", modifiers: .command)
-                .disabled(actions == nil)
+/// Connect native Find menu actions to the document's revision-aware search.
+/// Each document window owns its responder; sheets keep their own responder chain.
+struct DocumentFindCommandBridge: NSViewRepresentable {
+    var actions: DocumentFindCommandActions?
 
-                Button("查找与替换…") {
-                    actions?.showReplace()
-                }
-                .keyboardShortcut("f", modifiers: [.command, .option])
-                .disabled(actions == nil || actions?.canReplace != true)
-
-                Divider()
-
-                Button("查找下一个") {
-                    actions?.next()
-                }
-                .keyboardShortcut("g", modifiers: .command)
-                .disabled(actions?.hasQuery != true)
-
-                Button("查找上一个") {
-                    actions?.previous()
-                }
-                .keyboardShortcut("g", modifiers: [.command, .shift])
-                .disabled(actions?.hasQuery != true)
-            }
-
-            Menu("拼写与语法") {
-                responderButton("显示拼写与语法", action: "showGuessPanel:")
-                responderButton("立即检查文稿", action: "checkSpelling:")
-                    .keyboardShortcut(";", modifiers: .command)
-                Divider()
-                responderToggle("键入时检查拼写", command: .continuousSpellChecking)
-                responderToggle("检查语法", command: .grammarChecking)
-                responderToggle("自动纠正拼写", command: .automaticSpellingCorrection)
-            }
-
-            Menu("文本替换") {
-                responderButton("显示文本替换", action: "orderFrontSubstitutionsPanel:")
-                Divider()
-                responderToggle("智能拷贝/粘贴", command: .smartInsertDelete)
-                responderToggle("智能引号", command: .automaticQuoteSubstitution)
-                responderToggle("智能破折号", command: .automaticDashSubstitution)
-                responderToggle("智能链接", command: .automaticLinkDetection)
-                responderToggle("数据检测器", command: .automaticDataDetection)
-                responderToggle("文本替换", command: .automaticTextReplacement)
-            }
-
-            Menu("转换") {
-                responderButton("全部大写", action: "uppercaseWord:")
-                responderButton("全部小写", action: "lowercaseWord:")
-                responderButton("首字母大写", action: "capitalizeWord:")
-            }
-
-            Menu("语音") {
-                responderButton("开始朗读", action: "startSpeaking:")
-                responderButton("停止朗读", action: "stopSpeaking:")
-            }
-        }
+    func makeNSView(context: Context) -> BridgeView { BridgeView() }
+    func updateNSView(_ view: BridgeView, context: Context) {
+        view.responder.actions = actions
+    }
+    static func dismantleNSView(_ view: BridgeView, coordinator: ()) {
+        view.responder.actions = nil
+        view.detach()
     }
 
-    private func responderButton(_ title: String, action: String) -> some View {
-        let selector = Selector((action))
-        return Button(title) {
-            NSApp.sendAction(selector, to: nil, from: nil)
-        }
-        .disabled(!responderCanPerform(selector))
-    }
+    final class BridgeView: NSView {
+        let responder = DocumentFindResponder()
+        private weak var installedWindow: NSWindow?
 
-    private func responderToggle(
-        _ title: String,
-        command: ResponderTextToggle
-    ) -> some View {
-        Toggle(
-            title,
-            isOn: Binding(
-                get: { command.isOnCurrentResponder },
-                set: { _ in
-                    NSApp.sendAction(command.selector, to: nil, from: nil)
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            detach()
+            guard let window else { return }
+            installedWindow = window
+            responder.window = window
+            responder.nextResponder = window.nextResponder
+            window.nextResponder = responder
+        }
+
+        func detach() {
+            var previous: NSResponder? = installedWindow
+            while let current = previous {
+                if current.nextResponder === responder {
+                    current.nextResponder = responder.nextResponder
+                    break
                 }
-            )
-        )
-        .disabled(!responderCanPerform(command.selector))
-    }
-
-    private func responderCanPerform(_ selector: Selector) -> Bool {
-        guard let target = NSApp.target(forAction: selector, to: nil, from: nil) else {
-            return false
+                previous = current.nextResponder
+            }
+            installedWindow = nil
+            responder.window = nil
+            responder.nextResponder = nil
         }
-        guard let validator = target as? NSUserInterfaceValidations else {
-            return true
-        }
-
-        let item = NSMenuItem()
-        item.action = selector
-        return validator.validateUserInterfaceItem(item)
     }
 }
 
-enum ResponderTextToggle {
-    case continuousSpellChecking
-    case grammarChecking
-    case automaticSpellingCorrection
-    case smartInsertDelete
-    case automaticQuoteSubstitution
-    case automaticDashSubstitution
-    case automaticLinkDetection
-    case automaticDataDetection
-    case automaticTextReplacement
+@MainActor
+final class DocumentFindResponder: NSResponder, NSUserInterfaceValidations {
+    weak var window: NSWindow?
+    var actions: DocumentFindCommandActions?
 
-    var selector: Selector {
-        switch self {
-        case .continuousSpellChecking:
-            #selector(NSTextView.toggleContinuousSpellChecking(_:))
-        case .grammarChecking:
-            #selector(NSTextView.toggleGrammarChecking(_:))
-        case .automaticSpellingCorrection:
-            #selector(NSTextView.toggleAutomaticSpellingCorrection(_:))
-        case .smartInsertDelete:
-            #selector(NSTextView.toggleSmartInsertDelete(_:))
-        case .automaticQuoteSubstitution:
-            #selector(NSTextView.toggleAutomaticQuoteSubstitution(_:))
-        case .automaticDashSubstitution:
-            #selector(NSTextView.toggleAutomaticDashSubstitution(_:))
-        case .automaticLinkDetection:
-            #selector(NSTextView.toggleAutomaticLinkDetection(_:))
-        case .automaticDataDetection:
-            #selector(NSTextView.toggleAutomaticDataDetection(_:))
-        case .automaticTextReplacement:
-            #selector(NSTextView.toggleAutomaticTextReplacement(_:))
+    static func active(in window: NSWindow?) -> DocumentFindResponder? {
+        var current = window?.nextResponder
+        while let responder = current {
+            if let find = responder as? DocumentFindResponder, find.actions != nil { return find }
+            current = responder.nextResponder
+        }
+        return nil
+    }
+
+    private var selectedText: String {
+        guard let editor = window?.firstResponder as? NSTextView else { return "" }
+        let source = editor.string as NSString
+        let range = editor.selectedRange()
+        guard range.location != NSNotFound, NSMaxRange(range) <= source.length else { return "" }
+        return source.substring(with: range)
+    }
+
+    func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        guard item.action == #selector(performFindPanelAction(_:)), let actions else { return false }
+        switch NSTextFinder.Action(rawValue: item.tag) {
+        case .showFindInterface: return true
+        case .showReplaceInterface: return actions.canReplace
+        case .nextMatch, .previousMatch: return actions.hasQuery
+        case .setSearchString: return !selectedText.isEmpty
+        default: return false
         }
     }
 
-    @MainActor
-    var isOnCurrentResponder: Bool {
-        guard let textView = NSApp.target(
-            forAction: selector,
-            to: nil,
-            from: nil
-        ) as? NSTextView else {
-            return false
+    @objc func performFindPanelAction(_ sender: Any?) {
+        guard let item = sender as? NSMenuItem, validateUserInterfaceItem(item), let actions else { return }
+        switch NSTextFinder.Action(rawValue: item.tag) {
+        case .showFindInterface: actions.showFind()
+        case .showReplaceInterface: actions.showReplace()
+        case .nextMatch: actions.next()
+        case .previousMatch: actions.previous()
+        case .setSearchString: actions.useSelection(selectedText)
+        default: break
         }
-        return isOn(textView)
+    }
+}
+
+/// NSTextView already implements Find, so forward explicitly before its built-in
+/// finder takes over. Copy/paste, spelling and all other actions remain native.
+class DocumentFindTextView: NSTextView {
+    override func performFindPanelAction(_ sender: Any?) {
+        if let responder = DocumentFindResponder.active(in: window) {
+            responder.performFindPanelAction(sender)
+        } else {
+            super.performFindPanelAction(sender)
+        }
     }
 
-    @MainActor
-    func isOn(_ textView: NSTextView) -> Bool {
-        switch self {
-        case .continuousSpellChecking:
-            textView.isContinuousSpellCheckingEnabled
-        case .grammarChecking:
-            textView.isGrammarCheckingEnabled
-        case .automaticSpellingCorrection:
-            textView.isAutomaticSpellingCorrectionEnabled
-        case .smartInsertDelete:
-            textView.smartInsertDeleteEnabled
-        case .automaticQuoteSubstitution:
-            textView.isAutomaticQuoteSubstitutionEnabled
-        case .automaticDashSubstitution:
-            textView.isAutomaticDashSubstitutionEnabled
-        case .automaticLinkDetection:
-            textView.isAutomaticLinkDetectionEnabled
-        case .automaticDataDetection:
-            textView.isAutomaticDataDetectionEnabled
-        case .automaticTextReplacement:
-            textView.isAutomaticTextReplacementEnabled
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(performFindPanelAction(_:)),
+           let responder = DocumentFindResponder.active(in: window) {
+            return responder.validateUserInterfaceItem(item)
         }
+        return super.validateUserInterfaceItem(item)
     }
 }

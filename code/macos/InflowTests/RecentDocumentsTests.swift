@@ -199,7 +199,16 @@ final class RecentDocumentsTests: XCTestCase {
         await fulfillment(of: [minimized], timeout: 5)
         XCTAssertTrue(window.isMiniaturized)
         let restored = expectation(forNotification: NSWindow.didDeminiaturizeNotification, object: window)
-        window.deminiaturize(nil)
+        let tabs = DocumentWindowTabs()
+        tabs.register(window)
+        var blankRequests = 0
+        let delegate = InflowApplicationDelegate(
+            createUntitledDocument: { _ in blankRequests += 1 },
+            hasOpenDocuments: { true },
+            restoreDocumentWindow: { tabs.restoreSelectedWindow() }
+        )
+        XCTAssertFalse(delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false))
+        XCTAssertEqual(blankRequests, 0, "Dock reopen must restore the minimized document")
         await fulfillment(of: [restored], timeout: 5)
         XCTAssertFalse(window.isMiniaturized)
         XCTAssertTrue(minimize.isEnabled)
@@ -764,6 +773,27 @@ final class RecentDocumentsTests: XCTestCase {
 
         XCTAssertEqual(ordinaryInitialDocumentRequests, 1)
         XCTAssertEqual(ordinaryIntegrationInstallations, 1)
+
+        var reopenRequests = 0
+        var restoreRequests = 0
+        var hasDocuments = true
+        var canRestore = false
+        let reopenDelegate = InflowApplicationDelegate(
+            createUntitledDocument: { _ in reopenRequests += 1 },
+            hasOpenDocuments: { hasDocuments },
+            restoreDocumentWindow: { restoreRequests += 1; return canRestore }
+        )
+        XCTAssertTrue(reopenDelegate.applicationShouldHandleReopen(application, hasVisibleWindows: true))
+        XCTAssertEqual(restoreRequests, 0)
+        XCTAssertTrue(reopenDelegate.applicationShouldHandleReopen(application, hasVisibleWindows: false))
+        XCTAssertEqual(reopenRequests, 0, "An opening document must not create a second blank tab")
+        canRestore = true
+        XCTAssertFalse(reopenDelegate.applicationShouldHandleReopen(application, hasVisibleWindows: false))
+        XCTAssertEqual(reopenRequests, 0)
+        canRestore = false
+        hasDocuments = false
+        XCTAssertFalse(reopenDelegate.applicationShouldHandleReopen(application, hasVisibleWindows: false))
+        XCTAssertEqual(reopenRequests, 1, "A windowless app can still open an editable blank")
 
         let info = try hostApplicationInfoDictionary()
         let documentTypes = try XCTUnwrap(

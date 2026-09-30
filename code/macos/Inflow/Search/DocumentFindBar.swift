@@ -663,7 +663,7 @@ private struct LiteralMultilineTextEditor: NSViewRepresentable {
 }
 
 @MainActor
-private final class LiteralFindTextView: NSTextView {
+private final class LiteralFindTextView: DocumentFindTextView {
     var didAttachToWindow: (() -> Void)?
     var cancelHandler: (() -> Void)?
 

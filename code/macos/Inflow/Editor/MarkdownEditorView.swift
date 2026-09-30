@@ -308,10 +308,9 @@ struct MarkdownEditorView: View {
                 \.writingModeActions,
                 isWorkspaceSurfaceActive ? writingModeCommandActions : nil
             )
-            .focusedSceneValue(
-                \.documentFindActions,
-                isWorkspaceSurfaceActive ? findCommandActions : nil
-            )
+            .background(DocumentFindCommandBridge(
+                actions: isWorkspaceSurfaceActive ? findCommandActions : nil
+            ))
             .focusedSceneValue(
                 \.htmlExportActions,
                 isWorkspaceSurfaceActive ? htmlExportCommandActions : nil
@@ -2330,7 +2329,11 @@ struct MarkdownEditorView: View {
             showFind: { presentFind(replacing: false) },
             showReplace: { presentFind(replacing: true) },
             next: findNext,
-            previous: findPrevious
+            previous: findPrevious,
+            useSelection: { selection in
+                findSession.query = selection
+                presentFind(replacing: false)
+            }
         )
     }
 

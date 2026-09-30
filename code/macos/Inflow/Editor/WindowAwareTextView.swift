@@ -1,7 +1,7 @@
 import AppKit
 
 @MainActor
-final class WindowAwareTextView: NSTextView {
+final class WindowAwareTextView: DocumentFindTextView {
     private let centeredLineLayout = MarkdownCenteredLineLayout()
 
     override init(frame: NSRect, textContainer: NSTextContainer?) {

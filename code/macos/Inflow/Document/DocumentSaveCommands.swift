@@ -67,6 +67,15 @@ struct DocumentSaveCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .saveItem) {
+            // Replacing saveItem also removes SwiftUI's standard Close command.
+            // Route through AppKit so sheets and document close review still apply.
+            Button("关闭窗口") {
+                NSApp.sendAction(#selector(NSWindow.performClose(_:)), to: nil, from: nil)
+            }
+            .keyboardShortcut("w", modifiers: .command)
+
+            Divider()
+
             Button("保存") { actions?.save() }
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(

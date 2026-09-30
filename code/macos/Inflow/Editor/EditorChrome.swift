@@ -311,8 +311,18 @@ final class DocumentWindowTabs: ObservableObject {
 
     func select(_ item: Item) {
         guard items.contains(where: { $0.id == item.id }), let window = item.window else { return }
+        if window.isMiniaturized { window.deminiaturize(nil) }
         activate(window)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    /// Reopening from the Dock restores the selected document, including a
+    /// minimized window. Unloaded draft placeholders must remain unloaded.
+    func restoreSelectedWindow() -> Bool {
+        guard let item = items.first(where: { $0.id == selected && $0.window != nil })
+            ?? items.first(where: { $0.window != nil }) else { return false }
+        select(item)
+        return true
     }
 
     func remove(_ window: NSWindow, selectingNeighbor: Bool = false) {

@@ -866,9 +866,11 @@ final class FolderBrowserTests: XCTestCase {
     func testDockReopenCreatesAnUntitledDocumentOnlyWhenNoWindowIsVisible() {
         let application = NSApplication.shared
         var createdDocumentCount = 0
-        let delegate = InflowApplicationDelegate { _ in
-            createdDocumentCount += 1
-        }
+        let delegate = InflowApplicationDelegate(
+            createUntitledDocument: { _ in createdDocumentCount += 1 },
+            hasOpenDocuments: { false },
+            restoreDocumentWindow: { false }
+        )
 
         XCTAssertTrue(
             delegate.applicationShouldHandleReopen(
@@ -877,7 +879,7 @@ final class FolderBrowserTests: XCTestCase {
             )
         )
         XCTAssertEqual(createdDocumentCount, 0)
-        XCTAssertTrue(
+        XCTAssertFalse(
             delegate.applicationShouldHandleReopen(
                 application,
                 hasVisibleWindows: false

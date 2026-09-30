@@ -278,10 +278,59 @@ final class MarkdownSearcherTests: XCTestCase {
         XCTAssertEqual(result.matches.map(\.utf8Range), [0..<5, 9..<14])
     }
 
+    @MainActor
     func testRenderedEditingViewKeepsFindInTheCurrentEditableMode() {
         XCTAssertEqual(EditorViewMode.preview.sourceVisible, .preview)
         XCTAssertEqual(EditorViewMode.source.sourceVisible, .source)
         XCTAssertEqual(EditorViewMode.split.sourceVisible, .split)
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let originalResponder = window.nextResponder
+        let bridge = DocumentFindCommandBridge.BridgeView()
+        var calls: [String] = []
+        func actions(hasQuery: Bool, canReplace: Bool) -> DocumentFindCommandActions {
+            DocumentFindCommandActions(hasQuery: hasQuery, canReplace: canReplace,
+                showFind: { calls.append("find") }, showReplace: { calls.append("replace") },
+                next: { calls.append("next") }, previous: { calls.append("previous") },
+                useSelection: { calls.append($0) })
+        }
+        bridge.responder.actions = actions(hasQuery: true, canReplace: true)
+        window.contentView?.addSubview(bridge)
+        XCTAssertTrue(DocumentFindResponder.active(in: window) === bridge.responder)
+        for editor in [WindowAwareTextView(), RenderedMarkdownTableCellTextView()] as [NSTextView] {
+            window.contentView?.addSubview(editor)
+            editor.string = "alpha beta"
+            XCTAssertTrue(window.makeFirstResponder(editor))
+            editor.setSelectedRange(NSRange(location: 0, length: 5))
+            for action in [NSTextFinder.Action.showFindInterface, .showReplaceInterface,
+                           .nextMatch, .previousMatch, .setSearchString] {
+                let item = NSMenuItem(title: "Find", action: #selector(NSTextView.performFindPanelAction(_:)), keyEquivalent: "")
+                item.tag = action.rawValue
+                XCTAssertTrue(editor.validateUserInterfaceItem(item))
+                editor.performFindPanelAction(item)
+            }
+            XCTAssertEqual(Array(calls.suffix(5)), ["find", "replace", "next", "previous", "alpha"])
+            editor.removeFromSuperview()
+        }
+        bridge.responder.actions = actions(hasQuery: false, canReplace: false)
+        for action in [NSTextFinder.Action.showReplaceInterface, .nextMatch, .previousMatch] {
+            let item = NSMenuItem(title: "Find", action: #selector(NSTextView.performFindPanelAction(_:)), keyEquivalent: "")
+            item.tag = action.rawValue
+            XCTAssertFalse(bridge.responder.validateUserInterfaceItem(item))
+            let count = calls.count
+            bridge.responder.performFindPanelAction(item)
+            XCTAssertEqual(calls.count, count)
+        }
+        let other = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false
+        defer { other.close() }
+        XCTAssertNil(DocumentFindResponder.active(in: other), "Find routing must not leak to other windows or sheets")
+        bridge.removeFromSuperview()
+        XCTAssertTrue(window.nextResponder === originalResponder)
+        XCTAssertNil(DocumentFindResponder.active(in: window))
     }
 
     @MainActor
@@ -289,15 +338,17 @@ final class MarkdownSearcherTests: XCTestCase {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
         let items = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu))
 
-        let expectations: [(String, String, NSEvent.ModifierFlags)] = [
-            ("查找…", "f", [.command]),
-            ("查找与替换…", "f", [.command, .option]),
-            ("查找下一个", "g", [.command]),
-            ("查找上一个", "g", [.command, .shift]),
+        let expectations: [(NSTextFinder.Action, String, NSEvent.ModifierFlags)] = [
+            (.showFindInterface, "f", [.command]),
+            (.showReplaceInterface, "f", [.command, .option]),
+            (.nextMatch, "g", [.command]),
+            (.previousMatch, "g", [.command, .shift]),
         ]
-        for (title, key, modifiers) in expectations {
-            let matching = items.filter { $0.title == title }
-            XCTAssertEqual(matching.count, 1, "Expected one menu item titled \(title)")
+        for (action, key, modifiers) in expectations {
+            let matching = items.filter {
+                $0.action == #selector(NSTextView.performFindPanelAction(_:)) && $0.tag == action.rawValue
+            }
+            XCTAssertEqual(matching.count, 1, "Expected one native Find action \(action)")
             let item = try XCTUnwrap(matching.first)
             XCTAssertEqual(item.keyEquivalent, key)
             XCTAssertEqual(
@@ -306,16 +357,19 @@ final class MarkdownSearcherTests: XCTestCase {
             )
         }
 
-        for title in ["拼写与语法", "文本替换", "转换", "语音"] {
-            let matchingSubmenus = items.filter { $0.title == title && $0.submenu != nil }
-            XCTAssertEqual(matchingSubmenus.count, 1, "Expected preserved submenu \(title)")
-        }
-        for title in ["立即检查文稿", "显示文本替换", "全部大写", "开始朗读"] {
-            XCTAssertEqual(
-                items.filter { $0.title == title }.count,
-                1,
-                "Expected preserved responder command \(title)"
-            )
+        // System titles follow the user's macOS language; verify responder
+        // actions rather than hard-coded translations or SwiftUI closures.
+        for action in [
+            #selector(NSTextView.showGuessPanel(_:)),
+            #selector(NSTextView.checkSpelling(_:)),
+            #selector(NSTextView.toggleContinuousSpellChecking(_:)),
+            #selector(NSTextView.toggleAutomaticQuoteSubstitution(_:)),
+            #selector(NSTextView.uppercaseWord(_:)),
+            #selector(NSTextView.startSpeaking(_:)),
+        ] {
+            let matching = items.filter { $0.action == action }
+            XCTAssertEqual(matching.count, 1, "Expected one native responder command \(action)")
+            XCTAssertNil(matching.first?.target, "AppKit must route through the current responder")
         }
 
         let undoItem = try XCTUnwrap(
@@ -333,12 +387,6 @@ final class MarkdownSearcherTests: XCTestCase {
         )
         XCTAssertEqual(undoItem.action, #selector(WindowAwareTextView.undo(_:)))
         XCTAssertEqual(redoItem.action, #selector(WindowAwareTextView.redo(_:)))
-
-        let sourceEditor = MarkdownSourceEditorSession().textView
-        XCTAssertTrue(ResponderTextToggle.continuousSpellChecking.isOn(sourceEditor))
-        XCTAssertFalse(ResponderTextToggle.automaticQuoteSubstitution.isOn(sourceEditor))
-        sourceEditor.isAutomaticQuoteSubstitutionEnabled = true
-        XCTAssertTrue(ResponderTextToggle.automaticQuoteSubstitution.isOn(sourceEditor))
     }
 
     @MainActor
@@ -402,12 +450,16 @@ final class MarkdownSearcherTests: XCTestCase {
                 #selector(NSTextView.toggleAutomaticDataDetection(_:)),
                 #selector(NSTextView.toggleAutomaticTextReplacement(_:)),
             ]
+            XCTAssertTrue(window.makeFirstResponder(editor))
+            let nativeMenu = NSMenu(title: "Native text input")
             for selector in literalInputToggles {
-                let item = NSMenuItem()
-                item.action = selector
+                let item = nativeMenu.addItem(withTitle: NSStringFromSelector(selector), action: selector, keyEquivalent: "")
                 XCTAssertFalse(editor.validateUserInterfaceItem(item))
                 XCTAssertTrue(editor.tryToPerform(selector, with: nil))
             }
+            nativeMenu.update()
+            XCTAssertTrue(nativeMenu.items.allSatisfy { !$0.isEnabled },
+                "Native menu validation must follow the literal query/replacement field")
 
             XCTAssertFalse(editor.smartInsertDeleteEnabled)
             XCTAssertFalse(editor.isAutomaticQuoteSubstitutionEnabled)

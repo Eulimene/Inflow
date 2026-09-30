@@ -985,7 +985,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
 }
 
 @MainActor
-final class RenderedMarkdownTableCellTextView: NSTextView {
+final class RenderedMarkdownTableCellTextView: DocumentFindTextView {
     private let centeredLineLayout = MarkdownCenteredLineLayout()
 
     override init(frame: NSRect, textContainer: NSTextContainer?) {

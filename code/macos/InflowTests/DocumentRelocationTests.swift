@@ -400,6 +400,11 @@ final class DocumentRelocationTests: XCTestCase {
     func testFileMenuExposesSaveAsWithoutDeferredSaveCopyCommand() throws {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
         let items = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu))
+        let closeItems = items.filter {
+            $0.keyEquivalent == "w" && $0.keyEquivalentModifierMask.intersection([.command, .option, .shift]) == .command
+        }
+        XCTAssertEqual(closeItems.count, 1, "Custom save commands must preserve native window closing")
+        XCTAssertEqual(closeItems.first?.title, "关闭窗口")
         let saveAsItems = items.filter { $0.title == "另存为…" }
         XCTAssertEqual(saveAsItems.count, 1)
         let saveAs = try XCTUnwrap(saveAsItems.first)
