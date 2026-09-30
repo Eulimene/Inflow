@@ -170,6 +170,10 @@ struct DocumentWindowControls: NSViewRepresentable {
 @MainActor
 final class DocumentWindowTabs: ObservableObject {
     static let shared = DocumentWindowTabs()
+    enum TabID: Equatable {
+        case window(ObjectIdentifier)
+        case pending(UUID)
+    }
     struct Item: Identifiable {
         let id: ObjectIdentifier
         weak var window: NSWindow?
@@ -266,6 +270,22 @@ final class DocumentWindowTabs: ObservableObject {
         guard let index = pending.firstIndex(where: { $0.id == id }), pending[index].title != title else { return }
         pending[index].title = title
     }
+
+    func targets(_ scope: ProjectDocumentTabSelection.CloseScope, relativeTo anchor: TabID) -> [TabID] {
+        ProjectDocumentTabSelection.targetIDs(for: scope, anchorID: anchor,
+            orderedIDs: items.filter { $0.window != nil }.map { .window($0.id) }
+                + pending.map { .pending($0.id) })
+    }
+
+    func close(_ scope: ProjectDocumentTabSelection.CloseScope, relativeTo anchor: TabID) {
+        let targets = targets(scope, relativeTo: anchor)
+        // Remove unloaded placeholders first: closing the final native window
+        // may end the process. Their original recovery files remain intact.
+        for case let .pending(id) in targets { closePending(id) }
+        for case let .window(id) in targets {
+            items.first(where: { $0.id == id })?.window?.performClose(nil)
+        }
+    }
 }
 
 /// A public AppKit titlebar accessory shares the traffic-light row. The custom
@@ -288,8 +308,10 @@ struct DocumentTitlebar<Content: View>: NSViewRepresentable {
         private weak var attachedWindow: NSWindow?
         private var accessory: NSTitlebarAccessoryViewController?
         private var host: NSHostingView<AnyView>?
-        private var resizeObserver: NSObjectProtocol?
+        private var layoutObservers: [NSObjectProtocol] = []
         private var configurationTask: Task<Void, Never>?
+        private var isFullScreen = false
+        private var isResizing = false
 
         override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); configure() }
         func configure() {
@@ -301,10 +323,12 @@ struct DocumentTitlebar<Content: View>: NSViewRepresentable {
                 if self.attachedWindow !== window {
                     self.detach()
                     self.attachedWindow = window
+                    self.isFullScreen = window.styleMask.contains(.fullScreen)
                     window.tabbingMode = .disallowed
                     window.titleVisibility = .hidden
                     let controller = NSTitlebarAccessoryViewController()
                     controller.layoutAttribute = .left
+                    controller.automaticallyAdjustsSize = false
                     let host = NSHostingView(rootView: self.content)
                     host.sizingOptions = []
                     controller.view = host
@@ -312,9 +336,20 @@ struct DocumentTitlebar<Content: View>: NSViewRepresentable {
                     self.accessory = controller
                     self.resize()
                     window.addTitlebarAccessoryViewController(controller)
-                    self.resizeObserver = NotificationCenter.default.addObserver(
-                        forName: NSWindow.didResizeNotification, object: window, queue: .main
-                    ) { [weak self] _ in MainActor.assumeIsolated { self?.resize() } }
+                    self.layoutObservers = [NSWindow.didResizeNotification,
+                        NSWindow.willEnterFullScreenNotification, NSWindow.didEnterFullScreenNotification,
+                        NSWindow.didExitFullScreenNotification].map { name in
+                        NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) {
+                            [weak self] _ in MainActor.assumeIsolated {
+                                if name == NSWindow.willEnterFullScreenNotification || name == NSWindow.didEnterFullScreenNotification {
+                                    self?.isFullScreen = true
+                                } else if name == NSWindow.didExitFullScreenNotification {
+                                    self?.isFullScreen = false
+                                }
+                                self?.resize()
+                            }
+                        }
+                    }
                     DocumentWindowTabs.shared.register(window)
                 }
                 self.host?.rootView = self.content
@@ -322,14 +357,25 @@ struct DocumentTitlebar<Content: View>: NSViewRepresentable {
             }
         }
         private func resize() {
-            guard let window = attachedWindow else { return }
-            let reserved = ThemeStyleResources.defaults.token("titlebar-controls-width")
-            host?.setFrameSize(NSSize(width: max(0, window.frame.width - reserved),
-                height: ThemeStyleResources.defaults.token("titlebar-height")))
+            guard !isResizing, let window = attachedWindow, let accessory else { return }
+            isResizing = true
+            defer { isResizing = false }
+            let fullScreen = isFullScreen
+            let height = ThemeStyleResources.defaults.token("titlebar-height")
+            // AppKit only honors fullScreenMinHeight for bottom accessories.
+            // Keep the tab/side-panel controls visible when the system hides
+            // traffic lights in full screen; normal windows still use one row.
+            let attribute: NSLayoutConstraint.Attribute = fullScreen ? .bottom : .left
+            if accessory.layoutAttribute != attribute { accessory.layoutAttribute = attribute }
+            let minimumHeight = fullScreen ? height : 0
+            if accessory.fullScreenMinHeight != minimumHeight { accessory.fullScreenMinHeight = minimumHeight }
+            let reserved = fullScreen ? 0 : ThemeStyleResources.defaults.token("titlebar-controls-width")
+            let size = NSSize(width: max(0, window.frame.width - reserved), height: height)
+            if host?.frame.size != size { host?.setFrameSize(size) }
         }
         func detach() {
-            if let resizeObserver { NotificationCenter.default.removeObserver(resizeObserver) }
-            resizeObserver = nil
+            layoutObservers.forEach { NotificationCenter.default.removeObserver($0) }
+            layoutObservers.removeAll()
             if let window = attachedWindow {
                 DocumentWindowTabs.shared.remove(window)
                 if let accessory, let index = window.titlebarAccessoryViewControllers.firstIndex(of: accessory) {

@@ -3,6 +3,7 @@
 :root {
   --md-titlebar-controls-width: 96px;
   --md-titlebar-height: 36px;
+  --md-titlebar-content-inset: 8px;
   --md-titlebar-tab-height: 28px;
   --md-titlebar-tab-radius: 6px;
   --inflow-readingWidth: 800.0;

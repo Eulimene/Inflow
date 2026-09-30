@@ -1058,8 +1058,7 @@ struct MarkdownEditorView: View {
                     analysisState: analysisState,
                     selectedHeadingID: selectedHeadingID,
                     focusGeneration: outlineFocusGeneration,
-                    onSelect: selectHeading,
-                    onCollapse: { isOutlineVisible = false }
+                    onSelect: selectHeading
                 )
                 .frame(
                     minWidth: EditorWorkspaceMetrics.outlineMinimumWidth,

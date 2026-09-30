@@ -505,11 +505,11 @@ enum ProjectDocumentTabSelection {
         case right
     }
 
-    static func targetIDs(
+    static func targetIDs<ID: Equatable>(
         for scope: CloseScope,
-        anchorID: ObjectIdentifier,
-        orderedIDs: [ObjectIdentifier]
-    ) -> [ObjectIdentifier] {
+        anchorID: ID,
+        orderedIDs: [ID]
+    ) -> [ID] {
         guard let anchorIndex = orderedIDs.firstIndex(of: anchorID) else {
             return []
         }
@@ -2088,6 +2088,13 @@ private struct DocumentTitlebarContent: View {
                                 .frame(height: ThemeStyleResources.defaults.token("titlebar-tab-height"))
                                 .background(tabs.selected == item.id ? Color(nsColor: .selectedControlColor) : .clear,
                                     in: RoundedRectangle(cornerRadius: ThemeStyleResources.defaults.token("titlebar-tab-radius")))
+                                .contextMenu {
+                                    if let url = (window.windowController?.document as? NSDocument)?.fileURL {
+                                        Button(FinderRevealAction.title) { FinderRevealAction.perform(for: url) }
+                                        Divider()
+                                    }
+                                    DocumentTabCloseMenu(tabs: tabs, anchor: .window(item.id))
+                                }
                             }
                         }
                     }
@@ -2103,6 +2110,7 @@ private struct DocumentTitlebarContent: View {
                                 .accessibilityLabel("关闭恢复标签页：" + draft.title)
                         }
                         .buttonStyle(.borderless)
+                        .contextMenu { DocumentTabCloseMenu(tabs: tabs, anchor: .pending(draft.id)) }
                     }
                 }
             }
@@ -2111,9 +2119,32 @@ private struct DocumentTitlebarContent: View {
                 .keyboardShortcut("n", modifiers: .command)
                 .help("新建标签页（⌘N）")
                 .accessibilityLabel("新建标签页")
+            Button { preferences.workspaceOutlineVisible.toggle() } label: { Image(systemName: "sidebar.right") }
+                .buttonStyle(.borderless)
+                .help(preferences.workspaceOutlineVisible ? "隐藏大纲" : "显示大纲")
+                .accessibilityLabel(preferences.workspaceOutlineVisible ? "隐藏大纲" : "显示大纲")
+                .disabled(isProjectHost && projectCoordinator.documentSurfaces.isEmpty)
         }
+        .padding(.horizontal, ThemeStyleResources.defaults.token("titlebar-content-inset"))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityLabel("文档标签页")
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("窗口工具栏")
+    }
+}
+
+private struct DocumentTabCloseMenu: View {
+    @ObservedObject var tabs: DocumentWindowTabs
+    let anchor: DocumentWindowTabs.TabID
+
+    var body: some View {
+        Button("关闭当前标签") { tabs.close(.current, relativeTo: anchor) }
+        Divider()
+        Button("关闭其他标签") { tabs.close(.others, relativeTo: anchor) }
+            .disabled(tabs.targets(.others, relativeTo: anchor).isEmpty)
+        Button("关闭左侧标签") { tabs.close(.left, relativeTo: anchor) }
+            .disabled(tabs.targets(.left, relativeTo: anchor).isEmpty)
+        Button("关闭右侧标签") { tabs.close(.right, relativeTo: anchor) }
+            .disabled(tabs.targets(.right, relativeTo: anchor).isEmpty)
     }
 }
 

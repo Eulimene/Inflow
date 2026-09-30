@@ -31,6 +31,26 @@ final class RecentDocumentsTests: XCTestCase {
         XCTAssertEqual(opens, 1, "Closing an unloaded draft must not load it")
         tabs.removePending(drafts[70].id)
         XCTAssertEqual(tabs.pending.count, 98)
+
+        let windows = (0..<2).map { _ in
+            NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 520),
+                styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        }
+        windows.forEach { $0.isReleasedWhenClosed = false; tabs.register($0) }
+        defer { windows.forEach { $0.close() } }
+        let first = DocumentWindowTabs.TabID.window(ObjectIdentifier(windows[0]))
+        let second = DocumentWindowTabs.TabID.window(ObjectIdentifier(windows[1]))
+        XCTAssertTrue(tabs.targets(.left, relativeTo: first).isEmpty)
+        XCTAssertEqual(tabs.targets(.left, relativeTo: second), [first])
+        XCTAssertEqual(tabs.targets(.others, relativeTo: first).count, 99)
+        XCTAssertEqual(tabs.targets(.left, relativeTo: .pending(drafts[1].id)), [first, second])
+        tabs.close(.left, relativeTo: second)
+        XCTAssertEqual(tabs.items.map(\.id), [ObjectIdentifier(windows[1])])
+        tabs.close(.right, relativeTo: second)
+        XCTAssertTrue(tabs.pending.isEmpty)
+        XCTAssertEqual(opens, 1, "Batch closing recovery tabs must never materialize their contents")
+        XCTAssertEqual(dismissals, 99)
+        XCTAssertTrue(tabs.targets(.others, relativeTo: second).isEmpty)
     }
 
     func testTitlebarTabsShareWindowControlRowAndPreserveWindowGeometry() async throws {
@@ -54,6 +74,24 @@ final class RecentDocumentsTests: XCTestCase {
         XCTAssertEqual(controlRect.midY, titlebarRect.midY, accuracy: 12)
         XCTAssertGreaterThanOrEqual(titlebarRect.minX, controlRect.maxX)
         XCTAssertEqual(first.tabbingMode, .disallowed)
+        if let screen = first.screen {
+            first.setFrame(screen.visibleFrame, display: true)
+            first.contentView?.layoutSubtreeIfNeeded()
+            let expandedRect = accessory.view.convert(accessory.view.bounds, to: nil)
+            let expandedClose = close.convert(close.bounds, to: nil)
+            XCTAssertEqual(expandedRect.midY, expandedClose.midY, accuracy: 12)
+            XCTAssertLessThanOrEqual(expandedRect.maxX, first.frame.width + 1)
+            XCTAssertEqual(accessory.layoutAttribute, .left)
+        }
+        // During a native full-screen transition the style mask can lag the
+        // notification. A resize must not move controls back to the hidden row.
+        NotificationCenter.default.post(name: NSWindow.willEnterFullScreenNotification, object: first)
+        NotificationCenter.default.post(name: NSWindow.didResizeNotification, object: first)
+        XCTAssertEqual(accessory.layoutAttribute, .bottom)
+        XCTAssertEqual(accessory.fullScreenMinHeight, accessory.view.frame.height)
+        NotificationCenter.default.post(name: NSWindow.didExitFullScreenNotification, object: first)
+        XCTAssertEqual(accessory.layoutAttribute, .left)
+        XCTAssertEqual(accessory.fullScreenMinHeight, 0)
         let tabs = DocumentWindowTabs.shared
         tabs.register(second)
         let item = try XCTUnwrap(tabs.items.first { $0.window === second })
