@@ -431,7 +431,7 @@ final class AppPreferences: ObservableObject {
         static let scrollSyncEnabled = "preferences.preview.scrollSyncEnabled"
         static let headingNavigationEnabled = "preferences.preview.headingNavigationEnabled"
         static let previewContentWidth = "preferences.preview.contentWidth"
-        static let previewWidthMigration = "preferences.preview.widthMigration3"
+        static let previewWidthMigration = "preferences.preview.widthMigration4"
         static let previewZoom = "preferences.preview.zoom"
         static let previewColorScheme = "preferences.preview.colorScheme"
         static let previewTheme = "preferences.preview.theme"
@@ -851,10 +851,10 @@ final class AppPreferences: ObservableObject {
             defaultValue: true
         )
         if defaults.object(forKey: Key.previewWidthMigration) == nil {
-            // Upgrade the two historical defaults once. Subsequent explicit
+            // Upgrade historical defaults once. Subsequent explicit
             // narrow-width choices survive relaunch, as do other custom widths.
             let previousWidth = defaults.double(forKey: Key.previewContentWidth)
-            if previousWidth == 760 || previousWidth == 800 {
+            if previousWidth == 760 || previousWidth == 800 || previousWidth == 1200 {
                 defaults.set(MarkdownRenderMetrics.previewReadingWidth, forKey: Key.previewContentWidth)
             }
             defaults.set(true, forKey: Key.previewWidthMigration)

@@ -168,8 +168,7 @@ struct AdaptiveRenderedMarkdownTableLayoutStrategy: RenderedMarkdownTableLayoutS
         let preferredTotal = widths.reduce(0, +)
         guard preferredTotal > 0 else { return widths }
         if preferredTotal < target {
-            let extra = (target - preferredTotal) / CGFloat(columnCount)
-            return widths.map { $0 + extra }
+            return widths
         }
         if preferredTotal > target {
             let fittedMinimum = min(minimumColumnWidth, target / CGFloat(columnCount))

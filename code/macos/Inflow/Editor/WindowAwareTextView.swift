@@ -113,6 +113,28 @@ final class WindowAwareTextView: DocumentFindTextView {
     }
     var isLiveMarkdown = false { didSet { updateReadingColumn() } }
     var renderedTheme = PreviewTheme.standard { didSet { updateReadingColumn() } }
+    private var findRanges: [NSRange] = []
+    private var currentFindRange: NSRange?
+
+    func setFindHighlights(_ ranges: [NSRange], current: NSRange?) {
+        findRanges = ranges
+        currentFindRange = current
+        refreshFindHighlights()
+    }
+
+    func refreshFindHighlights() {
+        MarkdownFindHighlight.apply(to: self, ranges: findRanges, current: currentFindRange)
+        for state in renderedTableViews.values {
+            state.tableView.setFindHighlights(findRanges, current: currentFindRange)
+        }
+    }
+
+    var renderedTableAvailableWidth: CGFloat {
+        let viewport = enclosingScrollView?.contentSize.width ?? bounds.width
+        return max(160, min(1100, viewport - MarkdownRenderMetrics.renderedHorizontalInset * 2
+            - (textContainer?.lineFragmentPadding ?? 0) * 2))
+    }
+
     var readingColumnWidth = CGFloat(MarkdownRenderMetrics.previewReadingWidth) { didSet { updateReadingColumn() } }
     var structuralEditDidApply: (() -> Void)?
     var selectionVisibilityHandler: (() -> Void)?
@@ -553,6 +575,7 @@ final class WindowAwareTextView: DocumentFindTextView {
     }
 
     func layoutRenderedImages() {
+        defer { refreshFindHighlights() }
         guard let layoutManager, let textContainer, !isUpdatingRenderedOverlayLayout else { return }
         isUpdatingRenderedOverlayLayout = true
         defer { isUpdatingRenderedOverlayLayout = false }
@@ -575,7 +598,7 @@ final class WindowAwareTextView: DocumentFindTextView {
                 return (state.sourceRange, size, state.placement)
             }
             let resizedTables = renderedTableViews.values.compactMap { state -> (NSRange, NSSize)? in
-                state.tableView.updateMaximumWidth(availableWidth)
+                state.tableView.updateMaximumWidth(renderedTableAvailableWidth)
                     ? (state.sourceRange, state.tableView.renderedSize)
                     : nil
             }
@@ -711,7 +734,8 @@ final class WindowAwareTextView: DocumentFindTextView {
                 in: textContainer
             )
             state.tableView.frame = NSRect(
-                x: textContainerOrigin.x + glyphRect.minX,
+                x: min(textContainerOrigin.x + glyphRect.minX,
+                    max(0, (viewportWidth - state.tableView.renderedSize.width) / 2)),
                 y: textContainerOrigin.y + lineRect.minY + 5,
                 width: state.tableView.renderedSize.width,
                 height: state.tableView.renderedSize.height

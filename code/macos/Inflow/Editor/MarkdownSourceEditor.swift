@@ -124,6 +124,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
 
             parent.session.applyPendingRestorationIfPossible()
             parent.session.selectionController.apply(parent.selectionRequest, to: textView)
+            parent.session.textView.refreshFindHighlights()
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
@@ -158,8 +159,17 @@ final class MarkdownSelectionController {
             request.style == .caret ? target.caretRange : target.revealRange
         )
         textView.scrollRangeToVisible(target.revealRange)
-        if request.style == .caret {
-            textView.centerSelectionInVisibleArea(nil)
+        if let layout = textView.layoutManager, let container = textView.textContainer,
+           let scroll = textView.enclosingScrollView {
+            layout.ensureLayout(for: container)
+            let glyphs = layout.glyphRange(forCharacterRange: target.revealRange, actualCharacterRange: nil)
+            let rect = layout.boundingRect(forGlyphRange: glyphs, in: container)
+                .offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
+            let clip = scroll.contentView
+            let margin = request.style == .caret ? CGFloat(32) : clip.bounds.height * 0.3
+            let y = min(max(0, textView.bounds.height - clip.bounds.height), max(0, rect.minY - margin))
+            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: y))
+            scroll.reflectScrolledClipView(clip)
         }
         if request.style.showsTransientMatchIndicator {
             textView.showFindIndicator(for: target.revealRange)
@@ -183,5 +193,29 @@ final class MarkdownSelectionController {
 
         appliedGeneration = request.generation
         pendingRequest = nil
+    }
+}
+
+/// Temporary layout attributes never become part of the document or undo history.
+@MainActor
+enum MarkdownFindHighlight {
+    static func apply(to view: NSTextView, ranges: [NSRange], current: NSRange?) {
+        guard let layout = view.layoutManager else { return }
+        let full = NSRange(location: 0, length: view.string.utf16.count)
+        layout.removeTemporaryAttribute(.backgroundColor, forCharacterRange: full)
+        layout.removeTemporaryAttribute(.underlineStyle, forCharacterRange: full)
+        layout.removeTemporaryAttribute(.underlineColor, forCharacterRange: full)
+        for range in ranges where range.length > 0 && NSMaxRange(range) <= full.length {
+            layout.addTemporaryAttribute(.backgroundColor,
+                value: NSColor.systemYellow.withAlphaComponent(0.28), forCharacterRange: range)
+        }
+        if let current, current.length > 0, NSMaxRange(current) <= full.length {
+            layout.addTemporaryAttributes([
+                .backgroundColor: NSColor.systemOrange.withAlphaComponent(0.55),
+                .underlineStyle: NSUnderlineStyle.thick.rawValue,
+                .underlineColor: NSColor.labelColor,
+            ], forCharacterRange: current)
+        }
+        view.needsDisplay = true
     }
 }

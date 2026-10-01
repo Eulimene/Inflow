@@ -881,6 +881,7 @@ private final class FolderSecurityScopeLease {
 
 @MainActor
 final class FolderBrowserController: ObservableObject {
+    @Published var requestsRootCreation = false
     @Published private(set) var folderURL: URL?
     private(set) var projectRootIdentity: FolderProjectDirectoryIdentity?
     @Published private(set) var items: [FolderProjectItem] = []
@@ -1544,7 +1545,11 @@ struct FolderBrowserSidebar: View {
         .background(Color(nsColor: .controlBackgroundColor))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("项目侧栏")
-        .onAppear { synchronizeSelectionWithCurrentDocument() }
+        .onAppear {
+            synchronizeSelectionWithCurrentDocument()
+            consumeRootCreationRequest()
+        }
+        .onChange(of: controller.requestsRootCreation) { _, _ in consumeRootCreationRequest() }
         .onChange(of: currentDocumentURL) { _, _ in
             synchronizeSelectionWithCurrentDocument()
         }
@@ -1614,7 +1619,7 @@ struct FolderBrowserSidebar: View {
                 Image(systemName: "plus")
             }
             .buttonStyle(.borderless)
-            .help("新建 Markdown 文件…")
+            .help("在所选文件夹中新建 Markdown 文件…")
             .disabled(controller.folderURL == nil || controller.state != .ready)
             .accessibilityLabel("新建 Markdown 文件")
             Button {
@@ -1743,6 +1748,12 @@ struct FolderBrowserSidebar: View {
             for: currentDocumentURL,
             in: controller.items
         )
+    }
+
+    private func consumeRootCreationRequest() {
+        guard controller.requestsRootCreation else { return }
+        controller.requestsRootCreation = false
+        beginCreatingMarkdown(in: .none)
     }
 
     private func beginCreatingMarkdown(in selection: FolderBrowserSelection) {
@@ -2000,7 +2011,7 @@ private struct FolderProjectItemRow: View {
             Image(systemName: systemImage)
                 .foregroundStyle(.secondary)
             Text(item.displayName)
-                .lineLimit(1)
+                .lineLimit(isCurrentDocument ? nil : 1)
             Spacer(minLength: 2)
             if isModified {
                 Circle()

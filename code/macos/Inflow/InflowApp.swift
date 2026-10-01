@@ -2075,7 +2075,9 @@ private struct DocumentTitlebarContent: View {
                             } else {
                                 HStack(spacing: 2) {
                                     Button { tabs.select(item) } label: {
-                                        Text(window.title.isEmpty ? "未命名" : window.title)
+                                        Text(projectCoordinator.isProjectHostDocument(window.windowController?.document as? NSDocument)
+                                            ? (folderBrowser.folderURL?.lastPathComponent ?? "项目")
+                                            : (window.title.isEmpty ? "未命名" : window.title))
                                             .lineLimit(1)
                                             .padding(.horizontal, 8)
                                     }
@@ -2117,7 +2119,7 @@ private struct DocumentTitlebarContent: View {
             Button { NSDocumentController.shared.newDocument(nil) } label: { Image(systemName: "plus") }
                 .buttonStyle(.borderless)
                 .keyboardShortcut("n", modifiers: .command)
-                .help("新建标签页（⌘N）")
+                .help("新建未命名文档标签页（⌘N），首次保存时选择位置")
                 .accessibilityLabel("新建标签页")
             Button { preferences.workspaceOutlineVisible.toggle() } label: { Image(systemName: "sidebar.right") }
                 .buttonStyle(.borderless)

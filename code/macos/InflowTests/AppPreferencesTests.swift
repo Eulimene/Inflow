@@ -266,8 +266,15 @@ h2 { font-weight: 500; }
 
     func testDefaultsMatchLaunchContract() {
         withDefaults { defaults in
+            defaults.set(true, forKey: "preferences.preview.widthMigration3")
+            defaults.set(1200, forKey: "preferences.preview.contentWidth")
+            XCTAssertEqual(AppPreferences(defaults: defaults).previewContentWidth, 800)
+            defaults.set(1200, forKey: "preferences.preview.contentWidth")
+            XCTAssertEqual(AppPreferences(defaults: defaults).previewContentWidth, 1200)
+        }
+        withDefaults { defaults in
             defaults.set(760, forKey: "preferences.preview.contentWidth")
-            XCTAssertEqual(AppPreferences(defaults: defaults).previewContentWidth, 1_200)
+            XCTAssertEqual(AppPreferences(defaults: defaults).previewContentWidth, 800)
             defaults.set(760, forKey: "preferences.preview.contentWidth")
             XCTAssertEqual(AppPreferences(defaults: defaults).previewContentWidth, 760,
                 "A later explicit width choice must survive relaunch")
@@ -293,7 +300,7 @@ h2 { font-weight: 500; }
             XCTAssertFalse(preferences.showsLineNumbers)
             XCTAssertTrue(preferences.scrollSyncEnabled)
             XCTAssertTrue(preferences.headingNavigationEnabled)
-            XCTAssertEqual(preferences.previewContentWidth, 1_200)
+            XCTAssertEqual(preferences.previewContentWidth, 800)
             XCTAssertEqual(preferences.previewZoom, 1)
             XCTAssertEqual(preferences.previewColorScheme, .system)
             XCTAssertEqual(preferences.previewTheme, .standard)
@@ -604,7 +611,7 @@ h2 { font-weight: 500; }
             XCTAssertFalse(preferences.showsLineNumbers)
             XCTAssertTrue(preferences.scrollSyncEnabled)
             XCTAssertTrue(preferences.headingNavigationEnabled)
-            XCTAssertEqual(preferences.previewContentWidth, 1_200)
+            XCTAssertEqual(preferences.previewContentWidth, 800)
             XCTAssertEqual(preferences.previewZoom, 1)
             XCTAssertEqual(preferences.previewColorScheme, .system)
             XCTAssertEqual(preferences.previewTheme, .standard)

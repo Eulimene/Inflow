@@ -20,6 +20,7 @@ struct DocumentOutlineView: View {
 
     @FocusState private var focusedHeadingID: DocumentHeading.ID?
     @State private var handledFocusGeneration = 0
+    @State private var collapsedHeadingIDs = Set<DocumentHeading.ID>()
 
     private var analysis: DocumentAnalysis {
         analysisState.displayedAnalysis
@@ -50,8 +51,25 @@ struct DocumentOutlineView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(analysis.headings) { heading in
-                            headingButton(heading)
+                        ForEach(visibleHeadings) { heading in
+                            HStack(spacing: 2) {
+                                if hasChildren(heading) {
+                                    Button {
+                                        if !collapsedHeadingIDs.insert(heading.id).inserted {
+                                            collapsedHeadingIDs.remove(heading.id)
+                                        }
+                                    } label: {
+                                        Image(systemName: collapsedHeadingIDs.contains(heading.id)
+                                            ? "chevron.right" : "chevron.down")
+                                    }
+                                    .buttonStyle(.plain)
+                                    .frame(width: 18)
+                                    .accessibilityLabel((collapsedHeadingIDs.contains(heading.id) ? "展开章节：" : "折叠章节：") + heading.displayTitle)
+                                } else {
+                                    Color.clear.frame(width: 18, height: 1)
+                                }
+                                headingButton(heading)
+                            }
                         }
                     }
                     .focusSection()
@@ -69,6 +87,21 @@ struct DocumentOutlineView: View {
         .onChange(of: analysisState) { _, _ in
             focusFirstHeadingIfRequested()
         }
+    }
+
+    private var visibleHeadings: [DocumentHeading] {
+        var hiddenBelowLevel: Int?
+        return analysis.headings.filter { heading in
+            if let level = hiddenBelowLevel, heading.level > level { return false }
+            hiddenBelowLevel = collapsedHeadingIDs.contains(heading.id) ? heading.level : nil
+            return true
+        }
+    }
+
+    private func hasChildren(_ heading: DocumentHeading) -> Bool {
+        guard let index = analysis.headings.firstIndex(where: { $0.id == heading.id }),
+              index + 1 < analysis.headings.count else { return false }
+        return analysis.headings[index + 1].level > heading.level
     }
 
     @ViewBuilder
@@ -140,13 +173,9 @@ struct DocumentOutlineView: View {
             onSelect(heading)
         } label: {
             HStack(spacing: 7) {
-                Text("H\(heading.level)")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 20, alignment: .trailing)
-
                 Text(heading.displayTitle)
-                    .lineLimit(1)
+                    .fontWeight(heading.level == 1 ? .semibold : .regular)
+                    .lineLimit(isSelected ? nil : 1)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 if isSelected {

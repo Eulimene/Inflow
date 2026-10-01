@@ -1191,11 +1191,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             var size = textView.setRenderedTable(
                 table,
                 baseFont: baseFont,
-                maximumWidth: max(
-                    160,
-                    scrollView.contentSize.width - textView.textContainerInset.width * 2
-                        - (textView.textContainer?.lineFragmentPadding ?? 0) * 2
-                ),
+                maximumWidth: textView.renderedTableAvailableWidth,
                 linkActivation: renderedLinkActivation,
                 onLinkClick: { [weak self] target in
                     self?.renderedLinkHandler?(target)
@@ -1209,7 +1205,9 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             }
             applyRenderedBlock(
                 sourceRange: table.sourceRange.utf16Range,
-                size: size,
+                size: NSSize(width: min(size.width, max(1, scrollView.contentSize.width
+                    - textView.textContainerInset.width * 2
+                    - (textView.textContainer?.lineFragmentPadding ?? 0) * 2)), height: size.height),
                 storage: storage
             )
         }

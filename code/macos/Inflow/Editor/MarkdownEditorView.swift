@@ -1027,14 +1027,19 @@ struct MarkdownEditorView: View {
     private var documentContent: some View {
         if isProjectShell {
             ContentUnavailableView {
-                Label("选择一份 Markdown", systemImage: "doc.text.magnifyingglass")
+                Label("项目尚未打开文档", systemImage: "doc.text.magnifyingglass")
             } description: {
                 Text(
                     isProjectSidebarVisible
-                        ? "从左侧目录树选择 .md 或 .markdown，或新建一份 Markdown。"
+                        ? "从左侧选择 Markdown，或在项目根目录新建文档。"
                         : "目录树已隐藏。显示后可以选择或新建 Markdown。"
                 )
             } actions: {
+                Button("新建文档…") {
+                    isProjectSidebarVisible = true
+                    folderBrowser.requestsRootCreation = true
+                }
+                .help("在项目根目录创建 Markdown 文件")
                 if !isProjectSidebarVisible {
                     Button("显示目录树") {
                         isProjectSidebarVisible = true
@@ -1223,19 +1228,38 @@ struct MarkdownEditorView: View {
 
     private var statusBar: some View {
         HStack(spacing: 12) {
-            Label(
-                fileURL?.lastPathComponent ?? "未命名文档",
-                systemImage: fileURL == nil ? "doc.badge.plus" : "doc.text"
-            )
-            .lineLimit(1)
-
-            Divider()
-                .frame(height: 12)
-            Text(viewMode.label)
-
-            if isSavingDocument {
-                Label("正在保存…", systemImage: "arrow.triangle.2.circlepath")
-                    .accessibilityLabel("正在保存 Markdown 文档")
+            if isProjectShell {
+                Text("选择文档或新建文档以开始写作")
+            } else {
+                Label(
+                    isSavingDocument ? "正在保存…" :
+                        (MarkdownDocumentModificationProjection.isModified(document) || fileURL == nil
+                            ? "未保存 · ⌘S" : "已保存到原文件"),
+                    systemImage: isSavingDocument ? "arrow.triangle.2.circlepath" :
+                        (MarkdownDocumentModificationProjection.isModified(document) || fileURL == nil
+                            ? "circle.fill" : "checkmark.circle")
+                )
+                .foregroundStyle(MarkdownDocumentModificationProjection.isModified(document)
+                    ? Color.primary : Color.secondary)
+                .help("手动保存：⌘S 将内容写入文件。恢复暂存不会写回原文件。")
+                Menu {
+                    Button("源码 — 编辑 Markdown 标记") { selectViewMode(.source) }
+                    Button("源码与预览 — 对照编辑与效果") { selectViewMode(.split) }
+                    Button("即时编辑 — 在排版效果中写作") { selectViewMode(.preview) }
+                } label: { Text(viewMode.label) }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .disabled(usesSourceOnlyExperience)
+                .accessibilityLabel("写作模式：" + viewMode.label)
+                if let fileURL {
+                    Button { FinderRevealAction.perform(for: fileURL) } label: {
+                        Label(fileURL.deletingLastPathComponent().path, systemImage: "folder")
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                    .buttonStyle(.plain)
+                    .help(fileURL.path)
+                    .accessibilityLabel("在 Finder 中显示：" + fileURL.path)
+                }
             }
 
             if isFocusModeEnabled {
@@ -1249,21 +1273,23 @@ struct MarkdownEditorView: View {
 
             Spacer()
 
-            if usesSourceOnlyExperience {
-                Label("统计已暂停", systemImage: "pause.circle")
-                    .help("源码优先文件不运行完整文档分析")
-            } else {
-                statisticsMenu
-                    .help(statisticsHelp)
+            if !isProjectShell {
+                if usesSourceOnlyExperience {
+                    Label("统计已暂停", systemImage: "pause.circle")
+                        .help("源码优先文件不运行完整文档分析")
+                } else {
+                    statisticsMenu
+                        .help(statisticsHelp)
+                }
+                Divider()
+                    .frame(height: 12)
+                Text("UTF-8\(document.properties.hasUTF8BOM ? " BOM" : "")")
+                Text(
+                    document.properties.requiresLineEndingChoice
+                        ? "混合换行（待选择）"
+                        : document.properties.lineEnding.displayName
+                )
             }
-            Divider()
-                .frame(height: 12)
-            Text("UTF-8\(document.properties.hasUTF8BOM ? " BOM" : "")")
-            Text(
-                document.properties.requiresLineEndingChoice
-                    ? "混合换行（待选择）"
-                    : document.properties.lineEnding.displayName
-            )
         }
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -3175,6 +3201,7 @@ struct MarkdownEditorView: View {
         guard !replacing || canEditDocument else { return }
         revealSourceSurface()
         findSession.present(replacing: replacing)
+        updateFindHighlights()
         if !findSession.resultsAreCurrent(for: document.text) {
             scheduleFindSearch(
                 source: document.text,
@@ -3185,11 +3212,24 @@ struct MarkdownEditorView: View {
         }
     }
 
+    private func updateFindHighlights() {
+        let ranges = findSession.isPresented ? findSession.matches.compactMap {
+            MarkdownSourceRange.navigationTarget(forUTF8Range: $0.utf8Range, in: document.text)?.revealRange
+        } : []
+        let current = findSession.isPresented ? findSession.currentMatch.flatMap {
+            MarkdownSourceRange.navigationTarget(forUTF8Range: $0.utf8Range, in: document.text)?.revealRange
+        } : nil
+        sourceEditorSession.textView.setFindHighlights(ranges, current: current)
+    }
+
     private func closeFind() {
         findSession.dismiss()
+        updateFindHighlights()
         Task { @MainActor in
             await Task.yield()
             _ = sourceEditorSession.focusEditor()
+            sourceEditorSession.textView.restoreTableFocus(for: sourceEditorSession.textView.selectedRange())
+            sourceEditorSession.textView.layoutRenderedImages()
         }
     }
 
@@ -3225,6 +3265,7 @@ struct MarkdownEditorView: View {
     }
 
     private func reveal(_ match: DocumentSearchMatch?) {
+        updateFindHighlights()
         guard let match else { return }
         revealSourceSurface()
         sourceSelectionGeneration &+= 1
@@ -3358,6 +3399,7 @@ struct MarkdownEditorView: View {
         let query = findSession.query
         let caseSensitive = findSession.isCaseSensitive
         findSession.beginSearch()
+        sourceEditorSession.textView.setFindHighlights([], current: nil)
 
         findSearchTask = Task { @MainActor in
             if delayNanoseconds > 0 {
@@ -3390,6 +3432,7 @@ struct MarkdownEditorView: View {
                     caseSensitive: caseSensitive,
                     position: position
                 )
+                updateFindHighlights()
                 let pendingNavigation = pendingFindNavigation
                 pendingFindNavigation.removeAll()
                 if !pendingNavigation.isEmpty {

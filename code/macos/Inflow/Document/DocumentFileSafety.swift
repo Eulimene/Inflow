@@ -4,6 +4,16 @@ import Darwin
 import CryptoKit
 import Foundation
 
+private extension URL {
+    /// AppKit may publish /tmp for a save panel's /private/tmp URL. Resolve
+    /// directory aliases for identity, but keep the leaf unexpanded so the
+    /// existing O_NOFOLLOW checks still reject symbolic-link file targets.
+    var saveIdentityURL: URL {
+        deletingLastPathComponent().resolvingSymlinksInPath()
+            .appendingPathComponent(lastPathComponent).standardizedFileURL
+    }
+}
+
 enum MarkdownWriteGuardError: Error, Equatable, LocalizedError, Sendable {
     case externalChange
     case deletedTarget
@@ -85,8 +95,8 @@ struct SaveEnvelope: Equatable, Sendable {
         self.revision = revision
         self.bytes = bytes
         contentHash = Data(SHA256.hash(data: bytes))
-        self.sourceURL = sourceURL?.standardizedFileURL
-        self.targetURL = targetURL.standardizedFileURL
+        self.sourceURL = sourceURL?.saveIdentityURL
+        self.targetURL = targetURL.saveIdentityURL
         self.targetExpectation = targetExpectation
         self.operation = operation
     }
@@ -128,7 +138,7 @@ final class MarkdownWriteGuard: @unchecked Sendable {
 
     func configure(url: URL?, baselineData: Data?) {
         lock.lock()
-        let normalizedURL = url?.standardizedFileURL
+        let normalizedURL = url?.saveIdentityURL
         let isExpectedRelocation = normalizedURL.map { target in
             preparedEnvelope?.targetURL == target
                 || pendingEnvelopes.values.contains { $0.targetURL == target }
@@ -207,7 +217,7 @@ final class MarkdownWriteGuard: @unchecked Sendable {
         }
         lock.lock()
         relocationAuthorization = RelocationAuthorization(
-            targetURL: targetURL.standardizedFileURL,
+            targetURL: targetURL.saveIdentityURL,
             targetSnapshot: targetSnapshot,
             targetData: capturedTarget.data,
             proposedData: proposedData,
@@ -347,7 +357,7 @@ final class MarkdownWriteGuard: @unchecked Sendable {
     func candidateBaseline(for url: URL) -> Data? {
         lock.lock()
         defer { lock.unlock() }
-        let normalized = url.standardizedFileURL
+        let normalized = url.saveIdentityURL
         if let committed = committedRelocationBaselines[normalized] {
             return committed
         }
@@ -363,8 +373,13 @@ final class MarkdownWriteGuard: @unchecked Sendable {
     func adopt(_ data: Data) {
         lock.lock()
         baselineData = data
-        pendingEnvelopes.removeAll()
-        preparedEnvelope = nil
+        // A disk inspection can observe the completed write before AppKit's
+        // completion callback. Keep that explicit save's identity until commit
+        // verifies it; otherwise a successful save is reported as a mismatch.
+        pendingEnvelopes = pendingEnvelopes.filter {
+            $0.value.operation != .automatic && $0.value.bytes == data
+        }
+        if preparedEnvelope?.bytes != data { preparedEnvelope = nil }
         confirmedAutomaticEnvelopeAwaitingObservation = nil
         lock.unlock()
     }
@@ -377,7 +392,7 @@ final class MarkdownWriteGuard: @unchecked Sendable {
         let envelope: SaveEnvelope
         if let preparedEnvelope {
             guard preparedEnvelope.bytes == proposedData,
-                  preparedEnvelope.targetURL == targetURL.standardizedFileURL,
+                  preparedEnvelope.targetURL == targetURL.saveIdentityURL,
                   preparedEnvelope.targetExpectation.isCurrent(at: targetURL)
             else {
                 throw MarkdownWriteGuardError.targetChanged
@@ -547,7 +562,7 @@ struct DocumentFileConflictSnapshot: Identifiable, Sendable {
     }
 
     func hasSameFacts(as other: DocumentFileConflictSnapshot) -> Bool {
-        url.standardizedFileURL == other.url.standardizedFileURL
+        url.saveIdentityURL == other.url.saveIdentityURL
             && baselineData == other.baselineData
             && localData == other.localData
             && diskData == other.diskData
@@ -626,7 +641,7 @@ final class DocumentFileSafetySession: ObservableObject {
         }
         writeGuard = document.writeGuard
 
-        let normalizedURL = fileURL?.standardizedFileURL
+        let normalizedURL = fileURL?.saveIdentityURL
         if normalizedURL != configuredURL {
             configuredURL = normalizedURL
             guard let normalizedURL else {
@@ -705,7 +720,7 @@ final class DocumentFileSafetySession: ObservableObject {
         -> (data: Data, decoded: DecodedMarkdown)
     {
         let inspection = try await worker.verify(envelope.diskData, at: envelope.url)
-        guard configuredURL == envelope.url.standardizedFileURL,
+        guard configuredURL == envelope.url.saveIdentityURL,
               inspection.exists,
               currentData == envelope.sourceLocalData || currentData == envelope.diskData
         else {
@@ -813,7 +828,7 @@ final class DocumentFileSafetySession: ObservableObject {
     private func requireCurrentData(matching snapshot: DocumentFileConflictSnapshot) throws
         -> Data
     {
-        guard configuredURL == snapshot.url.standardizedFileURL,
+        guard configuredURL == snapshot.url.saveIdentityURL,
               let currentData,
               currentData == snapshot.localData
         else {

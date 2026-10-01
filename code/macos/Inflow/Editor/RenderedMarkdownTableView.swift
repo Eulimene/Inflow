@@ -2,6 +2,27 @@ import AppKit
 
 @MainActor
 final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemValidation {
+    private var hasFindHighlights = false
+
+    func setFindHighlights(_ ranges: [NSRange], current: NSRange?) {
+        let localRanges = ranges.filter { NSIntersectionRange($0, table.sourceRange.utf16Range).length > 0 }
+        guard hasFindHighlights || !localRanges.isEmpty else { return }
+        hasFindHighlights = !localRanges.isEmpty
+        for cell in cells {
+            let model = table.rows[cell.row][cell.column]
+            let sourceRange = model.sourceRange.utf16Range
+            let projection = MarkdownInlineProjection(model.markdown)
+            func visible(_ range: NSRange) -> NSRange? {
+                let overlap = NSIntersectionRange(range, sourceRange)
+                guard overlap.length > 0 else { return nil }
+                return projection.visibleRange(for: NSRange(
+                    location: overlap.location - sourceRange.location, length: overlap.length))
+            }
+            MarkdownFindHighlight.apply(to: cell.textView,
+                ranges: localRanges.compactMap(visible), current: current.flatMap(visible))
+        }
+    }
+
     private static let toolbarHeight: CGFloat = 28
     private var visibleToolbarHeight: CGFloat = 28
     private let toolsButton = NSPopUpButton(frame: .zero, pullsDown: true)

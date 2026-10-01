@@ -74,17 +74,21 @@ struct InflowSettingsView: View {
 
         }
         .padding(20)
-        .frame(width: 680, height: 560)
+        .frame(width: 680, height: selectedSection == .general ? 320 : 560)
         .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Menu("恢复默认…") {
+            ToolbarItem(placement: .automatic) {
+                Menu {
                     Button(SettingsResetScope.current(selectedSection).menuTitle) {
                         pendingResetScope = .current(selectedSection)
                     }
                     Button(SettingsResetScope.all.menuTitle) {
                         pendingResetScope = .all
                     }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
+                .help("恢复默认设置…")
+                .accessibilityLabel("恢复默认设置菜单")
             }
         }
         .confirmationDialog(

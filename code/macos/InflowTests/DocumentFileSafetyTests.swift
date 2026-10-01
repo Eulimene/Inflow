@@ -490,6 +490,8 @@ final class DocumentFileSafetyTests: XCTestCase {
 
         // SwiftUI may publish the new fileURL before AppKit calls save completion.
         session.update(document: document, fileURL: targetURL)
+        // Monitoring may adopt matching disk bytes before native completion.
+        document.writeGuard.adopt(envelope.bytes)
         try await session.commitSave(envelope)
         XCTAssertFalse(session.hasUncommittedChanges)
 
@@ -528,7 +530,9 @@ final class DocumentFileSafetyTests: XCTestCase {
         )
 
         document.text = "first save snapshot\nnewer edit\n"
-        session.update(document: document, fileURL: targetURL)
+        let alias = fixture.root.appendingPathComponent("directory-alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: fixture.root)
+        session.update(document: document, fileURL: alias.appendingPathComponent("first-save.md"))
         try envelope.bytes.write(to: targetURL)
         try await session.commitSave(envelope)
 

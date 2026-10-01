@@ -1562,8 +1562,8 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         let wide = strategy.columnWidths(for: table, font: font, availableWidth: 680)
         let narrow = strategy.columnWidths(for: table, font: font, availableWidth: 320)
 
-        XCTAssertEqual(wide.reduce(0, +), 680, accuracy: 2)
-        XCTAssertEqual(narrow.reduce(0, +), 320, accuracy: 2)
+        XCTAssertLessThan(wide.reduce(0, +), 680)
+        XCTAssertLessThanOrEqual(narrow.reduce(0, +), 320)
         XCTAssertGreaterThan(wide[0], wide[1])
         XCTAssertGreaterThan(narrow[0], narrow[1])
         XCTAssertTrue(narrow.allSatisfy { $0 >= 56 })
@@ -1579,9 +1579,26 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertEqual(compressed.reduce(0, +), 160, accuracy: 0.001)
         XCTAssertTrue(compressed.allSatisfy { $0 > 0 })
 
+        let textView = NSTextView()
+        textView.string = "个人首版与个人首版"
+        let matches = [NSRange(location: 0, length: 4), NSRange(location: 5, length: 4)]
+        MarkdownFindHighlight.apply(to: textView, ranges: matches, current: matches[1])
+        XCTAssertNotNil(textView.layoutManager?.temporaryAttribute(.backgroundColor, atCharacterIndex: 0, effectiveRange: nil))
+        XCTAssertNotNil(textView.layoutManager?.temporaryAttribute(.underlineStyle, atCharacterIndex: 5, effectiveRange: nil))
+        XCTAssertNil(textView.textStorage?.attribute(.backgroundColor, at: 0, effectiveRange: nil))
+        MarkdownFindHighlight.apply(to: textView, ranges: [], current: nil)
+        XCTAssertNil(textView.layoutManager?.temporaryAttribute(.backgroundColor, atCharacterIndex: 0, effectiveRange: nil))
+
         let measured = CountingTableLayoutStrategy()
         let view = RenderedMarkdownTableView(table: table, baseFont: font, maximumWidth: 680,
             linkActivation: .singleClick, palette: .light, onLinkClick: { _ in }, onEdit: { _ in }, layoutStrategy: measured)
+        let matchRange = (source as NSString).range(of: "value")
+        view.setFindHighlights([matchRange], current: matchRange)
+        let cell = try XCTUnwrap(view.subviews.compactMap { $0 as? NSTextView }.first { $0.string == "value" })
+        XCTAssertNotNil(cell.layoutManager?.temporaryAttribute(.backgroundColor, atCharacterIndex: 0, effectiveRange: nil))
+        XCTAssertNotNil(cell.layoutManager?.temporaryAttribute(.underlineStyle, atCharacterIndex: 0, effectiveRange: nil))
+        view.setFindHighlights([], current: nil)
+        XCTAssertNil(cell.layoutManager?.temporaryAttribute(.backgroundColor, atCharacterIndex: 0, effectiveRange: nil))
         for _ in 0..<10 { XCTAssertFalse(view.updateMaximumWidth(680)) }
         XCTAssertEqual(measured.calls, 1, "Repeated overlay layout must reuse unchanged content measurements")
         let edited = try XCTUnwrap(RenderedMarkdownEditor.plan(for: source.replacingOccurrences(of: "value", with: "one<br>two<br>three")).tables.first)
@@ -2364,6 +2381,10 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         session.setPresentation(.rendered, source: source, onLinkClick: nil)
         XCTAssertTrue(session.textView.textContainer?.widthTracksTextView == true)
         XCTAssertFalse(session.scrollView.hasHorizontalScroller)
+        session.scrollView.frame.size.width = 1200
+        session.textView.setFrameSize(NSSize(width: 1200, height: 240))
+        XCTAssertLessThanOrEqual(session.textView.bounds.width - session.textView.textContainerInset.width * 2, 800)
+        XCTAssertGreaterThan(session.textView.renderedTableAvailableWidth, 800)
 
         session.setPresentation(.source, source: source, onLinkClick: nil)
         XCTAssertFalse(session.textView.textContainer?.widthTracksTextView == true)
