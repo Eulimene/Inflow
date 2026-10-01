@@ -371,8 +371,8 @@ final class DocumentWindowTabs: ObservableObject {
 
     func close(_ scope: ProjectDocumentTabSelection.CloseScope, relativeTo anchor: TabID) {
         let targets = targets(scope, relativeTo: anchor)
-        // Remove unloaded placeholders first: closing the final native window
-        // may end the process. Persist each dismissal before removing its tab.
+        // Persist each unloaded draft's dismissal before removing its tab.
+        // Native windows continue through AppKit's document close lifecycle.
         for case let .pending(id) in targets { closePending(id) }
         for case let .window(id) in targets {
             items.first(where: { $0.id == id })?.window?.performClose(nil)

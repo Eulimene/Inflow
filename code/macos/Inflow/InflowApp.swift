@@ -2164,10 +2164,9 @@ private struct ProjectWorkspaceWindowTitle: NSViewRepresentable {
 }
 
 enum InflowTerminationPolicy {
-    /// Inflow is a document editor with no useful windowless runtime. Closing
-    /// the final document window therefore has the same lifecycle result as
-    /// choosing Quit after unsaved text has been checkpointed to temporary drafts.
-    static let terminatesAfterLastWindowClosed = true
+    /// Match native macOS document apps: closing the last document keeps the
+    /// process running. Dock reopen can create a fresh editable document.
+    static let terminatesAfterLastWindowClosed = false
 
     /// The concrete document host has already checkpointed each approved close.
     /// The application delegate checkpoints any remaining sessions before replying.

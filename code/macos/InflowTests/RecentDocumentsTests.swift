@@ -109,7 +109,7 @@ final class RecentDocumentsTests: XCTestCase {
             .terminateNow,
             "short-lived Inflow UI work must not turn the approved Quit command into a no-op"
         )
-        XCTAssertTrue(InflowTerminationPolicy.terminatesAfterLastWindowClosed)
+        XCTAssertFalse(InflowTerminationPolicy.terminatesAfterLastWindowClosed)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let previousStore = TemporaryDocumentDrafts.store
         let id = UUID()
@@ -148,9 +148,9 @@ final class RecentDocumentsTests: XCTestCase {
         try TemporaryDocumentDrafts.checkpoint(owner: document)
         XCTAssertFalse(try stagedStore.records().contains { $0.id == id }, "Clearing a draft after a cancelled quit must not restore stale content for that document")
         let delegate = InflowApplicationDelegate { _ in }
-        XCTAssertTrue(
+        XCTAssertFalse(
             delegate.applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared),
-            "closing the final document window must terminate the application"
+            "closing the final document window must keep the application running"
         )
     }
 
