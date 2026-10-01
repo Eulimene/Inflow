@@ -199,6 +199,19 @@ final class MarkdownSelectionController {
 /// Temporary layout attributes never become part of the document or undo history.
 @MainActor
 enum MarkdownFindHighlight {
+    static func requiresSource(for range: NSRange, plan: RenderedMarkdownPlan) -> Bool {
+        guard range.length > 0 else { return false }
+        var coveredThrough = range.location
+        for marker in plan.markers.sorted(by: { $0.sourceRange.utf16Range.location < $1.sourceRange.utf16Range.location }) {
+            let hidden = marker.sourceRange.utf16Range
+            guard NSMaxRange(hidden) > coveredThrough else { continue }
+            if hidden.location > coveredThrough { return false }
+            coveredThrough = NSMaxRange(hidden)
+            if coveredThrough >= NSMaxRange(range) { return true }
+        }
+        return false
+    }
+
     static func apply(to view: NSTextView, ranges: [NSRange], current: NSRange?) {
         guard let layout = view.layoutManager else { return }
         let full = NSRange(location: 0, length: view.string.utf16.count)

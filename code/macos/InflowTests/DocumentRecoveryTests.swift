@@ -539,7 +539,7 @@ final class DocumentRecoveryTests: XCTestCase {
         XCTAssertEqual(RecoveryOriginalChangePrompt.title, "原文件已变化")
         XCTAssertEqual(
             RecoveryOriginalChangePrompt.message,
-            "恢复内容不会自动写回。请比较后将它作为未命名文档打开，或另存到你确认的位置。"
+            "暂存副本尚未写入原文件。请比较后将它作为未命名文档打开，或另存到你确认的位置。"
         )
         XCTAssertEqual(RecoveryOriginalChangePrompt.compareTitle, "查看差异…")
         XCTAssertEqual(RecoveryOriginalChangePrompt.openTitle, "打开恢复文档")
@@ -1504,7 +1504,10 @@ final class DocumentRecoveryTests: XCTestCase {
         }
         XCTAssertEqual(protected.records, [record])
 
+        XCTAssertTrue(coordinator.protectsCurrentContent(record.id,
+            document: MarkdownDocument(text: record.text), originalURL: nil))
         coordinator.close(record.id)
+        XCTAssertNil(coordinator.protectedRecords[record.id])
         var afterClose = try await store.load()
         for _ in 0..<100 where !afterClose.records.isEmpty {
             try await Task.sleep(for: .milliseconds(10))
@@ -1566,10 +1569,13 @@ final class DocumentRecoveryTests: XCTestCase {
             verticalScrollOffset: 0
         )
         coordinator.update(first)
+        XCTAssertFalse(coordinator.protectsCurrentContent(id,
+            document: MarkdownDocument(text: first.text), originalURL: nil))
         let flush = Task { @MainActor in
             await coordinator.flush(id)
         }
         await gate.waitUntilSuspended()
+        XCTAssertTrue(coordinator.protectedRecords.isEmpty, "Starting a write must not claim success")
 
         let latest = DocumentRecoveryRecord(
             id: id,
@@ -1589,6 +1595,15 @@ final class DocumentRecoveryTests: XCTestCase {
         XCTAssertEqual(durable.text, latest.text)
         XCTAssertEqual(durable.selectedUTF16Location, latest.selectedUTF16Location)
         XCTAssertGreaterThan(durable.effectiveRevision, first.effectiveRevision)
+        XCTAssertTrue(coordinator.protectsCurrentContent(id,
+            document: MarkdownDocument(text: latest.text), originalURL: nil))
+        XCTAssertFalse(coordinator.protectsCurrentContent(id,
+            document: MarkdownDocument(text: first.text), originalURL: nil))
+        XCTAssertFalse(coordinator.protectsCurrentContent(id,
+            document: MarkdownDocument(text: latest.text + "new edit"), originalURL: nil))
+        try await coordinator.removeAllRecoveryContent()
+        XCTAssertTrue(coordinator.protectedRecords.isEmpty)
+        coordinator.close(id)
     }
 
     @MainActor
@@ -1888,6 +1903,7 @@ final class DocumentRecoveryTests: XCTestCase {
         XCTAssertNil(coordinator.protectionErrorMessage)
 
         await coordinator.retryProtection()
+        XCTAssertTrue(coordinator.protectedRecords.isEmpty)
         XCTAssertEqual(
             coordinator.protectionErrorMessage,
             DocumentRecoveryCoordinator.degradedProtectionMessage

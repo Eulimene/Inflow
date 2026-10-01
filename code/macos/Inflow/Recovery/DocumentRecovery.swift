@@ -1919,10 +1919,29 @@ actor PlaintextDocumentRecoveryStore: DocumentRecoveryStoring {
 }
 
 @MainActor
+final class DocumentRecoveryProtectionState: ObservableObject {
+    @Published var records: [UUID: DocumentRecoveryRecord] = [:]
+}
+
+@MainActor
 final class DocumentRecoveryCoordinator: ObservableObject {
     @Published private(set) var recoveredRecords: [DocumentRecoveryRecord] = []
     @Published private(set) var protectionErrorMessage: String?
     @Published private(set) var isLoaded = false
+    let protectionState = DocumentRecoveryProtectionState()
+    var protectedRecords: [UUID: DocumentRecoveryRecord] { protectionState.records }
+
+    func protectsCurrentContent(_ id: UUID, document: MarkdownDocument, originalURL: URL?) -> Bool {
+        guard store?.canWrite == true, let record = protectedRecords[id],
+              record.originalURL == originalURL,
+              UTF8Text.isExactlyEqual(record.text, document.text),
+              record.hasUTF8BOM == document.properties.hasUTF8BOM,
+              record.lineEndingRawValue == document.properties.lineEnding.rawValue,
+              record.requiresLineEndingChoice == document.properties.requiresLineEndingChoice
+        else { return false }
+        return true
+    }
+
 
     private struct ActiveSession {
         var latestRecord: DocumentRecoveryRecord
@@ -2001,6 +2020,10 @@ final class DocumentRecoveryCoordinator: ObservableObject {
                     Task { @MainActor [weak self] in
                         guard let self else { return }
                         self.protectionErrorMessage = nil
+                        self.protectionState.records.removeAll()
+                        for id in Array(self.activeSessions.keys) {
+                            self.activeSessions[id]?.lastWrittenRecord = nil
+                        }
                         if self.store?.canWrite == true {
                             if self.startupLoader == nil { await self.retryProtection() }
                             for id in Array(self.activeSessions.keys) { await self.flush(id) }
@@ -2234,13 +2257,15 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         while let session = activeSessions[id] {
             if session.lastWrittenRecord == session.latestRecord { return }
             guard store.canWrite else {
+                protectionState.records.removeValue(forKey: id)
                 if protectionErrorMessage != nil { protectionErrorMessage = nil }
                 return
             }
             let record = session.latestRecord
+            let outcome: DocumentRecoveryReconcileOutcome
             do {
                 try store.markSessionActive(id, generation: session.generation)
-                _ = try await store.reconcile(record)
+                outcome = try await store.reconcile(record)
                 if let sourceID = record.transferSourceRecordID,
                    recoveredRecords.contains(where: { $0.id == sourceID }) {
                     recoveredRecords.removeAll { $0.id == sourceID }
@@ -2248,6 +2273,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
                 isDegradedProtectionWarningDismissed = false
                 if protectionErrorMessage != nil { protectionErrorMessage = nil }
             } catch {
+                protectionState.records.removeValue(forKey: id)
                 showDegradedProtectionWarning()
                 return
             }
@@ -2259,11 +2285,20 @@ final class DocumentRecoveryCoordinator: ObservableObject {
                 continue
             }
             activeSessions[id]?.lastWrittenRecord = record
+            if outcome == .stored {
+                if protectedRecords[id]?.recoveryContentIdentity != record.recoveryContentIdentity
+                    || protectedRecords[id]?.originalURL != record.originalURL {
+                    protectionState.records[id] = record
+                }
+            } else {
+                protectionState.records.removeValue(forKey: id)
+            }
             return
         }
     }
 
     func close(_ id: UUID, discardingDraft: Bool = false) {
+        protectionState.records.removeValue(forKey: id)
         processOwnership?.unregisterRecovery(id)
         guard let closedSession = activeSessions.removeValue(forKey: id) else { return }
         closedSession.task.cancel()
@@ -2319,6 +2354,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         let suspendedRecords = activeSessions.values.map(\.latestRecord)
         for session in activeSessions.values { session.task.cancel() }
         activeSessions.removeAll()
+        protectionState.records.removeAll()
         sessionGenerations.removeAll()
         for record in suspendedRecords {
             clearedContentIdentities[record.id] = record.recoveryContentIdentity

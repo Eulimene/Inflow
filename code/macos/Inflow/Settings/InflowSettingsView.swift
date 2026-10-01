@@ -149,7 +149,7 @@ struct InflowSettingsView: View {
         Form {
             Section("保存") {
                 LabeledContent("正文保存方式", value: "手动保存")
-                Text("使用 ⌘S 保存；异常恢复保护独立运行，不会自动写回用户文件。")
+                Text("按 ⌘S 将内容保存到 Markdown 文件。恢复保护仅暂存副本；“已暂存”不代表已写入原文件。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }

@@ -739,6 +739,23 @@ final class EditorEngineClientTests: XCTestCase {
         client.submit(text: "new", selectionUTF16: NSRange(location: 3, length: 0))
         _ = await client.authoritativeSnapshot(matching: "new", selectionUTF16: NSRange(location: 3, length: 0))
         XCTAssertEqual(acknowledgements, ["new"], "A queued reset must not rewind subsequent native typing")
+
+        let reopening = EditorEngineClient()
+        let source = "# 重新打开\n\n正文"
+        var acknowledgementCount = 0
+        reopening.onAuthoritativeSnapshot = { _ in
+            acknowledgementCount += 1
+            if acknowledgementCount == 1 {
+                reopening.reset(text: "old", selectionUTF16: NSRange(location: 0, length: 0))
+                reopening.reset(text: source, selectionUTF16: NSRange(location: 0, length: 0))
+            }
+        }
+        let reopened = await reopening.derive(text: source,
+            selectionUTF16: NSRange(location: 0, length: 0), configuration: .default)
+        XCTAssertEqual(acknowledgementCount, 2, "Derived reads must wait for resets queued during an earlier acknowledgement")
+        XCTAssertEqual(reopened?.sourceSnapshot, source)
+        XCTAssertEqual(reopened?.analysis.headings.first?.displayTitle, "重新打开")
+
     }
 
     func testSynchronousDerivationCacheKeepsUnicodeByteIdentity() throws {

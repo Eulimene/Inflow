@@ -1579,6 +1579,13 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertEqual(compressed.reduce(0, +), 160, accuracy: 0.001)
         XCTAssertTrue(compressed.allSatisfy { $0 > 0 })
 
+        let linkedSource = "[个人首版](https://example.com/path)"
+        let linkedPlan = RenderedMarkdownEditor.plan(for: linkedSource)
+        XCTAssertTrue(MarkdownFindHighlight.requiresSource(
+            for: (linkedSource as NSString).range(of: "example.com"), plan: linkedPlan))
+        XCTAssertFalse(MarkdownFindHighlight.requiresSource(
+            for: (linkedSource as NSString).range(of: "个人首版"), plan: linkedPlan))
+
         let textView = NSTextView()
         textView.string = "个人首版与个人首版"
         let matches = [NSRange(location: 0, length: 4), NSRange(location: 5, length: 4)]

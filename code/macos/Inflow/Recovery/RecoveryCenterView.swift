@@ -10,13 +10,13 @@ enum RecoveryProtectionPrompt {
 
 enum RecoveryCenterPrompt {
     static let title = "恢复未保存的文档"
-    static let message = "上次 Inflow 未正常关闭。以下内容来自异常关闭，可打开或与当前磁盘版本比较。"
+    static let message = "上次 Inflow 未正常关闭。以下内容为恢复区暂存副本，尚未写入原文件；可打开或与当前磁盘版本比较。"
 }
 
 enum RecoveryOriginalChangePrompt {
     static let title = "原文件已变化"
     static let message =
-        "恢复内容不会自动写回。请比较后将它作为未命名文档打开，或另存到你确认的位置。"
+        "暂存副本尚未写入原文件。请比较后将它作为未命名文档打开，或另存到你确认的位置。"
     static let compareTitle = "查看差异…"
     static let openTitle = "打开恢复文档"
     static let saveAsTitle = "另存为…"
@@ -123,6 +123,34 @@ struct RecoveryCommands: Commands {
     }
 }
 
+/// A success claim is tied to the exact document content durably reconciled by
+/// the recovery store. Merely enabling protection or starting a write is insufficient.
+struct DocumentRecoveryStatusLabel: View {
+    let coordinator: DocumentRecoveryCoordinator
+    @ObservedObject private var protectionState: DocumentRecoveryProtectionState
+    let recordID: UUID
+    let document: MarkdownDocument
+    let originalURL: URL?
+
+    init(coordinator: DocumentRecoveryCoordinator, recordID: UUID,
+         document: MarkdownDocument, originalURL: URL?) {
+        self.coordinator = coordinator
+        self.recordID = recordID
+        self.document = document
+        self.originalURL = originalURL
+        _protectionState = ObservedObject(wrappedValue: coordinator.protectionState)
+    }
+
+    var body: some View {
+        if coordinator.protectsCurrentContent(recordID, document: document, originalURL: originalURL) {
+            Label("已暂存，尚未写入原文件", systemImage: "externaldrive.badge.checkmark")
+                .lineLimit(1)
+                .help("当前内容已暂存到恢复区。按 ⌘S 才会保存到 Markdown 文件。")
+                .accessibilityLabel("已暂存，尚未写入原文件。按 Command S 保存。")
+        }
+    }
+}
+
 struct RecoveryProtectionStatusBanner: View {
     @ObservedObject var coordinator: DocumentRecoveryCoordinator
 
@@ -188,7 +216,7 @@ struct LightweightRecoveryPromptView: View {
                         Text(record.displayName)
                             .font(.headline)
                             .lineLimit(1)
-                        Text("发现上次异常关闭前保留的一份最新快照。恢复后会作为未命名文档打开，不会覆盖原文件。")
+                        Text("发现上次异常关闭前暂存的内容，尚未写入原文件。恢复后会作为未命名文档打开，请检查后按 ⌘S 保存。")
                             .foregroundStyle(.secondary)
                     }
                 } icon: {

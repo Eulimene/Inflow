@@ -1227,21 +1227,30 @@ struct MarkdownEditorView: View {
     }
 
     private var statusBar: some View {
-        HStack(spacing: 12) {
+        let hasUnsavedChanges = MarkdownDocumentModificationProjection.isModified(document) || fileURL == nil
+        return HStack(spacing: 12) {
             if isProjectShell {
                 Text("选择文档或新建文档以开始写作")
             } else {
                 Label(
                     isSavingDocument ? "正在保存…" :
-                        (MarkdownDocumentModificationProjection.isModified(document) || fileURL == nil
+                        (hasUnsavedChanges
                             ? "未保存 · ⌘S" : "已保存到原文件"),
                     systemImage: isSavingDocument ? "arrow.triangle.2.circlepath" :
-                        (MarkdownDocumentModificationProjection.isModified(document) || fileURL == nil
+                        (hasUnsavedChanges
                             ? "circle.fill" : "checkmark.circle")
                 )
                 .foregroundStyle(MarkdownDocumentModificationProjection.isModified(document)
                     ? Color.primary : Color.secondary)
                 .help("手动保存：⌘S 将内容写入文件。恢复暂存不会写回原文件。")
+                if hasUnsavedChanges, let recoveryCoordinator {
+                    ViewThatFits(in: .horizontal) {
+                        DocumentRecoveryStatusLabel(coordinator: recoveryCoordinator,
+                            recordID: recoveryRecordID, document: document, originalURL: fileURL)
+                        Image(systemName: "externaldrive")
+                            .help("恢复暂存不会写回原文件；按 ⌘S 保存。")
+                    }
+                }
                 Menu {
                     Button("源码 — 编辑 Markdown 标记") { selectViewMode(.source) }
                     Button("源码与预览 — 对照编辑与效果") { selectViewMode(.split) }
@@ -3268,6 +3277,12 @@ struct MarkdownEditorView: View {
         updateFindHighlights()
         guard let match else { return }
         revealSourceSurface()
+        if viewMode == .preview,
+           let range = MarkdownSourceRange.navigationTarget(forUTF8Range: match.utf8Range, in: document.text)?.revealRange,
+           MarkdownFindHighlight.requiresSource(for: range, plan: sourceEditorSession.textView.currentWritingPlan()) {
+            viewMode = .source
+            findSession.showNotice("匹配位于隐藏的 Markdown 标记或链接地址，已切换到源码显示。")
+        }
         sourceSelectionGeneration &+= 1
         sourceSelectionRequest = SourceSelectionRequest(
             generation: sourceSelectionGeneration,

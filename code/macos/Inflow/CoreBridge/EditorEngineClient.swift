@@ -470,7 +470,7 @@ final class EditorEngineClient {
     ) async -> EditorEngineDerivedContent? {
         guard !Task.isCancelled else { return nil }
         submit(text: text, selectionUTF16: selectionUTF16)
-        await pending?.value
+        await waitForLatestInput()
         guard !Task.isCancelled else { return nil }
         return await client.derive(
             expectedText: text,
@@ -478,6 +478,16 @@ final class EditorEngineClient {
             mermaidEnabled: configuration.mermaidRenderingEnabled,
             deferMermaid: deferMermaid
         )
+    }
+
+    /// Opening/replacing a document can enqueue a reset while a previous input
+    /// is being acknowledged. A read must drain that newer input as well.
+    private func waitForLatestInput() async {
+        while !Task.isCancelled {
+            let generation = inputGeneration
+            await pending?.value
+            if generation == inputGeneration { return }
+        }
     }
 
     func resolveDeferredMermaid(
