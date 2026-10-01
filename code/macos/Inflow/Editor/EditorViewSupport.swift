@@ -73,7 +73,7 @@ enum EditorViewMode: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .source: "源码编辑"
-        case .split: "实时预览"
+        case .split: "分栏预览"
         case .preview: "即时编辑"
         }
     }

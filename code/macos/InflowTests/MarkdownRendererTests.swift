@@ -1724,6 +1724,18 @@ final class MarkdownRendererTests: XCTestCase {
         )
         XCTAssertEqual(editable.textView.renderedQuoteRanges, readOnly.textView.renderedQuoteRanges)
         XCTAssertEqual(editable.textView.string, readOnly.textView.string)
+
+        for width in [680.0, 1000.0] {
+            for session in [editable, readOnly] {
+                let adapter = MarkdownSourceEditor(text: .constant(source), selectionRequest: nil,
+                    session: session, isEditable: session === editable,
+                    presentation: .rendered, renderedContentWidth: width)
+                adapter.makeCoordinator().update(parent: adapter, textView: session.textView)
+                XCTAssertEqual(session.textView.readingColumnWidth, width)
+            }
+        }
+        XCTAssertEqual(editable.textView.accessibilityLabel(), "Markdown 即时编辑器")
+        XCTAssertEqual(readOnly.textView.accessibilityLabel(), "Markdown 只读预览")
     }
 
     private func temporaryDirectory() throws -> URL {

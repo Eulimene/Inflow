@@ -155,11 +155,19 @@ enum ProjectFileSearch {
         }
     }
 
-    static func results(_ files: [FolderMarkdownFile], query: String) -> [FolderMarkdownFile] {
-        files.filter { matches($0.relativePath, query: query) }.sorted {
+    static func results(_ files: [FolderMarkdownFile], query: String, recentURLs: [URL] = []) -> [FolderMarkdownFile] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        var ranks: [URL: Int] = [:]
+        for (index, url) in recentURLs.enumerated() where ranks[url.standardizedFileURL] == nil {
+            ranks[url.standardizedFileURL] = index
+        }
+        return files.filter { matches($0.relativePath, query: query) }.sorted {
             let lhs = $0.displayName.localizedStandardContains(query)
             let rhs = $1.displayName.localizedStandardContains(query)
             if lhs != rhs { return lhs }
+            let leftRank = ranks[$0.url.standardizedFileURL] ?? Int.max
+            let rightRank = ranks[$1.url.standardizedFileURL] ?? Int.max
+            if leftRank != rightRank { return leftRank < rightRank }
             return $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
         }
     }
@@ -2225,12 +2233,13 @@ struct FolderBrowserCommands: Commands {
 
 struct ProjectQuickOpenSheet: View {
     let files: [FolderMarkdownFile]
+    var recentURLs: [URL] = []
     let onOpen: (URL) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var selection: String?
     @FocusState private var searchFocused: Bool
-    private var matches: [FolderMarkdownFile] { Array(ProjectFileSearch.results(files, query: query).prefix(100)) }
+    private var matches: [FolderMarkdownFile] { Array(ProjectFileSearch.results(files, query: query, recentURLs: recentURLs).prefix(100)) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -2257,7 +2266,7 @@ struct ProjectQuickOpenSheet: View {
                 }
             }
             HStack {
-                Text("↑ ↓ 选择 · 回车打开 · 最多显示 100 项").font(.caption).foregroundStyle(.secondary)
+                Text("最近访问优先 · ↑ ↓ 选择 · 回车打开 · 最多 100 项").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("打开") { openSelection() }.disabled(matches.isEmpty)

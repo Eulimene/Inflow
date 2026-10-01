@@ -693,6 +693,16 @@ final class LightweightProjectCoordinator: ObservableObject {
         }
     }
 
+    var recentlyVisitedDocumentURLs: [URL] {
+        let ids = [activeSurfaceID].compactMap { $0 } + readingHistory.back.reversed()
+        var seen = Set<URL>()
+        return ids.compactMap { id in
+            guard let surface = documentSurfaces.first(where: { $0.id == id }),
+                  seen.insert(surface.fileURL).inserted else { return nil }
+            return surface.fileURL
+        }
+    }
+
     var canGoBack: Bool { readingHistory.back.contains { id in id != activeSurfaceID && documentSurfaces.contains { $0.id == id } } }
     var canGoForward: Bool { readingHistory.forward.contains { id in id != activeSurfaceID && documentSurfaces.contains { $0.id == id } } }
 
@@ -1755,7 +1765,8 @@ private struct InflowDocumentScene: View {
                 && !projectCoordinator.isBackgroundProjectDocument(nativeDocument) },
             set: { folderBrowser.requestsQuickOpen = $0 }
         )) {
-            ProjectQuickOpenSheet(files: folderBrowser.files) { url in
+            ProjectQuickOpenSheet(files: folderBrowser.files,
+                recentURLs: projectCoordinator.recentlyVisitedDocumentURLs) { url in
                 projectCoordinator.openDocument(url,
                     replacing: projectCoordinator.activeDocumentSurface?.nativeDocument ?? nativeDocument,
                     using: recentDocuments)
@@ -2120,7 +2131,7 @@ private struct DocumentTitlebarContent: View {
                                             .padding(.horizontal, 8)
                                     }
                                     Button { window.performClose(nil) } label: { Image(systemName: "xmark") }
-                                        .help("关闭标签页")
+                                        .help("关闭标签页并保留本地草稿；按 ⌘S 才会写入原文件")
                                         .accessibilityLabel("关闭标签页：" + window.title)
                                 }
                                 .buttonStyle(.borderless)

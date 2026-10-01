@@ -150,11 +150,12 @@ struct DocumentOutlineView: View {
                 Text("正在分析当前文档…")
             }
         case .ready:
-            ContentUnavailableView(
-                "暂无标题",
-                systemImage: "text.badge.plus",
-                description: Text("使用 H1–H6 标题即可生成大纲。")
-            )
+            VStack(alignment: .leading, spacing: 8) {
+                Text("暂无标题").font(.headline)
+                Text("输入 # 加空格创建标题，或使用“格式”菜单。")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(16)
         case let .failed(_, message):
             ContentUnavailableView(

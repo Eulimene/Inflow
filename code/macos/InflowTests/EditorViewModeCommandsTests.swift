@@ -39,6 +39,8 @@ final class EditorViewModeCommandsTests: XCTestCase {
         XCTAssertEqual(WorkspaceViewModePreference(mode: .preview), .preview)
         XCTAssertNil(WorkspaceViewModePreference(rawValue: "removed-mode"))
         XCTAssertEqual(EditorViewMode.preview.label, "即时编辑")
+        XCTAssertEqual(EditorViewMode.split.label, "分栏预览")
+        XCTAssertEqual(EditorViewMode.source.label, "源码编辑")
         XCTAssertFalse(EditorViewMode.source.usesCanonicalPreviewRenderer)
         XCTAssertTrue(EditorViewMode.split.usesCanonicalPreviewRenderer)
         XCTAssertTrue(EditorViewMode.preview.usesCanonicalPreviewRenderer)

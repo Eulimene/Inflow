@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 enum EditorRenderedSurfacePhase: Equatable {
     case preparing
@@ -67,8 +68,11 @@ enum EditorIntent: Sendable {
 final class EditorStore: ObservableObject {
     @Published private(set) var state: EditorViewState
 
-    private let sourceEditorSession: MarkdownSourceEditorSession
-    private let renderedPreviewSession: MarkdownSourceEditorSession
+    let sourceEditorSession: MarkdownSourceEditorSession
+    let renderedPreviewSession: MarkdownSourceEditorSession
+    private var sessionObservation: AnyCancellable?
+    private let preparationTimeout: Duration
+    private var preparationTimeoutTask: Task<Void, Never>?
     private var derivedContentGeneration = 0
     private var derivedContentTask: Task<Void, Never>?
     private var activeDerivedRequest: EditorDerivedContentRequest?
@@ -82,12 +86,17 @@ final class EditorStore: ObservableObject {
         renderedPreviewSession: MarkdownSourceEditorSession = MarkdownSourceEditorSession(
             role: .renderedProjection
         ),
-        initialState: EditorViewState = .initial
+        initialState: EditorViewState = .initial,
+        preparationTimeout: Duration = .seconds(8)
     ) {
         self.sourceEditorSession = sourceEditorSession
         self.renderedPreviewSession = renderedPreviewSession
         state = initialState
+        self.preparationTimeout = preparationTimeout
         requestedMode = initialState.engineMode
+        sessionObservation = sourceEditorSession.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
         sourceEditorSession.localTextProjectionDidPublish = { [weak self] sourceSnapshot in
             guard let self else { return }
             self.state.renderedSurfacePhase = .optimistic(sourceSnapshot: sourceSnapshot)
@@ -112,6 +121,7 @@ final class EditorStore: ObservableObject {
     deinit {
         derivedContentTask?.cancel()
         modeSynchronizationTask?.cancel()
+        preparationTimeoutTask?.cancel()
     }
 
     var textProjection: String {
@@ -218,6 +228,7 @@ final class EditorStore: ObservableObject {
             suspendDerived(markdown: markdown)
         case .cancelPending:
             derivedContentTask?.cancel()
+            preparationTimeoutTask?.cancel()
             derivedContentGeneration &+= 1
             activeDerivedRequest = nil
             latestDerivedRequest = nil
@@ -227,10 +238,18 @@ final class EditorStore: ObservableObject {
     func prepareForDocumentReplacement() {
         latestDerivedRequest = nil
         derivedContentTask?.cancel()
+        preparationTimeoutTask?.cancel()
         derivedContentGeneration &+= 1
         activeDerivedRequest = nil
         completedDerivedRequest = nil
         state.renderedSurfacePhase = .preparing
+    }
+
+    func retryDerivedContent() {
+        guard let request = latestDerivedRequest else { return }
+        activeDerivedRequest = nil
+        completedDerivedRequest = nil
+        refreshDerived(request)
     }
 
     private func refreshDerived(_ request: EditorDerivedContentRequest) {
@@ -241,10 +260,23 @@ final class EditorStore: ObservableObject {
             return
         }
         derivedContentTask?.cancel()
+        preparationTimeoutTask?.cancel()
         derivedContentGeneration &+= 1
         let generation = derivedContentGeneration
         activeDerivedRequest = request
         state.analysisState = .updating(previous: state.analysisState.displayedAnalysis)
+        state.previewFailureMessage = nil
+        preparationTimeoutTask = Task { @MainActor [weak self, preparationTimeout] in
+            do { try await Task.sleep(for: preparationTimeout) } catch { return }
+            guard let self, generation == self.derivedContentGeneration else { return }
+            self.derivedContentTask?.cancel()
+            self.derivedContentGeneration &+= 1
+            self.activeDerivedRequest = nil
+            self.completedDerivedRequest = nil
+            let message = "排版准备时间过长。正文仍保留，可重试或切换到源码编辑。"
+            self.state.previewFailureMessage = message
+            self.state.analysisState = .failed(previous: self.state.analysisState.displayedAnalysis, message: message)
+        }
 
         derivedContentTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -257,7 +289,8 @@ final class EditorStore: ObservableObject {
                 for: request.markdown,
                 configuration: request.configuration
             )
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, generation == derivedContentGeneration else { return }
+            preparationTimeoutTask?.cancel()
             guard let coreContent,
                   UTF8Text.isExactlyEqual(coreContent.sourceSnapshot, request.markdown)
             else {
@@ -302,6 +335,7 @@ final class EditorStore: ObservableObject {
     private func suspendDerived(markdown: String) {
         latestDerivedRequest = nil
         derivedContentTask?.cancel()
+        preparationTimeoutTask?.cancel()
         derivedContentGeneration &+= 1
         activeDerivedRequest = nil
         completedDerivedRequest = nil

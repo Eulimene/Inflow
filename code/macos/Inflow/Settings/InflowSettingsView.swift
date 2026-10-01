@@ -149,7 +149,7 @@ struct InflowSettingsView: View {
         Form {
             Section("保存") {
                 LabeledContent("正文保存方式", value: "手动保存")
-                Text("按 ⌘S 将内容保存到 Markdown 文件。恢复保护仅暂存副本；“已暂存”不代表已写入原文件。")
+                Text("按 ⌘S 将内容写入 Markdown 文件。“草稿已保护”仅表示恢复副本可用。关闭文档不会自动保存到原文件；可点击编辑器底部的保存状态查看详情。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
@@ -197,7 +197,7 @@ struct InflowSettingsView: View {
                     valueText: "\(Int(preferences.workspaceOutlineWidth.rounded())) 点"
                 )
                 SettingSliderRow(
-                    title: "实时预览源码占比",
+                    title: "分栏预览源码占比",
                     value: $preferences.workspaceSplitFraction,
                     range: EditorSplitLayout.allowedFraction,
                     step: 0.05,
@@ -242,6 +242,10 @@ struct InflowSettingsView: View {
 
     private var previewSettings: some View {
         Form {
+            LabeledContent("正文宽度预设") {
+                Button("舒适阅读") { preferences.previewContentWidth = 680 }
+                Button("宽屏资料") { preferences.previewContentWidth = 1000 }
+            }
             SettingSliderRow(
                 title: "最大正文宽度",
                 value: $preferences.previewContentWidth,
@@ -249,7 +253,7 @@ struct InflowSettingsView: View {
                 step: 20,
                 valueText: "\(Int(preferences.previewContentWidth.rounded())) 点"
             )
-            Text("正文随窗口伸缩，默认最宽 1200 点；宽窗口保持居中，窄窗口两侧保留少量留白。")
+            Text("正文随窗口伸缩；选择舒适阅读或宽屏资料预设，也可继续调整宽度。主题可限制最大宽度。")
                 .font(.caption).foregroundStyle(.secondary)
             Picker("主题", selection: $preferences.previewTheme) {
                 ForEach(preferences.availableThemes) { theme in
@@ -260,7 +264,7 @@ struct InflowSettingsView: View {
                 Button("打开主题目录…") { preferences.openThemeDirectory() }
                 Button("重新加载主题") { preferences.reloadThemes() }
             }
-            Text("将 .css 文件放入主题目录即可使用，文件修改后会自动刷新。支持常用字体、颜色和块样式；复杂网页布局仅用于 HTML 导出。")
+            Text("将 .css 文件放入主题目录即可使用，文件修改后会自动刷新。支持常用字体、颜色和块样式。原生排版不支持复杂网页布局。")
                 .font(.caption).foregroundStyle(.secondary)
             if let message = preferences.themeLoadMessage {
                 Text(message).font(.caption).foregroundStyle(.secondary)
@@ -273,7 +277,7 @@ struct InflowSettingsView: View {
             Toggle("编辑器到预览滚动同步", isOn: $preferences.scrollSyncEnabled)
                 .help("手动滚动预览后会暂停跟随，直到再次滚动源码编辑器。")
             Toggle("点击预览标题定位源码", isOn: $preferences.headingNavigationEnabled)
-                .help("定位时会从纯预览进入实时预览，不会修改 Markdown。")
+                .help("定位到当前正文中的标题，不会修改 Markdown。")
             Picker("链接打开方式", selection: $preferences.linkActivation) {
                 ForEach(LinkActivationPreference.allCases) { behavior in
                     Text(behavior.label).tag(behavior)

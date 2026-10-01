@@ -14,6 +14,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
     let renderedResourceContext: RenderedMarkdownResourceContext
     let linkActivation: LinkActivationPreference
     let renderedTheme: PreviewTheme
+    let renderedContentWidth: Double
     let renderedColorScheme: PreviewColorScheme
 
     init(
@@ -29,7 +30,8 @@ struct MarkdownSourceEditor: NSViewRepresentable {
         renderedResourceContext: RenderedMarkdownResourceContext = .unavailable,
         linkActivation: LinkActivationPreference = .singleClick,
         renderedTheme: PreviewTheme = .standard,
-        renderedColorScheme: PreviewColorScheme = .system
+        renderedColorScheme: PreviewColorScheme = .system,
+        renderedContentWidth: Double = MarkdownRenderMetrics.previewReadingWidth
     ) {
         _text = text
         self.selectionRequest = selectionRequest
@@ -44,6 +46,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
         self.linkActivation = linkActivation
         self.renderedTheme = renderedTheme
         self.renderedColorScheme = renderedColorScheme
+        self.renderedContentWidth = renderedContentWidth
     }
 
     func makeCoordinator() -> Coordinator {
@@ -95,6 +98,10 @@ struct MarkdownSourceEditor: NSViewRepresentable {
             textView.delegate = self
             textView.isEditable = parent.isEditable
             textView.isSelectable = true
+            if parent.presentation == .rendered {
+                textView.readingColumnWidth = min(CGFloat(parent.renderedContentWidth),
+                    max(240, parent.renderedTheme.styles.length("max-width") ?? CGFloat(parent.renderedContentWidth)))
+            }
             textView.appearance = parent.presentation == .rendered
                 ? (parent.renderedColorScheme.nativeAppearance
                     ?? (parent.renderedTheme.styles.value("color-scheme") == "dark" ? NSAppearance(named: .darkAqua)

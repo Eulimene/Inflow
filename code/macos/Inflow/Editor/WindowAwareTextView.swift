@@ -131,7 +131,7 @@ final class WindowAwareTextView: DocumentFindTextView {
 
     var renderedTableAvailableWidth: CGFloat {
         let viewport = enclosingScrollView?.contentSize.width ?? bounds.width
-        return max(160, min(1100, viewport - MarkdownRenderMetrics.renderedHorizontalInset * 2
+        return max(160, min(readingColumnWidth, viewport - textContainerInset.width * 2
             - (textContainer?.lineFragmentPadding ?? 0) * 2))
     }
 

@@ -15,6 +15,10 @@ final class FolderBrowserTests: XCTestCase {
         XCTAssertEqual(ProjectFileSearch.results(files, query: "README").count, 1)
         XCTAssertEqual(ProjectFileSearch.results(files, query: "不存在").count, 0)
         XCTAssertEqual(ProjectFileSearch.results(files, query: "  ").count, 3)
+        XCTAssertEqual(ProjectFileSearch.results(files, query: "  ", recentURLs: [files[2].url, files[0].url, files[2].url])
+            .map(\.relativePath), ["Readme.md", "章节/写作计划.md", "归档/计划.markdown"])
+        XCTAssertEqual(ProjectFileSearch.results(files, query: " 计划 ", recentURLs: [files[1].url])
+            .map(\.relativePath), ["归档/计划.markdown", "章节/写作计划.md"])
     }
 
     func testReadingHistorySkipsClosedDocumentsAndTruncatesForwardBranch() {

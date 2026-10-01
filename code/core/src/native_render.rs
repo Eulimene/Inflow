@@ -708,9 +708,12 @@ fn list_item(
         while task_end < end && matches!(bytes[task_end], b' ' | b'\t') {
             task_end += 1;
         }
+        // A checkbox replaces the whole list prefix, not just [x]. Leaving
+        // the preceding bullet produces two competing markers for one task.
+        markers.pop();
         markers.push(replacement_mark(
             MarkerKind::TaskList,
-            task.start..task_end,
+            start..task_end,
             if checked { "☑ " } else { "☐ " }.to_owned(),
         ));
         cursor = task_end;
@@ -1349,6 +1352,17 @@ mod tests {
         assert_eq!(
             marker(MarkerKind::TaskList).replacement_text.as_deref(),
             Some("☑ ")
+        );
+        assert_eq!(
+            &source[marker(MarkerKind::TaskList).source_range.clone()],
+            "- [x] "
+        );
+        assert_eq!(
+            plan.markers
+                .iter()
+                .filter(|item| item.kind == MarkerKind::UnorderedList)
+                .count(),
+            1
         );
         assert_eq!(
             &source[marker(MarkerKind::Rule).source_range.clone()],

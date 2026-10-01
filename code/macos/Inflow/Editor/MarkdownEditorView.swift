@@ -47,14 +47,9 @@ struct MarkdownEditorView: View {
         self.showsProjectSidebar = showsProjectSidebar
         self.tearsDownWhenRemovedFromWorkspace = tearsDownWhenRemovedFromWorkspace
         self.isWorkspaceSurfaceActive = isWorkspaceSurfaceActive
-        let sourceEditorSession = sourceEditorSessionOverride ?? MarkdownSourceEditorSession()
-        let renderedPreviewSession = MarkdownSourceEditorSession(role: .renderedProjection)
-        _sourceEditorSession = StateObject(wrappedValue: sourceEditorSession)
-        _renderedPreviewSession = StateObject(wrappedValue: renderedPreviewSession)
         _editorStore = StateObject(
             wrappedValue: EditorStore(
-                sourceEditorSession: sourceEditorSession,
-                renderedPreviewSession: renderedPreviewSession
+                sourceEditorSession: sourceEditorSessionOverride ?? MarkdownSourceEditorSession()
             )
         )
         let initialDocument = document.wrappedValue
@@ -83,8 +78,10 @@ struct MarkdownEditorView: View {
     @State private var previewLinkPlan: PreviewLinkPlan?
     @State private var incomingHeadingFragment: String?
     @State private var incomingNavigationIsPending = false
-    @StateObject private var sourceEditorSession: MarkdownSourceEditorSession
-    @StateObject private var renderedPreviewSession: MarkdownSourceEditorSession
+    // One StateObject owns both surfaces. Separate lazy StateObjects can capture
+    // different sessions when SwiftUI reconstructs a view before first access.
+    private var sourceEditorSession: MarkdownSourceEditorSession { editorStore.sourceEditorSession }
+    private var renderedPreviewSession: MarkdownSourceEditorSession { editorStore.renderedPreviewSession }
     @StateObject private var nativeDocumentHost = MarkdownEditorNativeDocumentHost()
     @State private var selectedHeadingID: DocumentHeading.ID?
     @State private var sourceSelectionRequest: SourceSelectionRequest?
@@ -125,6 +122,8 @@ struct MarkdownEditorView: View {
     @State private var isRelocatingDocument = false
     @State private var relocationNativeDocument: NSDocument?
     @State private var isSavingDocument = false
+    @State private var isSaveStatusPresented = false
+    @State private var lastSuccessfulSave: Date?
     @State private var documentSaveFailureMessage: String?
 
     private var previewSourceSnapshot: String { editorStore.state.previewSourceSnapshot }
@@ -524,6 +523,7 @@ struct MarkdownEditorView: View {
                 )
             }
             document.adoptRecoveryCommittedSave(envelope)
+            lastSuccessfulSave = Date()
             updateRecoveryProtection(originalURL: envelope.targetURL)
             Task { @MainActor in
                 await recoveryCoordinator?.flush(recoveryRecordID)
@@ -1108,7 +1108,7 @@ struct MarkdownEditorView: View {
     }
 
     private var renderedEditor: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             renderedSurface(
                 session: sourceEditorSession,
                 isEditable: canEditDocument
@@ -1117,15 +1117,34 @@ struct MarkdownEditorView: View {
             .allowsHitTesting(renderedSurfaceCanDisplay)
             .accessibilityHidden(!renderedSurfaceCanDisplay)
 
+            if renderedSurfaceCanDisplay, document.text.isEmpty, canEditDocument {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("开始写作…").font(.body)
+                    Text("输入 # 创建标题 · ⌘O 打开文件 · ⌘S 保存")
+                        .font(.caption)
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 32).padding(.top, 32)
+                .allowsHitTesting(false)
+            }
+            if renderedSurfaceCanDisplay, previewFailureMessage != nil {
+                previewFailureBanner
+            }
             if !renderedSurfaceCanDisplay {
                 VStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("正在准备即时编辑…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if let message = previewFailureMessage {
+                        Label("暂时无法完成排版", systemImage: "exclamationmark.triangle")
+                        Text(message).font(.callout).foregroundStyle(.secondary)
+                        Button("重试排版") { editorStore.retryDerivedContent() }
+                    } else {
+                        ProgressView().controlSize(.small)
+                        Text("正在准备即时编辑…").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button("切换到源码编辑") { selectViewMode(.source) }
+                        .help("使用当前正文继续编辑，不会写入原文件")
                 }
-                .accessibilityElement(children: .combine)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityElement(children: .contain)
             }
         }
     }
@@ -1157,7 +1176,8 @@ struct MarkdownEditorView: View {
             renderedResourceContext: renderedEditingResourceContext,
             linkActivation: preferences.linkActivation,
             renderedTheme: preferences.previewConfiguration.theme,
-            renderedColorScheme: preferences.previewConfiguration.colorScheme
+            renderedColorScheme: preferences.previewConfiguration.colorScheme,
+            renderedContentWidth: preferences.previewContentWidth
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1232,14 +1252,18 @@ struct MarkdownEditorView: View {
             if isProjectShell {
                 Text("选择文档或新建文档以开始写作")
             } else {
-                Label(
+                Button { isSaveStatusPresented = true } label: {
+                    Label(
                     isSavingDocument ? "正在保存…" :
                         (hasUnsavedChanges
-                            ? "未保存 · ⌘S" : "已保存到原文件"),
+                            ? "尚未保存到文件 · ⌘S" : "已保存到文件"),
                     systemImage: isSavingDocument ? "arrow.triangle.2.circlepath" :
                         (hasUnsavedChanges
                             ? "circle.fill" : "checkmark.circle")
                 )
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $isSaveStatusPresented) { saveStatusDetails }
                 .foregroundStyle(MarkdownDocumentModificationProjection.isModified(document)
                     ? Color.primary : Color.secondary)
                 .fixedSize(horizontal: true, vertical: false)
@@ -1254,8 +1278,8 @@ struct MarkdownEditorView: View {
                     }
                 }
                 Menu {
-                    Button("源码 — 编辑 Markdown 标记") { selectViewMode(.source) }
-                    Button("源码与预览 — 对照编辑与效果") { selectViewMode(.split) }
+                    Button("源码编辑 — 编辑 Markdown 标记") { selectViewMode(.source) }
+                    Button("分栏预览 — 对照编辑与效果") { selectViewMode(.split) }
                     Button("即时编辑 — 在排版效果中写作") { selectViewMode(.preview) }
                 } label: { Text(viewMode.label) }
                 .menuStyle(.borderlessButton)
@@ -1308,6 +1332,32 @@ struct MarkdownEditorView: View {
         .frame(height: EditorWorkspaceMetrics.statusBarHeight)
         .background(Color(nsColor: .windowBackgroundColor))
         .accessibilityElement(children: .contain)
+    }
+
+    private var saveStatusDetails: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("文件与草稿").font(.headline)
+            Text(fileURL?.path ?? "尚未选择文件位置")
+                .font(.callout).textSelection(.enabled)
+            if let lastSuccessfulSave {
+                Text("本次会话最近保存：" + lastSuccessfulSave.formatted(date: .abbreviated, time: .standard))
+                    .font(.caption)
+            } else {
+                Text("本次会话尚未执行保存").font(.caption).foregroundStyle(.secondary)
+            }
+            if let recoveryCoordinator {
+                DocumentRecoveryStatusLabel(coordinator: recoveryCoordinator,
+                    recordID: recoveryRecordID, document: document, originalURL: fileURL)
+            }
+            Text("按 ⌘S 才会写入 Markdown 文件。关闭后保留的本地草稿用于继续写作，不代表原文件已更新。")
+                .font(.callout).foregroundStyle(.secondary)
+            Button(fileURL == nil ? "选择位置并保存…" : "保存到文件") {
+                isSaveStatusPresented = false
+                saveCurrentDocument()
+            }
+            .disabled(!canEditDocument || isSavingDocument || isRelocatingDocument)
+        }
+        .padding(20).frame(width: 360)
     }
 
     private var lineEndingChoiceBanner: some View {
@@ -1640,6 +1690,7 @@ struct MarkdownEditorView: View {
                     expectedData: envelope.bytes
                 )
                 document.adoptRecoveryCommittedSave(envelope)
+                lastSuccessfulSave = Date()
                 updateRecoveryProtection(originalURL: envelope.targetURL)
                 await recoveryCoordinator?.flush(recoveryRecordID)
                 documentSaveFailureMessage = nil
@@ -1691,6 +1742,7 @@ struct MarkdownEditorView: View {
                 expectedData: envelope.bytes
             )
             document.adoptRecoveryCommittedSave(envelope)
+            lastSuccessfulSave = Date()
             updateRecoveryProtection(originalURL: envelope.targetURL)
             await recoveryCoordinator?.flush(recoveryRecordID)
             documentSaveFailureMessage = nil
@@ -1888,6 +1940,7 @@ struct MarkdownEditorView: View {
                     expectedData: envelope.bytes
                 )
                 document.adoptRecoveryCommittedSave(envelope)
+                lastSuccessfulSave = Date()
                 updateRecoveryProtection(originalURL: envelope.targetURL)
                 await recoveryCoordinator?.flush(recoveryRecordID)
             }
@@ -3565,6 +3618,14 @@ struct MarkdownEditorView: View {
     }
 
     private var statisticsText: String? {
+        guard statisticMode != .hidden else { return nil }
+        if editorStore.state.previewSourceSnapshot.isEmpty, !document.text.isEmpty {
+            switch analysisState {
+            case .updating: return "待分析"
+            case .failed: return "统计暂不可用"
+            case .ready: break
+            }
+        }
         let analysis = analysisState.displayedAnalysis
         return switch statisticMode {
         case .words:

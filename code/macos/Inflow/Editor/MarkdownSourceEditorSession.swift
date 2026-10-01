@@ -672,7 +672,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             }
         case .rendered:
             configureLineWrapping(true)
-            textView.setAccessibilityLabel("Markdown 即时编辑器")
+            textView.setAccessibilityLabel(textView.isEditable ? "Markdown 即时编辑器" : "Markdown 只读预览")
             textView.linkClickHandler = { [weak self] location in
                 guard let self,
                       let renderedPlan = self.renderedPlan,

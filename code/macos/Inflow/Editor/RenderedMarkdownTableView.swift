@@ -278,6 +278,10 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
                 textView.allowsUndo = false
                 textView.isSelectable = true
                 textView.isRichText = true
+                // The table owns row geometry; NSTextView must not resize itself
+                // while TextKit recomputes wrapping or toggles read-only mode.
+                textView.isVerticallyResizable = false
+                textView.isHorizontallyResizable = false
                 textView.drawsBackground = false
                 textView.selectedTextAttributes = palette.selectedTextAttributes
                 textView.textContainerInset = .zero
@@ -375,6 +379,10 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
 
     func setEditingEnabled(_ enabled: Bool) {
         for cell in cells { cell.textView.isEditable = enabled }
+        toolTip = enabled
+            ? "Tab 切换单元格；⌘Enter 新增行；Shift+Enter 换行；右键查看更多表格操作。"
+            : "只读表格，可选择和复制内容。切换到即时编辑可修改单元格。"
+        setAccessibilityHelp(toolTip)
         toolsButton.isEnabled = enabled
         updateToolbarVisibility()
         let height = enabled ? Self.toolbarHeight : 0
@@ -1026,6 +1034,10 @@ final class RenderedMarkdownTableCellTextView: DocumentFindTextView {
 
     func centerContentVertically() {
         guard let manager = layoutManager, let container = textContainer else { return }
+        // Reset the previous inset before measuring the new width. Otherwise a
+        // narrow-to-wide transition measures using stale centering geometry.
+        textContainerInset = .zero
+        container.size = NSSize(width: max(1, bounds.width), height: .greatestFiniteMagnitude)
         manager.ensureLayout(for: container)
         let used = manager.usedRect(for: container)
         let contentHeight = max(used.maxY, manager.extraLineFragmentRect.maxY)

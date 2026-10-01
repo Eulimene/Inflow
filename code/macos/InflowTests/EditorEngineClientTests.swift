@@ -3,6 +3,43 @@ import SwiftUI
 @testable import Inflow
 
 final class EditorEngineClientTests: XCTestCase {
+    @MainActor
+    func testPreparationTimeoutCanRetryWithoutPublishingStaleResults() async throws {
+        let session = MarkdownSourceEditorSession()
+        let source = "# 可恢复的正文"
+        session.textView.string = source
+        let store = EditorStore(sourceEditorSession: session, preparationTimeout: .milliseconds(80))
+        let request = EditorDerivedContentRequest(markdown: source, documentDirectory: nil,
+            projectRoot: nil, expectedProjectRootIdentity: nil, requiresProjectBoundary: false,
+            configuration: .default, syntaxHighlightingEnabled: true, delayNanoseconds: 300_000_000)
+        store.send(.refreshDerived(request))
+        for _ in 0..<100 where store.state.previewFailureMessage == nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertNotNil(store.state.previewFailureMessage)
+        XCTAssertFalse(store.state.analysisState.allowsNavigation)
+        XCTAssertEqual(session.textView.string, source)
+        let immediate = EditorDerivedContentRequest(markdown: source, documentDirectory: nil,
+            projectRoot: nil, expectedProjectRootIdentity: nil, requiresProjectBoundary: false,
+            configuration: .default, syntaxHighlightingEnabled: true, delayNanoseconds: 0)
+        store.send(.refreshDerived(immediate))
+        for _ in 0..<100 where store.state.previewSourceSnapshot != source {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(store.state.renderedSurfacePhase, .ready(sourceSnapshot: source))
+        XCTAssertNil(store.state.previewFailureMessage)
+        try await Task.sleep(for: .milliseconds(320))
+        XCTAssertEqual(store.state.previewSourceSnapshot, source)
+        XCTAssertNil(store.state.previewFailureMessage, "A cancelled timeout must not overwrite a successful retry")
+        store.retryDerivedContent()
+        for _ in 0..<100 where !store.state.analysisState.allowsNavigation {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(store.state.analysisState.allowsNavigation)
+        XCTAssertTrue(store.sourceEditorSession === session)
+        XCTAssertFalse(store.renderedPreviewSession === session)
+    }
+
     func testRenderedSurfacePhaseHidesOnlyUnpreparedDocumentReplacements() {
         let ready = EditorRenderedSurfacePhase.ready(sourceSnapshot: "old")
 

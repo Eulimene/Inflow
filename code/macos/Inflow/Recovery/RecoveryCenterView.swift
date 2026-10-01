@@ -143,7 +143,7 @@ struct DocumentRecoveryStatusLabel: View {
 
     var body: some View {
         if coordinator.protectsCurrentContent(recordID, document: document, originalURL: originalURL) {
-            Label("已暂存，尚未写入原文件", systemImage: "externaldrive.badge.checkmark")
+            Label("草稿已保护", systemImage: "externaldrive.badge.checkmark")
                 .lineLimit(1)
                 .help("当前内容已暂存到恢复区。按 ⌘S 才会保存到 Markdown 文件。")
                 .accessibilityLabel("已暂存，尚未写入原文件。按 Command S 保存。")

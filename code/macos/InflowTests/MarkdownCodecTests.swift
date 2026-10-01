@@ -5,6 +5,68 @@ import XCTest
 @testable import Inflow
 
 final class MarkdownCodecTests: XCTestCase {
+    @MainActor
+    func testHostedEditorRetainsSessionAndRenderingAcrossViewReconstruction() async throws {
+        let sample = "# 产品方案\n\n连续写作与清晰的保存反馈。\n\n## 方案比较\n\n| 能力 | 当前目标 | 优先级 |\n| --- | --- | --- |\n| 连续写作 | 不中断输入 | 高 |\n| 文档导航 | 快速找到内容 | 高 |\n| 个性化 | 合适的排版 | 中 |\n\n- [ ] 待完成\n- [x] 已完成\n"
+        let model = MarkdownDocumentHarness(document: MarkdownDocument(text: sample))
+        let suite = "UXReview." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = AppPreferences(defaults: defaults)
+        preferences.workspaceViewMode = .preview
+        preferences.workspaceOutlineVisible = true
+        let browser = FolderBrowserController(restoresSavedFolder: false)
+        func content() -> some View {
+            MarkdownEditorView(document: Binding(get: { model.document }, set: { model.document = $0 }),
+                fileURL: nil, isEditable: true, preferences: preferences, folderBrowser: browser)
+                .frame(width: 1200, height: 760)
+        }
+        let host = NSHostingView(rootView: content())
+        host.rootView = content()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 760),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        for _ in 0..<50 where descendantTextViews(in: host).isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let editor = try XCTUnwrap(descendantTextViews(in: host).compactMap { $0 as? WindowAwareTextView }.first)
+        let location = (sample as NSString).range(of: "| 能力").location
+        for _ in 0..<100 where editor.renderedTable(atUTF16Location: location) == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNotNil(editor.renderedTable(atUTF16Location: location))
+        for mode: WorkspaceViewModePreference in [.split, .source, .preview, .split] {
+            preferences.workspaceViewMode = mode
+            host.rootView = content()
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertTrue(descendantTextViews(in: host).contains { $0 === editor })
+            XCTAssertEqual(editor.string, sample)
+        }
+        let preview = try XCTUnwrap(descendantTextViews(in: host).compactMap { $0 as? WindowAwareTextView }
+            .first { !$0.isEditable })
+        XCTAssertEqual(preview.accessibilityLabel(), "Markdown 只读预览")
+        XCTAssertNotNil(preview.renderedTable(atUTF16Location: location))
+        if let directory = ProcessInfo.processInfo.environment["INFLOW_UX_SCREENSHOTS"] {
+            try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+            host.layoutSubtreeIfNeeded()
+            host.displayIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("verified-split.png"))
+        }
+        editor.setSelectedRange(NSRange(location: sample.utf16.count, length: 0))
+        editor.insertText("新增正文", replacementRange: editor.selectedRange())
+        for _ in 0..<100 where model.document.text != sample + "新增正文" {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(model.document.text, sample + "新增正文")
+        XCTAssertEqual(try model.document.encodedFileData(), Data((sample + "新增正文").utf8))
+    }
+
     func testEngineABILayoutMatchesRustContractOnArm64() {
         XCTAssertEqual(MemoryLayout<InflowEngineCreateResult>.size, 32)
         XCTAssertEqual(MemoryLayout<InflowEngineCreateResult>.alignment, 8)

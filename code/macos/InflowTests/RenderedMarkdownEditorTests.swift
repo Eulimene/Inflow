@@ -6,6 +6,41 @@ import XCTest
 
 final class RenderedMarkdownEditorTests: XCTestCase {
     @MainActor
+    func testReadOnlyTableReflowsWithoutClippingAcrossWidthAndModeChanges() async throws {
+        let source = "| 能力 | 当前目标 | 优先级 |\n| --- | --- | --- |\n| 连续写作 | 不中断输入 | 高 |\n| 文档导航 | 快速找到内容 | 高 |\n| 个性化 | 合适的排版<br>以及多行说明 | 中 |"
+        let editor = MarkdownSourceEditorSession()
+        editor.scrollView.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
+        editor.textView.frame = editor.scrollView.bounds
+        editor.textView.string = source
+        _ = await editor.deriveContent(for: source, configuration: .default)
+        editor.setPresentation(.rendered, source: source, onLinkClick: nil)
+        let table = try XCTUnwrap(editor.textView.renderedTable(atUTF16Location: 0))
+        for editable in [true, false, true, false] {
+            table.setEditingEnabled(editable)
+            for width: CGFloat in [800, 310, 520, 800] {
+                _ = table.updateMaximumWidth(width)
+                table.layoutSubtreeIfNeeded()
+                let cells = table.subviews.compactMap { $0 as? RenderedMarkdownTableCellTextView }
+                for cell in cells {
+                    let manager = try XCTUnwrap(cell.layoutManager)
+                    let container = try XCTUnwrap(cell.textContainer)
+                    manager.ensureLayout(for: container)
+                    let used = manager.usedRect(for: container)
+                    XCTAssertLessThanOrEqual(used.maxY + cell.textContainerOrigin.y,
+                        cell.bounds.height + 1, "Cell clipped: \(cell.string), width \(width), editable \(editable)")
+                    XCTAssertGreaterThanOrEqual(cell.frame.minY, 0)
+                    XCTAssertLessThanOrEqual(cell.frame.maxY, table.bounds.maxY + 0.5)
+                    XCTAssertEqual(cell.isEditable, editable)
+                    try assertCenteredTextLines(in: cell)
+                }
+            }
+        }
+        XCTAssertEqual(editor.textView.string, source)
+        table.setEditingEnabled(false)
+        XCTAssertTrue(table.accessibilityHelp()?.contains("只读") == true)
+    }
+
+    @MainActor
     func testRenderedSelectionIsVisibleAcrossThemesAndCopiesTheSelectedSource() async throws {
         let source = "# 选区检查\n\n普通段落 English 和 **粗体**、`inline code`。\n\n> 引用文字 Quote\n\n- 第一条列表 Item\n- 第二条列表\n\n```swift\nlet value = 1\n```\n\n| 表头 | 内容 |\n| --- | --- |\n| 第一格 | 第二格 |"
         let board = NSPasteboard.general
@@ -260,7 +295,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertTrue(hasMarker(.blockQuote, text: "> ", source: source, plan: plan))
         XCTAssertTrue(hasMarker(.unorderedList, text: "- ", source: source, plan: plan))
         XCTAssertTrue(hasMarker(.orderedList, text: "1. ", source: source, plan: plan))
-        XCTAssertTrue(hasMarker(.taskList, text: "[x] ", source: source, plan: plan))
+        XCTAssertTrue(hasMarker(.taskList, text: "- [x] ", source: source, plan: plan))
         XCTAssertTrue(hasMarker(.strong, text: "**", source: source, plan: plan))
         XCTAssertTrue(hasMarker(.emphasis, text: "*", source: source, plan: plan))
         XCTAssertTrue(hasMarker(.strikethrough, text: "~~", source: source, plan: plan))
@@ -2395,7 +2430,8 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         session.scrollView.frame.size.width = 1200
         session.textView.setFrameSize(NSSize(width: 1200, height: 240))
         XCTAssertLessThanOrEqual(session.textView.bounds.width - session.textView.textContainerInset.width * 2, 800)
-        XCTAssertGreaterThan(session.textView.renderedTableAvailableWidth, 800)
+        XCTAssertLessThanOrEqual(session.textView.renderedTableAvailableWidth, session.textView.readingColumnWidth)
+        XCTAssertGreaterThan(session.textView.renderedTableAvailableWidth, 700)
 
         session.setPresentation(.source, source: source, onLinkClick: nil)
         XCTAssertFalse(session.textView.textContainer?.widthTracksTextView == true)
@@ -2795,7 +2831,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         )
         XCTAssertEqual(
             session.textView.renderedReplacementMarkers.compactMap(\.replacementText),
-            ["• ", "• ", "☑ "]
+            ["• ", "☑ "]
         )
         for marker in RenderedMarkdownEditor.plan(for: source).markers
         where marker.replacementText != nil {
@@ -2871,7 +2907,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
 
         XCTAssertEqual(
             session.textView.renderedReplacementMarkers.compactMap(\.replacementText),
-            ["• ", "• ", "☑ ", "1", "2", "2 ", "1 "]
+            ["• ", "☑ ", "1", "2", "2 ", "1 "]
         )
         XCTAssertEqual(session.textView.renderedRuleRanges.count, 1)
         for marker in plan.markers where marker.replacementText != nil || marker.kind == .rule {
