@@ -7,6 +7,35 @@ import XCTest
 
 @MainActor
 final class FolderBrowserTests: XCTestCase {
+    func testProjectSearchMatchesUnicodePathsAndAllQueryTerms() {
+        let files = ["章节/写作计划.md", "归档/计划.markdown", "Readme.md"].map {
+            FolderMarkdownFile(url: URL(fileURLWithPath: "/tmp/" + $0), relativePath: $0)
+        }
+        XCTAssertEqual(ProjectFileSearch.results(files, query: "章节 计划").map(\.relativePath), ["章节/写作计划.md"])
+        XCTAssertEqual(ProjectFileSearch.results(files, query: "README").count, 1)
+        XCTAssertEqual(ProjectFileSearch.results(files, query: "不存在").count, 0)
+        XCTAssertEqual(ProjectFileSearch.results(files, query: "  ").count, 3)
+    }
+
+    func testReadingHistorySkipsClosedDocumentsAndTruncatesForwardBranch() {
+        var history = ReadingHistory<Int>()
+        history.record(1, next: 2)
+        history.record(2, next: 3)
+        XCTAssertEqual(history.move(backward: true, current: 3, available: [1, 2, 3]), 2)
+        XCTAssertEqual(history.move(backward: false, current: 2, available: [1, 2, 3]), 3)
+        XCTAssertEqual(history.move(backward: true, current: 3, available: [1, 3]), 1)
+        history.record(1, next: 4)
+        XCTAssertNil(history.move(backward: false, current: 4, available: [1, 3, 4]))
+        XCTAssertEqual(history.move(backward: true, current: 4, available: [1, 3, 4]), 1)
+        for value in 0..<200 { history.record(value, next: value + 1) }
+        XCTAssertEqual(history.back.count, 100)
+        var closed = ReadingHistory<Int>()
+        closed.record(1, next: 2)
+        closed.record(2, next: 1)
+        closed.record(1, next: 2)
+        XCTAssertNil(closed.move(backward: true, current: 2, available: [2]))
+    }
+
     func testOneModificationProjectionFeedsProjectTreeAndTabState() throws {
         let url = URL(fileURLWithPath: "/tmp/inflow-dirty-projection/note.md")
         let nativeDocument = NSDocument()
@@ -2084,11 +2113,11 @@ final class FolderBrowserTests: XCTestCase {
         )
     }
 
-    func testLaunchFileMenuDoesNotExposeFutureFolderBrowser() throws {
+    func testLaunchMenusExposeCurrentWritingAndProjectCommands() throws {
         let items = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu))
         XCTAssertTrue(items.filter { $0.title == "打开文件夹…" }.isEmpty)
-        for title in ["专注模式", "打字机模式", "放大", "缩小", "实际大小"] {
-            XCTAssertTrue(items.filter { $0.title == title }.isEmpty)
+        for title in ["打开项目…", "专注模式", "打字机模式", "放大", "缩小", "实际大小"] {
+            XCTAssertEqual(items.filter { $0.title == title }.count, 1, title)
         }
     }
 

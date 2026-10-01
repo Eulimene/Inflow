@@ -687,15 +687,19 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             RenderedMarkdownTableView.backgroundColor(forRow: 1),
             RenderedMarkdownTableView.backgroundColor(forRow: 2)
         )
+        // Authored themes may intentionally fix their color scheme (GitHub is
+        // light, Night is dark). Only an unpinned theme follows system appearance.
+        let adaptiveTheme = PreviewTheme(id: "adaptive-test", label: "Adaptive", css: "")
+        let lightAppearance = try XCTUnwrap(NSAppearance(named: .aqua))
+        let darkAppearance = try XCTUnwrap(NSAppearance(named: .darkAqua))
         XCTAssertNotEqual(
-            RenderedMarkdownTableView.backgroundColor(
-                forRow: 0,
-                appearance: try XCTUnwrap(NSAppearance(named: .aqua))
-            ),
-            RenderedMarkdownTableView.backgroundColor(
-                forRow: 0,
-                appearance: try XCTUnwrap(NSAppearance(named: .darkAqua))
-            )
+            MarkdownRenderPalette.resolved(for: lightAppearance, theme: adaptiveTheme).mutedSurfaceColor,
+            MarkdownRenderPalette.resolved(for: darkAppearance, theme: adaptiveTheme).mutedSurfaceColor
+        )
+        let night = try XCTUnwrap(PreviewTheme(rawValue: "night"))
+        XCTAssertNotEqual(
+            MarkdownRenderPalette.resolved(for: lightAppearance, theme: .standard).mutedSurfaceColor,
+            MarkdownRenderPalette.resolved(for: darkAppearance, theme: night).mutedSurfaceColor
         )
         XCTAssertEqual(
             RenderedMarkdownTableView.borderColor,

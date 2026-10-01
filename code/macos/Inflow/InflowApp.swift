@@ -683,7 +683,26 @@ final class LightweightProjectCoordinator: ObservableObject {
     private var projectPreparationTasks: [UUID: Task<Void, Never>] = [:]
     private var projectPreparationTimeouts: [UUID: Task<Void, Never>] = [:]
     private var pendingSurfaceActivation: ObjectIdentifier?
-    @Published private var workspaceSurfaceState = WorkspaceSurfaceState()
+    private var readingHistory = ReadingHistory<ObjectIdentifier>()
+    private var isTraversingHistory = false
+    @Published private var workspaceSurfaceState = WorkspaceSurfaceState() {
+        didSet {
+            if !isTraversingHistory {
+                readingHistory.record(oldValue.activeID, next: workspaceSurfaceState.activeID)
+            }
+        }
+    }
+
+    var canGoBack: Bool { readingHistory.back.contains { id in id != activeSurfaceID && documentSurfaces.contains { $0.id == id } } }
+    var canGoForward: Bool { readingHistory.forward.contains { id in id != activeSurfaceID && documentSurfaces.contains { $0.id == id } } }
+
+    func navigateReadingHistory(backward: Bool) {
+        guard let target = readingHistory.move(backward: backward, current: activeSurfaceID,
+                                               available: documentSurfaces.map(\.id)) else { return }
+        isTraversingHistory = true
+        selectDocumentSurface(target)
+        isTraversingHistory = false
+    }
 
     var documentSurfaces: [ProjectDocumentSurface] {
         workspaceSurfaceState.surfaces
@@ -1730,6 +1749,18 @@ private struct InflowDocumentScene: View {
                 )
             }
         }
+        .sheet(isPresented: Binding(
+            get: { folderBrowser.requestsQuickOpen
+                && folderBrowser.isAssociatedProjectDocument(nativeDocument)
+                && !projectCoordinator.isBackgroundProjectDocument(nativeDocument) },
+            set: { folderBrowser.requestsQuickOpen = $0 }
+        )) {
+            ProjectQuickOpenSheet(files: folderBrowser.files) { url in
+                projectCoordinator.openDocument(url,
+                    replacing: projectCoordinator.activeDocumentSurface?.nativeDocument ?? nativeDocument,
+                    using: recentDocuments)
+            }
+        }
         .preferredColorScheme(preferences.previewColorScheme == .system ? nil :
             preferences.previewColorScheme == .dark ? .dark : .light)
         .background {
@@ -1925,6 +1956,12 @@ private struct ProjectDocumentTabBar: View {
     @ObservedObject var projectCoordinator: LightweightProjectCoordinator
     var body: some View {
         HStack(spacing: 4) {
+            Button { projectCoordinator.navigateReadingHistory(backward: true) } label: { Image(systemName: "chevron.left") }
+                .disabled(!projectCoordinator.canGoBack).help("返回上一阅读文档（⌃⌘←）")
+                .accessibilityLabel("返回上一阅读文档").keyboardShortcut(.leftArrow, modifiers: [.control, .command])
+            Button { projectCoordinator.navigateReadingHistory(backward: false) } label: { Image(systemName: "chevron.right") }
+                .disabled(!projectCoordinator.canGoForward).help("前进到下一阅读文档（⌃⌘→）")
+                .accessibilityLabel("前进到下一阅读文档").keyboardShortcut(.rightArrow, modifiers: [.control, .command])
             ForEach(projectCoordinator.documentSurfaces) { surface in
                 let isActive = projectCoordinator.activeSurfaceID == surface.id
                 HStack(spacing: 2) {
@@ -2033,6 +2070,7 @@ private struct ProjectDocumentTabBar: View {
                 }
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("项目文档标签页")
     }
 }
@@ -2385,7 +2423,7 @@ private struct OutlineCommands: Commands {
 
 private struct InflowPrimaryCommands: Commands {
     let recentDocuments: RecentDocumentsController
-    let folderBrowser: FolderBrowserController
+    @ObservedObject var folderBrowser: FolderBrowserController
     @FocusedValue(\.projectSidebarVisibility) private var projectSidebarVisibility
 
     var body: some Commands {
@@ -2395,6 +2433,9 @@ private struct InflowPrimaryCommands: Commands {
                 recentDocuments.chooseProjectToOpen()
             }
             if folderBrowser.folderURL != nil {
+                Button("快速打开文件…") { folderBrowser.requestsQuickOpen = true }
+                    .keyboardShortcut("p", modifiers: .command)
+                    .disabled(folderBrowser.state != .ready)
                 Button("刷新项目") { folderBrowser.refresh() }
                     .disabled(folderBrowser.state == .loading)
             }

@@ -148,6 +148,49 @@ struct FolderMarkdownFile: Identifiable, Equatable, Sendable {
     }
 }
 
+enum ProjectFileSearch {
+    static func matches(_ path: String, query: String) -> Bool {
+        query.split(whereSeparator: \.isWhitespace).allSatisfy {
+            path.localizedStandardContains(String($0))
+        }
+    }
+
+    static func results(_ files: [FolderMarkdownFile], query: String) -> [FolderMarkdownFile] {
+        files.filter { matches($0.relativePath, query: query) }.sorted {
+            let lhs = $0.displayName.localizedStandardContains(query)
+            let rhs = $1.displayName.localizedStandardContains(query)
+            if lhs != rhs { return lhs }
+            return $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
+        }
+    }
+}
+
+struct ReadingHistory<ID: Equatable> {
+    private(set) var back: [ID] = []
+    private(set) var forward: [ID] = []
+
+    mutating func record(_ previous: ID?, next: ID?) {
+        guard let previous, let next, previous != next else { return }
+        back.append(previous)
+        if back.count > 100 { back.removeFirst() }
+        forward.removeAll()
+    }
+
+    mutating func move(backward: Bool, current: ID?, available: [ID]) -> ID? {
+        back.removeAll { !available.contains($0) }
+        forward.removeAll { !available.contains($0) }
+        if let current {
+            if backward { while back.last == current { back.removeLast() } }
+            else { while forward.last == current { forward.removeLast() } }
+        }
+        guard let target = backward ? back.popLast() : forward.popLast() else { return nil }
+        if let current {
+            if backward { forward.append(current) } else { back.append(current) }
+        }
+        return target
+    }
+}
+
 struct FolderProjectItem: Identifiable, Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case directory
@@ -882,6 +925,7 @@ private final class FolderSecurityScopeLease {
 @MainActor
 final class FolderBrowserController: ObservableObject {
     @Published var requestsRootCreation = false
+    @Published var requestsQuickOpen = false
     @Published private(set) var folderURL: URL?
     private(set) var projectRootIdentity: FolderProjectDirectoryIdentity?
     @Published private(set) var items: [FolderProjectItem] = []
@@ -1492,6 +1536,7 @@ struct FolderBrowserSidebar: View {
     private let onCollapse: () -> Void
 
     @State private var selectedItemID: String?
+    @State private var filterQuery = ""
     @State private var creationSelection = FolderBrowserSelection.none
     @State private var newFileName = ""
     @State private var creationError: FolderMarkdownCreationError?
@@ -1539,7 +1584,38 @@ struct FolderBrowserSidebar: View {
         VStack(spacing: 0) {
             header
             Divider()
-            browserContent
+            if controller.folderURL != nil {
+                HStack(spacing: 4) {
+                    TextField("过滤文件或路径", text: $filterQuery)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("过滤项目文件")
+                    if !filterQuery.isEmpty {
+                        Button { filterQuery = "" } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.plain).accessibilityLabel("清除目录过滤")
+                    }
+                    Button { controller.requestsQuickOpen = true } label: { Image(systemName: "doc.text.magnifyingglass") }
+                        .buttonStyle(.plain).help("快速打开文件（⌘P）").accessibilityLabel("快速打开文件")
+                }.padding(8)
+            }
+            if filterQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                browserContent
+            } else {
+                let matches = ProjectFileSearch.results(controller.files, query: filterQuery)
+                if matches.isEmpty {
+                    ContentUnavailableView("没有匹配文件", systemImage: "magnifyingglass", description: Text("试试文件名或相对路径中的关键词。"))
+                } else {
+                    List(matches, selection: $selectedItemID) { file in
+                        Button { openItem(at: file.url, createdFile: false) } label: {
+                            VStack(alignment: .leading) {
+                                Text(file.displayName)
+                                Text(file.relativePath).font(.caption).foregroundStyle(.secondary)
+                            }.lineLimit(2).help(file.relativePath)
+                        }.buttonStyle(.plain).tag(file.id)
+                            .onTapGesture(count: 2) { openItem(at: file.url, createdFile: false) }
+                    }.listStyle(.sidebar)
+                        .onKeyPress(.return) { activateItem(withID: selectedItemID) ? .handled : .ignored }
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(nsColor: .controlBackgroundColor))
@@ -2135,11 +2211,71 @@ struct FolderBrowserCommands: Commands {
                 controller.chooseFolder()
             }
             if controller.folderURL != nil {
+                Button("快速打开文件…") { controller.requestsQuickOpen = true }
+                    .keyboardShortcut("p", modifiers: .command)
+                    .disabled(controller.state != .ready)
                 Button("刷新项目") {
                     controller.refresh()
                 }
                 .disabled(controller.state == .loading)
             }
         }
+    }
+}
+
+struct ProjectQuickOpenSheet: View {
+    let files: [FolderMarkdownFile]
+    let onOpen: (URL) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var selection: String?
+    @FocusState private var searchFocused: Bool
+    private var matches: [FolderMarkdownFile] { Array(ProjectFileSearch.results(files, query: query).prefix(100)) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("快速打开文件").font(.headline)
+            TextField("输入文件名或相对路径", text: $query)
+                .textFieldStyle(.roundedBorder).focused($searchFocused)
+                .onSubmit { openSelection() }
+                .onKeyPress(.downArrow) { move(1); return .handled }
+                .onKeyPress(.upArrow) { move(-1); return .handled }
+            if matches.isEmpty {
+                ContentUnavailableView("没有匹配文件", systemImage: "magnifyingglass")
+            } else {
+                ScrollViewReader { proxy in
+                    List(matches, selection: $selection) { file in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(file.displayName)
+                            Text(file.relativePath).font(.caption).foregroundStyle(.secondary)
+                        }.lineLimit(2).tag(file.id).id(file.id)
+                            .help(file.relativePath)
+                            .onTapGesture(count: 2) { selection = file.id; openSelection() }
+                    }
+                    .onChange(of: selection) { _, value in if let value { proxy.scrollTo(value) } }
+                    .onKeyPress(.return) { openSelection(); return .handled }
+                }
+            }
+            HStack {
+                Text("↑ ↓ 选择 · 回车打开 · 最多显示 100 项").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("打开") { openSelection() }.disabled(matches.isEmpty)
+            }
+        }.padding(20).frame(width: 520, height: 380)
+            .onAppear { selection = matches.first?.id; searchFocused = true }
+            .onChange(of: query) { _, _ in selection = matches.first?.id }
+    }
+
+    private func move(_ delta: Int) {
+        guard !matches.isEmpty else { return }
+        let index = matches.firstIndex { $0.id == selection } ?? 0
+        selection = matches[min(max(index + delta, 0), matches.count - 1)].id
+    }
+
+    private func openSelection() {
+        guard let file = matches.first(where: { $0.id == selection }) ?? matches.first else { return }
+        dismiss()
+        onOpen(file.url)
     }
 }

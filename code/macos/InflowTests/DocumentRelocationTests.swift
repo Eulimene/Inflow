@@ -418,7 +418,7 @@ final class DocumentRelocationTests: XCTestCase {
     }
 
     @MainActor
-    func testMenusDoNotExposePostLaunchCommands() throws {
+    func testMenusKeepDeferredCommandsHiddenAndScopeQuickOpenShortcut() throws {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
         let items = allMenuItems(in: try XCTUnwrap(NSApp.mainMenu))
         let postLaunchTitles = [
@@ -437,7 +437,6 @@ final class DocumentRelocationTests: XCTestCase {
             "插件市场",
             "插件购买与订阅…",
             "开发者中心…",
-            "关闭窗口",
             "显示上一个标签页",
             "显示下一个标签页",
             "将标签页移到新窗口",
@@ -446,10 +445,13 @@ final class DocumentRelocationTests: XCTestCase {
             XCTAssertTrue(items.filter { $0.title == title }.isEmpty, title)
         }
         XCTAssertEqual(items.filter { $0.title == "即时编辑" }.count, 1)
-        XCTAssertTrue(items.filter {
+        XCTAssertEqual(items.filter { $0.title == "关闭窗口" }.count, 1)
+        let quickOpenItems = items.filter {
             $0.keyEquivalent == "p"
                 && $0.keyEquivalentModifierMask.contains(.command)
-        }.isEmpty)
+        }
+        XCTAssertLessThanOrEqual(quickOpenItems.count, 1)
+        XCTAssertTrue(quickOpenItems.allSatisfy { $0.title == "快速打开文件…" })
     }
 
     @MainActor

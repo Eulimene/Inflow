@@ -1242,6 +1242,8 @@ struct MarkdownEditorView: View {
                 )
                 .foregroundStyle(MarkdownDocumentModificationProjection.isModified(document)
                     ? Color.primary : Color.secondary)
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(2)
                 .help("手动保存：⌘S 将内容写入文件。恢复暂存不会写回原文件。")
                 if hasUnsavedChanges, let recoveryCoordinator {
                     ViewThatFits(in: .horizontal) {
