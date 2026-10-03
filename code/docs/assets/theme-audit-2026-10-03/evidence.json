@@ -1,0 +1,48 @@
+{
+  "source_commit": "4187030",
+  "capture_app": "code/Build/Products/Debug/Inflow.app",
+  "capture_pixels": [
+    2400,
+    1520
+  ],
+  "preferences": {
+    "renderedFontSize": 16,
+    "storedLineHeight": 1.6,
+    "contentWidth": 1080,
+    "zoom": 1,
+    "colorScheme": "system"
+  },
+  "typora_runtime_limit": "Trial expired; no live Typora rendering comparison performed.",
+  "sha256": {
+    "04-newsprint.png": "3ebf7dcc4da7356860f418bd6cc7ddd083d0d53e7d3b03e24cd33bb936fb0eee",
+    "03-night.png": "d2f07f6edecd9fefd057c4ca384017afe7f9a65a7227ff0ed9502eee7ade4603",
+    "preferences-tests.log": "a412df40f6174033398528fec543e365eb68d95de227485b3374cffdbbb9397e",
+    "06-gothic-lower.png": "88373d8bb8402a3bb3e0a4218e1181efc6b963afb70d80318ef09e5a7421633d",
+    "02-whitey-lower.png": "d15bdfcf39d67302c80b2505dda15134d6d544b3cb275d4f73407dff7939e9ed",
+    "01-github-lower.png": "5c114434bf2da935cc219ec021c8bda52c60981be800884f680e227b23441a7c",
+    "04-newsprint-lower.png": "fc8f287d2607354482ca8bd24397324f3dd2a01f789cd313a4d6c630bf9b2cac",
+    "02-whitey.png": "0890a509d605ec953d0b07039ee6e68e934a96f41526edbe2b0a420b682ba2b5",
+    "03-night-lower.png": "212e10d357d7eb57f09e72e892b3568bbfec50154b4cda50a0a11518a3a562da",
+    "01-github.png": "57e1332190f62aec8c94b4c8e6d98733494aeef878b91234f4e25ecb8a4f20a9",
+    "05-pixyll.png": "0def4fc3d1c7e033e1e94ca739e290ae709b18d4fb1c8b4b369fd3fb31992982",
+    "theme-sample.md": "62defaa371989b9e5f1755f51e9c433f04e2cac7816742cdc1c12adb0773bf91",
+    "06-gothic.png": "84c2717e42fce203529bd2828a5032d804b54f8f337b9aba72e9f17e6e4532ca",
+    "05-pixyll-lower.png": "f3f2a7e1e5d3658e1169359fae6060af3bcc6d7f3fa52015cfb8ba10eee8b71b"
+  },
+  "typora_installed": {
+    "github": "0225b3c456252023b46d71b05c7ae592ac247207d5e4aabd99a1f07ef70d02a0",
+    "whitey": "93b2c21baa15b08f6b355d0d2e422b7d1e75562f9f36dcf90d0796234d1202ab",
+    "night": "8c74d124c74a327faccce839b1c9ea3d5b953b541291ff2aff14d2c67d7e7bc0",
+    "newsprint": "74f8e327abb48ac331dc1096c1e244d20ff9f5b05beb1204e9867b919cdecade",
+    "pixyll": "90e27bc256d6ce61802e7f643bdc7bd9956b04013b3b36b00e1a4b191ff4fe8d",
+    "gothic": "bfdc69b8ea083ca1e52c5be9cac658953d96617bbca1e9f92f630f3f96b4a758"
+  },
+  "inflow_source": {
+    "github": "40e74a136a2391d571f31762dd59b51476676b625200016e9f369c99b94e7d4b",
+    "whitey": "9f9f4bbfcc1741aa45e661b6d44b1d371583ddeb6c9021e64eb580d046634de6",
+    "night": "11c42b7e9e12ad67c395f8ae5da03e34ff9b2ba0feb7da36af6199c93e719895",
+    "newsprint": "5deeaa21db9deb7c24f4cbabd56b45c47b6cd22bf2185632f43b0b977f9a8cf4",
+    "pixyll": "62e177be5fe388e31b63c0d7c23fb41624d53fdf931d1e1be1422b0d7c0629dc",
+    "gothic": "e4f03b3e1eb0f1f933338a45d77316cd86e5202038acfa988efc92c0d159046e"
+  }
+}

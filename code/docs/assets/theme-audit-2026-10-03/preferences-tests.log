@@ -1,0 +1,98 @@
+Test Suite 'Selected tests' started at 2026-10-03 23:08:14.235.
+Test Suite 'InflowTests.xctest' started at 2026-10-03 23:08:14.236.
+Test Suite 'AppPreferencesTests' started at 2026-10-03 23:08:14.236.
+Test Case '-[InflowTests.AppPreferencesTests testBuiltinThemeMigrationUpdatesDefaultsAndPreservesUserEdits]' started.
+Test Case '-[InflowTests.AppPreferencesTests testBuiltinThemeMigrationUpdatesDefaultsAndPreservesUserEdits]' passed (0.033 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testCSSCascadeVariablesUnitsAndUnsupportedRulesStayBounded]' started.
+Test Case '-[InflowTests.AppPreferencesTests testCSSCascadeVariablesUnitsAndUnsupportedRulesStayBounded]' passed (0.001 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testCSSSelectionColorsReachNativeTextAndTableCells]' started.
+2026-10-03 23:08:14.350 xctest[31895:50693228] Connection Invalid error for service com.apple.hiservices-xpcservice.
+2026-10-03 23:08:14.350 xctest[31895:50693224] Error received in message reply handler: Connection invalid
+Test Case '-[InflowTests.AppPreferencesTests testCSSSelectionColorsReachNativeTextAndTableCells]' passed (0.129 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testCSSThemeCatalogInstallsSixEditableFilesAndDiscoversCustomThemes]' started.
+Test Case '-[InflowTests.AppPreferencesTests testCSSThemeCatalogInstallsSixEditableFilesAndDiscoversCustomThemes]' passed (0.035 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testCSSThemeHTMLUsesWriteSelectorWithoutAllowingStyleTagEscape]' started.
+Test Case '-[InflowTests.AppPreferencesTests testCSSThemeHTMLUsesWriteSelectorWithoutAllowingStyleTagEscape]' passed (0.003 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testCSSThemeReloadPersistsSelectionAndFreezesExportSnapshot]' started.
+Test Case '-[InflowTests.AppPreferencesTests testCSSThemeReloadPersistsSelectionAndFreezesExportSnapshot]' passed (0.082 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testCSSThemesReachNativeFontsColorsHeadingsAndKeepMarkdownIntact]' started.
+2026-10-03 23:08:14.620 xctest[31895:50693224] IOPMScheduleUserActivityLevelNotification returned 0
+2026-10-03 23:08:14.620 xctest[31895:50693224] IOPMScheduleUserActivityLevelNotification returned 0
+Could not create a 'com.apple.gputools.service' sandbox extension
+Could not create a 'com.apple.coreservices.launchservicesd' sandbox extension
+Could not create a 'com.apple.webinspector' sandbox extension
+Could not create a 'com.apple.gputools.service' sandbox extension
+Could not create a 'com.apple.coreservices.launchservicesd' sandbox extension
+2026-10-03 23:08:14.665 xctest[31895:50693224] NOT IMPLEMENTED - CopyPropertiesForAllFonts
+2026-10-03 23:08:14.772 xctest[31895:50693224] IOPMScheduleUserActivityLevelNotification returned 0
+2026-10-03 23:08:14.772 xctest[31895:50693224] IOPMScheduleUserActivityLevelNotification returned 0
+Could not create a 'com.apple.gputools.service' sandbox extension
+Could not create a 'com.apple.coreservices.launchservicesd' sandbox extension
+Could not create a 'com.apple.webinspector' sandbox extension
+Could not create a 'com.apple.gputools.service' sandbox extension
+Could not create a 'com.apple.coreservices.launchservicesd' sandbox extension
+2026-10-03 23:08:14.806 xctest[31895:50693224] NOT IMPLEMENTED - CopyPropertiesForAllFonts
+2026-10-03 23:08:14.863 xctest[31895:50693224] IOPMScheduleUserActivityLevelNotification returned 0
+2026-10-03 23:08:14.863 xctest[31895:50693224] IOPMScheduleUserActivityLevelNotification returned 0
+Could not create a 'com.apple.gputools.service' sandbox extension
+Could not create a 'com.apple.coreservices.launchservicesd' sandbox extension
+Could not create a 'com.apple.webinspector' sandbox extension
+Could not create a 'com.apple.gputools.service' sandbox extension
+Could not create a 'com.apple.coreservices.launchservicesd' sandbox extension
+2026-10-03 23:08:14.896 xctest[31895:50693224] NOT IMPLEMENTED - CopyPropertiesForAllFonts
+Test Case '-[InflowTests.AppPreferencesTests testCSSThemesReachNativeFontsColorsHeadingsAndKeepMarkdownIntact]' passed (0.508 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testDefaultsMatchLaunchContract]' started.
+Test Case '-[InflowTests.AppPreferencesTests testDefaultsMatchLaunchContract]' passed (0.050 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testExistingImagePlacementPreferenceKeepsPromptAsAnExplicitChoice]' started.
+Test Case '-[InflowTests.AppPreferencesTests testExistingImagePlacementPreferenceKeepsPromptAsAnExplicitChoice]' passed (0.000 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testExportFreezesAppearanceSnapshot]' started.
+Test Case '-[InflowTests.AppPreferencesTests testExportFreezesAppearanceSnapshot]' passed (0.003 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testGroupResetOnlyChangesTheSelectedPreferenceGroup]' started.
+Test Case '-[InflowTests.AppPreferencesTests testGroupResetOnlyChangesTheSelectedPreferenceGroup]' passed (0.017 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testInvalidStoredValuesAreSanitizedWithoutAffectingUnrelatedData]' started.
+Test Case '-[InflowTests.AppPreferencesTests testInvalidStoredValuesAreSanitizedWithoutAffectingUnrelatedData]' passed (0.011 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testLineNumbersTrackPhysicalLinesWithoutChangingTextOrUndo]' started.
+2026-10-03 23:08:15.113 xctest[31895:50693224] IOPMScheduleUserActivityLevelNotification returned 0
+2026-10-03 23:08:15.114 xctest[31895:50693224] IOPMScheduleUserActivityLevelNotification returned 0
+Could not create a 'com.apple.gputools.service' sandbox extension
+Could not create a 'com.apple.coreservices.launchservicesd' sandbox extension
+Could not create a 'com.apple.webinspector' sandbox extension
+Could not create a 'com.apple.gputools.service' sandbox extension
+Could not create a 'com.apple.coreservices.launchservicesd' sandbox extension
+2026-10-03 23:08:15.151 xctest[31895:50693224] NOT IMPLEMENTED - CopyPropertiesForAllFonts
+Test Case '-[InflowTests.AppPreferencesTests testLineNumbersTrackPhysicalLinesWithoutChangingTextOrUndo]' passed (0.054 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testManualSaveHostPolicyAddsOnlyToConcreteInheritedHost]' started.
+Test Case '-[InflowTests.AppPreferencesTests testManualSaveHostPolicyAddsOnlyToConcreteInheritedHost]' passed (0.001 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testManualSaveHostPolicyNeverMutatesNSDocumentGlobally]' started.
+Test Case '-[InflowTests.AppPreferencesTests testManualSaveHostPolicyNeverMutatesNSDocumentGlobally]' passed (0.000 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testPersonalMilestoneDisablesDocumentGroupHostAutosavePolicies]' started.
+Test Case '-[InflowTests.AppPreferencesTests testPersonalMilestoneDisablesDocumentGroupHostAutosavePolicies]' passed (0.000 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testPersonalMilestoneKeepsPeriodicAutosaveDisabledAndManualSaveAvailable]' started.
+Test Case '-[InflowTests.AppPreferencesTests testPersonalMilestoneKeepsPeriodicAutosaveDisabledAndManualSaveAvailable]' passed (0.008 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testPreviewConfigurationProducesSafeDeterministicCSS]' started.
+Test Case '-[InflowTests.AppPreferencesTests testPreviewConfigurationProducesSafeDeterministicCSS]' passed (0.007 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testResetAllReturnsEveryLaunchPreferenceToDefaultWithoutDeletingOtherRecords]' started.
+Test Case '-[InflowTests.AppPreferencesTests testResetAllReturnsEveryLaunchPreferenceToDefaultWithoutDeletingOtherRecords]' passed (0.019 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testSettingsPersistenceFailureKeepsSessionValuesAndSupportsRetry]' started.
+/Users/larrychen/项目/inflow/code/macos/InflowTests/AppPreferencesTests.swift:729: error: -[InflowTests.AppPreferencesTests testSettingsPersistenceFailureKeepsSessionValuesAndSupportsRetry] : XCTAssertEqual failed: ("800.0") is not equal to ("1200.0")
+/Users/larrychen/项目/inflow/code/macos/InflowTests/AppPreferencesTests.swift:737: error: -[InflowTests.AppPreferencesTests testSettingsPersistenceFailureKeepsSessionValuesAndSupportsRetry] : XCTAssertEqual failed: ("800.0") is not equal to ("1200.0")
+Test Case '-[InflowTests.AppPreferencesTests testSettingsPersistenceFailureKeepsSessionValuesAndSupportsRetry]' failed (0.076 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testSettingsResetUsesFrozenCopyAndNamesCurrentOrAllScope]' started.
+Test Case '-[InflowTests.AppPreferencesTests testSettingsResetUsesFrozenCopyAndNamesCurrentOrAllScope]' passed (0.000 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testSourceAppearanceChangesStyleWithoutChangingTextSelectionOrUndo]' started.
+2026-10-03 23:08:15.277 xctest[31895:50693234] Spell server connection invalidated
+2026-10-03 23:08:15.277 xctest[31895:50693228] Spell server connection invalidated
+2026-10-03 23:08:15.278 xctest[31895:50693228] dataFromCheckingGrammarInString received error Error Domain=NSCocoaErrorDomain Code=4099 "The connection to service named com.apple.naturallanguaged was invalidated: Connection init failed at lookup with error 159 - Sandbox restriction." UserInfo={NSDebugDescription=The connection to service named com.apple.naturallanguaged was invalidated: Connection init failed at lookup with error 159 - Sandbox restriction.}
+Test Case '-[InflowTests.AppPreferencesTests testSourceAppearanceChangesStyleWithoutChangingTextSelectionOrUndo]' passed (0.005 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testThemeDefaultsAndCustomOverridesComeFromCSS]' started.
+Test Case '-[InflowTests.AppPreferencesTests testThemeDefaultsAndCustomOverridesComeFromCSS]' passed (0.003 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testVersionedSettingsRegistryMigratesLegacyWorkspacePreferences]' started.
+Test Case '-[InflowTests.AppPreferencesTests testVersionedSettingsRegistryMigratesLegacyWorkspacePreferences]' passed (0.009 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testWorkspacePreferencesPersistAcrossPreferenceInstancesAndClampToBounds]' started.
+Test Case '-[InflowTests.AppPreferencesTests testWorkspacePreferencesPersistAcrossPreferenceInstancesAndClampToBounds]' passed (0.028 seconds).
+Test Suite 'AppPreferencesTests' failed at 2026-10-03 23:08:15.322.
+	 Executed 25 tests, with 2 failures (0 unexpected) in 1.084 (1.086) seconds
+Test Suite 'InflowTests.xctest' failed at 2026-10-03 23:08:15.322.
+	 Executed 25 tests, with 2 failures (0 unexpected) in 1.084 (1.086) seconds
+Test Suite 'Selected tests' failed at 2026-10-03 23:08:15.322.
+	 Executed 25 tests, with 2 failures (0 unexpected) in 1.084 (1.086) seconds
