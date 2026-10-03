@@ -1,0 +1,59 @@
+{
+  "date": "2026-10-03",
+  "build": "Debug build-for-testing, macOS arm64, CODE_SIGNING_ALLOWED=NO",
+  "app": "/private/tmp/inflow-theme-fix/DerivedData/Build/Products/Debug/Inflow.app",
+  "debugDylibSHA256": "1a0ad0efa0fecb69b9832bfcbafb77842e24c98ab30ea36435b3be5019ca9fe9",
+  "themes": {
+    "github": {
+      "sourceSHA256": "79a925eacd4a89f69177882444642256b59a8cf5122ee0c31b00a033b8d52ce6",
+      "bundleMatches": true,
+      "installedThemeMatches": true
+    },
+    "whitey": {
+      "sourceSHA256": "ab11a493873663e258196534a032e0a60001a9b7c9aef0db8fb2e6efa771abc7",
+      "bundleMatches": true,
+      "installedThemeMatches": true
+    },
+    "night": {
+      "sourceSHA256": "ca956128466d790e3160e7bcfacfb92ad28a266707d7517be45286f4e084c060",
+      "bundleMatches": true,
+      "installedThemeMatches": true
+    },
+    "newsprint": {
+      "sourceSHA256": "17135978dd99ced1e36c91c85fe017b1ab1652d74d7bbab7c2690f184bf8d118",
+      "bundleMatches": true,
+      "installedThemeMatches": true
+    },
+    "pixyll": {
+      "sourceSHA256": "7e52a8f93cd79dc9affdb70447ebf36f258dd9521927fe291fc22e2ddea659c2",
+      "bundleMatches": true,
+      "installedThemeMatches": true
+    },
+    "gothic": {
+      "sourceSHA256": "ee07bc89b67e151c3500ba06d07e1d3bc5bfe236da0506ec6e7c343b3cd26b13",
+      "bundleMatches": true,
+      "installedThemeMatches": true
+    }
+  },
+  "sampleSHA256": "62defaa371989b9e5f1755f51e9c433f04e2cac7816742cdc1c12adb0773bf91",
+  "sampleUnchanged": true,
+  "tests": {
+    "selected": 108,
+    "failures": 0,
+    "scope": "current-direct AppPreferencesTests, RenderedMarkdownEditorTests, MarkdownRendererTests, MarkdownHighlighterTests"
+  },
+  "screenshots": [
+    "github-lower.png",
+    "github.png",
+    "gothic-lower.png",
+    "gothic.png",
+    "newsprint-lower.png",
+    "newsprint.png",
+    "night-lower.png",
+    "night.png",
+    "pixyll-lower.png",
+    "pixyll.png",
+    "whitey-lower.png",
+    "whitey.png"
+  ]
+}

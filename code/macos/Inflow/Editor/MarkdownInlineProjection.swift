@@ -74,8 +74,8 @@ struct MarkdownInlineProjection {
             case .strong, .emphasis:
                 var replacements: [(NSRange, NSFont)] = []
                 output.enumerateAttribute(.font, in: range) { value, run, _ in
-                    replacements.append((run, NSFontManager.shared.convert((value as? NSFont) ?? font,
-                        toHaveTrait: style.kind == .strong ? .boldFontMask : .italicFontMask)))
+                    replacements.append((run, NativeCSSStyles.font((value as? NSFont) ?? font,
+                        trait: style.kind == .strong ? .boldFontMask : .italicFontMask)))
                 }
                 for (run, value) in replacements { output.addAttribute(.font, value: value, range: run) }
             case .inlineCode:

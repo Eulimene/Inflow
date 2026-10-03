@@ -57,6 +57,23 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
     }
     private var mathPreviewState: MathPreviewState?
 
+    private struct CellGeometry: Equatable {
+        var left: CGFloat = CGFloat(MarkdownRenderMetrics.tableCellHorizontalPadding)
+        var right: CGFloat = CGFloat(MarkdownRenderMetrics.tableCellHorizontalPadding)
+        var top: CGFloat = CGFloat(MarkdownRenderMetrics.tableCellVerticalPadding)
+        var bottom: CGFloat = CGFloat(MarkdownRenderMetrics.tableCellVerticalPadding)
+        var lineHeight: CGFloat = 0
+        var fillsWidth = false
+        var horizontal: CGFloat { left + right }
+        var vertical: CGFloat { top + bottom }
+        func height(font: NSFont) -> CGFloat {
+            max(lineHeight > 0 ? lineHeight : font.pointSize * CGFloat(MarkdownRenderMetrics.bodyLineHeight),
+                ceil(font.ascender - font.descender + font.leading))
+        }
+    }
+    private var geometry = CellGeometry()
+    private var themeStyles: NativeCSSStyles?
+    private var headerBorderWidth: CGFloat = 0
     private var columnWidths: [CGFloat]
     private var rowHeights: [CGFloat]
     private var cells: [CellLayout]
@@ -83,11 +100,32 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
     private var borderWidth = ThemeStyleResources.defaults.length("border-width", on: "table") ?? 0
     private(set) var usesRowBorders = false
     func applyTheme(_ theme: PreviewTheme) {
+        guard themeStyles != theme.styles else { return }
         usesRowBorders = theme.styles.value("--md-table-grid", on: "table") == "rows"
         borderWidth = max(0, min(8, theme.styles.length("border-top-width", on: "td")
             ?? theme.styles.length("border-width", on: "td") ?? theme.styles.length("border-width", on: "table") ?? 0))
         layer?.cornerRadius = max(0, min(24, theme.styles.length("border-radius", on: "table") ?? 0))
+        headerBorderWidth = max(borderWidth, min(8, theme.styles.length("border-bottom-width", on: "th") ?? borderWidth))
+        themeStyles = theme.styles
+        refreshGeometry()
+        applyFont(baseFont, force: true)
+        updateMaximumWidth(maximumWidth)
         needsDisplay = true
+    }
+
+    private func refreshGeometry() {
+        guard let css = themeStyles else { return }
+        var next = CellGeometry()
+        next.left = max(0, min(80, css.length("padding-left", on: "td", relativeTo: baseFont.pointSize) ?? next.left))
+        next.right = max(0, min(80, css.length("padding-right", on: "td", relativeTo: baseFont.pointSize) ?? next.right))
+        next.top = max(0, min(80, css.length("padding-top", on: "td", relativeTo: baseFont.pointSize) ?? next.top))
+        next.bottom = max(0, min(80, css.length("padding-bottom", on: "td", relativeTo: baseFont.pointSize) ?? next.bottom))
+        if let raw = css.value("line-height", on: "td") {
+            next.lineHeight = max(0, min(240, Double(raw).map { CGFloat($0) * baseFont.pointSize }
+                ?? css.length("line-height", on: "td", relativeTo: baseFont.pointSize) ?? 0))
+        }
+        next.fillsWidth = css.value("width", on: "table") == "100%"
+        if next != geometry { geometry = next; needsContentMeasurement = true; mathPreviewState = nil }
     }
 
     override var isFlipped: Bool { true }
@@ -233,7 +271,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
     }
 
     private static func makeCells(table: RenderedMarkdownTable, widths: [CGFloat], baseFont: NSFont,
-                                  palette: MarkdownRenderPalette, startingRow: Int = 0) -> [CellLayout] {
+                                  palette: MarkdownRenderPalette, startingRow: Int = 0, geometry: CellGeometry = CellGeometry()) -> [CellLayout] {
         var layouts: [CellLayout] = []
         for (rowIndex, row) in table.rows.enumerated() where rowIndex >= startingRow {
             for (column, cell) in row.enumerated() where column < widths.count {
@@ -247,9 +285,9 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
                 case .trailing: paragraph.alignment = .right
                 }
                 let font = rowIndex == 0
-                    ? NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
+                    ? NativeCSSStyles.font(baseFont, bold: true)
                     : baseFont
-                paragraph.minimumLineHeight = font.pointSize * MarkdownRenderMetrics.bodyLineHeight
+                paragraph.minimumLineHeight = geometry.height(font: font)
                 let attributed = NSMutableAttributedString(
                     string: cell.text,
                     attributes: [
@@ -364,7 +402,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
                   old.map(\.markdown) == new.map(\.markdown) && old.map(\.text) == new.map(\.text)
               }) else { return false }
         let added = Self.makeCells(table: updated, widths: columnWidths, baseFont: baseFont,
-            palette: currentPalette, startingRow: table.rows.count)
+            palette: currentPalette, startingRow: table.rows.count, geometry: geometry)
         let editable = cells.first?.textView.isEditable ?? false
         cells += added
         for cell in added { configure(cell); cell.textView.isEditable = editable }
@@ -448,18 +486,19 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
         }
     }
 
-    func applyFont(_ font: NSFont) {
-        guard font != baseFont, !cells.contains(where: { $0.textView.hasMarkedText() }) else { return }
+    func applyFont(_ font: NSFont, force: Bool = false) {
+        guard (force || font != baseFont), !cells.contains(where: { $0.textView.hasMarkedText() }) else { return }
         baseFont = font
+        refreshGeometry()
         for cell in cells {
             let selected = cell.textView.selectedRange()
-            let cellFont = cell.row == 0 ? NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) : font
+            let cellFont = cell.row == 0 ? NativeCSSStyles.font(font, bold: true) : font
             cell.textView.caretFont = cellFont
             cell.textView.typingAttributes[.font] = cellFont
             guard let storage = cell.textView.textStorage else { continue }
             let fullRange = NSRange(location: 0, length: storage.length)
             let paragraph = (cell.textView.defaultParagraphStyle?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
-            paragraph.minimumLineHeight = cellFont.pointSize * MarkdownRenderMetrics.bodyLineHeight
+            paragraph.minimumLineHeight = geometry.height(font: cellFont)
             cell.textView.defaultParagraphStyle = paragraph
             cell.textView.typingAttributes[.paragraphStyle] = paragraph
             storage.addAttributes([.font: cellFont, .paragraphStyle: paragraph], range: fullRange)
@@ -498,16 +537,18 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
         let width = max(160, width)
         guard needsContentMeasurement || maximumWidth != width else { return false }
         needsContentMeasurement = false
-        let widths = layoutStrategy.columnWidths(
-            for: table,
-            font: baseFont,
-            availableWidth: width
-        )
-        var heights = Self.rowHeights(for: table, widths: widths, baseFont: baseFont)
+        let strategy: any RenderedMarkdownTableLayoutStrategy = layoutStrategy is AdaptiveRenderedMarkdownTableLayoutStrategy
+            ? AdaptiveRenderedMarkdownTableLayoutStrategy(horizontalCellPadding: geometry.horizontal) : layoutStrategy
+        var widths = strategy.columnWidths(for: table, font: baseFont, availableWidth: width)
+        let total = widths.reduce(0, +)
+        if geometry.fillsWidth, total > 0, total < width {
+            widths = widths.map { $0 * width / total }
+        }
+        var heights = Self.rowHeights(for: table, widths: widths, baseFont: baseFont, geometry: geometry)
         for cell in cells {
             if let preview = cell.mathPreview {
                 heights[cell.row] = max(heights[cell.row], preview.height(for: widths[cell.column]
-                    - CGFloat(MarkdownRenderMetrics.tableCellHorizontalPadding * 2)) + CGFloat(MarkdownRenderMetrics.tableCellVerticalPadding * 2))
+                    - geometry.horizontal) + geometry.vertical)
             }
         }
         guard widths != columnWidths || maximumWidth != width || heights != rowHeights else { return false }
@@ -532,7 +573,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
         if mathPreviewState == state { updateMathPreviewVisibility(); return renderedSize }
         mathPreviewState = state
         let palette = currentPalette
-        var heights = Self.rowHeights(for: table, widths: columnWidths, baseFont: baseFont)
+        var heights = Self.rowHeights(for: table, widths: columnWidths, baseFont: baseFont, geometry: geometry)
         for cell in cells {
             cell.mathPreview?.removeFromSuperview()
             cell.mathPreview = nil
@@ -552,7 +593,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
             }
             guard let preview = MarkdownTableMathPreview(cell: model, attributedText: storage,
                 requests: cellRequests, results: results, color: palette.textColor, font: cell.textView.caretFont,
-                maximumWidth: columnWidths[cell.column] - CGFloat(MarkdownRenderMetrics.tableCellHorizontalPadding * 2)) else { continue }
+                maximumWidth: columnWidths[cell.column] - geometry.horizontal) else { continue }
             let row = cell.row, column = cell.column
             preview.drawsBackground = true
             preview.backgroundColor = backgroundColor(forRow: row)
@@ -570,8 +611,8 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
             }
             cell.mathPreview = preview
             addSubview(preview)
-            let height = preview.height(for: columnWidths[cell.column] - CGFloat(MarkdownRenderMetrics.tableCellHorizontalPadding * 2))
-            heights[cell.row] = max(heights[cell.row], height + CGFloat(MarkdownRenderMetrics.tableCellVerticalPadding * 2))
+            let height = preview.height(for: columnWidths[cell.column] - geometry.horizontal)
+            heights[cell.row] = max(heights[cell.row], height + geometry.vertical)
         }
         rowHeights = heights
         renderedSize.height = rowHeights.reduce(0, +) + visibleToolbarHeight
@@ -591,22 +632,23 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
     private static func rowHeights(
         for table: RenderedMarkdownTable,
         widths: [CGFloat],
-        baseFont: NSFont
+        baseFont: NSFont,
+        geometry: CellGeometry = CellGeometry()
     ) -> [CGFloat] {
         table.rows.enumerated().map { rowIndex, row in
             let font = rowIndex == 0
-                ? NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
+                ? NativeCSSStyles.font(baseFont, bold: true)
                 : baseFont
             let paragraph = NSMutableParagraphStyle()
-            paragraph.minimumLineHeight = font.pointSize * MarkdownRenderMetrics.bodyLineHeight
-            var rowHeight = max(CGFloat(36), paragraph.minimumLineHeight + CGFloat(MarkdownRenderMetrics.tableCellVerticalPadding * 2))
+            paragraph.minimumLineHeight = geometry.height(font: font)
+            var rowHeight = paragraph.minimumLineHeight + geometry.vertical
             for (column, cell) in row.enumerated() where column < widths.count {
                 let bounds = (cell.text as NSString).boundingRect(
                     with: NSSize(
                         width: max(
                             20,
                             widths[column]
-                                - CGFloat(MarkdownRenderMetrics.tableCellHorizontalPadding * 2)
+                                - geometry.horizontal
                         ),
                         height: 2_000
                     ),
@@ -616,7 +658,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
                 rowHeight = max(
                     rowHeight,
                     ceil(bounds.height) + (cell.text.hasSuffix("\n") ? paragraph.minimumLineHeight : 0)
-                        + CGFloat(MarkdownRenderMetrics.tableCellVerticalPadding * 2)
+                        + geometry.vertical
                 )
             }
             return rowHeight
@@ -635,13 +677,13 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
         }
         for cell in cells {
             guard cell.column + 1 < xOffsets.count, cell.row + 1 < yOffsets.count else { continue }
-            let horizontalPadding = CGFloat(MarkdownRenderMetrics.tableCellHorizontalPadding)
-            let verticalPadding = CGFloat(MarkdownRenderMetrics.tableCellVerticalPadding)
+            let horizontalPadding = geometry.left
+            let verticalPadding = geometry.top
             cell.textView.frame = NSRect(
                 x: xOffsets[cell.column] + horizontalPadding,
                 y: yOffsets[cell.row] + verticalPadding,
-                width: max(1, columnWidths[cell.column] - horizontalPadding * 2),
-                height: max(1, rowHeights[cell.row] - verticalPadding * 2)
+                width: max(1, columnWidths[cell.column] - geometry.horizontal),
+                height: max(1, rowHeights[cell.row] - geometry.vertical)
             )
             cell.textView.centerContentVertically()
             if let preview = cell.mathPreview {
@@ -693,10 +735,10 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
             divider.stroke()
         }
         y = visibleToolbarHeight
-        for height in rowHeights.dropLast() {
+        for (row, height) in rowHeights.dropLast().enumerated() {
             y += height
             let divider = NSBezierPath()
-            divider.lineWidth = borderWidth
+            divider.lineWidth = row == 0 ? headerBorderWidth : borderWidth
             divider.move(to: NSPoint(x: 0, y: y))
             divider.line(to: NSPoint(x: renderedSize.width, y: y))
             divider.stroke()

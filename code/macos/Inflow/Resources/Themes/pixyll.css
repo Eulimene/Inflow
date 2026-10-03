@@ -30,5 +30,6 @@ p { margin: 0 0 1.25rem; }
 a { text-decoration: underline; }
 blockquote { font-style: italic; border-left: 5px solid #7a7a7a; padding-left: 1.33em; margin: 1rem 0; }
 pre { font-size: .8em; color: #7a7a7a; border: 1px solid #7a7a7a; border-radius: 0; }
-table { --md-table-grid: rows; border: 0; border-radius: 0; }
-th, td { border: 0; border-top: 1px solid #333333; }
+table { --md-table-grid: rows; border: 0; border-radius: 0; width: 100%; }
+th, td { border: 0; border-top: 1px solid #333333; padding: 12px; line-height: 1.2; }
+th { border-bottom: 2px solid #333333; }

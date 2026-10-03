@@ -1,6 +1,10 @@
 import AppKit
 import CoreText
 
+extension NSAttributedString.Key {
+    static let markdownUppercase = NSAttributedString.Key("InflowMarkdownUppercase")
+}
+
 enum MarkdownNativeTypography {
     static func paragraphStyle(font: NSFont, lineHeight: CGFloat) -> NSMutableParagraphStyle {
         let style = NSMutableParagraphStyle()
@@ -15,6 +19,37 @@ enum MarkdownNativeTypography {
 /// used line box, leaving paragraph gaps and overlay anchors unchanged.
 @MainActor
 final class MarkdownCenteredLineLayout: NSObject, @preconcurrency NSLayoutManagerDelegate {
+    // English uppercase is a display operation. Source offsets, undo, copy and
+    // selection remain unchanged. Multi-character Unicode case expansions are
+    // deliberately left intact rather than corrupting TextKit's character map.
+    func layoutManager(_ manager: NSLayoutManager, shouldGenerateGlyphs glyphs: UnsafePointer<CGGlyph>,
+                       properties: UnsafePointer<NSLayoutManager.GlyphProperty>,
+                       characterIndexes: UnsafePointer<Int>, font: NSFont,
+                       forGlyphRange range: NSRange) -> Int {
+        guard let storage = manager.textStorage else { return 0 }
+        var output = Array(UnsafeBufferPointer(start: glyphs, count: range.length))
+        var changed = false
+        for index in 0..<range.length {
+            let character = characterIndexes[index]
+            guard character < storage.length,
+                  storage.attribute(.markdownUppercase, at: character, effectiveRange: nil) as? Bool == true else { continue }
+            let source = storage.mutableString.character(at: character)
+            guard (97...122).contains(source) else { continue }
+            var uppercase = source - 32
+            var glyph: CGGlyph = 0
+            if CTFontGetGlyphsForCharacters(font as CTFont, &uppercase, &glyph, 1) {
+                output[index] = glyph
+                changed = true
+            }
+        }
+        guard changed else { return 0 }
+        output.withUnsafeBufferPointer {
+            manager.setGlyphs($0.baseAddress!, properties: properties, characterIndexes: characterIndexes,
+                              font: font, forGlyphRange: range)
+        }
+        return range.length
+    }
+
     func layoutManager(
         _ manager: NSLayoutManager,
         shouldSetLineFragmentRect line: UnsafeMutablePointer<NSRect>,

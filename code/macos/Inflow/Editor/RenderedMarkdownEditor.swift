@@ -131,6 +131,7 @@ struct RenderedMarkdownTable: Equatable, Sendable {
 /// Strategy object for translating semantic table content into native editor widths.
 /// Markdown parsing stays in Rust; this policy owns only platform typography and the
 /// currently available viewport width.
+@MainActor
 protocol RenderedMarkdownTableLayoutStrategy {
     func columnWidths(
         for table: RenderedMarkdownTable,
@@ -143,7 +144,7 @@ struct AdaptiveRenderedMarkdownTableLayoutStrategy: RenderedMarkdownTableLayoutS
     let minimumColumnWidth: CGFloat = 56
     let minimumPreferredWidth: CGFloat = 72
     let maximumPreferredWidth: CGFloat = 360
-    let horizontalCellPadding = MarkdownRenderMetrics.tableCellHorizontalPadding * 2
+    var horizontalCellPadding: CGFloat = CGFloat(MarkdownRenderMetrics.tableCellHorizontalPadding * 2)
 
     func columnWidths(
         for table: RenderedMarkdownTable,
@@ -153,9 +154,10 @@ struct AdaptiveRenderedMarkdownTableLayoutStrategy: RenderedMarkdownTableLayoutS
         let columnCount = table.rows.map(\.count).max() ?? 0
         guard columnCount > 0 else { return [] }
         var widths = Array(repeating: minimumPreferredWidth, count: columnCount)
-        for row in table.rows {
+        for (index, row) in table.rows.enumerated() {
+            let cellFont = index == 0 ? NativeCSSStyles.font(font, bold: true) : font
             for (column, cell) in row.enumerated() {
-                let measured = (cell.text as NSString).size(withAttributes: [.font: font]).width
+                let measured = (cell.text as NSString).size(withAttributes: [.font: cellFont]).width
                     + horizontalCellPadding
                 widths[column] = max(
                     widths[column],
@@ -557,5 +559,13 @@ enum RenderedAttributePatch {
         for (range, attributes) in changes { storage.setAttributes(attributes, range: range) }
         storage.endEditing()
         return changes.map(\.0)
+    }
+}
+
+@MainActor
+extension RenderedMarkdownMarker {
+    func displayText(styles: NativeCSSStyles) -> String? {
+        if kind == .unorderedList, styles.value("list-style-type", on: "ul") == "square" { return "▪" }
+        return replacementText
     }
 }

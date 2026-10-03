@@ -168,7 +168,7 @@ struct NativeCSSStyles: Hashable, Sendable {
         var escaped = false
         var valid = true
         var unsupported = false
-        let supported = Set([":root", "html", "body", "#write", "p", "h1", "h2", "h3", "h4", "h5", "h6", "a", "blockquote", "pre", "code", "table", "th", "td", "tr:nth-child(even)", "tr:nth-child(2n)", "strong", "em", "li", "ul", "ol", "hr", "math", "::selection", "#write::selection"])
+        let supported = Set([":root", "html", "body", "#write", "p", "h1", "h2", "h3", "h4", "h5", "h6", "h1+h2", "h2+h3", "h1:first-child", "h2:first-child", "a", "blockquote", "pre", "code", "table", "th", "td", "tr:nth-child(even)", "tr:nth-child(2n)", "strong", "em", "li", "ul", "ol", "hr", "math", "::selection", "#write::selection"])
         for c in clean {
             if escaped { if depth > 0 { body.append(c) } else { header.append(c) }; escaped = false; continue }
             if c == "\\" { if depth > 0 { body.append(c) } else { header.append(c) }; escaped = true; continue }
@@ -257,9 +257,9 @@ struct NativeCSSStyles: Hashable, Sendable {
         return resolve(input.replacingCharacters(in: fullRange, with: replacement), depth: depth + 1)
     }
 
-    func length(_ property: String, on element: String = "body", relativeTo size: CGFloat = 16) -> CGFloat? {
+    func length(_ property: String, on element: String = "body", relativeTo size: CGFloat = 16, rootSize: CGFloat? = nil) -> CGFloat? {
         guard let raw = value(property, on: element)?.lowercased() else { return nil }
-        let units: [(String, CGFloat)] = [("rem", size), ("em", size), ("px", 1), ("pt", 1), ("%", size / 100)]
+        let units: [(String, CGFloat)] = [("rem", rootSize ?? size), ("em", size), ("px", 1), ("pt", 1), ("%", size / 100)]
         for (unit, scale) in units where raw.hasSuffix(unit) {
             guard let number = Double(raw.dropLast(unit.count)), number.isFinite else { return nil }
             return CGFloat(number) * scale
@@ -285,12 +285,17 @@ struct NativeCSSStyles: Hashable, Sendable {
 
     @MainActor
     static func font(_ font: NSFont, bold: Bool) -> NSFont {
+        Self.font(font, trait: .boldFontMask, enabled: bold)
+    }
+
+    @MainActor
+    static func font(_ font: NSFont, trait: NSFontTraitMask, enabled: Bool = true) -> NSFont {
         let manager = NSFontManager.shared
-        let converted = bold ? manager.convert(font, toHaveTrait: .boldFontMask) : manager.convert(font, toNotHaveTrait: .boldFontMask)
+        let converted = enabled ? manager.convert(font, toHaveTrait: trait) : manager.convert(font, toNotHaveTrait: trait)
         guard let cascade = font.fontDescriptor.object(forKey: .cascadeList) as? [NSFontDescriptor] else { return converted }
         let fallback = cascade.compactMap { descriptor -> NSFontDescriptor? in
             guard let member = NSFont(descriptor: descriptor, size: font.pointSize) else { return nil }
-            return (bold ? manager.convert(member, toHaveTrait: .boldFontMask) : manager.convert(member, toNotHaveTrait: .boldFontMask)).fontDescriptor
+            return (enabled ? manager.convert(member, toHaveTrait: trait) : manager.convert(member, toNotHaveTrait: trait)).fontDescriptor
         }
         return NSFont(descriptor: converted.fontDescriptor.addingAttributes([.cascadeList: fallback]), size: font.pointSize) ?? converted
     }

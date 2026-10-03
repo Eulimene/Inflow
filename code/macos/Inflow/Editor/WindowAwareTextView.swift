@@ -962,7 +962,7 @@ final class WindowAwareTextView: DocumentFindTextView {
         let palette = MarkdownRenderPalette.resolved(for: effectiveAppearance, theme: renderedTheme)
         for marker in renderedReplacementMarkers {
             let range = marker.sourceRange.utf16Range
-            guard let text = marker.replacementText,
+            guard let text = marker.displayText(styles: renderedTheme.styles),
                   range.length > 0,
                   NSMaxRange(range) <= (string as NSString).length
             else { continue }

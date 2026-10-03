@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import CoreText
 import XCTest
 @testable import Inflow
 
@@ -134,7 +135,7 @@ final class AppPreferencesTests: XCTestCase {
     }
 
     func testCSSThemesReachNativeFontsColorsHeadingsAndKeepMarkdownIntact() async throws {
-        let source = "# Heading 标题\n\n正文排版 Typography：这是同一份 Markdown，用来比较字体、字号与行距。**重点内容**与 `inline code`。\n\n## Section 章节\n\n> 引用文字：安静地阅读，专注于内容。 A thoughtful quotation.\n\n### Detail 细节\n\n- 列表项目 List item\n- 第二个项目 Another item\n\n[阅读链接](https://example.com)\n\n| A | B |\n| --- | --- |\n| 甲 | 乙 |\n| 丙 | 丁 |\n\n```swift\nlet theme = \"Inflow\"\nprint(theme)\n```"
+        let source = "# Heading 标题\n\n正文排版 Typography：这是同一份 Markdown，用来比较字体、字号与行距。**重点内容**与 `inline code`。\n\n## Section 章节\n\n> 引用文字：安静地阅读，专注于内容。 A thoughtful quotation.\n\n### Detail 细节\n\n- 列表项目 List item\n- 第二个项目 Another item\n\n[阅读链接](https://example.com)\n\n| Element 元素 | Description 说明 |\n| --- | --- |\n| **甲 Bold** | 乙 |\n| 丙 | 丁 |\n\n###### Minor 六级\n\n```javascript\nconst theme = \"Inflow\";\nconst size = 42; // comment\n```"
         let editor = MarkdownSourceEditorSession(role: .renderedProjection)
         editor.scrollView.frame = NSRect(x: 0, y: 0, width: 920, height: 1100)
         editor.textView.frame = editor.scrollView.bounds
@@ -148,10 +149,10 @@ final class AppPreferencesTests: XCTestCase {
             let palette = MarkdownRenderPalette.resolved(for: NSAppearance(named: .aqua)!, theme: theme)
             XCTAssertEqual(editor.textView.backgroundColor, palette.canvasColor, theme.label)
             XCTAssertEqual(editor.textView.string, source)
-            let table = try XCTUnwrap(editor.textView.renderedTable(atUTF16Location: (source as NSString).range(of: "| A").location))
+            let table = try XCTUnwrap(editor.textView.renderedTable(atUTF16Location: (source as NSString).range(of: "| Element").location))
             XCTAssertEqual(table.backgroundColor(forRow: 0), palette.mutedSurfaceColor, theme.label)
             XCTAssertEqual(table.backgroundColor(forRow: 1), palette.canvasColor, theme.label)
-            let cell = try XCTUnwrap(table.subviews.compactMap { $0 as? RenderedMarkdownTableCellTextView }.first { $0.string == "甲" })
+            let cell = try XCTUnwrap(table.subviews.compactMap { $0 as? RenderedMarkdownTableCellTextView }.first { $0.string == "乙" })
             let expectedFont = theme.styles.font(size: CGFloat(configuration.fontSize), fallback: MarkdownRenderMetrics.bodyFont(size: CGFloat(configuration.fontSize)))
             XCTAssertEqual(cell.caretFont.familyName, expectedFont.familyName, theme.label)
             let headingRange = (source as NSString).range(of: "Heading")
@@ -162,6 +163,72 @@ final class AppPreferencesTests: XCTestCase {
             XCTAssertEqual(editor.textView.renderedHeadingDividerRanges.count,
                 theme.id == "github" ? 2 : ["whitey", "newsprint"].contains(theme.id) ? 1 : 0, theme.label)
             XCTAssertEqual(table.usesRowBorders, ["whitey", "pixyll", "gothic"].contains(theme.id), theme.label)
+            XCTAssertEqual(headingFont.pointSize, try XCTUnwrap(theme.styles.length("font-size", on: "h1", relativeTo: CGFloat(configuration.fontSize))), accuracy: 0.01)
+            let storage = try XCTUnwrap(editor.textView.textStorage)
+            let h6 = (source as NSString).range(of: "Minor").location
+            let h6Color = theme.styles.value("color", on: "h6").flatMap(NativeCSSStyles.color) ?? palette.headingColor
+            XCTAssertEqual(storage.attribute(.foregroundColor, at: h6, effectiveRange: nil) as? NSColor, h6Color, theme.label)
+            let headingManager = try XCTUnwrap(editor.textView.layoutManager)
+            headingManager.ensureLayout(for: try XCTUnwrap(editor.textView.textContainer))
+            if theme.id == "gothic" {
+                var uppercase: UniChar = 69 // e in Heading must display as E.
+                var expected: CGGlyph = 0
+                XCTAssertTrue(CTFontGetGlyphsForCharacters(headingFont as CTFont, &uppercase, &expected, 1))
+                XCTAssertEqual(headingManager.glyph(at: headingManager.glyphIndexForCharacter(at: headingRange.location + 1)), NSGlyph(expected))
+                XCTAssertEqual(headingParagraph.paragraphSpacingBefore, 64, accuracy: 0.1, "First Gothic H1: 2.75rem + 20px padding")
+            }
+            if theme.id == "whitey" {
+                XCTAssertEqual(headingParagraph.paragraphSpacingBefore, headingFont.pointSize * 1.6, accuracy: 0.1)
+            }
+            let header = try XCTUnwrap(table.subviews.compactMap { $0 as? RenderedMarkdownTableCellTextView }.first { $0.string == "Element 元素" })
+            let boldCell = try XCTUnwrap(table.subviews.compactMap { $0 as? RenderedMarkdownTableCellTextView }.first { $0.string == "甲 Bold" })
+            for text in [header, boldCell] {
+                let line = CTLineCreateWithAttributedString(try XCTUnwrap(text.textStorage))
+                let runs = CTLineGetGlyphRuns(line) as! [CTRun]
+                XCTAssertFalse(runs.isEmpty)
+                for run in runs {
+                    let attributes = CTRunGetAttributes(run) as NSDictionary
+                    let font = try XCTUnwrap(attributes[kCTFontAttributeName] as? NSFont)
+                    XCTAssertTrue(CTFontGetSymbolicTraits(font as CTFont).contains(.traitBold), "\(theme.label): Latin AND Chinese glyph runs must be bold: \(font.fontName)")
+                }
+            }
+            table.updateMaximumWidth(620)
+            let expectedPadding = theme.styles.length("padding-left", on: "td", relativeTo: CGFloat(configuration.fontSize)) ?? 12
+            XCTAssertEqual(header.frame.minX, expectedPadding, accuracy: 0.1, theme.label)
+            if ["night", "pixyll"].contains(theme.id) { XCTAssertEqual(table.renderedSize.width, 620, accuracy: 0.1, theme.label) }
+            let originalHeight = table.renderedSize.height
+            table.applyFont(NSFont(descriptor: expectedFont.fontDescriptor, size: expectedFont.pointSize * 2)!)
+            table.updateMaximumWidth(240)
+            XCTAssertLessThanOrEqual(table.renderedSize.width, 240.1)
+            XCTAssertGreaterThan(table.renderedSize.height, originalHeight)
+            for text in table.subviews.compactMap({ $0 as? RenderedMarkdownTableCellTextView }) {
+                XCTAssertGreaterThan(text.frame.width, 0)
+                XCTAssertLessThanOrEqual(text.frame.maxX, table.renderedSize.width + 0.1)
+                XCTAssertLessThanOrEqual(text.frame.maxY, table.renderedSize.height + 0.1)
+            }
+            table.applyFont(expectedFont)
+            table.updateMaximumWidth(620)
+            let link = (source as NSString).range(of: "阅读链接").location
+            XCTAssertEqual(storage.attribute(.underlineStyle, at: link, effectiveRange: nil) as? Int ?? 0,
+                ["night", "pixyll"].contains(theme.id) ? 1 : 0, theme.label)
+            if theme.id == "night" {
+                let quote = (source as NSString).range(of: "引用文字").location
+                let style = try XCTUnwrap(storage.attribute(.paragraphStyle, at: quote, effectiveRange: nil) as? NSParagraphStyle)
+                XCTAssertEqual(style.headIndent, 60, accuracy: 0.1)
+                XCTAssertEqual(storage.attribute(.foregroundColor, at: link, effectiveRange: nil) as? NSColor, NativeCSSStyles.color("#e0e0e0"))
+            }
+            let listMarker = try XCTUnwrap(RenderedMarkdownEditor.plan(for: source).markers.first { $0.kind == .unorderedList })
+            XCTAssertEqual(listMarker.displayText(styles: theme.styles), ["whitey", "night"].contains(theme.id) ? "▪" : listMarker.replacementText)
+            let literal = (source as NSString).range(of: "Inflow").location
+            for _ in 0..<300 {
+                if storage.attribute(.foregroundColor, at: literal, effectiveRange: nil) as? NSColor == NativeCSSStyles.color(palette.string) { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            for (text, color) in [("const", palette.keyword), ("Inflow", palette.string), ("42", palette.number), ("// comment", palette.comment)] {
+                XCTAssertEqual(storage.attribute(.foregroundColor, at: (source as NSString).range(of: text).location, effectiveRange: nil) as? NSColor,
+                    NativeCSSStyles.color(color), "\(theme.label) final token color: \(text)")
+            }
+            XCTAssertEqual(editor.textView.string, source, "Theme, geometry and glyph transformations must preserve Markdown")
             if let path = ProcessInfo.processInfo.environment["INFLOW_THEME_SNAPSHOTS"] {
                 let directory = URL(fileURLWithPath: path)
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -726,7 +793,7 @@ h2 { font-weight: 500; }
                 persistence: persistence
             )
             XCTAssertNil(preferences.persistenceFailure)
-            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 1_200)
+            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), MarkdownRenderMetrics.previewReadingWidth)
 
             persistence.shouldFail = true
             preferences.previewContentWidth = 900
@@ -734,7 +801,7 @@ h2 { font-weight: 500; }
 
             XCTAssertEqual(preferences.previewContentWidth, 900)
             XCTAssertTrue(preferences.workspaceOutlineVisible)
-            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), 1_200)
+            XCTAssertEqual(defaults.double(forKey: "preferences.preview.contentWidth"), MarkdownRenderMetrics.previewReadingWidth)
             XCTAssertFalse(defaults.bool(forKey: "preferences.workspace.outlineVisible"))
             XCTAssertNotNil(preferences.persistenceFailure)
             XCTAssertEqual(SettingsPersistencePrompt.title, "暂时无法保存设置")

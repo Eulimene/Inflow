@@ -1949,10 +1949,8 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         let font = try XCTUnwrap(session.textView.typingAttributes[.font] as? NSFont)
         XCTAssertEqual(
             font.pointSize,
-            CGFloat(
-                SourceEditorAppearance.default.fontSize
-                    * MarkdownRenderMetrics.heading(level: 1).scale
-            ),
+            try XCTUnwrap(session.textView.renderedTheme.styles.length("font-size", on: "h1",
+                relativeTo: CGFloat(SourceEditorAppearance.default.fontSize))),
             accuracy: 0.001
         )
         let rect = RenderedMarkdownCaretStyleResolver.adjustedInsertionRect(
@@ -2382,7 +2380,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         XCTAssertTrue(NSFontManager.shared.traits(of: reappliedFont).contains(.boldFontMask))
         XCTAssertEqual(
             reappliedFont.pointSize,
-            CGFloat(19 * MarkdownRenderMetrics.heading(level: 1).scale),
+            try XCTUnwrap(session.textView.renderedTheme.styles.length("font-size", on: "h1", relativeTo: 19)),
             accuracy: 0.001
         )
         XCTAssertEqual(paragraphStyle.minimumLineHeight, reappliedFont.pointSize * MarkdownRenderMetrics.headingLineHeight(level: 1), accuracy: 0.001)
@@ -3011,10 +3009,8 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         let linkFont = try XCTUnwrap(
             storage.attribute(.font, at: linkLocation, effectiveRange: nil) as? NSFont
         )
-        let headingPointSize = CGFloat(
-            SourceEditorAppearance.default.fontSize
-                * MarkdownRenderMetrics.heading(level: 1).scale
-        )
+        let headingPointSize = try XCTUnwrap(session.textView.renderedTheme.styles.length("font-size", on: "h1",
+            relativeTo: CGFloat(SourceEditorAppearance.default.fontSize)))
         XCTAssertEqual(boldFont.pointSize, headingPointSize, accuracy: 0.001)
         XCTAssertTrue(NSFontManager.shared.traits(of: boldFont).contains(.boldFontMask))
         XCTAssertEqual(

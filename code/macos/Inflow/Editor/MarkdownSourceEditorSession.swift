@@ -1315,11 +1315,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 guard NSMaxRange(range) <= storage.length else { continue }
                 let color: NSColor
                 switch token.kind {
-                case "keyword", "tag": color = palette.accentColor
-                case "string": color = NSColor.systemGreen
-                case "number", "literal": color = NSColor.systemOrange
-                case "comment": color = palette.secondaryTextColor
-                case "type", "attribute": color = NSColor.systemPurple
+                case "keyword": color = NativeCSSStyles.color(palette.keyword) ?? palette.textColor
+                case "tag": color = NativeCSSStyles.color(palette.tag) ?? palette.textColor
+                case "string": color = NativeCSSStyles.color(palette.string) ?? palette.textColor
+                case "number", "literal": color = NativeCSSStyles.color(palette.number) ?? palette.textColor
+                case "comment": color = NativeCSSStyles.color(palette.comment) ?? palette.textColor
+                case "type", "attribute": color = NativeCSSStyles.color(palette.type) ?? palette.textColor
                 default: color = palette.textColor
                 }
                 storage.addAttribute(.foregroundColor, value: color, range: range)

@@ -1,0 +1,236 @@
+Test Suite 'Selected tests' started at 2026-10-03 23:42:18.252.
+Test Suite 'InflowTests.xctest' started at 2026-10-03 23:42:18.253.
+Test Suite 'AppPreferencesTests' started at 2026-10-03 23:42:18.253.
+Test Case '-[InflowTests.AppPreferencesTests testBuiltinThemeMigrationUpdatesDefaultsAndPreservesUserEdits]' started.
+Test Case '-[InflowTests.AppPreferencesTests testBuiltinThemeMigrationUpdatesDefaultsAndPreservesUserEdits]' passed (0.028 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testCSSCascadeVariablesUnitsAndUnsupportedRulesStayBounded]' started.
+Test Case '-[InflowTests.AppPreferencesTests testCSSCascadeVariablesUnitsAndUnsupportedRulesStayBounded]' passed (0.001 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testCSSSelectionColorsReachNativeTextAndTableCells]' started.
+Test Case '-[InflowTests.AppPreferencesTests testCSSSelectionColorsReachNativeTextAndTableCells]' passed (0.088 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testCSSThemeCatalogInstallsSixEditableFilesAndDiscoversCustomThemes]' started.
+Test Case '-[InflowTests.AppPreferencesTests testCSSThemeCatalogInstallsSixEditableFilesAndDiscoversCustomThemes]' passed (0.027 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testCSSThemeHTMLUsesWriteSelectorWithoutAllowingStyleTagEscape]' started.
+Test Case '-[InflowTests.AppPreferencesTests testCSSThemeHTMLUsesWriteSelectorWithoutAllowingStyleTagEscape]' passed (0.003 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testCSSThemeReloadPersistsSelectionAndFreezesExportSnapshot]' started.
+Test Case '-[InflowTests.AppPreferencesTests testCSSThemeReloadPersistsSelectionAndFreezesExportSnapshot]' passed (0.062 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testCSSThemesReachNativeFontsColorsHeadingsAndKeepMarkdownIntact]' started.
+Test Case '-[InflowTests.AppPreferencesTests testCSSThemesReachNativeFontsColorsHeadingsAndKeepMarkdownIntact]' passed (0.782 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testDefaultsMatchLaunchContract]' started.
+Test Case '-[InflowTests.AppPreferencesTests testDefaultsMatchLaunchContract]' passed (0.014 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testInvalidStoredValuesAreSanitizedWithoutAffectingUnrelatedData]' started.
+Test Case '-[InflowTests.AppPreferencesTests testInvalidStoredValuesAreSanitizedWithoutAffectingUnrelatedData]' passed (0.004 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testManualSaveHostPolicyAddsOnlyToConcreteInheritedHost]' started.
+Test Case '-[InflowTests.AppPreferencesTests testManualSaveHostPolicyAddsOnlyToConcreteInheritedHost]' passed (0.000 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testManualSaveHostPolicyNeverMutatesNSDocumentGlobally]' started.
+Test Case '-[InflowTests.AppPreferencesTests testManualSaveHostPolicyNeverMutatesNSDocumentGlobally]' passed (0.000 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testPersonalMilestoneDisablesDocumentGroupHostAutosavePolicies]' started.
+Test Case '-[InflowTests.AppPreferencesTests testPersonalMilestoneDisablesDocumentGroupHostAutosavePolicies]' passed (0.000 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testPersonalMilestoneKeepsPeriodicAutosaveDisabledAndManualSaveAvailable]' started.
+Test Case '-[InflowTests.AppPreferencesTests testPersonalMilestoneKeepsPeriodicAutosaveDisabledAndManualSaveAvailable]' passed (0.003 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testThemeDefaultsAndCustomOverridesComeFromCSS]' started.
+Test Case '-[InflowTests.AppPreferencesTests testThemeDefaultsAndCustomOverridesComeFromCSS]' passed (0.002 seconds).
+Test Case '-[InflowTests.AppPreferencesTests testVersionedSettingsRegistryMigratesLegacyWorkspacePreferences]' started.
+Test Case '-[InflowTests.AppPreferencesTests testVersionedSettingsRegistryMigratesLegacyWorkspacePreferences]' passed (0.003 seconds).
+Test Suite 'AppPreferencesTests' passed at 2026-10-03 23:42:19.272.
+	 Executed 15 tests, with 0 failures (0 unexpected) in 1.018 (1.019) seconds
+Test Suite 'MarkdownHighlighterTests' started at 2026-10-03 23:42:19.272.
+Test Case '-[InflowTests.MarkdownHighlighterTests testBridgeReturnsValidatedLaunchSyntaxRanges]' started.
+Test Case '-[InflowTests.MarkdownHighlighterTests testBridgeReturnsValidatedLaunchSyntaxRanges]' passed (0.001 seconds).
+Test Case '-[InflowTests.MarkdownHighlighterTests testHighlightingPreparedInPreviewModeAppliesWhenSourceEditorMounts]' started.
+Test Case '-[InflowTests.MarkdownHighlighterTests testHighlightingPreparedInPreviewModeAppliesWhenSourceEditorMounts]' passed (0.008 seconds).
+Test Case '-[InflowTests.MarkdownHighlighterTests testSessionAppliesAndDisablesHighlightingWithoutChangingDocumentOrUndo]' started.
+Test Case '-[InflowTests.MarkdownHighlighterTests testSessionAppliesAndDisablesHighlightingWithoutChangingDocumentOrUndo]' passed (0.025 seconds).
+Test Case '-[InflowTests.MarkdownHighlighterTests testSessionRejectsCanonicalEquivalentButByteStaleHighlighting]' started.
+Test Case '-[InflowTests.MarkdownHighlighterTests testSessionRejectsCanonicalEquivalentButByteStaleHighlighting]' passed (0.002 seconds).
+Test Case '-[InflowTests.MarkdownHighlighterTests testSyntaxKindValuesRemainStable]' started.
+Test Case '-[InflowTests.MarkdownHighlighterTests testSyntaxKindValuesRemainStable]' passed (0.000 seconds).
+Test Case '-[InflowTests.MarkdownHighlighterTests testUTF8ScalarRangesConvertWithoutAssumingCharacterBoundaries]' started.
+Test Case '-[InflowTests.MarkdownHighlighterTests testUTF8ScalarRangesConvertWithoutAssumingCharacterBoundaries]' passed (0.000 seconds).
+Test Suite 'MarkdownHighlighterTests' passed at 2026-10-03 23:42:19.308.
+	 Executed 6 tests, with 0 failures (0 unexpected) in 0.036 (0.036) seconds
+Test Suite 'MarkdownRendererTests' started at 2026-10-03 23:42:19.308.
+Test Case '-[InflowTests.MarkdownRendererTests testCoreImageSlotsAreInertUntilResolvedByThePlatform]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testCoreImageSlotsAreInertUntilResolvedByThePlatform]' passed (0.001 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testCoreLinkMetadataCarriesExactParsedTargetWithoutHTMLPostprocessing]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testCoreLinkMetadataCarriesExactParsedTargetWithoutHTMLPostprocessing]' passed (0.004 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testDiagramRequestsCarrySafeSourceRanges]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testDiagramRequestsCarrySafeSourceRanges]' passed (0.000 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testEditableAndReadOnlySurfacesInstallOneIdenticalNativePlan]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testEditableAndReadOnlySurfacesInstallOneIdenticalNativePlan]' passed (0.068 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testHeadingFragmentsDecodeExactlyOnceBeforeExactDOMIdentifierMatch]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testHeadingFragmentsDecodeExactlyOnceBeforeExactDOMIdentifierMatch]' passed (0.001 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testHeadingIdentifiersUseOneStableNormalizedContract]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testHeadingIdentifiersUseOneStableNormalizedContract]' passed (0.000 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testImageIssueNavigationUsesExactDuplicateReferenceAndRejectsStaleContent]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testImageIssueNavigationUsesExactDuplicateReferenceAndRejectsStaleContent]' passed (0.000 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testLinkPlannerClassifiesLocalTargetsAndInvalidatesChangedSnapshots]' started.
+CoreGraphics PDF has logged an error. Set environment variable "CG_PDF_VERBOSE" to learn more.
+Test Case '-[InflowTests.MarkdownRendererTests testLinkPlannerClassifiesLocalTargetsAndInvalidatesChangedSnapshots]' passed (0.005 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testLinkPlannerRequiresAnExactParsedReferenceAndSupportsWebAndFileURLs]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testLinkPlannerRequiresAnExactParsedReferenceAndSupportsWebAndFileURLs]' passed (0.002 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testLinkPlannerResolvesCurrentAndDuplicateUnicodeHeadingAnchors]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testLinkPlannerResolvesCurrentAndDuplicateUnicodeHeadingAnchors]' passed (0.000 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testLinkPlannerValidatesImageContentAndNeverFollowsSymlinks]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testLinkPlannerValidatesImageContentAndNeverFollowsSymlinks]' passed (0.003 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testLocalMarkdownPromptFreezesSafeCopySemantics]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testLocalMarkdownPromptFreezesSafeCopySemantics]' passed (0.000 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testLocalStaticPNGIsInlinedWithoutExposingAFilePath]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testLocalStaticPNGIsInlinedWithoutExposingAFilePath]' passed (0.005 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testMissingAndUnsavedRelativeImagesShowSpecificLocalPlaceholders]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testMissingAndUnsavedRelativeImagesShowSpecificLocalPlaceholders]' passed (0.009 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testMountedNativeProjectionCarriesExactLinkTarget]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testMountedNativeProjectionCarriesExactLinkTarget]' passed (0.011 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testNativeProjectionScrollUsesTextKitFraction]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testNativeProjectionScrollUsesTextKitFraction]' passed (0.002 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testNativeRemoteImageResolutionAcceptsOnlyRestrictedWebTargets]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testNativeRemoteImageResolutionAcceptsOnlyRestrictedWebTargets]' passed (0.000 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testNativeRenderPlanCarriesClosedNavigationMetadata]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testNativeRenderPlanCarriesClosedNavigationMetadata]' passed (0.000 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testPreviewDerivationReportsRelativeResourcesWithoutAnotherSourceScan]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testPreviewDerivationReportsRelativeResourcesWithoutAnotherSourceScan]' passed (0.007 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testPreviewDocumentAllowsOnlyImageNetworkRequestsAndForbidsScripts]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testPreviewDocumentAllowsOnlyImageNetworkRequestsAndForbidsScripts]' passed (0.003 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testPreviewFailureUsesFrozenSafeExitCopyAndKeepsDetailsOutOfHTML]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testPreviewFailureUsesFrozenSafeExitCopyAndKeepsDetailsOutOfHTML]' passed (0.004 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testPreviewHeadingsCarryCoreOwnedSourceOffsetsWithoutHTMLPostprocessing]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testPreviewHeadingsCarryCoreOwnedSourceOffsetsWithoutHTMLPostprocessing]' passed (0.008 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testPreviewIssueNavigationRejectsStaleAndInvalidUTF8Offsets]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testPreviewIssueNavigationRejectsStaleAndInvalidUTF8Offsets]' passed (0.000 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testPreviewStyleMatchesInlineQuoteLinkAndTablePresentationContract]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testPreviewStyleMatchesInlineQuoteLinkAndTablePresentationContract]' passed (0.007 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testProjectImageResolutionSupportsPathsOutsideTheProjectRoot]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testProjectImageResolutionSupportsPathsOutsideTheProjectRoot]' passed (0.018 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testProjectLinkPlannerSupportsNormalizedTargetsInsideAndOutsideRoot]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testProjectLinkPlannerSupportsNormalizedTargetsInsideAndOutsideRoot]' passed (0.002 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testRawHTMLIsEscaped]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testRawHTMLIsEscaped]' passed (0.000 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testRemoteImagesRenderWhileUnsupportedLocalImagesStayBlocked]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testRemoteImagesRenderWhileUnsupportedLocalImagesStayBlocked]' passed (0.009 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testRendersCommonMarkdownAndExtensions]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testRendersCommonMarkdownAndExtensions]' passed (0.000 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testReplacedProjectRootBlocksPreviewImagesAndLocalLinkExecution]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testReplacedProjectRootBlocksPreviewImagesAndLocalLinkExecution]' passed (0.013 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testSafePreviewMaintenanceCleansExpiredManagedCopiesAtStartupSafely]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testSafePreviewMaintenanceCleansExpiredManagedCopiesAtStartupSafely]' passed (0.001 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testSafePreviewMaintenanceRepeatsStopsAndDoesNotRetainItsOwner]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testSafePreviewMaintenanceRepeatsStopsAndDoesNotRetainItsOwner]' passed (0.044 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testSourceEditorPublishesNormalizedScrollFraction]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testSourceEditorPublishesNormalizedScrollFraction]' passed (0.003 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testSplitViewIsTheDefaultMode]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testSplitViewIsTheDefaultMode]' passed (0.000 seconds).
+Test Case '-[InflowTests.MarkdownRendererTests testSuccessfulPreviewDocumentDoesNotReportFailure]' started.
+Test Case '-[InflowTests.MarkdownRendererTests testSuccessfulPreviewDocumentDoesNotReportFailure]' passed (0.004 seconds).
+Test Suite 'MarkdownRendererTests' passed at 2026-10-03 23:42:19.546.
+	 Executed 35 tests, with 0 failures (0 unexpected) in 0.237 (0.238) seconds
+Test Suite 'RenderedMarkdownEditorTests' started at 2026-10-03 23:42:19.546.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testAdaptiveTableLayoutFillsAndRespondsToTheViewport]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testAdaptiveTableLayoutFillsAndRespondsToTheViewport]' passed (0.008 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testBlockSpacingPolicyCanBeReusedWithoutChangingBlockContents]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testBlockSpacingPolicyCanBeReusedWithoutChangingBlockContents]' passed (0.001 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testBlockSpacingUsesCanonicalBoundariesAcrossSyntax]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testBlockSpacingUsesCanonicalBoundariesAcrossSyntax]' passed (0.402 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testComplexStructuresBecomeNonoverlappingLocalSourceBlocks]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testComplexStructuresBecomeNonoverlappingLocalSourceBlocks]' passed (0.001 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testContinuousTableNavigationAndCommandReturn]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testContinuousTableNavigationAndCommandReturn]' passed (0.909 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testEmptySourceHasAnEmptyCharacterPreservingPlan]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testEmptySourceHasAnEmptyCharacterPreservingPlan]' passed (0.000 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testFencedCodeRendersUntilCaretRequestsItsSource]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testFencedCodeRendersUntilCaretRequestsItsSource]' passed (0.025 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testHeadingSpacingDoesNotDependOnSelection]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testHeadingSpacingDoesNotDependOnSelection]' passed (0.356 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testImageTargetResolvesRelativeAbsoluteFileAndRemotePaths]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testImageTargetResolvesRelativeAbsoluteFileAndRemotePaths]' passed (0.000 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testInlineCodeBackgroundTracksTheGlyphBaselineInsteadOfTheLineBox]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testInlineCodeBackgroundTracksTheGlyphBaselineInsteadOfTheLineBox]' passed (0.011 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testInlineCodeDelimitersCollapseWithoutDistortingCodeTypography]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testInlineCodeDelimitersCollapseWithoutDistortingCodeTypography]' passed (0.010 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testLinkAndImageTitlesRenderWhileMalformedDestinationsRemainLocalSource]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testLinkAndImageTitlesRenderWhileMalformedDestinationsRemainLocalSource]' passed (0.001 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testLinkClickConvertsWindowCoordinatesIntoTheTextView]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testLinkClickConvertsWindowCoordinatesIntoTheTextView]' passed (0.004 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testLiveWritingPairsAndProtectedBlocks]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testLiveWritingPairsAndProtectedBlocks]' passed (0.024 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testLiveWritingReturnUndoRestoresSourceAndCaret]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testLiveWritingReturnUndoRestoresSourceAndCaret]' passed (0.435 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testLiveWritingStructuralTransactions]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testLiveWritingStructuralTransactions]' passed (0.000 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testLongChineseBlockQuoteUsesRenderedTypographyWithoutExposingMarker]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testLongChineseBlockQuoteUsesRenderedTypographyWithoutExposingMarker]' passed (0.016 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testMarkedTextRequestsKeepExistingPresentation]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testMarkedTextRequestsKeepExistingPresentation]' passed (0.000 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testNestedInlineSyntaxRendersWhileMalformedSyntaxFallsBackLocally]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testNestedInlineSyntaxRendersWhileMalformedSyntaxFallsBackLocally]' passed (0.000 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testNormalClickResolvesOnlyCurrentVisibleLinkText]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testNormalClickResolvesOnlyCurrentVisibleLinkText]' passed (0.000 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testOnlySourceOnlyBlocksRevealMarkdownAtTheCaret]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testOnlySourceOnlyBlocksRevealMarkdownAtTheCaret]' passed (0.001 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testPlanCoversPersonalEditionDirectEditingStructures]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testPlanCoversPersonalEditionDirectEditingStructures]' passed (0.047 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testPlanRendersLocalAndRemoteImagesWithoutChangingSource]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testPlanRendersLocalAndRemoteImagesWithoutChangingSource]' passed (0.000 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testQuoteContinuationKeepsOneBarAndStylesEmptyLines]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testQuoteContinuationKeepsOneBarAndStylesEmptyLines]' passed (0.054 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testReadOnlyTableReflowsWithoutClippingAcrossWidthAndModeChanges]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testReadOnlyTableReflowsWithoutClippingAcrossWidthAndModeChanges]' passed (0.034 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedCaretAtHeadingEndSkipsHiddenMarkersAndNewline]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedCaretAtHeadingEndSkipsHiddenMarkersAndNewline]' passed (0.324 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedCaretTypingFontMatchesTheVisibleText]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedCaretTypingFontMatchesTheVisibleText]' passed (0.972 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedLinkPublishesHoverRangeAtItsVisibleGlyphs]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedLinkPublishesHoverRangeAtItsVisibleGlyphs]' passed (0.058 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedModeUsesViewportWrappingAndRestoresSourcePreference]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedModeUsesViewportWrappingAndRestoresSourcePreference]' passed (0.012 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedParagraphsDoNotAddExtraParagraphSpacing]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedParagraphsDoNotAddExtraParagraphSpacing]' passed (7.135 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedSessionComposesEveryInlineStyleWithoutShrinkingHeadingText]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedSessionComposesEveryInlineStyleWithoutShrinkingHeadingText]' passed (0.013 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedSessionKeepsProseRenderedAndUnmountsOnlySourceOnlyBlocks]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedSessionKeepsProseRenderedAndUnmountsOnlySourceOnlyBlocks]' passed (0.062 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedSessionMatchesPreviewMarkersRulesLinksAndFootnotes]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedSessionMatchesPreviewMarkersRulesLinksAndFootnotes]' passed (0.018 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedSessionMountsLocalImageWithoutChangingMarkdown]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedSessionMountsLocalImageWithoutChangingMarkdown]' passed (0.044 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedSessionReappliesPresentationAfterSourceAppearanceChanges]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedSessionReappliesPresentationAfterSourceAppearanceChanges]' passed (0.026 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedSessionRefreshesAfterTypingUndoAndRedo]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedSessionRefreshesAfterTypingUndoAndRedo]' passed (0.034 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedSessionRendersStructuralMarkersWithoutLeakingQuoteSource]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedSessionRendersStructuralMarkersWithoutLeakingQuoteSource]' passed (0.019 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedSessionSupportsSingleClickAndContextMenuLinkPreferences]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedSessionSupportsSingleClickAndContextMenuLinkPreferences]' passed (0.011 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedTableEditingPreservesMarkdownAndSupportsCommonOperations]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedTableEditingPreservesMarkdownAndSupportsCommonOperations]' passed (0.005 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedTableOverlaySurvivesUnrelatedProseTyping]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedTableOverlaySurvivesUnrelatedProseTyping]' passed (0.033 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedTableUsesOneLayoutAnchorAndCollapsesBackingRows]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedTableUsesOneLayoutAnchorAndCollapsesBackingRows]' passed (0.027 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedTextBaselinesCenterAcrossBlocksThemesAndLineHeights]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testRenderedTextBaselinesCenterAcrossBlocksThemesAndLineHeights]' passed (0.433 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testSemanticParagraphAndLineBreakTransactions]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testSemanticParagraphAndLineBreakTransactions]' passed (0.909 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testSingleLineChineseBlockQuoteBarAlignsWithVisibleTextBaseline]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testSingleLineChineseBlockQuoteBarAlignsWithVisibleTextBaseline]' passed (0.012 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testSourceModePreservesBlankLineLayoutAfterRenderedMode]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testSourceModePreservesBlankLineLayoutAfterRenderedMode]' passed (0.107 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testTableAndParagraphCaretsShareFontHeightAndLineCentre]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testTableAndParagraphCaretsShareFontHeightAndLineCentre]' passed (0.048 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testTableTextCentersWithinLinesAndUnequalHeightRows]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testTableTextCentersWithinLinesAndUnequalHeightRows]' passed (0.021 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testTypingProjectionCannotInheritHiddenDisplayAttributes]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testTypingProjectionCannotInheritHiddenDisplayAttributes]' passed (0.025 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testTypingProjectionRebasesUTF16WithoutCrossingSemanticRuns]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testTypingProjectionRebasesUTF16WithoutCrossingSemanticRuns]' passed (0.001 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testUnicodeRangesUseExactUTF8AndNSTextViewUTF16Coordinates]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testUnicodeRangesUseExactUTF8AndNSTextViewUTF16Coordinates]' passed (0.000 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testUnsupportedTripleDashBlockRemainsLiteralSource]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testUnsupportedTripleDashBlockRemainsLiteralSource]' passed (0.002 seconds).
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testWritingPlanCacheSeparatesConfigurationAndAvoidsParsingOrdinaryDeletion]' started.
+Test Case '-[InflowTests.RenderedMarkdownEditorTests testWritingPlanCacheSeparatesConfigurationAndAvoidsParsingOrdinaryDeletion]' passed (0.002 seconds).
+Test Suite 'RenderedMarkdownEditorTests' passed at 2026-10-03 23:42:32.248.
+	 Executed 52 tests, with 0 failures (0 unexpected) in 12.693 (12.702) seconds
+Test Suite 'InflowTests.xctest' passed at 2026-10-03 23:42:32.248.
+	 Executed 108 tests, with 0 failures (0 unexpected) in 13.984 (13.995) seconds
+Test Suite 'Selected tests' passed at 2026-10-03 23:42:32.248.
+	 Executed 108 tests, with 0 failures (0 unexpected) in 13.984 (13.996) seconds
+Table navigation, 100 native commands: P50=0.3904164768755436ms P95=8.952458389103413ms (not end-to-end input latency)

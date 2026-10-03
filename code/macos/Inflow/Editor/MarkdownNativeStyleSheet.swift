@@ -48,7 +48,7 @@ struct MarkdownNativeStyleSheet {
         baseFont: NSFont
     ) {
         let range = marker.sourceRange.utf16Range
-        guard let replacement = marker.replacementText,
+        guard let replacement = marker.displayText(styles: theme.styles),
               range.length > 0,
               NSMaxRange(range) <= storage.length
         else { return }
@@ -154,9 +154,7 @@ struct MarkdownNativeStyleSheet {
                         NSFont(descriptor: baseFont.fontDescriptor, size: baseFont.pointSize * CGFloat(metrics.scale)) ?? baseFont,
                         bold: true
                     ),
-                    .foregroundColor: level == 6
-                        ? palette.secondaryTextColor
-                        : palette.headingColor,
+                    .foregroundColor: palette.headingColor,
                 ],
                 range: range
             )
@@ -310,6 +308,11 @@ struct MarkdownNativeStyleSheet {
         if let raw = css.value("color", on: element), let color = NativeCSSStyles.color(raw) {
             storage.addAttribute(.foregroundColor, value: color, range: range)
         }
+        if css.value("text-transform", on: element) == "uppercase" {
+            storage.addAttribute(.markdownUppercase, value: true, range: range)
+            // Keep one source character per glyph (including fi/fl sequences).
+            storage.addAttribute(.ligature, value: 0, range: range)
+        }
         if let spacing = css.length("letter-spacing", on: element, relativeTo: size) {
             storage.addAttribute(.kern, value: min(20, max(-2, spacing)), range: range)
         }
@@ -325,11 +328,11 @@ struct MarkdownNativeStyleSheet {
             paragraph.minimumLineHeight = size * CGFloat(MarkdownRenderMetrics.headingLineHeight(level: level))
         }
         if let line = css.value("line-height", on: element) {
-            let height = Double(line).map { size * CGFloat($0) } ?? css.length("line-height", on: element, relativeTo: size) ?? 0
+            let height = Double(line).map { size * CGFloat($0) } ?? css.length("line-height", on: element, relativeTo: size, rootSize: baseFont.pointSize) ?? 0
             if height.isFinite && height > 0 { paragraph.minimumLineHeight = min(240, max(size, height)); paragraph.lineHeightMultiple = 1 }
         }
-        if let before = css.length("margin-top", on: element, relativeTo: baseFont.pointSize) { paragraph.paragraphSpacingBefore = min(200, max(0, before)) }
-        if let after = css.length("margin-bottom", on: element, relativeTo: baseFont.pointSize) { paragraph.paragraphSpacing = min(200, max(0, after)) }
+        if let before = css.length("margin-top", on: element, relativeTo: size, rootSize: baseFont.pointSize) { paragraph.paragraphSpacingBefore = min(200, max(0, before)) }
+        if let after = css.length("margin-bottom", on: element, relativeTo: size, rootSize: baseFont.pointSize) { paragraph.paragraphSpacing = min(200, max(0, after)) }
         if let alignment = css.value("text-align", on: element) {
             paragraph.alignment = alignment == "center" ? .center : alignment == "right" ? .right : alignment == "justify" ? .justified : .left
         }
@@ -339,8 +342,31 @@ struct MarkdownNativeStyleSheet {
             paragraph.firstLineHeadIndent = inset
             paragraph.headIndent = inset
         }
-        if case .heading = kind, let padding = css.length("padding-bottom", on: element, relativeTo: size) {
-            paragraph.paragraphSpacing += max(0, min(80, padding))
+        if case .heading = kind {
+            let start = storage.mutableString.paragraphRange(for: range).location
+            let preceding = storage.mutableString.substring(to: start).trimmingCharacters(in: .whitespacesAndNewlines)
+            var contextualElement: String?
+            if preceding.isEmpty { contextualElement = element + ":first-child" }
+            else if let line = preceding.components(separatedBy: "\n").last {
+                let hashes = line.prefix(while: { $0 == "#" }).count
+                if (1...2).contains(hashes), line.dropFirst(hashes).first == " " {
+                    contextualElement = "h\(hashes)+" + element
+                }
+            }
+            if let contextualElement, let before = css.length("margin-top", on: contextualElement,
+                relativeTo: size, rootSize: baseFont.pointSize) {
+                paragraph.paragraphSpacingBefore = min(200, max(0, before))
+            }
+            paragraph.paragraphSpacingBefore += max(0, min(80, css.length("padding-top", on: element,
+                relativeTo: size, rootSize: baseFont.pointSize) ?? 0))
+            paragraph.paragraphSpacing += max(0, min(80, css.length("padding-bottom", on: element,
+                relativeTo: size, rootSize: baseFont.pointSize) ?? 0))
+            if let left = css.length("padding-left", on: element, relativeTo: size, rootSize: baseFont.pointSize) {
+                paragraph.firstLineHeadIndent = max(0, min(80, left)); paragraph.headIndent = paragraph.firstLineHeadIndent
+            }
+            if let right = css.length("padding-right", on: element, relativeTo: size, rootSize: baseFont.pointSize) {
+                paragraph.tailIndent = -max(0, min(80, right))
+            }
         }
         // TextKit takes alignment from the start of the paragraph, including hidden Markdown markers.
         storage.addAttribute(.paragraphStyle, value: paragraph, range: storage.mutableString.paragraphRange(for: range))

@@ -91,6 +91,9 @@ Inflow 即时编辑和预览使用原生 TextKit，并非浏览器。CSS 文件�
 - 正文背景、文字、标题、引用、链接、代码背景、表格边框与条纹颜色；十六进制颜色（含透明度）、逗号形式 `rgb()` / `rgba()` 和少量基础命名色。
 - 正文字体及中文回退链、字号、行高；标题和段落等文本块的字体、字号、字重、斜体、颜色、字距、行高、上下间距与对齐，以及链接下划线。常用长度支持 `px`、`pt`、`em`、`rem`、`%`，不是完整浏览器单位运算。
 - 标题下边线的宽度和颜色、引用左边线宽度与缩进、代码块边框和圆角、表格完整网格或横线。`--md-divider-width` / `--md-divider-height` / `--md-divider-color` 提供居中短分隔线；`table { --md-table-grid: rows; }` 选择原生横线表格，HTML 对应规则见 Whitey、Pixyll、Gothic。
+- 表格 `width: 100%`、单元格四侧 `padding`、`line-height` 和表头下分隔线；宽度会随可用阅读宽度重新计算，正文与表头使用同一中文字体回退链。
+- `ul { list-style-type: square; }`；标题 `text-transform: uppercase` 在原生视图中转换 ASCII 英文字形，保持 Markdown 原文、选择与复制的字符映射。多字符 Unicode 大写扩展不转换。
+- 标题间距支持受限的 `h1+h2`、`h2+h3`、`h1:first-child`、`h2:first-child`；标题的 `em` 以标题字号计算，`rem` 以正文基准字号计算。
 - 正文最大宽度（不超过设置中的上限）及对称水平留白。设置中的字号／缩放会作用于主题字号；自定义行高设置优先于主题的默认行高。
 
 `--bg-color`、`--text-color`、`--primary-color` 与 Typora 常用变量对齐。更多可用的 `--md-*` 变量可参考内置主题，如 `--md-heading`、`--md-secondary`、`--md-quote-bar`、`--md-table-stripe`，以及代码配色的 `--md-keyword`、`--md-string`、`--md-comment` 等。
