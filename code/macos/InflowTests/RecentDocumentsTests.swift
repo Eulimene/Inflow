@@ -11,6 +11,67 @@ final class RecentDocumentsTests: XCTestCase {
         _ = NSApplication.shared
     }
 
+    func testFirstDraftCloseExplainsOnceAfterCheckpointAndAllowsCancellation() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let suite = "DraftClose." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let previousStore = TemporaryDocumentDrafts.store
+        let previousDisclosure = TemporaryDocumentDrafts.closeDisclosure
+        let document = NSDocument()
+        let id = UUID()
+        let url = root.appendingPathComponent("original.md")
+        let original = Data("# 已保存正文".utf8)
+        try original.write(to: url)
+        var content = try MarkdownDocument(fileData: original)
+        var modified = false
+        var decisions = [false, true]
+        var presentations = 0
+        TemporaryDocumentDrafts.store = TemporaryDocumentDraftStore(rootURL: root.appendingPathComponent("drafts"))
+        TemporaryDocumentDrafts.closeDisclosure = DraftCloseDisclosure(defaults: defaults) {
+            XCTAssertFalse(TemporaryDocumentDrafts.closeDisclosure.approve(hasUnsavedContent: true),
+                "A repeated close while the explanation is open must not present another modal")
+            presentations += 1
+            XCTAssertEqual(try? TemporaryDocumentDrafts.store.records().first?.text, content.text,
+                "The latest draft must be durable before explaining close")
+            return decisions.removeFirst()
+        }
+        TemporaryDocumentDrafts.register(id, owner: document, isModified: { modified }) {
+            DocumentRecoveryRecord(id: id, document: content, originalURL: url,
+                selectedUTF16Range: NSRange(location: 0, length: 0), viewMode: .preview, verticalScrollOffset: 0)
+        }
+        defer {
+            TemporaryDocumentDrafts.unregister(id)
+            TemporaryDocumentDrafts.closeDisclosure = previousDisclosure
+            TemporaryDocumentDrafts.store = previousStore
+            TemporaryDocumentDrafts.cancelTermination()
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+        XCTAssertTrue(TemporaryDocumentDrafts.approveClose(owner: document))
+        XCTAssertEqual(presentations, 0, "Saved documents must not consume the first-close explanation")
+        content.text += "\n最后一次输入😀"
+        modified = true
+        document.updateChangeCount(.changeDone)
+        XCTAssertFalse(TemporaryDocumentDrafts.approveClose(owner: document))
+        XCTAssertTrue(document.isDocumentEdited)
+        XCTAssertEqual(try Data(contentsOf: url), original)
+        XCTAssertEqual(presentations, 1)
+        XCTAssertTrue(TemporaryDocumentDrafts.approveClose(owner: document))
+        XCTAssertEqual(presentations, 2, "Cancelling must leave the explanation available for the next close")
+        XCTAssertEqual(try Data(contentsOf: url), original)
+        TemporaryDocumentDrafts.closeDisclosure = DraftCloseDisclosure(defaults: defaults) {
+            XCTFail("Acknowledgement must persist across disclosure instances")
+            return false
+        }
+        XCTAssertTrue(TemporaryDocumentDrafts.approveClose(owner: document))
+        let alert = DraftCloseDisclosure.makeAlert()
+        XCTAssertEqual(alert.buttons.map(\.title), ["保留草稿并关闭", "返回编辑"])
+        XCTAssertEqual(alert.buttons[1].keyEquivalent, "\u{1b}")
+        XCTAssertTrue(alert.window.defaultButtonCell === alert.buttons[0].cell)
+
+    }
+
     func testRecoveryTabPlaceholdersOpenOnlyWhenSelected() {
         let tabs = DocumentWindowTabs()
         var opens = 0
@@ -112,16 +173,22 @@ final class RecentDocumentsTests: XCTestCase {
         XCTAssertFalse(InflowTerminationPolicy.terminatesAfterLastWindowClosed)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let previousStore = TemporaryDocumentDrafts.store
+        let previousDisclosure = TemporaryDocumentDrafts.closeDisclosure
+        let suite = "QuitReview." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        TemporaryDocumentDrafts.closeDisclosure = DraftCloseDisclosure(defaults: defaults, present: { true })
         let id = UUID()
         let document = NSDocument()
         var latest = "first"
         TemporaryDocumentDrafts.store = TemporaryDocumentDraftStore(rootURL: root)
-        TemporaryDocumentDrafts.register(id, owner: document) {
+        TemporaryDocumentDrafts.register(id, owner: document, isModified: { !latest.isEmpty }) {
             DocumentRecoveryRecord(id: id, document: MarkdownDocument(text: latest), originalURL: nil,
                 selectedUTF16Range: NSRange(location: latest.utf16.count, length: 0), viewMode: .preview, verticalScrollOffset: 0)
         }
         defer {
             TemporaryDocumentDrafts.cancelTermination()
+            TemporaryDocumentDrafts.closeDisclosure = previousDisclosure
+            defaults.removePersistentDomain(forName: suite)
             TemporaryDocumentDrafts.unregister(id)
             TemporaryDocumentDrafts.store = previousStore
             try? FileManager.default.removeItem(at: root)

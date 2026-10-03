@@ -33,7 +33,7 @@ Inflow 是一款本地优先的 Markdown 写作工作台。当前代码只为产
 - 项目树可在选定目录安全新建 .md / .markdown，使用不覆盖创建并在执行时重新检查项目边界。
 - 项目文档以顶部标签保持独立的内容、撤销与未保存状态；目录树和标签以圆点标记修改，每个标签都有快捷关闭按钮，关闭时暂存对应未保存内容，重启后静默恢复。
 
-- 项目树支持文件名过滤；⌘P 快速打开支持文件名/路径匹配，并优先显示本次会话最近访问的已打开文档；阅读历史支持前进和后退。
+- 项目树支持文件名过滤；⌘P 快速打开支持文件名/路径匹配，并优先显示本次会话最近访问的文档（包含已关闭标签）；阅读历史支持前进和后退，侧栏支持定位当前文件并展开其父目录。
 
 ### 三种写作视图
 
@@ -129,7 +129,7 @@ ABI 3 只暴露 Engine create/dispatch/snapshot/free 和 owned-bytes free，其�
 
     scripts/verify-launch.sh --personal
 
-该配置只执行生成绑定校验、Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查；不创建归档或发布证据，也不执行固定设备/30 次性能协议、扩展生态合同、签名、公证或分发门禁。[`quality/personal-xctest-scope.tsv`](quality/personal-xctest-scope.tsv) 把当前 483 个 XCTest method 逐项分为 355 个 `current-direct`、37 个 `current-host`、86 个 `deferred` 和 5 个 `fixed-performance`。`--personal` 只执行 `current-direct`；其余三类不计为通过。37 个宿主用例保留为 App-host 专项验证或真实应用 UAT，其中包括需要 AppKit 打印/PDF 系统服务的导出用例；后置与固定性能用例由 deferred profile 的全量测试保留。脚本会对重复、陈旧、未分类、非法分区和四类精确计数失败关闭；新增测试不能默认混入当前门禁。可用 `scripts/verify-launch.sh --describe-profile personal` 无副作用查看边界。
+该配置只执行生成绑定校验、Rust 格式、Clippy 与测试、macOS `build-for-testing` 后的个人首版 direct XCTest、Analyze 和 diff 检查；不创建归档或发布证据，也不执行固定设备/30 次性能协议、扩展生态合同、签名、公证或分发门禁。[`quality/personal-xctest-scope.tsv`](quality/personal-xctest-scope.tsv) 把当前 486 个 XCTest method 逐项分为 358 个 `current-direct`、37 个 `current-host`、86 个 `deferred` 和 5 个 `fixed-performance`。`--personal` 只执行 `current-direct`；其余三类不计为通过。37 个宿主用例保留为 App-host 专项验证或真实应用 UAT，其中包括需要 AppKit 打印/PDF 系统服务的导出用例；后置与固定性能用例由 deferred profile 的全量测试保留。脚本会对重复、陈旧、未分类、非法分区和四类精确计数失败关闭；新增测试不能默认混入当前门禁。可用 `scripts/verify-launch.sh --describe-profile personal` 无副作用查看边界。
 
 `--deferred-release-local`、`--deferred-signed-archive` 以及 `scripts/release-workflow.sh` 只为后续公共分发决策保留，不属于个人首版完成条件。
 

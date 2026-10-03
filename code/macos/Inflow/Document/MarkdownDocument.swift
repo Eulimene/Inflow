@@ -493,20 +493,62 @@ struct TemporaryDocumentDraftStore: Sendable {
     }
 }
 
+/// A one-time explanation at the first close of unsaved content. A cancelled
+/// close does not acknowledge it; successful draft protection happens first.
+@MainActor
+final class DraftCloseDisclosure {
+    private let defaults: UserDefaults
+    private let present: () -> Bool
+    private let acknowledgementKey = "hasAcknowledgedDraftOnlyClose"
+    private var isPresenting = false
+
+    init(defaults: UserDefaults = .standard, present: @escaping () -> Bool = {
+        makeAlert().runModal() == .alertFirstButtonReturn
+    }) {
+        self.defaults = defaults
+        self.present = present
+    }
+
+    static func makeAlert() -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = "关闭文档不会保存到原文件"
+        alert.informativeText = "未保存内容已保留为本机草稿，可在下次启动 Inflow 时恢复。要更新 Markdown 文件，请返回编辑后按 ⌘S。此说明确认后不再显示。"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "保留草稿并关闭")
+        alert.addButton(withTitle: "返回编辑")
+        _ = alert.window
+        alert.buttons[0].keyEquivalent = "\r"
+        alert.buttons[1].keyEquivalent = "\u{1b}"
+        return alert
+    }
+
+    func approve(hasUnsavedContent: Bool) -> Bool {
+        guard hasUnsavedContent, !defaults.bool(forKey: acknowledgementKey) else { return true }
+        guard !isPresenting else { return false }
+        isPresenting = true
+        defer { isPresenting = false }
+        guard present() else { return false }
+        defaults.set(true, forKey: acknowledgementKey)
+        return true
+    }
+}
+
 @MainActor
 enum TemporaryDocumentDrafts {
     private struct Provider {
         let owners: Set<ObjectIdentifier>
         let snapshot: () -> DocumentRecoveryRecord
+        let isModified: () -> Bool
     }
     private static var providers: [UUID: Provider] = [:]
     private static var installed = false
     private(set) static var isTerminating = false
     private static var writtenSnapshots: [UUID: DocumentRecoveryRecord] = [:]
     static var store = TemporaryDocumentDraftStore(rootURL: TemporaryDocumentDraftStore.defaultRoot)
+    static var closeDisclosure = DraftCloseDisclosure()
 
-    static func register(_ id: UUID, owner: NSDocument?, windowOwner: NSDocument? = nil, snapshot: @escaping () -> DocumentRecoveryRecord) {
-        providers[id] = Provider(owners: Set([owner, windowOwner].compactMap { $0.map(ObjectIdentifier.init) }), snapshot: snapshot)
+    static func register(_ id: UUID, owner: NSDocument?, windowOwner: NSDocument? = nil, isModified: @escaping () -> Bool, snapshot: @escaping () -> DocumentRecoveryRecord) {
+        providers[id] = Provider(owners: Set([owner, windowOwner].compactMap { $0.map(ObjectIdentifier.init) }), snapshot: snapshot, isModified: isModified)
     }
 
     static func unregister(_ id: UUID) {
@@ -515,6 +557,11 @@ enum TemporaryDocumentDrafts {
     }
 
     static func checkpoint(owner: NSDocument? = nil) throws {
+        _ = try checkpointWithModificationState(owner: owner)
+    }
+
+    private static func checkpointWithModificationState(owner: NSDocument?) throws -> Bool {
+        var hasUnsavedContent = false
         for provider in Array(providers.values) where owner == nil || owner.map({ provider.owners.contains(ObjectIdentifier($0)) }) == true {
             let record = provider.snapshot()
             if record.originalURL == nil && record.text.isEmpty {
@@ -522,6 +569,7 @@ enum TemporaryDocumentDrafts {
                 writtenSnapshots.removeValue(forKey: record.id)
                 continue
             }
+            hasUnsavedContent = provider.isModified() || hasUnsavedContent
             if let previous = writtenSnapshots[record.id], record.hasSameSnapshot(as: previous),
                FileManager.default.fileExists(atPath: store.rootURL.appendingPathComponent(record.id.uuidString + ".json").path) {
                 continue
@@ -529,14 +577,20 @@ enum TemporaryDocumentDrafts {
             try store.write(record)
             writtenSnapshots[record.id] = record
         }
+        return hasUnsavedContent
     }
 
     static func approveClose(owner: NSDocument? = nil) -> Bool {
-        do { try checkpoint(owner: owner); return true }
+        do {
+            let hasUnsavedContent = try checkpointWithModificationState(owner: owner)
+            let approved = closeDisclosure.approve(hasUnsavedContent: hasUnsavedContent)
+            if !approved { cancelTermination() }
+            return approved
+        }
         catch {
             cancelTermination()
             NSApp.presentError(NSError(domain: "Inflow.DraftCheckpoint", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "未能暂存未保存内容，已取消退出以保留编辑。", NSUnderlyingErrorKey: error]))
+                userInfo: [NSLocalizedDescriptionKey: "未能暂存未保存内容，已取消关闭或退出以保留编辑。", NSUnderlyingErrorKey: error]))
             return false
         }
     }

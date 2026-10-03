@@ -65,6 +65,35 @@ final class MarkdownCodecTests: XCTestCase {
         }
         XCTAssertEqual(model.document.text, sample + "新增正文")
         XCTAssertEqual(try model.document.encodedFileData(), Data((sample + "新增正文").utf8))
+
+        let codeRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let regressionURL = ProcessInfo.processInfo.environment["INFLOW_UX_DOCUMENT"].map { URL(fileURLWithPath: $0) }
+            ?? codeRoot.appendingPathComponent("docs/current-implementation.md")
+        let longDocument = try String(contentsOf: regressionURL, encoding: .utf8)
+        XCTAssertGreaterThan(longDocument.utf16.count, 3000)
+        model.document = try MarkdownDocument(fileData: Data(longDocument.utf8))
+        preferences.workspaceViewMode = .preview
+        host.rootView = content()
+        for _ in 0..<400 where editor.string != longDocument || editor.renderedHeadingDividerRanges.count < 3 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(editor.string, longDocument)
+        XCTAssertGreaterThan(editor.renderedHeadingDividerRanges.count, 2)
+        XCTAssertFalse(editor.isHidden)
+        XCTAssertEqual(try model.document.encodedFileData(), Data(longDocument.utf8))
+        // Deriving TextKit attributes precedes SwiftUI committing the ready state.
+        try await Task.sleep(for: .milliseconds(150))
+        if let directory = ProcessInfo.processInfo.environment["INFLOW_UX_SCREENSHOTS"] {
+            host.layoutSubtreeIfNeeded()
+            host.displayIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(
+                to: URL(fileURLWithPath: directory).appendingPathComponent("document-regression.png"))
+        }
+
+
     }
 
     func testEngineABILayoutMatchesRustContractOnArm64() {

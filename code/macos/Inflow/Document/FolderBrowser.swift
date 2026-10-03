@@ -173,6 +173,19 @@ enum ProjectFileSearch {
     }
 }
 
+/// Visit order is independent of the back/forward cursor and survives closing
+/// a tab. ProjectFileSearch only ranks URLs present in the current project.
+struct ProjectRecentVisits {
+    private(set) var urls: [URL] = []
+
+    mutating func record(_ url: URL) {
+        let url = url.standardizedFileURL
+        urls.removeAll { $0 == url }
+        urls.insert(url, at: 0)
+        if urls.count > 100 { urls.removeLast(urls.count - 100) }
+    }
+}
+
 struct ReadingHistory<ID: Equatable> {
     private(set) var back: [ID] = []
     private(set) var forward: [ID] = []
@@ -278,6 +291,25 @@ enum FolderProjectTreeState {
             item.isMarkdown
                 && FolderProjectPathBoundary.normalizedResolvedURL(item.url) == target
         }?.id
+    }
+
+    struct RevealTarget: Equatable {
+        let itemID: String
+        let ancestorDirectoryIDs: Set<String>
+    }
+
+    static func revealTarget(for documentURL: URL?, in items: [FolderProjectItem]) -> RevealTarget? {
+        guard let id = selectedItemID(for: documentURL, in: items) else { return nil }
+        func ancestors(in items: [FolderProjectItem]) -> Set<String>? {
+            for item in items {
+                if item.id == id { return [] }
+                if item.isDirectory, let nested = ancestors(in: item.children ?? []) {
+                    return nested.union([item.id])
+                }
+            }
+            return nil
+        }
+        return RevealTarget(itemID: id, ancestorDirectoryIDs: ancestors(in: items) ?? [])
     }
 
     static func toggledExpansion(
@@ -1553,6 +1585,8 @@ struct FolderBrowserSidebar: View {
     @State private var notice: FolderBrowserNotice?
     @State private var creationAuthorization: FolderMarkdownCreationAuthorization?
     @State private var expandedDirectoryIDs = Set<String>()
+    @State private var revealRequest = 0
+    @State private var currentDocumentRevealTarget: FolderProjectTreeState.RevealTarget?
 
     init(
         controller: FolderBrowserController,
@@ -1680,6 +1714,19 @@ struct FolderBrowserSidebar: View {
                 .lineLimit(1)
             Spacer(minLength: 4)
             Button {
+                guard let target = currentDocumentRevealTarget else { return }
+                filterQuery = ""
+                selectedItemID = target.itemID
+                expandedDirectoryIDs.formUnion(target.ancestorDirectoryIDs)
+                revealRequest &+= 1
+            } label: {
+                Image(systemName: "scope")
+            }
+            .buttonStyle(.borderless)
+            .help("在目录树中定位当前文件，并清除过滤")
+            .accessibilityLabel("定位当前文件")
+            .disabled(controller.state != .ready || currentDocumentRevealTarget == nil)
+            Button {
                 expandedDirectoryIDs = FolderProjectTreeState.toggledExpansion(
                     current: expandedDirectoryIDs,
                     in: controller.items
@@ -1759,43 +1806,52 @@ struct FolderBrowserSidebar: View {
                 }
             }
         case .ready:
-            List(selection: $selectedItemID) {
-                FolderProjectTreeRows(
-                    items: controller.items,
-                    expandedDirectoryIDs: $expandedDirectoryIDs,
-                    selectedItemID: $selectedItemID,
-                    isCurrentDocument: isCurrentDocument,
-                    isModifiedDocument: { item in
-                        item.isMarkdown && controller.isDocumentModified(at: item.url)
-                    },
-                    onActivate: { item in
-                        selectedItemID = item.id
-                        _ = activateItem(withID: item.id)
-                    },
-                    onBeginCreation: { item in
-                        selectedItemID = item.id
-                        beginCreatingMarkdown(
-                            in: item.isDirectory
-                                ? .directory(item.url)
-                                : .file(item.url)
-                        )
-                    }
-                )
-            }
-            .listStyle(.sidebar)
-            .onKeyPress(.return, phases: .down) { _ in
-                activateItem(withID: selectedItemID) ? .handled : .ignored
-            }
-            .contextMenu {
-                if let folderURL = controller.folderURL {
-                    Button(FinderRevealAction.title) {
-                        FinderRevealAction.perform(for: folderURL)
-                    }
-                    Divider()
+            ScrollViewReader { proxy in
+                List(selection: $selectedItemID) {
+                    FolderProjectTreeRows(
+                        items: controller.items,
+                        expandedDirectoryIDs: $expandedDirectoryIDs,
+                        selectedItemID: $selectedItemID,
+                        isCurrentDocument: isCurrentDocument,
+                        isModifiedDocument: { item in
+                            item.isMarkdown && controller.isDocumentModified(at: item.url)
+                        },
+                        onActivate: { item in
+                            selectedItemID = item.id
+                            _ = activateItem(withID: item.id)
+                        },
+                        onBeginCreation: { item in
+                            selectedItemID = item.id
+                            beginCreatingMarkdown(
+                                in: item.isDirectory
+                                    ? .directory(item.url)
+                                    : .file(item.url)
+                            )
+                        }
+                    )
                 }
-                Button("新建 Markdown 文件…") {
-                    selectedItemID = nil
-                    beginCreatingMarkdown(in: .none)
+                .listStyle(.sidebar)
+                .onKeyPress(.return, phases: .down) { _ in
+                    activateItem(withID: selectedItemID) ? .handled : .ignored
+                }
+                .contextMenu {
+                    if let folderURL = controller.folderURL {
+                        Button(FinderRevealAction.title) {
+                            FinderRevealAction.perform(for: folderURL)
+                        }
+                        Divider()
+                    }
+                    Button("新建 Markdown 文件…") {
+                        selectedItemID = nil
+                        beginCreatingMarkdown(in: .none)
+                    }
+                }
+                .task(id: revealRequest) {
+                    guard revealRequest > 0, let id = selectedItemID else { return }
+                    // Wait for DisclosureGroup to mount the newly expanded rows.
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    proxy.scrollTo(id, anchor: .center)
                 }
             }
         case let .failed(message):
@@ -1828,10 +1884,10 @@ struct FolderBrowserSidebar: View {
     }
 
     private func synchronizeSelectionWithCurrentDocument() {
-        selectedItemID = FolderProjectTreeState.selectedItemID(
-            for: currentDocumentURL,
-            in: controller.items
-        )
+        let target = FolderProjectTreeState.revealTarget(for: currentDocumentURL, in: controller.items)
+        currentDocumentRevealTarget = target
+        selectedItemID = target?.itemID
+        if let target { expandedDirectoryIDs.formUnion(target.ancestorDirectoryIDs) }
     }
 
     private func consumeRootCreationRequest() {
@@ -2011,9 +2067,11 @@ private struct FolderProjectTreeRows: View {
                     row(for: item)
                 }
                 .tag(item.id)
+                .id(item.id)
             } else {
                 row(for: item)
                     .tag(item.id)
+                    .id(item.id)
             }
         }
     }

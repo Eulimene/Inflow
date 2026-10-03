@@ -1120,7 +1120,7 @@ struct MarkdownEditorView: View {
             if renderedSurfaceCanDisplay, document.text.isEmpty, canEditDocument {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("开始写作…").font(.body)
-                    Text("输入 # 创建标题 · ⌘O 打开文件 · ⌘S 保存")
+                    Text("输入 # 和空格创建标题 · ⌘O 打开文件 · ⌘S 保存")
                         .font(.caption)
                 }
                 .foregroundStyle(.secondary)
@@ -1475,7 +1475,12 @@ struct MarkdownEditorView: View {
 
     private func updateRecoveryProtection(originalURL: URL? = nil) {
         document.writeGuard.setProcessWitness(processOwnership.witness)
-        TemporaryDocumentDrafts.register(recoveryRecordID, owner: nativeDocument, windowOwner: workspaceWindowDocument) {
+        TemporaryDocumentDrafts.register(recoveryRecordID, owner: nativeDocument, windowOwner: workspaceWindowDocument,
+            isModified: {
+                var latest = document
+                latest.text = sourceEditorSession.textView.string
+                return MarkdownDocumentModificationProjection.isModified(latest)
+            }) {
             let view = sourceEditorSession.textView
             view.finishPendingInputForCheckpoint()
             var latest = document

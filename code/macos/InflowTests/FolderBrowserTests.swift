@@ -7,6 +7,88 @@ import XCTest
 
 @MainActor
 final class FolderBrowserTests: XCTestCase {
+    func testRecentVisitsSurviveHistoryTraversalAndClosingTabs() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let urls = ["A.md", "B.md", "C.md"].map { root.appendingPathComponent($0) }
+        for url in urls { try Data("# 正文".utf8).write(to: url) }
+        let browser = FolderBrowserController(persistence: TestFolderBrowserPersistence(),
+            restoresSavedFolder: false, bookmarkData: { _ in Data() }, startAccess: { _ in true }, stopAccess: { _ in })
+        browser.openFolder(root)
+        try await waitUntilReady(browser)
+        let coordinator = LightweightProjectCoordinator(browser: browser, createProjectDocument: { NSDocument() })
+        let documents = urls.map { url -> NSDocument in
+            let document = NSDocument()
+            document.fileURL = url
+            NSDocumentController.shared.addDocument(document)
+            browser.associateProjectWindow(with: document)
+            coordinator.registerDocumentSurface(nativeDocument: document,
+                content: .constant(MarkdownDocument(text: "# 正文")), fileURL: url, isEditable: true)
+            return document
+        }
+        defer { documents.forEach { $0.close() } }
+        coordinator.selectDocumentSurface(ObjectIdentifier(documents[1]))
+        coordinator.selectDocumentSurface(ObjectIdentifier(documents[2]))
+        XCTAssertEqual(coordinator.recentlyVisitedDocumentURLs, urls.reversed())
+        coordinator.navigateReadingHistory(backward: true)
+        XCTAssertEqual(coordinator.recentlyVisitedDocumentURLs, [urls[1], urls[2], urls[0]])
+        coordinator.navigateReadingHistory(backward: false)
+        XCTAssertEqual(coordinator.recentlyVisitedDocumentURLs, [urls[2], urls[1], urls[0]])
+        coordinator.closeDocumentSurface(ObjectIdentifier(documents[2]))
+        XCTAssertEqual(coordinator.documentSurfaces.count, 2)
+        XCTAssertEqual(coordinator.recentlyVisitedDocumentURLs, [urls[1], urls[2], urls[0]])
+        XCTAssertEqual(ProjectFileSearch.results(browser.files, query: "", recentURLs: coordinator.recentlyVisitedDocumentURLs).map(\.url),
+            [urls[1], urls[2], urls[0]])
+        var bounded = ProjectRecentVisits()
+        for index in 0..<110 { bounded.record(root.appendingPathComponent("\(index).md")) }
+        bounded.record(root.appendingPathComponent("./109.md"))
+        XCTAssertEqual(bounded.urls.count, 100)
+        XCTAssertEqual(bounded.urls.first?.lastPathComponent, "109.md")
+    }
+
+    func testRevealCurrentDocumentExpandsOnlyItsAncestorsAndDistinguishesSameNames() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = ["产品/方案/README.md", "归档/README.md", "README.md"]
+        for path in paths {
+            let url = root.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("正文".utf8).write(to: url)
+        }
+        let tree = try FolderContentScanner.scanTree(root)
+        let nested = try XCTUnwrap(FolderProjectTreeState.revealTarget(for: root.appendingPathComponent(paths[0]), in: tree))
+        XCTAssertEqual(nested.itemID, paths[0])
+        XCTAssertEqual(nested.ancestorDirectoryIDs, ["产品", "产品/方案"])
+        XCTAssertEqual(FolderProjectTreeState.revealTarget(for: root.appendingPathComponent(paths[1]), in: tree)?.ancestorDirectoryIDs, ["归档"])
+        XCTAssertEqual(FolderProjectTreeState.revealTarget(for: root.appendingPathComponent(paths[2]), in: tree)?.ancestorDirectoryIDs, [])
+        XCTAssertNil(FolderProjectTreeState.revealTarget(for: root.appendingPathComponent("missing.md"), in: tree))
+        XCTAssertNil(FolderProjectTreeState.revealTarget(for: root.appendingPathComponent("产品"), in: tree))
+        XCTAssertNil(FolderProjectTreeState.revealTarget(for: nil, in: tree))
+        if let directory = ProcessInfo.processInfo.environment["INFLOW_UX_SCREENSHOTS"] {
+            let browser = FolderBrowserController(persistence: TestFolderBrowserPersistence(),
+                restoresSavedFolder: false, bookmarkData: { _ in Data() }, startAccess: { _ in true }, stopAccess: { _ in })
+            browser.openFolder(root)
+            try await waitUntilReady(browser)
+            let host = NSHostingView(rootView: FolderBrowserSidebar(controller: browser,
+                currentDocumentURL: root.appendingPathComponent(paths[0]), onOpenDocument: { _ in })
+                .frame(width: 320, height: 560))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 560),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.makeKeyAndOrderFront(nil)
+            defer { window.close() }
+            try await Task.sleep(for: .milliseconds(150))
+            host.layoutSubtreeIfNeeded()
+            try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(
+                to: URL(fileURLWithPath: directory).appendingPathComponent("current-file-sidebar.png"))
+        }
+
+    }
+
     func testProjectSearchMatchesUnicodePathsAndAllQueryTerms() {
         let files = ["章节/写作计划.md", "归档/计划.markdown", "Readme.md"].map {
             FolderMarkdownFile(url: URL(fileURLWithPath: "/tmp/" + $0), relativePath: $0)

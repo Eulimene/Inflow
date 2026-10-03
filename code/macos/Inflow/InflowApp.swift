@@ -684,23 +684,21 @@ final class LightweightProjectCoordinator: ObservableObject {
     private var projectPreparationTimeouts: [UUID: Task<Void, Never>] = [:]
     private var pendingSurfaceActivation: ObjectIdentifier?
     private var readingHistory = ReadingHistory<ObjectIdentifier>()
+    private var recentVisits = ProjectRecentVisits()
     private var isTraversingHistory = false
     @Published private var workspaceSurfaceState = WorkspaceSurfaceState() {
         didSet {
             if !isTraversingHistory {
                 readingHistory.record(oldValue.activeID, next: workspaceSurfaceState.activeID)
             }
+            if oldValue.activeID != workspaceSurfaceState.activeID, let surface = activeDocumentSurface {
+                recentVisits.record(surface.fileURL)
+            }
         }
     }
 
     var recentlyVisitedDocumentURLs: [URL] {
-        let ids = [activeSurfaceID].compactMap { $0 } + readingHistory.back.reversed()
-        var seen = Set<URL>()
-        return ids.compactMap { id in
-            guard let surface = documentSurfaces.first(where: { $0.id == id }),
-                  seen.insert(surface.fileURL).inserted else { return nil }
-            return surface.fileURL
-        }
+        recentVisits.urls
     }
 
     var canGoBack: Bool { readingHistory.back.contains { id in id != activeSurfaceID && documentSurfaces.contains { $0.id == id } } }
@@ -2007,7 +2005,7 @@ private struct ProjectDocumentTabBar: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.trailing, 5)
-                    .help("关闭 \(surface.title)")
+                    .help("关闭 \(surface.title) 并保留本地草稿；按 ⌘S 才会写入原文件")
                     .accessibilityLabel("关闭文档：\(surface.title)")
                 }
                 .frame(height: 28)
