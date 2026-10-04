@@ -20,6 +20,7 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             for width: CGFloat in [800, 310, 520, 800] {
                 _ = table.updateMaximumWidth(width)
                 table.layoutSubtreeIfNeeded()
+                XCTAssertEqual(table.renderedSize.width, width, accuracy: 0.001)
                 let cells = table.subviews.compactMap { $0 as? RenderedMarkdownTableCellTextView }
                 for cell in cells {
                     let manager = try XCTUnwrap(cell.layoutManager)
@@ -34,6 +35,17 @@ final class RenderedMarkdownEditorTests: XCTestCase {
                     try assertCenteredTextLines(in: cell)
                 }
             }
+        }
+        // Exercise the editor's resize path too, not just the table strategy.
+        for viewportWidth: CGFloat in [900, 420, 900] {
+            editor.scrollView.frame.size.width = viewportWidth
+            editor.scrollView.layoutSubtreeIfNeeded()
+            editor.textView.setFrameSize(NSSize(width: editor.scrollView.contentSize.width, height: 600))
+            editor.textView.layoutRenderedImages()
+            XCTAssertIdentical(editor.textView.renderedTable(atUTF16Location: 0), table)
+            XCTAssertEqual(table.renderedSize.width, editor.textView.renderedTableAvailableWidth, accuracy: 0.001)
+            XCTAssertGreaterThanOrEqual(table.frame.minX, 0)
+            XCTAssertLessThanOrEqual(table.frame.maxX, editor.scrollView.contentSize.width + 0.5)
         }
         XCTAssertEqual(editor.textView.string, source)
         table.setEditingEnabled(false)
@@ -1601,11 +1613,24 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         let wide = strategy.columnWidths(for: table, font: font, availableWidth: 680)
         let narrow = strategy.columnWidths(for: table, font: font, availableWidth: 320)
 
-        XCTAssertLessThan(wide.reduce(0, +), 680)
-        XCTAssertLessThanOrEqual(narrow.reduce(0, +), 320)
+        XCTAssertEqual(wide.reduce(0, +), 680, accuracy: 0.001)
+        XCTAssertEqual(narrow.reduce(0, +), 320, accuracy: 0.001)
         XCTAssertGreaterThan(wide[0], wide[1])
         XCTAssertGreaterThan(narrow[0], narrow[1])
         XCTAssertTrue(narrow.allSatisfy { $0 >= 56 })
+
+        // Short, empty and single-column tables must expand as well; font or
+        // content changes must never leave unused space inside the table area.
+        for compactSource in ["| A | B |\n| --- | --- |\n| 1 | 2 |",
+                              "| A | B |\n| --- | --- |\n| | |",
+                              "| A |\n| --- |\n| 1 |"] {
+            let compact = try XCTUnwrap(RenderedMarkdownEditor.plan(for: compactSource).tables.first)
+            for width: CGFloat in [240, 680, 960] {
+                let fitted = strategy.columnWidths(for: compact, font: font, availableWidth: width)
+                XCTAssertEqual(fitted.reduce(0, +), width, accuracy: 0.001)
+                XCTAssertTrue(fitted.allSatisfy { $0 > 0 })
+            }
+        }
 
         let denseSource = "| A | B | C | D | E |\n| --- | --- | --- | --- | --- |\n| 1 | 2 | 3 | 4 | 5 |"
         let denseTable = try XCTUnwrap(RenderedMarkdownEditor.plan(for: denseSource).tables.first)

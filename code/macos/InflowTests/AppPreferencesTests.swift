@@ -195,7 +195,7 @@ final class AppPreferencesTests: XCTestCase {
             table.updateMaximumWidth(620)
             let expectedPadding = theme.styles.length("padding-left", on: "td", relativeTo: CGFloat(configuration.fontSize)) ?? 12
             XCTAssertEqual(header.frame.minX, expectedPadding, accuracy: 0.1, theme.label)
-            if ["night", "pixyll"].contains(theme.id) { XCTAssertEqual(table.renderedSize.width, 620, accuracy: 0.1, theme.label) }
+            XCTAssertEqual(table.renderedSize.width, 620, accuracy: 0.1, theme.label)
             let originalHeight = table.renderedSize.height
             table.applyFont(NSFont(descriptor: expectedFont.fontDescriptor, size: expectedFont.pointSize * 2)!)
             table.updateMaximumWidth(240)

@@ -63,7 +63,6 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
         var top: CGFloat = CGFloat(MarkdownRenderMetrics.tableCellVerticalPadding)
         var bottom: CGFloat = CGFloat(MarkdownRenderMetrics.tableCellVerticalPadding)
         var lineHeight: CGFloat = 0
-        var fillsWidth = false
         var horizontal: CGFloat { left + right }
         var vertical: CGFloat { top + bottom }
         func height(font: NSFont) -> CGFloat {
@@ -124,7 +123,6 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
             next.lineHeight = max(0, min(240, Double(raw).map { CGFloat($0) * baseFont.pointSize }
                 ?? css.length("line-height", on: "td", relativeTo: baseFont.pointSize) ?? 0))
         }
-        next.fillsWidth = css.value("width", on: "table") == "100%"
         if next != geometry { geometry = next; needsContentMeasurement = true; mathPreviewState = nil }
     }
 
@@ -539,11 +537,7 @@ final class RenderedMarkdownTableView: NSView, NSTextViewDelegate, NSMenuItemVal
         needsContentMeasurement = false
         let strategy: any RenderedMarkdownTableLayoutStrategy = layoutStrategy is AdaptiveRenderedMarkdownTableLayoutStrategy
             ? AdaptiveRenderedMarkdownTableLayoutStrategy(horizontalCellPadding: geometry.horizontal) : layoutStrategy
-        var widths = strategy.columnWidths(for: table, font: baseFont, availableWidth: width)
-        let total = widths.reduce(0, +)
-        if geometry.fillsWidth, total > 0, total < width {
-            widths = widths.map { $0 * width / total }
-        }
+        let widths = strategy.columnWidths(for: table, font: baseFont, availableWidth: width)
         var heights = Self.rowHeights(for: table, widths: widths, baseFont: baseFont, geometry: geometry)
         for cell in cells {
             if let preview = cell.mathPreview {

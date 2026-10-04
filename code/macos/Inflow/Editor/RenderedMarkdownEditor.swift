@@ -170,7 +170,9 @@ struct AdaptiveRenderedMarkdownTableLayoutStrategy: RenderedMarkdownTableLayoutS
         let preferredTotal = widths.reduce(0, +)
         guard preferredTotal > 0 else { return widths }
         if preferredTotal < target {
-            return widths
+            // Use the whole reading column even for short or empty cells, while
+            // giving columns with more content a proportionally larger share.
+            return widths.map { $0 * target / preferredTotal }
         }
         if preferredTotal > target {
             let fittedMinimum = min(minimumColumnWidth, target / CGFloat(columnCount))
