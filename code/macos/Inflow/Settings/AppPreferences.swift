@@ -588,6 +588,8 @@ final class AppPreferences: ObservableObject {
     private let persistence: any AppPreferencePersistence
     private var accessibilityObserver: AnyCancellable?
     private var themeRefreshTimer: AnyCancellable?
+    private var themeReloadTask: Task<Void, Never>?
+    private var themeReloadGeneration: UInt64 = 0
     let themeDirectory: URL
     @Published private(set) var availableThemes: [PreviewTheme] = PreviewTheme.allCases
     @Published private(set) var themeLoadMessage: String?
@@ -926,10 +928,11 @@ final class AppPreferences: ObservableObject {
         existingImagePlacement = LaunchFixed.existingImagePlacement
 
         if defaults === UserDefaults.standard || themeDirectory != nil {
-            reloadThemes()
+            if defaults === UserDefaults.standard { requestThemeReload() }
+            else { reloadThemes() }
             if defaults === UserDefaults.standard {
                 themeRefreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect().sink { [weak self] _ in
-                    self?.reloadThemes()
+                    self?.requestThemeReload()
                 }
             }
         } else if previewTheme.css.isEmpty && previewTheme != .highContrast {
@@ -946,23 +949,58 @@ final class AppPreferences: ObservableObject {
     }
 
     func reloadThemes() {
+        // Synchronous entry for deterministic tests and explicit non-UI callers.
+        // All production UI entry points use requestThemeReload.
+        themeReloadGeneration &+= 1
         do {
-            let result = try ThemeCatalog(directory: themeDirectory).load()
-            if availableThemes != result.themes { availableThemes = result.themes }
-            let selected = result.themes.first { $0.rawValue == previewTheme.rawValue }
-                ?? ([PreviewTheme.code, .highContrast].first { $0.rawValue == previewTheme.rawValue }) ?? .standard
-            if previewTheme != selected { previewTheme = selected }
-            let message = result.issues.isEmpty ? nil : result.issues.joined(separator: "\n")
-            if themeLoadMessage != message { themeLoadMessage = message }
+            applyThemes(try ThemeCatalog(directory: themeDirectory).load(previousThemes: availableThemes))
         } catch {
             let message = "无法读取主题目录；继续使用当前主题。"
             if themeLoadMessage != message { themeLoadMessage = message }
         }
     }
 
+    func requestThemeReload() {
+        guard themeReloadTask == nil else { return }
+        themeReloadGeneration &+= 1
+        let generation = themeReloadGeneration
+        let directory = themeDirectory
+        let previous = availableThemes
+        themeReloadTask = Task { [weak self] in
+            let result = await Task.detached(priority: .utility) {
+                Result { try PerformanceTrace.measure("theme.catalog") {
+                    try ThemeCatalog(directory: directory).load(previousThemes: previous)
+                } }
+            }.value
+            guard let self else { return }
+            defer { self.themeReloadTask = nil }
+            guard self.themeReloadGeneration == generation else { return }
+            switch result {
+            case .success(let themes): self.applyThemes(themes)
+            case .failure:
+                let message = "无法读取主题目录；继续使用当前主题。"
+                if self.themeLoadMessage != message { self.themeLoadMessage = message }
+            }
+        }
+    }
+
+    private func applyThemes(_ result: (themes: [PreviewTheme], issues: [String])) {
+        if availableThemes != result.themes { availableThemes = result.themes }
+        let selected = result.themes.first { $0.rawValue == previewTheme.rawValue }
+            ?? ([PreviewTheme.code, .highContrast].first { $0.rawValue == previewTheme.rawValue }) ?? .standard
+        if previewTheme != selected { previewTheme = selected }
+        let message = result.issues.isEmpty ? nil : result.issues.joined(separator: "\n")
+        if themeLoadMessage != message { themeLoadMessage = message }
+    }
+
     func openThemeDirectory() {
-        reloadThemes()
-        NSWorkspace.shared.open(themeDirectory)
+        requestThemeReload()
+        let reload = themeReloadTask
+        Task { [weak self] in
+            await reload?.value
+            guard let self else { return }
+            NSWorkspace.shared.open(self.themeDirectory)
+        }
     }
 
     var sourceEditorAppearance: SourceEditorAppearance {

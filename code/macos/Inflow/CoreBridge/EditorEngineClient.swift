@@ -44,6 +44,47 @@ private final class TemporaryDerivedContentCache: @unchecked Sendable {
 
 private let temporaryDerivedContentCache = TemporaryDerivedContentCache()
 
+/// Pure presentation operations share the generated, capability-versioned engine ABI.
+/// No alternate Swift CSS parser or column allocation policy is retained.
+enum EditorEnginePresentation {
+    private struct Command: Encodable {
+        let type: String
+        var css: String? = nil
+        var value: String? = nil
+        var measurements: CoreTableMeasurements? = nil
+    }
+    private struct Envelope: Encodable {
+        let schema_version = 1
+        let request_id = UUID().uuidString
+        let command: Command
+    }
+    private static func perform(_ command: Command) throws -> EditorEngineRawHostEffect {
+        try withTemporaryEditorEngine(source: "") { handle in
+            let response = try dispatchTemporaryEditorEngine(Envelope(command: command), to: handle)
+            guard let effect = response.patch.effects.first else { throw EditorEngineBridgeError.invalidResponse }
+            return effect
+        }
+    }
+    static func compileTheme(_ css: String) throws -> CoreThemeSnapshot {
+        try PerformanceTrace.measure("theme.compile", bytes: css.utf8.count) {
+            guard let theme = try perform(Command(type: "compile_theme", css: css)).theme else {
+                throw EditorEngineBridgeError.invalidResponse
+            }
+            return theme
+        }
+    }
+    static func color(_ value: String) -> String? {
+        try? perform(Command(type: "inspect_theme_color", value: value)).color
+    }
+    static func layoutTable(_ measurements: CoreTableMeasurements) throws -> [Double] {
+        guard let widths = try perform(Command(type: "layout_table", measurements: measurements)).layout?.widths,
+              widths.count == measurements.columns.count, widths.allSatisfy({ $0.isFinite && $0 > 0 }) else {
+            throw EditorEngineBridgeError.invalidResponse
+        }
+        return widths
+    }
+}
+
 private func withTemporaryEditorEngine<Result>(
     source: String,
     selection: EditorEngineSelection = EditorEngineSelection(start: 0, end: 0),
@@ -1900,6 +1941,9 @@ private struct EditorEngineStatePatch: Decodable {
 
 private struct EditorEngineRawHostEffect: Decodable {
     let type: String
+    let theme: CoreThemeSnapshot?
+    let color: String?
+    let layout: CoreTableLayout?
     let saveID: String?
     let revision: UInt64?
     let text: String?
@@ -1913,6 +1957,7 @@ private struct EditorEngineRawHostEffect: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case type
+        case theme, color, layout
         case saveID = "save_id"
         case revision
         case text
@@ -2216,12 +2261,14 @@ private struct EditorEngineRawNativeRenderPlan: Decodable {
         let headingLevel: Int?
         let isChecked: Bool?
         let alternating: Bool?
+        let contextualElement: String?
         enum CodingKeys: String, CodingKey {
             case kind
             case sourceRange = "source_range"
             case headingLevel = "heading_level"
             case isChecked = "is_checked"
             case alternating
+            case contextualElement = "contextual_element"
         }
     }
 
@@ -2399,7 +2446,7 @@ private struct EditorEngineRawNativeRenderPlan: Decodable {
             case "display_math": .displayMath
             default: throw EditorEngineBridgeError.invalidResponse
             }
-            return RenderedMarkdownContentStyle(kind: kind, sourceRange: try mapped(item.sourceRange))
+            return RenderedMarkdownContentStyle(kind: kind, sourceRange: try mapped(item.sourceRange), contextualElement: item.contextualElement)
         }
         let mappedLocals = try localSourceBlocks.map { item in
             let reasons = try item.reasons.map { reason -> RenderedMarkdownLocalSourceReason in

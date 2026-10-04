@@ -1,0 +1,13 @@
+{
+  "name": "inflow-native-legacy",
+  "version": 0,
+  "status": "migration",
+  "compiler": "rust",
+  "requiredCapability": "portable_presentation",
+  "cssUnits": ["px", "pt", "em", "rem", "%"],
+  "pointToLogicalPixel": "96/72",
+  "unsupportedRulePolicy": "diagnose-and-skip",
+  "invalidFilePolicy": "retain-last-valid-theme",
+  "maximumSourceBytes": 262144,
+  "crossPlatformNativeRenderingVerified": false
+}

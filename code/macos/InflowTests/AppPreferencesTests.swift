@@ -105,7 +105,7 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertEqual(cascade.value("color", on: "p"), "orange", "Existing snapshots remain immutable")
     }
 
-    func testCSSThemeReloadPersistsSelectionAndFreezesExportSnapshot() throws {
+    func testCSSThemeReloadPersistsSelectionAndFreezesExportSnapshot() async throws {
         let suite = "inflow-css-tests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -123,6 +123,17 @@ final class AppPreferencesTests: XCTestCase {
         let reloaded = AppPreferences(defaults: defaults, themeDirectory: directory)
         XCTAssertEqual(reloaded.previewTheme.id, "custom")
         XCTAssertEqual(reloaded.previewTheme.styles.value("color"), "#654321")
+        try "body { color:".write(to: file, atomically: true, encoding: .utf8)
+        preferences.reloadThemes()
+        XCTAssertEqual(preferences.previewTheme.id, "custom")
+        XCTAssertEqual(preferences.previewTheme.styles.value("color"), "#654321", "Invalid reload retains the last compiled snapshot")
+        try "body { color: #abcdef; }".write(to: file, atomically: true, encoding: .utf8)
+        preferences.requestThemeReload()
+        let deadline = Date().addingTimeInterval(3)
+        while preferences.previewTheme.styles.value("color") != "#abcdef", Date() < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(preferences.previewTheme.styles.value("color"), "#abcdef", "Background compilation publishes a complete snapshot")
         try FileManager.default.removeItem(at: file)
         preferences.reloadThemes()
         XCTAssertEqual(preferences.previewTheme.id, "github")

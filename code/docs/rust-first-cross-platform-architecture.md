@@ -1,6 +1,6 @@
 # Rust 核心与跨平台主题架构
 
-日期：2026-10-04。状态：目标架构与迁移设计，尚未完成实现。当前运行基线为 `d818fa5`；本设计不代表 Windows/Linux 宿主已经存在或已通过验收。
+日期：2026-10-04。状态：目标架构与迁移设计，已完成下述首批迁移，其他阶段仍待实现。设计时运行基线为 `d818fa5`；本设计不代表 Windows/Linux 宿主已经存在或已通过验收。
 
 ## 1. 决策与兼容承诺
 
@@ -116,7 +116,7 @@ Typora CSS 通过显式导入映射支持常见 `#write` 与 token 别名，并�
 
 ## 6. 主题包、单位与平台适配
 
-共享主题资源最终移至 `code/themes/`，由各 OS 构建脚本打包同一源目录与清单 hash，避免维护三份副本。单个 `.css` 仍可导入，赋予默认 profile；目录包可带 `theme.json`（id、profile、必需能力、CSS 入口、资源 hash、字体声明）。编译缓存是派生物，不作为唯一主题源格式。
+共享主题资源最终移至 `code/Themes/`，由各 OS 构建脚本打包同一源目录与清单 hash，避免维护三份副本。单个 `.css` 仍可导入，赋予默认 profile；目录包可带 `theme.json`（id、profile、必需能力、CSS 入口、资源 hash、字体声明）。编译缓存是派生物，不作为唯一主题源格式。
 
 资源引用统一为包内相对 URI，禁止 Windows 盘符、反斜杠与 macOS 绝对路径进入可移植主题；统一大小写规则并拒绝仅大小写不同的资源重名。Rust 决定资源身份和请求，宿主根据授权读取字节。原生窗口 token 从文档 CSS 分离；旧 token 可迁移，但不要求 Linux 窗口装饰模拟 macOS 标题栏。
 
@@ -200,3 +200,19 @@ P1 先在测试/开发模式做旧 Swift 与 Rust 结果差分，不在用户生
 - Rust trace 与宿主 trace 显式传递同一 trace ID、request ID 与 PresentationKey；Rust 时长不依赖 Swift TaskLocal。区分 CPU、队列等待、宿主执行和帧提交。延续默认关闭、惰性元数据、不记录正文路径的规则。
 
 交付“Windows/Linux 主题兼容”的证据应包含三端执行结果、主题/profile/hash、渲染器与字体环境及失败项。只有本机 Rust 单元测试或 macOS 截图不足以证明此承诺。
+
+## 11. 首批迁移记录（2026-10-04）
+
+已接入生产 macOS 路径：
+
+- `theme.rs` 使用锁定版本 cssparser 编译主题；`theme_values.rs` 生成类型化长度、字体族和规范颜色，带诊断、输入/深度/展开预算和有界不可变缓存。
+- 原有 Swift CSS tokenizer、规则层叠、变量展开及颜色/单位解析已删除；NativeCSSStyles 为 CoreThemeSnapshot 的平台投影。Rust ABI 3.1 增加 portable_presentation capability，以原有 Engine 命令和 HostEffect 返回结果，没有新增一次性 C ABI。
+- `presentation_layout.rs` 负责表格列宽分配，Swift 一次提交原生测量数组；标题 first-child/相邻标题上下文直接来自 Rust RenderIr，Swift 不再扫描前文。
+- `code/Themes` 成为共享主题源，macOS 直接打包；主题文件刷新与编译在后台进行，错误保留上一份有效主题，不反复发布未变化的错误。
+- 三端 Rust CI 工作流覆盖同一主题语料及领域/布局测试；Windows/Linux 实际 CI 和原生宿主验收尚未执行。
+
+为避免把迁移变成未经验证的主题行为重写，当前运行 profile 是显式的 legacy v0。P0 的完整属性清单、P1 的完整 v1 选择器/继承/媒体查询、P2 的通用语义树与 final text runs、P3 的 Rust 运行时/资源调度和增量几何、P4 的原生 Windows/Linux 宿主、P5 的剩余策略清理仍未完成。Swift 仍包含部分呈现策略、输入协调和原生生命周期，不应把这一批改动描述为“整个架构已重构完毕”或“Swift 已仅剩绘制”。
+
+验证：156 项 Rust 测试、Clippy/格式检查、生成绑定一致性和全部 Rust 构建输入检查通过；169 项 macOS 定向集成测试通过，覆盖主题、引擎、原生编辑、文件打开/迁移、编解码和离线资源。后续改动需继续沿用同一合同与性能基准。
+
+补充验证：本机对 `x86_64-unknown-linux-gnu` 与 `x86_64-pc-windows-gnu` 执行 `cargo check --locked --all-targets` 均通过；这是交叉编译检查，不是目标 OS 上的测试执行或原生 UI 验收。

@@ -1027,6 +1027,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             else { continue }
             styleSheet.applyRenderedAttributes(
                 for: style.kind,
+                contextualElement: style.contextualElement,
                 range: range,
                 storage: storage,
                 baseFont: baseFont

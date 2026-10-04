@@ -112,11 +112,12 @@ struct MarkdownNativeStyleSheet {
 
     func applyRenderedAttributes(
         for kind: RenderedMarkdownContentStyleKind,
+        contextualElement: String? = nil,
         range: NSRange,
         storage: NSTextStorage,
         baseFont: NSFont
     ) {
-        defer { applyCSS(kind: kind, range: range, storage: storage, baseFont: baseFont) }
+        defer { applyCSS(kind: kind, contextualElement: contextualElement, range: range, storage: storage, baseFont: baseFont) }
         switch kind {
         case .paragraph:
             break
@@ -276,7 +277,7 @@ struct MarkdownNativeStyleSheet {
         storage.addAttribute(.paragraphStyle, value: paragraphStyle, range: range)
     }
 
-    private func applyCSS(kind: RenderedMarkdownContentStyleKind, range: NSRange, storage: NSTextStorage, baseFont: NSFont) {
+    private func applyCSS(kind: RenderedMarkdownContentStyleKind, contextualElement: String?, range: NSRange, storage: NSTextStorage, baseFont: NSFont) {
         let element: String
         switch kind {
         case .paragraph: element = "p"
@@ -291,7 +292,7 @@ struct MarkdownNativeStyleSheet {
         }
         guard range.length > 0, NSMaxRange(range) <= storage.length else { return }
         let css = theme.styles
-        guard css.rules.contains(where: { $0.selector == element || $0.selector == "#write " + element }) else { return }
+        guard css.hasDeclarations(on: element) else { return }
         let existingFont = storage.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont ?? baseFont
         let size = kind == .inlineCode ? existingFont.pointSize
             : min(120, max(6, css.length("font-size", on: element, relativeTo: baseFont.pointSize) ?? existingFont.pointSize))
@@ -343,25 +344,6 @@ struct MarkdownNativeStyleSheet {
             paragraph.headIndent = inset
         }
         if case .heading = kind {
-            let start = storage.mutableString.paragraphRange(for: range).location
-            // Inspect only the preceding non-empty paragraph. Copying and
-            // splitting the entire prefix for every heading is quadratic.
-            let previous = storage.mutableString.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.inverted,
-                options: .backwards, range: NSRange(location: 0, length: start))
-            var contextualElement: String?
-            if previous.location == NSNotFound { contextualElement = element + ":first-child" }
-            else {
-                let previousParagraph = storage.mutableString.paragraphRange(for: previous)
-                let first = storage.mutableString.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.inverted,
-                    range: NSRange(location: 0, length: start))
-                let lineStart = max(previousParagraph.location, first.location)
-                let line = storage.mutableString.substring(with: NSRange(location: lineStart,
-                    length: NSMaxRange(previous) - lineStart))
-                let hashes = line.prefix(while: { $0 == "#" }).count
-                if (1...2).contains(hashes), line.dropFirst(hashes).first == " " {
-                    contextualElement = "h\(hashes)+" + element
-                }
-            }
             if let contextualElement, let before = css.length("margin-top", on: contextualElement,
                 relativeTo: size, rootSize: baseFont.pointSize) {
                 paragraph.paragraphSpacingBefore = min(200, max(0, before))

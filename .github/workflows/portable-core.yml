@@ -1,0 +1,26 @@
+name: Portable Rust core
+on:
+  push:
+    paths: ['code/core/**', 'code/Themes/**', '.github/workflows/portable-core.yml']
+  pull_request:
+    paths: ['code/core/**', 'code/Themes/**', '.github/workflows/portable-core.yml']
+jobs:
+  contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: code
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned toolchain
+        run: rustup toolchain install 1.96.0 --profile minimal --component clippy --component rustfmt
+      - name: Formatting
+        run: cargo +1.96.0 fmt --manifest-path core/Cargo.toml -- --check
+      - name: Static checks
+        run: cargo +1.96.0 clippy --manifest-path core/Cargo.toml --locked --all-targets -- -D warnings
+      - name: Shared document, theme and layout contracts
+        run: cargo +1.96.0 test --manifest-path core/Cargo.toml --locked

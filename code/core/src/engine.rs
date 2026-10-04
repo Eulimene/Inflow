@@ -66,6 +66,15 @@ pub struct CommandEnvelope {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EditorCommand {
+    CompileTheme {
+        css: String,
+    },
+    InspectThemeColor {
+        value: String,
+    },
+    LayoutTable {
+        measurements: crate::presentation_layout::TableMeasurements,
+    },
     ReplaceText {
         base_revision: Revision,
         range: ByteRange,
@@ -240,7 +249,7 @@ pub struct EngineSnapshot {
     pub dirty: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct StatePatch {
     pub base_revision: Revision,
     pub revision: Revision,
@@ -270,9 +279,18 @@ pub struct FormatCapabilities {
     pub can_clear: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostEffect {
+    ThemeCompiled {
+        theme: crate::theme::ThemeSnapshot,
+    },
+    ThemeColor {
+        color: Option<String>,
+    },
+    TableLaidOut {
+        layout: crate::presentation_layout::TableLayout,
+    },
     WriteDocument {
         save_id: String,
         revision: Revision,
@@ -326,7 +344,7 @@ pub struct MermaidPatch {
     pub failed_source_ranges: Vec<ByteRange>,
 }
 
-#[derive(Debug, Eq, PartialEq, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 pub struct DispatchResponse {
     pub schema_version: u32,
     pub request_id: String,
@@ -417,7 +435,31 @@ impl EditorEngine {
         }
 
         let request_id = envelope.request_id;
-        let patch = match envelope.command {
+        let patch = self.dispatch_command(envelope.command)?;
+        Ok(DispatchResponse {
+            schema_version: ENGINE_SCHEMA_VERSION,
+            request_id,
+            patch,
+        })
+    }
+
+    fn dispatch_command(&mut self, command: EditorCommand) -> Result<StatePatch, EngineError> {
+        let patch = match command {
+            EditorCommand::CompileTheme { css } => {
+                self.presentation_effect(HostEffect::ThemeCompiled {
+                    theme: crate::theme::compile(&css).as_ref().clone(),
+                })
+            }
+            EditorCommand::InspectThemeColor { value } => {
+                self.presentation_effect(HostEffect::ThemeColor {
+                    color: crate::theme_values::color(&value),
+                })
+            }
+            EditorCommand::LayoutTable { measurements } => {
+                self.presentation_effect(HostEffect::TableLaidOut {
+                    layout: crate::presentation_layout::table(&measurements),
+                })
+            }
             EditorCommand::ReplaceText {
                 base_revision,
                 range,
@@ -499,11 +541,7 @@ impl EditorEngine {
             } => self.encode_document(revision, has_utf8_bom, line_ending)?,
         };
 
-        Ok(DispatchResponse {
-            schema_version: ENGINE_SCHEMA_VERSION,
-            request_id,
-            patch,
-        })
+        Ok(patch)
     }
 
     pub fn snapshot(&self) -> EngineSnapshot {
@@ -1046,6 +1084,12 @@ impl EditorEngine {
         })
     }
 
+    fn presentation_effect(&self, effect: HostEffect) -> StatePatch {
+        let mut patch = self.empty_patch(self.revision);
+        patch.effects.push(effect);
+        patch
+    }
+
     fn empty_patch(&self, base_revision: Revision) -> StatePatch {
         StatePatch {
             base_revision,
@@ -1151,6 +1195,37 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn presentation_commands_are_read_only_and_versioned() {
+        let mut engine = engine("# 标题 😀");
+        let before = engine.snapshot();
+        for command in [
+            EditorCommand::CompileTheme {
+                css: "body {color:#123;}".into(),
+            },
+            EditorCommand::LayoutTable {
+                measurements: crate::presentation_layout::TableMeasurements {
+                    columns: vec![12.0, 120.0],
+                    available_width: 800.0,
+                    horizontal_padding: 24.0,
+                },
+            },
+        ] {
+            let response = engine
+                .dispatch(CommandEnvelope {
+                    schema_version: ENGINE_SCHEMA_VERSION,
+                    request_id: "presentation-test".into(),
+                    command,
+                })
+                .unwrap();
+            assert_eq!(response.patch.revision, before.revision);
+            assert!(response.patch.text.is_none() && response.patch.derived.is_none());
+            assert!(!response.patch.dirty && !response.patch.can_undo);
+            assert_eq!(response.patch.effects.len(), 1);
+        }
+        assert_eq!(engine.snapshot(), before);
+    }
 
     struct CountingMarkdownPort {
         parses: Arc<AtomicUsize>,

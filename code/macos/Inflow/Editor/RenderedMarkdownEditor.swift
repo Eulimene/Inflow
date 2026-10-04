@@ -60,6 +60,7 @@ enum RenderedMarkdownContentStyleKind: Equatable, Sendable {
 struct RenderedMarkdownContentStyle: Equatable, Sendable {
     let kind: RenderedMarkdownContentStyleKind
     let sourceRange: RenderedMarkdownSourceRange
+    var contextualElement: String? = nil
 }
 
 enum RenderedMarkdownLocalSourceReason: Int, CaseIterable, Hashable, Sendable {
@@ -141,51 +142,27 @@ protocol RenderedMarkdownTableLayoutStrategy {
 }
 
 struct AdaptiveRenderedMarkdownTableLayoutStrategy: RenderedMarkdownTableLayoutStrategy {
-    let minimumColumnWidth: CGFloat = 56
-    let minimumPreferredWidth: CGFloat = 72
-    let maximumPreferredWidth: CGFloat = 360
     var horizontalCellPadding: CGFloat = CGFloat(MarkdownRenderMetrics.tableCellHorizontalPadding * 2)
 
-    func columnWidths(
-        for table: RenderedMarkdownTable,
-        font: NSFont,
-        availableWidth: CGFloat
-    ) -> [CGFloat] {
-        let columnCount = table.rows.map(\.count).max() ?? 0
-        guard columnCount > 0 else { return [] }
-        var widths = Array(repeating: minimumPreferredWidth, count: columnCount)
+    func columnWidths(for table: RenderedMarkdownTable, font: NSFont, availableWidth: CGFloat) -> [CGFloat] {
+        let count = table.rows.map(\.count).max() ?? 0
+        guard count > 0 else { return [] }
+        var measurements = Array(repeating: 0.0, count: count)
         for (index, row) in table.rows.enumerated() {
             let cellFont = index == 0 ? NativeCSSStyles.font(font, bold: true) : font
             for (column, cell) in row.enumerated() {
-                let measured = (cell.text as NSString).size(withAttributes: [.font: cellFont]).width
-                    + horizontalCellPadding
-                widths[column] = max(
-                    widths[column],
-                    min(maximumPreferredWidth, ceil(measured))
-                )
+                measurements[column] = max(measurements[column], Double((cell.text as NSString).size(withAttributes: [.font: cellFont]).width))
             }
         }
-
-        let target = max(1, availableWidth)
-        let preferredTotal = widths.reduce(0, +)
-        guard preferredTotal > 0 else { return widths }
-        if preferredTotal < target {
-            // Use the whole reading column even for short or empty cells, while
-            // giving columns with more content a proportionally larger share.
-            return widths.map { $0 * target / preferredTotal }
-        }
-        if preferredTotal > target {
-            let fittedMinimum = min(minimumColumnWidth, target / CGFloat(columnCount))
-            let flexible = widths.map { max(0, $0 - fittedMinimum) }
-            let flexibleTotal = flexible.reduce(0, +)
-            let remaining = max(0, target - fittedMinimum * CGFloat(columnCount))
-            guard flexibleTotal > 0 else {
-                return Array(repeating: target / CGFloat(columnCount), count: columnCount)
-            }
-            return flexible.map { fittedMinimum + remaining * ($0 / flexibleTotal) }
-        }
-        return widths
+        // One batch of native font measurements; Rust owns column allocation.
+        return (try? EditorEnginePresentation.layoutTable(CoreTableMeasurements(
+            columns: measurements, availableWidth: Double(availableWidth),
+            horizontalPadding: Double(horizontalCellPadding))))?.map { CGFloat($0) }
+            // Preserve safe cell geometry if the core cannot provide a plan.
+            // This is the host measurement, not a second allocation algorithm.
+            ?? measurements.map { CGFloat(max(1, $0)) }
     }
+
 }
 
 enum RenderedMarkdownTableEdit: Equatable, Sendable {

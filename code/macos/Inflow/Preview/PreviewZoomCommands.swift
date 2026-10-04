@@ -84,7 +84,7 @@ struct AppearanceCommands: Commands {
             .pickerStyle(.inline)
             Divider()
             Button("打开主题目录…") { preferences.openThemeDirectory() }
-            Button("重新加载主题") { preferences.reloadThemes() }
+            Button("重新加载主题") { preferences.requestThemeReload() }
             Divider()
             Picker("外观", selection: $preferences.previewColorScheme) {
                 ForEach(PreviewColorScheme.allCases) { scheme in

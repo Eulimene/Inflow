@@ -25,6 +25,7 @@ enum InflowCoreBridge {
         static let engineMode = Self(rawValue: UInt64(INFLOW_CAPABILITY_ENGINE_MODE))
         static let hostEffects = Self(rawValue: UInt64(INFLOW_CAPABILITY_HOST_EFFECTS))
         static let documentCodec = Self(rawValue: UInt64(INFLOW_CAPABILITY_DOCUMENT_CODEC))
+        static let portablePresentation = Self(rawValue: UInt64(INFLOW_CAPABILITY_PORTABLE_PRESENTATION))
 
         static let editorRequired: Self = [
             .editorEngine,
@@ -38,6 +39,7 @@ enum InflowCoreBridge {
             .engineMode,
             .hostEffects,
             .documentCodec,
+            .portablePresentation,
         ]
     }
 

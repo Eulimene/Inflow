@@ -262,7 +262,7 @@ struct InflowSettingsView: View {
             }
             HStack {
                 Button("打开主题目录…") { preferences.openThemeDirectory() }
-                Button("重新加载主题") { preferences.reloadThemes() }
+                Button("重新加载主题") { preferences.requestThemeReload() }
             }
             Text("将 .css 文件放入主题目录即可使用，文件修改后会自动刷新。支持常用字体、颜色和块样式。原生排版不支持复杂网页布局。")
                 .font(.caption).foregroundStyle(.secondary)

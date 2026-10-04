@@ -138,6 +138,7 @@ pub struct NativeContentStyle {
     pub heading_level: Option<u8>,
     pub is_checked: Option<bool>,
     pub alternating: Option<bool>,
+    pub contextual_element: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -479,6 +480,7 @@ impl NativeRenderPlan {
         markers.dedup_by(|a, b| a.kind == b.kind && a.source_range == b.source_range);
         styles.sort_by_key(|item| (item.source_range.start, item.source_range.end, item.kind));
         styles.dedup_by(|a, b| a.kind == b.kind && a.source_range == b.source_range);
+        apply_heading_context(render, &mut styles);
         links.sort_by_key(|item| (item.source_range.start, item.source_range.end));
         images.sort_by_key(|item| (item.source_range.start, item.source_range.end));
         Self {
@@ -556,6 +558,45 @@ fn style(kind: ContentStyleKind, range: Range<usize>) -> NativeContentStyle {
         heading_level: None,
         is_checked: None,
         alternating: None,
+        contextual_element: None,
+    }
+}
+
+/// CSS sibling context is semantic data from the one Markdown parse. Hosts must
+/// not inspect preceding source text during attribute application.
+fn apply_heading_context(render: &RenderIr, styles: &mut [NativeContentStyle]) {
+    let mut previous: HashMap<Option<&str>, &crate::render_ir::RenderBlock> = HashMap::new();
+    let mut contexts = Vec::new();
+    for block in &render.blocks {
+        let parent = block.parent_id.as_deref();
+        if let Some(level) = block.heading_level {
+            let context = match previous.get(&parent) {
+                None => Some(format!("h{level}:first-child")),
+                Some(prior) => prior
+                    .heading_level
+                    .map(|prior| format!("h{prior}+h{level}")),
+            };
+            contexts.push((block.source_range.start..block.source_range.end, context));
+        }
+        previous.insert(parent, block);
+    }
+    let mut headings = contexts.iter().peekable();
+    for style in styles
+        .iter_mut()
+        .filter(|s| s.kind == ContentStyleKind::Heading)
+    {
+        while headings
+            .peek()
+            .is_some_and(|(range, _)| range.end <= style.source_range.start)
+        {
+            headings.next();
+        }
+        if let Some((range, context)) = headings.peek()
+            && range.start <= style.source_range.start
+            && style.source_range.end <= range.end
+        {
+            style.contextual_element.clone_from(context);
+        }
     }
 }
 
@@ -1256,6 +1297,20 @@ mod tests {
         assert_eq!(quotes.len(), 3);
         assert_eq!(&source[quotes[1].source_range.clone()], "lazy continuation");
         assert_eq!(&source[quotes[2].source_range.clone()], "> ");
+    }
+    #[test]
+    fn heading_context_comes_from_structure_including_setext() {
+        let result = plan("First\n=====\n\n## Second\n\n### Third\n\nbody\n\n## Last");
+        let contexts: Vec<_> = result
+            .content_styles
+            .iter()
+            .filter(|s| s.kind == ContentStyleKind::Heading)
+            .map(|s| s.contextual_element.as_deref())
+            .collect();
+        assert_eq!(
+            contexts,
+            vec![Some("h1:first-child"), Some("h1+h2"), Some("h2+h3"), None]
+        );
     }
 
     #[test]

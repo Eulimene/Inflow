@@ -217,7 +217,7 @@
 		98AE260274C7498AB145B240 /* MarkdownBlockSpacingPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownBlockSpacingPlan.swift; sourceTree = "<group>"; };
 		B20000000000000000000029 /* MarkdownLayoutPlanCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownLayoutPlanCache.swift; sourceTree = "<group>"; };
         E52000000000000000000001 /* CSSThemes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings/CSSThemes.swift; sourceTree = "<group>"; };
-        E52000000000000000000002 /* Themes */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/Themes; sourceTree = "<group>"; };
+        E52000000000000000000002 /* Themes */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Themes; sourceTree = SOURCE_ROOT; };
         E62000000000000000000001 /* RecoveryStartup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Recovery/RecoveryStartup.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -503,6 +503,9 @@
 				"$(PROJECT_DIR)/core/src/render.rs",
 				"$(PROJECT_DIR)/core/src/render_ir.rs",
 				"$(PROJECT_DIR)/core/src/search.rs",
+				"$(PROJECT_DIR)/core/src/theme.rs",
+				"$(PROJECT_DIR)/core/src/theme_values.rs",
+				"$(PROJECT_DIR)/core/src/presentation_layout.rs",
 				"$(PROJECT_DIR)/core/include/inflow_core.h",
 				"$(PROJECT_DIR)/core/include/generated/inflow_core.h",
 				"$(PROJECT_DIR)/rust-toolchain.toml",

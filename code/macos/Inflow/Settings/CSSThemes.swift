@@ -89,7 +89,7 @@ struct ThemeCatalog {
     }
 
     let directory: URL
-    func load() throws -> (themes: [PreviewTheme], issues: [String]) {
+    func load(previousThemes: [PreviewTheme] = []) throws -> (themes: [PreviewTheme], issues: [String]) {
         let fm = FileManager.default
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
         let manifestURL = directory.appendingPathComponent(".builtin-versions.json")
@@ -128,11 +128,13 @@ struct ThemeCatalog {
                 let id = file.deletingPathExtension().lastPathComponent
                 guard PreviewTheme(rawValue: id) != nil else { throw ThemeError.invalidFile }
                 let label = PreviewTheme.allCases.first(where: { $0.rawValue == id })?.label ?? PreviewTheme.displayName(id)
-                themes.append(PreviewTheme(id: id, label: label, css: css))
-                if styles.hasUnsupportedRules { issues.append("\(file.lastPathComponent)：部分 CSS 规则仅适用于 HTML 导出") }
+                let theme = PreviewTheme(id: id, label: label, css: css)
+                guard theme.styles.isValid else { throw ThemeError.invalidFile }
+                themes.append(theme)
+                if styles.hasUnsupportedRules { issues.append("\(file.lastPathComponent)：包含当前主题规范未支持的 CSS 规则") }
             } catch {
                 issues.append("\(file.lastPathComponent)：无法读取有效 CSS，暂时跳过")
-                if let fallback = PreviewTheme.allCases.first(where: { $0.rawValue + ".css" == file.lastPathComponent }) { themes.append(fallback) }
+                if let fallback = (previousThemes + PreviewTheme.allCases).first(where: { $0.rawValue + ".css" == file.lastPathComponent }) { themes.append(fallback) }
             }
         }
         let order = PreviewTheme.allCases.map(\.rawValue)
@@ -146,163 +148,34 @@ struct ThemeCatalog {
     enum ThemeError: Error { case invalidFile }
 }
 
-/// Deliberately bounded native bridge, not a browser CSS implementation.
-/// Supports common element / #write selectors, variables and declaration cascade.
+/// Platform projection of a Rust-compiled immutable theme. No CSS parsing here.
 struct NativeCSSStyles: Hashable, Sendable {
-    struct Rule: Hashable, Sendable {
-        let selector: String
-        let property: String
-        let value: String
-        let priority: Int
-    }
-    let rules: [Rule]
-    let isValid: Bool
-    let hasUnsupportedRules: Bool
-    private let resolvedValues: [String: [String: String]]
+    typealias Rule = CoreThemeSnapshot.Rule
+    let snapshot: CoreThemeSnapshot
+    var rules: [Rule] { snapshot.rules }
+    var isValid: Bool { snapshot.isValid }
+    var hasUnsupportedRules: Bool { snapshot.hasUnsupportedRules }
+    var diagnostics: [CoreThemeSnapshot.Diagnostic] { snapshot.diagnostics }
 
     init(css: String) {
-        let clean = css.replacingOccurrences(of: #"/\*[\s\S]*?\*/"#, with: "", options: .regularExpression)
-        var result: [Rule] = []
-        var header = "", body = ""
-        var depth = 0
-        var quote: Character?
-        var escaped = false
-        var valid = true
-        var unsupported = false
-        let supported = Set([":root", "html", "body", "#write", "p", "h1", "h2", "h3", "h4", "h5", "h6", "h1+h2", "h2+h3", "h1:first-child", "h2:first-child", "a", "blockquote", "pre", "code", "table", "th", "td", "tr:nth-child(even)", "tr:nth-child(2n)", "strong", "em", "li", "ul", "ol", "hr", "math", "::selection", "#write::selection"])
-        for c in clean {
-            if escaped { if depth > 0 { body.append(c) } else { header.append(c) }; escaped = false; continue }
-            if c == "\\" { if depth > 0 { body.append(c) } else { header.append(c) }; escaped = true; continue }
-            if let current = quote {
-                if c == current { quote = nil }
-                if depth > 0 { body.append(c) } else { header.append(c) }
-                continue
-            }
-            if c == "\"" || c == "'" { quote = c; if depth > 0 { body.append(c) } else { header.append(c) }; continue }
-            if c == "{" { depth += 1; if depth > 1 { unsupported = true }; continue }
-            if c == "}" {
-                depth -= 1
-                if depth < 0 { valid = false; break }
-                if depth == 0 {
-                    let selectors = header.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: #"\s*>?\s+"#, with: " ", options: .regularExpression) }
-                    if !header.contains("@"), !body.contains("{") {
-                        for selector in selectors {
-                            let element = selector.hasPrefix("#write ") ? String(selector.dropFirst(7)) : selector
-                            guard supported.contains(element) else { unsupported = true; continue }
-                            for declaration in body.split(separator: ";") {
-                                guard let colon = declaration.firstIndex(of: ":") else { continue }
-                                let name = declaration[..<colon].trimmingCharacters(in: .whitespacesAndNewlines)
-                                let property = name.hasPrefix("--") ? name : name.lowercased()
-                                let value = declaration[declaration.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
-                                let important = value.range(of: #"\s*!important\s*$"#, options: [.regularExpression, .caseInsensitive])
-                                let stripped = important.map { String(value[..<$0.lowerBound]) } ?? value
-                                let priority = (important == nil ? 0 : 1000) + (selector.contains("#write") ? 100 : selector == ":root" ? 10 : 1)
-                                result.append(Rule(selector: selector, property: property, value: stripped, priority: priority))
-                                if property == "margin" || property == "padding" {
-                                    let parts = stripped.split(whereSeparator: { $0.isWhitespace }).map(String.init)
-                                    if (1...4).contains(parts.count) {
-                                        let sides = [parts[0], parts.count > 1 ? parts[1] : parts[0], parts.count > 2 ? parts[2] : parts[0], parts.count > 3 ? parts[3] : parts.count > 1 ? parts[1] : parts[0]]
-                                        for (side, value) in zip(["top", "right", "bottom", "left"], sides) {
-                                            result.append(Rule(selector: selector, property: property + "-" + side, value: value, priority: priority))
-                                        }
-                                    }
-                                }
-                                if ["border", "border-left", "border-bottom", "border-top"].contains(property) {
-                                    let parts = stripped.split(separator: " ").map(String.init)
-                                    if let first = parts.first {
-                                        let width = ["none", "hidden"].contains(first) ? "0" : first
-                                        result.append(Rule(selector: selector, property: property + "-width", value: width, priority: priority))
-                                    }
-                                    if let color = parts.last {
-                                        result.append(Rule(selector: selector, property: property + "-color", value: color, priority: priority))
-                                    }
-                                }
-                            }
-                        }
-                    } else { unsupported = true }
-                    header = ""; body = ""
-                } else { body.append("}") }
-                continue
-            }
-            if depth > 0 { body.append(c) } else if c == ";" && header.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("@") { unsupported = true; header = "" } else { header.append(c) }
-        }
-        rules = result
-        isValid = valid && depth == 0 && quote == nil && !result.isEmpty
-        hasUnsupportedRules = unsupported
-        resolvedValues = Self.compile(result)
+        snapshot = (try? EditorEnginePresentation.compileTheme(css)) ?? .unavailable
+        NativeThemeColorCache.shared.include(snapshot.colors)
     }
 
-    /// Cascade and variables depend on the immutable theme, not the document.
-    /// Resolve once at load/reload instead of scanning every rule for every
-    /// property of every native text span on the main thread.
+    func hasDeclarations(on element: String) -> Bool { !(snapshot.values[element]?.isEmpty ?? true) }
+
     func value(_ property: String, on element: String = "body") -> String? {
-        resolvedValues[element]?[property]
-    }
-
-    private static func compile(_ rules: [Rule]) -> [String: [String: String]] {
-        let roots: Set<String> = [":root", "html", "body", "#write"]
-        var variables: [String: Rule] = [:]
-        for rule in rules where roots.contains(rule.selector) && rule.property.hasPrefix("--") {
-            if variables[rule.property].map({ $0.priority <= rule.priority }) ?? true {
-                variables[rule.property] = rule
-            }
-        }
-        let variableValues = variables.mapValues(\.value)
-        var elements: Set<String> = ["body"]
-        for rule in rules {
-            elements.insert(rule.selector)
-            if rule.selector.hasPrefix("#write ") { elements.insert(String(rule.selector.dropFirst(7))) }
-            if rule.selector == "#write::selection" { elements.insert("::selection") }
-        }
-        var result: [String: [String: String]] = [:]
-        for element in elements {
-            let selectors: Set<String> = element == "body" ? roots
-                : [element, "#write " + element, element == "::selection" ? "#write::selection" : element]
-            var winners: [String: Rule] = [:]
-            for rule in rules where selectors.contains(rule.selector) {
-                if let previous = winners[rule.property] {
-                    let priorScope = ["body", "#write"].contains(previous.selector) ? 1 : 0
-                    let scope = ["body", "#write"].contains(rule.selector) ? 1 : 0
-                    if element == "body", priorScope != scope {
-                        if priorScope > scope { continue }
-                    } else if previous.priority > rule.priority { continue }
-                }
-                winners[rule.property] = rule
-            }
-            result[element] = winners.compactMapValues { resolve($0.value, variables: variableValues) }
-        }
-        return result
-    }
-
-    private static let variableExpression = try? NSRegularExpression(pattern: #"var\(\s*(--[\w-]+)\s*(?:,\s*([^()]*))?\)"#)
-
-    private static func resolve(_ input: String, variables: [String: String], depth: Int = 0) -> String? {
-        guard depth < 12 else { return nil }
-        guard let expression = Self.variableExpression,
-              let match = expression.firstMatch(in: input, range: NSRange(input.startIndex..., in: input)),
-              let nameRange = Range(match.range(at: 1), in: input), let fullRange = Range(match.range, in: input) else { return input.contains("var(") ? nil : input }
-        let name = String(input[nameRange])
-        let variable = variables[name]
-        let fallback = Range(match.range(at: 2), in: input).map { String(input[$0]) }
-        guard let replacement = variable ?? fallback else { return nil }
-        return resolve(input.replacingCharacters(in: fullRange, with: replacement), variables: variables, depth: depth + 1)
+        snapshot.values[element]?[property]
     }
 
     func length(_ property: String, on element: String = "body", relativeTo size: CGFloat = 16, rootSize: CGFloat? = nil) -> CGFloat? {
-        guard let raw = value(property, on: element)?.lowercased() else { return nil }
-        let units: [(String, CGFloat)] = [("rem", rootSize ?? size), ("em", size), ("px", 1), ("pt", 1), ("%", size / 100)]
-        for (unit, scale) in units where raw.hasSuffix(unit) {
-            guard let number = Double(raw.dropLast(unit.count)), number.isFinite else { return nil }
-            return CGFloat(number) * scale
-        }
-        return Double(raw).flatMap { $0.isFinite ? CGFloat($0) : nil }
+        snapshot.lengths[element]?[property]?.used(font: Double(size), root: Double(rootSize ?? size), percentageBasis: Double(size)).map { CGFloat($0) }
     }
 
     @MainActor
     func font(on element: String = "body", size: CGFloat, fallback: NSFont) -> NSFont {
-        guard let family = value("font-family", on: element) else { return fallback }
-        let fonts: [NSFont] = family.split(separator: ",").compactMap { entry in
-            let name = entry.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"'")))
+        guard let families = snapshot.fonts[element] else { return fallback }
+        let fonts: [NSFont] = families.compactMap { name in
             if ["monospace", "ui-monospace"].contains(name) { return NSFont.monospacedSystemFont(ofSize: size, weight: .regular) }
             if ["serif", "ui-serif"].contains(name), let descriptor = fallback.fontDescriptor.withDesign(.serif) { return NSFont(descriptor: descriptor, size: size) }
             if ["sans-serif", "system-ui", "-apple-system"].contains(name) { return NSFont.systemFont(ofSize: size) }
@@ -340,27 +213,9 @@ struct NativeCSSStyles: Hashable, Sendable {
 
     static func colorHex(_ value: String?) -> String? {
         guard let value else { return nil }
-        let text = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let names = ["white": "#ffffff", "black": "#000000", "red": "#ff0000", "blue": "#0000ff", "gray": "#808080", "grey": "#808080", "transparent": "#00000000"]
-        if let named = names[text] { return named }
-        if text.hasPrefix("#") {
-            let hex = String(text.dropFirst())
-            guard [3, 4, 6, 8].contains(hex.count), UInt32(hex, radix: 16) != nil else { return nil }
-            return "#" + (hex.count <= 4 ? hex.map { "\($0)\($0)" }.joined() : hex)
-        }
-        if text.hasPrefix("rgb"), let start = text.firstIndex(of: "("), let end = text.lastIndex(of: ")") {
-            let parts = text[text.index(after: start)..<end].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-            guard parts.count == 3 || parts.count == 4 else { return nil }
-            var numbers: [Int] = []
-            for (i, part) in parts.enumerated() {
-                guard let number = Double(part.replacingOccurrences(of: "%", with: "")), number.isFinite else { return nil }
-                let scale = part.hasSuffix("%") ? 2.55 : i == 3 ? 255.0 : 1.0
-                numbers.append(Int(min(255, max(0, number * scale)).rounded()))
-            }
-            return "#" + numbers.map { String(format: "%02x", $0) }.joined()
-        }
-        return nil
+        return NativeThemeColorCache.shared.color(value)
     }
+
 }
 
 extension NativeCSSStyles {
@@ -403,5 +258,33 @@ extension NativeCSSStyles {
         let rgb = hex.count == 8 ? number >> 8 : number
         return NSColor(srgbRed: CGFloat((rgb >> 16) & 255) / 255, green: CGFloat((rgb >> 8) & 255) / 255,
             blue: CGFloat(rgb & 255) / 255, alpha: alpha)
+    }
+}
+
+/// Small host-object cache; CSS color interpretation belongs exclusively to Rust.
+private final class NativeThemeColorCache: @unchecked Sendable {
+    static let shared = NativeThemeColorCache()
+    private let lock = NSLock()
+    private var values: [String: String] = [:]
+    func include(_ colors: [String: String]) {
+        lock.lock()
+        defer { lock.unlock() }
+        for (source, color) in colors where source.utf8.count <= 256 {
+            if values.count >= 256 { values.removeAll(keepingCapacity: true) }
+            values[source] = color
+        }
+    }
+    func color(_ value: String) -> String? {
+        guard value.utf8.count <= 256 else { return nil }
+        lock.lock()
+        let cached = values[value]
+        lock.unlock()
+        if let cached { return cached.isEmpty ? nil : cached }
+        let result = EditorEnginePresentation.color(value)
+        lock.lock()
+        if values.count >= 256 { values.removeAll(keepingCapacity: true) }
+        values[value] = result ?? ""
+        lock.unlock()
+        return result
     }
 }

@@ -1,5 +1,61 @@
 import Foundation
 
+struct CoreThemeSnapshot: Decodable, Hashable, Sendable {
+    struct Rule: Decodable, Hashable, Sendable {
+        let selector: String
+        let property: String
+        let value: String
+        let priority: Int
+    }
+    struct Length: Decodable, Hashable, Sendable {
+        let value: Double
+        let unit: String
+        // Host supplies the final font/root/containing-block measurements.
+        func used(font: Double, root: Double, percentageBasis: Double) -> Double? {
+            let result: Double
+            switch unit {
+            case "px": result = value
+            case "em": result = value * font
+            case "rem": result = value * root
+            case "fraction": result = value * percentageBasis
+            default: return nil
+            }
+            return result.isFinite ? result : nil
+        }
+    }
+    struct Diagnostic: Decodable, Hashable, Sendable {
+        let code: String
+        let line: Int
+        let column: Int
+    }
+    let profileVersion: Int
+    let rules: [Rule]
+    let isValid: Bool
+    let hasUnsupportedRules: Bool
+    let diagnostics: [Diagnostic]
+    let values: [String: [String: String]]
+    let lengths: [String: [String: Length]]
+    let colors: [String: String]
+    let fonts: [String: [String]]
+    enum CodingKeys: String, CodingKey {
+        case profileVersion = "profile_version", rules, isValid = "is_valid"
+        case hasUnsupportedRules = "has_unsupported_rules", diagnostics, values, lengths, colors, fonts
+    }
+    static let unavailable = Self(profileVersion: 0, rules: [], isValid: false,
+        hasUnsupportedRules: false, diagnostics: [], values: [:], lengths: [:], colors: [:], fonts: [:])
+}
+
+struct CoreTableMeasurements: Encodable, Sendable {
+    let columns: [Double]
+    let availableWidth: Double
+    let horizontalPadding: Double
+    enum CodingKeys: String, CodingKey {
+        case columns, availableWidth = "available_width", horizontalPadding = "horizontal_padding"
+    }
+}
+
+struct CoreTableLayout: Decodable, Sendable { let widths: [Double] }
+
 struct EditorEngineDerivedContent: Sendable {
     let revision: UInt64
     let sourceSnapshot: String
