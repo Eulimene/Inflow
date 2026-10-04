@@ -1954,6 +1954,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     @Published private(set) var startupPhases: [UUID: RecoveryStartupPhase] = [:]
     private var startupLoader: RecoveryStartupLoader?
     private var startupStarted = false
+    private var startupGeneration: UInt64 = 0
     private var startupPrefetch: Task<Void, Never>?
     private var startupReadTasks: [UUID: Task<PreparedStartupDraft?, Error>] = [:]
     private var preparedStartupDrafts: [UUID: PreparedStartupDraft] = [:]
@@ -2033,10 +2034,13 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         }
     }
 
-    /// Opens lightweight document shells first; the original window stays usable.
+    /// Discover privately, then publish only verified drafts (or retryable errors).
+    /// File reads stay off the main thread and never allocate an editor.
     func beginStartupRestoration(anchor: NSWindow? = nil, open: @escaping @MainActor (MarkdownDocument) -> Void) async {
         guard !startupStarted, store?.canWrite == true else { return }
         startupStarted = true
+        startupGeneration &+= 1
+        let generation = startupGeneration
         guard let loader = startupLoader else {
             await loadIfNeeded()
             for document in await claimDraftsForAutomaticRestoration() { open(document); await Task.yield() }
@@ -2045,26 +2049,47 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         hasClaimedAutomaticRestoration = true
         do {
             let placeholders = try await Task.detached(priority: .utility) { try loader.discover() }.value
+            guard !Task.isCancelled, startupGeneration == generation else { return }
             startupDrafts = placeholders
-            for placeholder in placeholders {
-                guard !Task.isCancelled else { return }
-                startupPhases[placeholder.id] = .queued
-                open(MarkdownDocument(recoveryPlaceholder: placeholder))
-                // Production adds a lightweight titlebar item; no editor/window
-                // is allocated until that tab is selected.
-                await Task.yield()
-            }
-            startupPrefetch = Task(priority: .utility) { [weak self] in
-                for placeholder in placeholders {
-                    guard !Task.isCancelled, let self else { return }
-                    _ = await self.prepareStartupDraft(placeholder, priority: .utility)
-                    await Task.yield()
+            startupPhases.merge(Dictionary(uniqueKeysWithValues: placeholders.map { ($0.id, RecoveryStartupPhase.queued) })) { current, _ in current }
+            startupPrefetch = Task(priority: .utility) { @MainActor [weak self] in
+                // Bound concurrent I/O, but do not let one slow draft delay every
+                // other draft. Candidates are internal until validation finishes.
+                await withTaskGroup(of: Void.self) { group in
+                    var remaining = placeholders.makeIterator()
+                    func enqueue(_ placeholder: RecoveryDraftPlaceholder) {
+                        group.addTask { [weak self] in
+                            guard !Task.isCancelled, let self else { return }
+                            _ = await self.prepareStartupDraft(placeholder, priority: .utility)
+                            guard !Task.isCancelled else { return }
+                            await self.publishStartupDraft(placeholder, generation: generation, open: open)
+                        }
+                    }
+                    for _ in 0..<4 { if let next = remaining.next() { enqueue(next) } }
+                    while await group.next() != nil {
+                        guard !Task.isCancelled else { group.cancelAll(); return }
+                        if let next = remaining.next() { enqueue(next) }
+                    }
                 }
-                self?.isLoaded = true
+                guard let self, self.startupGeneration == generation, !Task.isCancelled else { return }
+                self.isLoaded = true
             }
             if placeholders.isEmpty { isLoaded = true }
         } catch {
             protectionErrorMessage = "暂未能载入上次的草稿。你可以继续编辑，并稍后重试恢复。"
+        }
+    }
+
+    private func publishStartupDraft(_ placeholder: RecoveryDraftPlaceholder, generation: UInt64,
+                                     open: @MainActor (MarkdownDocument) -> Void) {
+        guard startupGeneration == generation, !dismissedStartupDrafts.contains(placeholder.id),
+              store?.canWrite == true else { return }
+        switch startupPhases[placeholder.id] {
+        case .ready, .failed:
+            let visible = RecoveryDraftPlaceholder(id: placeholder.id, targetID: placeholder.targetID,
+                locations: placeholder.locations, title: preparedStartupDrafts[placeholder.id]?.record.displayName ?? placeholder.title)
+            open(MarkdownDocument(recoveryPlaceholder: visible))
+        default: break
         }
     }
 
@@ -2360,6 +2385,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
             clearedContentIdentities[record.id] = record.recoveryContentIdentity
         }
         do {
+            startupGeneration &+= 1
             startupPrefetch?.cancel()
             let pendingIDs = startupDrafts.map(\.id)
             for id in pendingIDs { dismissStartupDraft(id) }

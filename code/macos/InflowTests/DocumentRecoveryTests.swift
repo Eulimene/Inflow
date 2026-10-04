@@ -70,7 +70,7 @@ final class DocumentRecoveryTests: XCTestCase {
     }
 
     @MainActor
-    func testStartupShowsEmptyTabsBeforeReadingAndSelectedDraftBypassesSlowRead() async throws {
+    func testStartupValidatesBeforePublishingAndSlowDraftDoesNotBlockReadyDraft() async throws {
         let fixture = try RecoveryFixture()
         defer { fixture.remove() }
         let temporary = TemporaryDocumentDraftStore(rootURL: fixture.root.appendingPathComponent("SessionDrafts"))
@@ -86,9 +86,17 @@ final class DocumentRecoveryTests: XCTestCase {
                 if placeholder.id == first.id { await gate.suspendFirstCommit() }
             })
         var tabs: [MarkdownDocument] = []
-        await coordinator.beginStartupRestoration { tabs.append($0) }
+        let fastPublished = expectation(description: "Ready draft appears while slow candidate is still private")
+        let slowPublished = expectation(description: "Slow draft appears only after validation")
+        await coordinator.beginStartupRestoration {
+            tabs.append($0)
+            if $0.recoveryPlaceholder?.id == second.id { fastPublished.fulfill() }
+            if $0.recoveryPlaceholder?.id == first.id { slowPublished.fulfill() }
+        }
         await gate.waitUntilSuspended()
-        XCTAssertEqual(tabs.count, 2)
+        await fulfillment(of: [fastPublished], timeout: 2)
+        XCTAssertEqual(tabs.count, 1)
+        XCTAssertEqual(tabs.first?.recoveryPlaceholder?.title, second.displayName)
         XCTAssertTrue(tabs.allSatisfy { $0.text.isEmpty && $0.recoveryPlaceholder != nil })
         XCTAssertFalse(MarkdownDocumentModificationProjection.isModified(tabs[0]))
         XCTAssertThrowsError(try tabs[0].encodedFileData())
@@ -105,6 +113,7 @@ final class DocumentRecoveryTests: XCTestCase {
         }
         await fulfillment(of: [completed], timeout: 2)
         await gate.resume()
+        await fulfillment(of: [slowPublished], timeout: 2)
         let restored = await selection.value
         XCTAssertEqual(restored?.text, second.text)
         XCTAssertEqual(restored?.recoveryTransfer?.targetRecordID, selected.targetID)
@@ -129,7 +138,7 @@ final class DocumentRecoveryTests: XCTestCase {
         let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot,
             temporaryDraftStore: temporary, usesPlaintext: true,
             beforeStartupRead: { _ in await gate.suspendFirstCommit() })
-        await coordinator.beginStartupRestoration { _ in }
+        await coordinator.beginStartupRestoration { _ in XCTFail("Dismissed candidate must never be published") }
         await gate.waitUntilSuspended()
         let placeholder = try XCTUnwrap(coordinator.startupDrafts.first)
         XCTAssertTrue(coordinator.closeStartupDraft(record.id))
@@ -165,7 +174,10 @@ final class DocumentRecoveryTests: XCTestCase {
         try Data("unfinished JSON".utf8).write(to: corruptURL)
         let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot,
             temporaryDraftStore: temporary, usesPlaintext: true)
-        await coordinator.beginStartupRestoration { _ in }
+        let published = expectation(description: "Both valid and retryable drafts appear")
+        published.expectedFulfillmentCount = 2
+        await coordinator.beginStartupRestoration { _ in published.fulfill() }
+        await fulfillment(of: [published], timeout: 2)
         let invalid = try XCTUnwrap(coordinator.startupDrafts.first { $0.id == repaired.id })
         let failed = await coordinator.materializeStartupDraft(invalid)
         XCTAssertNil(failed)
@@ -222,6 +234,7 @@ final class DocumentRecoveryTests: XCTestCase {
         XCTAssertEqual(loaded.records.first?.transferTargetRecordID, target)
     }
 
+    @MainActor
     func testStartupDiscoveryDeduplicatesFilesAndKeepsSavedDraftUntouched() async throws {
         let fixture = try RecoveryFixture()
         defer { fixture.remove() }
@@ -243,6 +256,20 @@ final class DocumentRecoveryTests: XCTestCase {
         XCTAssertNil(try loader.prepare(XCTUnwrap(placeholders.first)))
         XCTAssertEqual(try temporary.records(), [record])
         XCTAssertEqual(try String(contentsOf: original, encoding: .utf8), "saved")
+        let empty = recoveryRecord(text: "", updatedAt: Date())
+        try temporary.write(empty)
+        // Retained checkpoints must not flash as tabs on this or a later launch.
+        for _ in 0..<2 {
+            let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot,
+                temporaryDraftStore: temporary, usesPlaintext: true)
+            await coordinator.beginStartupRestoration { _ in XCTFail("Unnecessary candidate must never appear") }
+            for _ in 0..<200 where !coordinator.isLoaded { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertTrue(coordinator.isLoaded)
+            XCTAssertEqual(coordinator.startupPhases[record.id], .unnecessary)
+            XCTAssertEqual(coordinator.startupPhases[empty.id], .unnecessary)
+        }
+        XCTAssertEqual(Set(try temporary.records().map(\.id)), Set([record.id, empty.id]),
+            "Filtering presentation must not delete recovery data")
     }
 
 
@@ -257,7 +284,7 @@ final class DocumentRecoveryTests: XCTestCase {
         let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot,
             temporaryDraftStore: temporary, usesPlaintext: true,
             beforeStartupRead: { _ in await gate.suspendFirstCommit() })
-        await coordinator.beginStartupRestoration { _ in }
+        await coordinator.beginStartupRestoration { _ in XCTFail("Dismissed candidate must never be published") }
         await gate.waitUntilSuspended()
         let placeholder = try XCTUnwrap(coordinator.startupDrafts.first)
         try await coordinator.removeAllRecoveryContent()
@@ -275,7 +302,8 @@ final class DocumentRecoveryTests: XCTestCase {
         defer { fixture.remove() }
         _ = NSApplication.shared
         let temporary = TemporaryDocumentDraftStore(rootURL: fixture.root.appendingPathComponent("SessionDrafts"))
-        try temporary.write(recoveryRecord(text: "background tab", updatedAt: Date()))
+        let record = recoveryRecord(text: "background tab", updatedAt: Date())
+        try temporary.write(record)
         let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot,
             temporaryDraftStore: temporary, usesPlaintext: true)
         let anchor = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
@@ -287,14 +315,17 @@ final class DocumentRecoveryTests: XCTestCase {
         pendingDocument.addWindowController(NSWindowController(window: pending))
         defer { anchor.orderOut(nil); pending.orderOut(nil) }
         anchor.makeKeyAndOrderFront(nil)
+        let published = expectation(description: "Verified draft is published")
         await coordinator.beginStartupRestoration(anchor: anchor) { document in
             guard let placeholder = document.recoveryPlaceholder else { return XCTFail("Missing placeholder") }
             pending.makeKeyAndOrderFront(nil)
             coordinator.attachStartupWindow(pending, placeholder: placeholder)
+            published.fulfill()
         }
+        await fulfillment(of: [published], timeout: 2)
         XCTAssertNil(anchor.tabbedWindows)
         XCTAssertEqual(pending.tabbingMode, .disallowed)
-        XCTAssertEqual(pending.title, "恢复草稿 1")
+        XCTAssertEqual(pending.title, record.displayName)
         for placeholder in coordinator.startupDrafts { coordinator.dismissStartupDraft(placeholder.id) }
     }
 
@@ -530,7 +561,7 @@ final class DocumentRecoveryTests: XCTestCase {
         XCTAssertEqual(RecoveryCenterPrompt.title, "恢复未保存的文档")
         XCTAssertEqual(
             RecoveryCenterPrompt.message,
-            "上次 Inflow 未正常关闭。以下内容来自异常关闭，可打开或与当前磁盘版本比较。"
+            "上次 Inflow 未正常关闭。以下内容为恢复区暂存副本，尚未写入原文件；可打开或与当前磁盘版本比较。"
         )
         XCTAssertFalse(RecoveryCenterPrompt.message.contains("比最近磁盘内容更新"))
     }
