@@ -1226,6 +1226,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                 alternative: "Mermaid 图表",
                 sourceRange: diagram.sourceRange.utf16Range,
                 fillsAvailableWidth: true,
+                sizing: .diagram,
                 collapsesSourceLines: true,
                 storage: storage
             )
@@ -1475,7 +1476,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             alternative: "Mermaid 图表",
             sourceRange: sourceRange,
             fillsAvailableWidth: true,
-            placement: .belowSource
+            placement: .belowSource,
+            sizing: .diagram
         )
         reserveSpaceBelowRenderedSource(
             sourceRange: sourceRange,
@@ -1509,6 +1511,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         alternative: String,
         sourceRange: NSRange,
         fillsAvailableWidth: Bool,
+        sizing: RenderedImageSizing = .image,
         collapsesSourceLines: Bool = false,
         storage: NSTextStorage
     ) {
@@ -1535,7 +1538,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             displayedImage,
             alternative: alternative,
             sourceRange: sourceRange,
-            fillsAvailableWidth: fillsAvailableWidth
+            fillsAvailableWidth: fillsAvailableWidth,
+            sizing: sizing
         )
         if collapsesSourceLines {
             reserveRenderedOverlaySpace(
@@ -1792,6 +1796,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
                     alternative: "Mermaid 图表",
                     sourceRange: diagram.sourceRange.utf16Range,
                     fillsAvailableWidth: true,
+                    sizing: .diagram,
                     collapsesSourceLines: true,
                     storage: storage
                 )

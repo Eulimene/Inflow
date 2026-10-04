@@ -188,7 +188,12 @@
     }
     const rect = svg.getBoundingClientRect();
     const box = svg.viewBox.baseVal;
-    const width = rect.width || box.width, height = rect.height || box.height;
+    // Mermaid's responsive SVG can inherit the worker's 1200px viewport. Its
+    // viewBox is the actual diagram size: preserve that 1:1 typography in native
+    // PDF images and let the editor/HTML container handle width-only scaling.
+    const intrinsicMermaid = kind === "mermaid" && box.width > 0 && box.height > 0;
+    const width = intrinsicMermaid ? box.width : rect.width || box.width;
+    const height = intrinsicMermaid ? box.height : rect.height || box.height;
     if (![width, height].every(n => Number.isFinite(n) && n > 0 && n <= 16384)) throw Error("Invalid SVG size");
     if (!svg.hasAttribute("viewBox")) svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
     svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
@@ -205,7 +210,9 @@
         if (name.startsWith("on") || name === "style" || ((name === "href" || name === "xlink:href") && !attr.value.startsWith("#"))) node.removeAttribute(attr.name);
       }
     }
-    if (kind !== "math") {
+    // Typora-style Mermaid diagrams sit directly on the document surface.
+    // Keep node/cluster/edge-label fills, but do not paint a rectangular canvas.
+    if (kind !== "math" && kind !== "mermaid") {
       const background = document.createElementNS(svg.namespaceURI, "rect");
       const bounds = svg.viewBox.baseVal;
       background.setAttribute("x", bounds.x); background.setAttribute("y", bounds.y);

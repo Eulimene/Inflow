@@ -1531,7 +1531,16 @@ final class MarkdownRendererTests: XCTestCase {
                 XCTAssertNotEqual(darkRequest.cacheKey, request.cacheKey)
                 let darkResult = try await JavaScriptRenderService.shared.render(darkRequest)
                 let darkSVG = try XCTUnwrap(darkResult.svg)
-                XCTAssertTrue(darkSVG.contains("#1f1f1f"), language)
+                if language == "mermaid" {
+                    // The canvas must remain transparent in both appearances;
+                    // only diagram nodes/clusters should have a background.
+                    for output in [svg, darkSVG] {
+                        let document = try XMLDocument(xmlString: output)
+                        XCTAssertTrue(try document.nodes(forXPath: "/*[local-name()='svg']/*[local-name()='rect']").isEmpty)
+                    }
+                } else {
+                    XCTAssertTrue(darkSVG.contains("#1f1f1f"), language)
+                }
                 XCTAssertNotEqual(darkSVG, svg, language)
                 XCTAssertNotNil(darkResult.pdfData, language)
                 XCTAssertEqual(darkRequest.source, request.source)
@@ -1566,6 +1575,26 @@ final class MarkdownRendererTests: XCTestCase {
                               second.attribute(forName: "y")?.stringValue, body)
             XCTAssertEqual(request.source, original)
             XCTAssertFalse(svg.contains("第一行\\n第二行"))
+        }
+        // Responsive Mermaid families must use viewBox dimensions, independent
+        // of the offscreen WKWebView's size, with real node text and arrows.
+        for body in ["flowchart LR\nA[开始] --> B{检查}\nB -->|通过| C[完成]",
+                     "sequenceDiagram\nparticipant A as 用户\nparticipant B as 编辑器\nA->>B: 打开文档\nB-->>A: 展示内容",
+                     "classDiagram\nDocument --> Editor\nDocument : title"] {
+            let request = try XCTUnwrap(RenderedMarkdownEditor.plan(for: "```mermaid\n\(body)\n```").renderRequests.first)
+            let result = try await JavaScriptRenderService.shared.render(request)
+            let document = try XMLDocument(xmlString: XCTUnwrap(result.svg))
+            let root = try XCTUnwrap(document.rootElement())
+            let box = try XCTUnwrap(root.attribute(forName: "viewBox")?.stringValue)
+                .split(separator: " ").compactMap { Double($0) }
+            XCTAssertEqual(box.count, 4)
+            if box.count == 4 {
+                XCTAssertEqual(Double(try XCTUnwrap(result.width)), ceil(box[2]), accuracy: 0.001)
+                XCTAssertEqual(Double(try XCTUnwrap(result.height)), ceil(box[3]), accuracy: 0.001)
+            }
+            XCTAssertFalse(try document.nodes(forXPath: "//*[local-name()='text']").isEmpty)
+            XCTAssertFalse(try document.nodes(forXPath: "//*[local-name()='marker']").isEmpty)
+            XCTAssertNotNil(result.pdfData)
         }
         let code = "```javascript\nconst 名称 = \"😀\";\r\n// 中文注释\n```"
         let codeRequest = try XCTUnwrap(RenderedMarkdownEditor.plan(for: code).renderRequests.first)
@@ -1651,7 +1680,8 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(mathSession.textView.string, mathSource)
         let mixedCodeRequest = try XCTUnwrap(mixedPlan.renderRequests.first(where: { $0.kind == "code" }))
         let keywordColor = mixedSession.textView.textStorage?.attribute(.foregroundColor, at: mixedCodeRequest.contentRange.utf16Range.location, effectiveRange: nil) as? NSColor
-        XCTAssertEqual(keywordColor, MarkdownRenderPalette.resolved(for: mixedSession.textView.effectiveAppearance).accentColor)
+        let palette = MarkdownRenderPalette.resolved(for: mixedSession.textView.effectiveAppearance)
+        XCTAssertEqual(keywordColor, NativeCSSStyles.color(palette.keyword) ?? palette.textColor)
         let view = mixedSession.textView
         for imageView in view.subviews.compactMap({ $0 as? NSImageView }) {
             XCTAssertGreaterThan(imageView.frame.minY, 0, "Resolved overlays must be laid out before export")

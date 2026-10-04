@@ -2560,6 +2560,9 @@ final class RenderedMarkdownEditorTests: XCTestCase {
 
         XCTAssertEqual(size.width, CGFloat(diagram.intrinsicWidth), accuracy: 0.001)
         XCTAssertEqual(size.height, CGFloat(diagram.intrinsicHeight), accuracy: 0.001)
+        session.textView.layoutRenderedImages()
+        let imageView = try XCTUnwrap(session.textView.subviews.compactMap { $0 as? NSImageView }.first)
+        XCTAssertEqual(imageView.frame.midX, session.scrollView.contentSize.width / 2, accuracy: 0.5)
         let paragraph = try XCTUnwrap(
             session.textView.textStorage?.attribute(
                 .paragraphStyle,
@@ -2568,6 +2571,24 @@ final class RenderedMarkdownEditorTests: XCTestCase {
             ) as? NSParagraphStyle
         )
         XCTAssertLessThanOrEqual(paragraph.minimumLineHeight, size.height + 10.001)
+
+        // A tall flowchart stays readable instead of inheriting the photograph
+        // preview's 480px height limit; narrowing still preserves aspect ratio.
+        let tallSource = "```mermaid\nflowchart TD\nA[开始] --> B[读取文档] --> C[编辑内容] --> D[检查] --> E[保存] --> F[完成]\n```"
+        let tall = MarkdownSourceEditorSession(role: .renderedProjection)
+        tall.scrollView.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
+        tall.scrollView.layoutSubtreeIfNeeded()
+        tall.textView.string = tallSource
+        _ = await tall.deriveContent(for: tallSource, configuration: .default)
+        tall.setPresentation(.rendered, source: tallSource, onLinkClick: nil)
+        await tall.waitForRenderedResources()
+        let tallPlan = try await resolvedDiagramPlan(for: tallSource)
+        let tallDiagram = try XCTUnwrap(tallPlan.mermaidDiagrams.first)
+        let tallSize = try XCTUnwrap(tall.textView.renderedImageSize(atUTF16Location: 0))
+        XCTAssertGreaterThan(tallDiagram.intrinsicHeight, 480)
+        XCTAssertEqual(tallSize.height, CGFloat(tallDiagram.intrinsicHeight), accuracy: 0.001)
+        XCTAssertEqual(tallSize.width, CGFloat(tallDiagram.intrinsicWidth), accuracy: 0.001)
+        XCTAssertEqual(tall.textView.string, tallSource)
     }
 
     @MainActor

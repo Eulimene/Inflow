@@ -1,5 +1,12 @@
 import AppKit
 
+/// Diagrams preserve readable intrinsic typography and grow vertically with the
+/// document; photographs keep their bounded preview size.
+enum RenderedImageSizing: Equatable {
+    case image
+    case diagram
+}
+
 @MainActor
 final class WindowAwareTextView: DocumentFindTextView {
     private let centeredLineLayout = MarkdownCenteredLineLayout()
@@ -26,19 +33,22 @@ final class WindowAwareTextView: DocumentFindTextView {
         var renderedSize: NSSize
         let fillsAvailableWidth: Bool
         let placement: RenderedMarkdownImagePlacement
+        let sizing: RenderedImageSizing
 
         init(
             sourceRange: NSRange,
             imageView: RenderedMarkdownImageView,
             renderedSize: NSSize,
             fillsAvailableWidth: Bool,
-            placement: RenderedMarkdownImagePlacement
+            placement: RenderedMarkdownImagePlacement,
+            sizing: RenderedImageSizing
         ) {
             self.sourceRange = sourceRange
             self.imageView = imageView
             self.renderedSize = renderedSize
             self.fillsAvailableWidth = fillsAvailableWidth
             self.placement = placement
+            self.sizing = sizing
         }
     }
 
@@ -364,7 +374,8 @@ final class WindowAwareTextView: DocumentFindTextView {
         alternative: String,
         sourceRange: NSRange,
         fillsAvailableWidth: Bool,
-        placement: RenderedMarkdownImagePlacement = .replacesSource
+        placement: RenderedMarkdownImagePlacement = .replacesSource,
+        sizing: RenderedImageSizing = .image
     ) -> NSSize {
         let key = sourceRange.location
         retainedRenderedOverlayKeys?.insert(key)
@@ -376,14 +387,16 @@ final class WindowAwareTextView: DocumentFindTextView {
         )
         let renderedSize = Self.fittedRenderedImageSize(
             image.size,
-            availableWidth: availableWidth,
-            fillsAvailableWidth: fillsAvailableWidth
+            availableWidth: sizing == .diagram ? min(readingColumnWidth, availableWidth) : availableWidth,
+            fillsAvailableWidth: fillsAvailableWidth,
+            sizing: sizing
         )
         let imageView: RenderedMarkdownImageView
         if let existing = renderedImageViews[key],
            existing.sourceRange == sourceRange,
            existing.fillsAvailableWidth == fillsAvailableWidth,
-           existing.placement == placement
+           existing.placement == placement,
+           existing.sizing == sizing
         {
             imageView = existing.imageView
             existing.renderedSize = renderedSize
@@ -397,7 +410,8 @@ final class WindowAwareTextView: DocumentFindTextView {
                 imageView: imageView,
                 renderedSize: renderedSize,
                 fillsAvailableWidth: fillsAvailableWidth,
-                placement: placement
+                placement: placement,
+                sizing: sizing
             )
         }
         imageView.image = image
@@ -422,7 +436,8 @@ final class WindowAwareTextView: DocumentFindTextView {
     private static func fittedRenderedImageSize(
         _ intrinsicSize: NSSize,
         availableWidth: CGFloat,
-        fillsAvailableWidth: Bool
+        fillsAvailableWidth: Bool,
+        sizing: RenderedImageSizing
     ) -> NSSize {
         guard intrinsicSize.width > 0, intrinsicSize.height > 0 else {
             return NSSize(width: 1, height: 1)
@@ -432,7 +447,7 @@ final class WindowAwareTextView: DocumentFindTextView {
             fillsAvailableWidth ? availableWidth : min(760, availableWidth)
         )
         let widthScale = widthLimit / intrinsicSize.width
-        let heightScale = 480 / intrinsicSize.height
+        let heightScale = sizing == .diagram ? 1 : 480 / intrinsicSize.height
         let scale = min(1, widthScale, heightScale)
         return NSSize(
             width: max(1, intrinsicSize.width * scale),
@@ -590,8 +605,9 @@ final class WindowAwareTextView: DocumentFindTextView {
                 guard let image = state.imageView.image else { return nil }
                 let size = Self.fittedRenderedImageSize(
                     image.size,
-                    availableWidth: availableWidth,
-                    fillsAvailableWidth: state.fillsAvailableWidth
+                    availableWidth: state.sizing == .diagram ? min(readingColumnWidth, availableWidth) : availableWidth,
+                    fillsAvailableWidth: state.fillsAvailableWidth,
+                    sizing: state.sizing
                 )
                 guard size != state.renderedSize else { return nil }
                 state.renderedSize = size
@@ -702,9 +718,11 @@ final class WindowAwareTextView: DocumentFindTextView {
                 in: textContainer
             )
             state.imageView.frame = NSRect(
-                x: state.placement == .belowSource
-                    ? textContainerOrigin.x + lineRect.minX
-                    : textContainerOrigin.x + glyphRect.minX,
+                x: state.sizing == .diagram
+                    ? max(0, (viewportWidth - state.renderedSize.width) / 2)
+                    : (state.placement == .belowSource
+                        ? textContainerOrigin.x + lineRect.minX
+                        : textContainerOrigin.x + glyphRect.minX),
                 y: state.placement == .belowSource
                     ? textContainerOrigin.y + lineRect.minY + layoutManager.location(forGlyphAt: glyphIndex).y
                         - ((textStorage?.attribute(.font, at: anchorLocation, effectiveRange: nil) as? NSFont)?.descender ?? 0) + 10

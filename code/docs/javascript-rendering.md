@@ -18,9 +18,17 @@ CodeMirror 仅提供语法模式和 token 范围，保留原生 NSTextView 的�
 
 图表先生成独立 SVG，再由 WebKit 生成矢量 PDF 图像回填同一个 TextKit 表面，避免 AppKit SVG 解码丢失箭头；公式同样经 WebKit 转成矢量 PDF 回填，保留正确的 MathJax 字形路径。文档 PDF 仍打印这个原生表面。CodeMirror 的 UTF-16 token 范围只设置显示属性。每次异步回填都验证原始文档快照、任务取消状态和输入法状态，不改写 Markdown，不登记展示层 undo。进入公式或图表时显示可编辑源码。
 
-三类图表跟随阅读主题使用对应的背景、文字和连线配色，主题变化重新派生并使用不同缓存键；原生公式配色随阅读主题生成。SVG 中的 CSS 在 WebKit 内解析为显式属性，tspan 转换为带坐标的 text，以兼容 AppKit SVG 解码。
+三类图表跟随阅读主题使用对应的文字和连线配色，主题变化重新派生并使用不同缓存键；Mermaid 保持透明画布，节点、分组与边标签仍保留自身填色，避免白底或深灰矩形与正文主题割裂。原生公式配色随阅读主题生成。SVG 中的 CSS 在 WebKit 内解析为显式属性，tspan 转换为带坐标的 text，以兼容 AppKit SVG 解码。
 
 HTML 预览和 HTML 导出包含相同的离线适配器，以 nonce 限定可信内联脚本。导出文件无需 CDN，保留未解析源码，在打开后完成渲染；不再声称导出时已经生成静态 SVG 或 MathML。PDF 等待原生异步资源完成后生成。
+
+## 图表呈现
+
+参考 [Typora 图表选项](https://support.typora.io/Diagram-Options/)，Mermaid 保留浅色 default / 深色 dark 主题、Trebuchet/Verdana/Arial 与中文回退字体、linear 连线。原生图表在正文可用区域居中，源码编辑时下方的预览采用同一规则。
+
+图表与普通图片使用独立的布局策略：图表以固有尺寸展示，只在超过正文宽度时等比缩小，不放大小图，也不再受到普通图片 480 像素高度上限的限制。纵向流程图随文档向下展开，保持文字可读；窗口缩放时重新计算宽度，普通图片仍保留原有高度限制。
+
+Mermaid 以 SVG viewBox 作为固有尺寸，避免时序图、类图等响应式 SVG 继承离屏 WebKit 的视口宽度。HTML 与原生 PDF 图像共用透明背景和尺寸归一化逻辑，不改写用户源码。
 
 ## 标签换行
 
