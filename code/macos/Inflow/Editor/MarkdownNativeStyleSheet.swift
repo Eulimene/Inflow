@@ -344,10 +344,19 @@ struct MarkdownNativeStyleSheet {
         }
         if case .heading = kind {
             let start = storage.mutableString.paragraphRange(for: range).location
-            let preceding = storage.mutableString.substring(to: start).trimmingCharacters(in: .whitespacesAndNewlines)
+            // Inspect only the preceding non-empty paragraph. Copying and
+            // splitting the entire prefix for every heading is quadratic.
+            let previous = storage.mutableString.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.inverted,
+                options: .backwards, range: NSRange(location: 0, length: start))
             var contextualElement: String?
-            if preceding.isEmpty { contextualElement = element + ":first-child" }
-            else if let line = preceding.components(separatedBy: "\n").last {
+            if previous.location == NSNotFound { contextualElement = element + ":first-child" }
+            else {
+                let previousParagraph = storage.mutableString.paragraphRange(for: previous)
+                let first = storage.mutableString.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.inverted,
+                    range: NSRange(location: 0, length: start))
+                let lineStart = max(previousParagraph.location, first.location)
+                let line = storage.mutableString.substring(with: NSRange(location: lineStart,
+                    length: NSMaxRange(previous) - lineStart))
                 let hashes = line.prefix(while: { $0 == "#" }).count
                 if (1...2).contains(hashes), line.dropFirst(hashes).first == " " {
                     contextualElement = "h\(hashes)+" + element

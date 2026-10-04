@@ -834,7 +834,9 @@ private actor EditorEngineTransport {
             else {
                 throw EditorEngineBridgeError.invalidResponse
             }
-            return try raw.validated(source: expectedText)
+            return try PerformanceTrace.measure("bridge.validate", bytes: expectedText.utf8.count) {
+                try raw.validated(source: expectedText)
+            }
         } catch {
             logger.error(
                 "Unified derivation failed; revision=\(self.revision, privacy: .public) error=\(String(describing: error), privacy: .public)"
@@ -1274,19 +1276,21 @@ private actor EditorEngineTransport {
 
     private func dispatch<T: Encodable, Response: Decodable>(_ command: T) throws -> Response {
         guard let handle else { throw EditorEngineBridgeError.invalidHandle }
-        let encoded = try JSONEncoder().encode(command)
-        let result: InflowBytesResult = encoded.withUnsafeBytes { buffer in
-            inflow_engine_dispatch(
-                handle.pointer,
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(buffer.count)
-            )
+        return try PerformanceTrace.measure("bridge.dispatch") {
+            let encoded = try PerformanceTrace.measure("bridge.encode") { try JSONEncoder().encode(command) }
+            let result: InflowBytesResult = PerformanceTrace.measure("rust.dispatch", bytes: encoded.count) {
+                encoded.withUnsafeBytes { buffer in
+                    inflow_engine_dispatch(handle.pointer, buffer.bindMemory(to: UInt8.self).baseAddress, UInt(buffer.count))
+                }
+            }
+            let payload = try PerformanceTrace.measure("bridge.copy") { try InflowCoreBridge.copyAndFree(result.bytes) }
+            guard result.status == INFLOW_STATUS_OK else {
+                throw Self.bridgeError(status: result.status, payload: payload)
+            }
+            return try PerformanceTrace.measure("bridge.decode", bytes: payload.count) {
+                try JSONDecoder().decode(Response.self, from: payload)
+            }
         }
-        let payload = try InflowCoreBridge.copyAndFree(result.bytes)
-        guard result.status == INFLOW_STATUS_OK else {
-            throw Self.bridgeError(status: result.status, payload: payload)
-        }
-        return try JSONDecoder().decode(Response.self, from: payload)
     }
 
     private func compareSnapshot(to swiftText: String) throws {

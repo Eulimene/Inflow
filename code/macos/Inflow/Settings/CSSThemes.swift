@@ -158,6 +158,7 @@ struct NativeCSSStyles: Hashable, Sendable {
     let rules: [Rule]
     let isValid: Bool
     let hasUnsupportedRules: Bool
+    private let resolvedValues: [String: [String: String]]
 
     init(css: String) {
         let clean = css.replacingOccurrences(of: #"/\*[\s\S]*?\*/"#, with: "", options: .regularExpression)
@@ -228,33 +229,63 @@ struct NativeCSSStyles: Hashable, Sendable {
         rules = result
         isValid = valid && depth == 0 && quote == nil && !result.isEmpty
         hasUnsupportedRules = unsupported
+        resolvedValues = Self.compile(result)
     }
 
+    /// Cascade and variables depend on the immutable theme, not the document.
+    /// Resolve once at load/reload instead of scanning every rule for every
+    /// property of every native text span on the main thread.
     func value(_ property: String, on element: String = "body") -> String? {
-        let selectors: Set<String> = element == "body" ? [":root", "html", "body", "#write"] : [element, "#write " + element, element == "::selection" ? "#write::selection" : element]
-        guard let rule = rules.enumerated().filter({ selectors.contains($0.element.selector) && $0.element.property == property }).max(by: {
-            let leftScope = ["body", "#write"].contains($0.element.selector) ? 1 : 0
-            let rightScope = ["body", "#write"].contains($1.element.selector) ? 1 : 0
-            if element == "body", leftScope != rightScope { return leftScope < rightScope }
-            return $0.element.priority == $1.element.priority ? $0.offset < $1.offset : $0.element.priority < $1.element.priority
-        })?.element else { return nil }
-        return resolve(rule.value)
+        resolvedValues[element]?[property]
+    }
+
+    private static func compile(_ rules: [Rule]) -> [String: [String: String]] {
+        let roots: Set<String> = [":root", "html", "body", "#write"]
+        var variables: [String: Rule] = [:]
+        for rule in rules where roots.contains(rule.selector) && rule.property.hasPrefix("--") {
+            if variables[rule.property].map({ $0.priority <= rule.priority }) ?? true {
+                variables[rule.property] = rule
+            }
+        }
+        let variableValues = variables.mapValues(\.value)
+        var elements: Set<String> = ["body"]
+        for rule in rules {
+            elements.insert(rule.selector)
+            if rule.selector.hasPrefix("#write ") { elements.insert(String(rule.selector.dropFirst(7))) }
+            if rule.selector == "#write::selection" { elements.insert("::selection") }
+        }
+        var result: [String: [String: String]] = [:]
+        for element in elements {
+            let selectors: Set<String> = element == "body" ? roots
+                : [element, "#write " + element, element == "::selection" ? "#write::selection" : element]
+            var winners: [String: Rule] = [:]
+            for rule in rules where selectors.contains(rule.selector) {
+                if let previous = winners[rule.property] {
+                    let priorScope = ["body", "#write"].contains(previous.selector) ? 1 : 0
+                    let scope = ["body", "#write"].contains(rule.selector) ? 1 : 0
+                    if element == "body", priorScope != scope {
+                        if priorScope > scope { continue }
+                    } else if previous.priority > rule.priority { continue }
+                }
+                winners[rule.property] = rule
+            }
+            result[element] = winners.compactMapValues { resolve($0.value, variables: variableValues) }
+        }
+        return result
     }
 
     private static let variableExpression = try? NSRegularExpression(pattern: #"var\(\s*(--[\w-]+)\s*(?:,\s*([^()]*))?\)"#)
 
-    private func resolve(_ input: String, depth: Int = 0) -> String? {
+    private static func resolve(_ input: String, variables: [String: String], depth: Int = 0) -> String? {
         guard depth < 12 else { return nil }
         guard let expression = Self.variableExpression,
               let match = expression.firstMatch(in: input, range: NSRange(input.startIndex..., in: input)),
               let nameRange = Range(match.range(at: 1), in: input), let fullRange = Range(match.range, in: input) else { return input.contains("var(") ? nil : input }
         let name = String(input[nameRange])
-        let variable = rules.enumerated().filter { [":root", "html", "body", "#write"].contains($0.element.selector) && $0.element.property == name }.max {
-            $0.element.priority == $1.element.priority ? $0.offset < $1.offset : $0.element.priority < $1.element.priority
-        }?.element.value
+        let variable = variables[name]
         let fallback = Range(match.range(at: 2), in: input).map { String(input[$0]) }
         guard let replacement = variable ?? fallback else { return nil }
-        return resolve(input.replacingCharacters(in: fullRange, with: replacement), depth: depth + 1)
+        return resolve(input.replacingCharacters(in: fullRange, with: replacement), variables: variables, depth: depth + 1)
     }
 
     func length(_ property: String, on element: String = "body", relativeTo size: CGFloat = 16, rootSize: CGFloat? = nil) -> CGFloat? {

@@ -397,7 +397,9 @@ struct MarkdownDocument: FileDocument, Sendable {
         let tier = try MarkdownDocumentSizePolicy.validatedTierForOpening(
             byteCount: fileData.count
         )
-        let decoded = try MarkdownCodec.decode(fileData)
+        let decoded = try PerformanceTrace.measure("file.decode", bytes: fileData.count) {
+            try MarkdownCodec.decode(fileData)
+        }
         text = decoded.text
         properties = decoded.properties
         capabilityTier = tier

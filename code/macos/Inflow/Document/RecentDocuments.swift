@@ -1484,6 +1484,12 @@ final class RecentDocumentsController: NSObject, ObservableObject {
         presentsErrors: Bool = true,
         completion: @escaping @MainActor (Result<OpenedDocumentResult, Error>) -> Void = { _ in }
     ) {
+        let trace = PerformanceTrace.begin("file.open")
+        let originalCompletion = completion
+        let completion: @MainActor (Result<OpenedDocumentResult, Error>) -> Void = { result in
+            if case .success = result { trace?.end() } else { trace?.end("failed") }
+            originalCompletion(result)
+        }
         // A project authorization is backed by the retained security-scoped
         // lease for the user-selected root. Starting a second lease on the
         // child file can update Finder's last-used metadata (and therefore
@@ -1496,43 +1502,45 @@ final class RecentDocumentsController: NSObject, ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else {
                 if accessed { url.stopAccessingSecurityScopedResource() }
+                trace?.end("cancelled")
                 return
             }
-            do {
-                let inspection = try await openPreflightWorker.inspect(
-                    url,
-                    authorization: authorization
-                )
-                switch inspection.preflight {
-                case .supported:
-                    openVerifiedDocument(
-                        url,
-                        reusableDocument: reusableDocument,
-                        authorization: authorization,
-                        authorizedData: inspection.authorizedData,
-                        display: display,
-                        presentsErrors: presentsErrors,
-                        securityScopeIsActive: accessed,
-                        completion: completion
-                    )
-                case let .unsupportedEncoding(originalData):
-                    if accessed { url.stopAccessingSecurityScopedResource() }
-                    failureRecorder(.opening, .unsupportedEncoding)
-                    completion(.failure(DocumentOpenError.unsupportedEncoding))
-                    if presentsErrors {
-                        await UnsupportedEncodingRecoveryUI.present(
-                            sourceURL: url,
-                            originalData: originalData,
-                            attachedTo: NSApp.keyWindow ?? NSApp.mainWindow
-                        )
+            await PerformanceTrace.$parentID.withValue(trace?.id ?? PerformanceTrace.parentID) {
+                do {
+                    let inspection = try await PerformanceTrace.measureAsync("file.preflight") {
+                        try await openPreflightWorker.inspect(url, authorization: authorization)
                     }
-                }
-            } catch {
-                if accessed { url.stopAccessingSecurityScopedResource() }
-                failureRecorder(.opening, .fileUnavailable)
-                completion(.failure(error))
-                if presentsErrors {
-                    NSDocumentController.shared.presentError(error)
+                    switch inspection.preflight {
+                    case .supported:
+                        openVerifiedDocument(
+                            url,
+                            reusableDocument: reusableDocument,
+                            authorization: authorization,
+                            authorizedData: inspection.authorizedData,
+                            display: display,
+                            presentsErrors: presentsErrors,
+                            securityScopeIsActive: accessed,
+                            completion: completion
+                        )
+                    case let .unsupportedEncoding(originalData):
+                        if accessed { url.stopAccessingSecurityScopedResource() }
+                        failureRecorder(.opening, .unsupportedEncoding)
+                        completion(.failure(DocumentOpenError.unsupportedEncoding))
+                        if presentsErrors {
+                            await UnsupportedEncodingRecoveryUI.present(
+                                sourceURL: url,
+                                originalData: originalData,
+                                attachedTo: NSApp.keyWindow ?? NSApp.mainWindow
+                            )
+                        }
+                    }
+                } catch {
+                    if accessed { url.stopAccessingSecurityScopedResource() }
+                    failureRecorder(.opening, .fileUnavailable)
+                    completion(.failure(error))
+                    if presentsErrors {
+                        NSDocumentController.shared.presentError(error)
+                    }
                 }
             }
         }

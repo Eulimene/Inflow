@@ -107,12 +107,19 @@ final class JavaScriptRenderService {
     func render(_ request: JavaScriptRenderRequest) async throws -> JavaScriptRenderedOutput {
         try Task.checkCancellation()
         if let cached = cache[request.cacheKey] { return cached }
+        let trace = PerformanceTrace.begin("resource.queue.\(request.kind)", bytes: request.source.utf8.count)
+        var outcome = "failed"
+        defer { trace?.end(Task.isCancelled ? "cancelled" : outcome) }
         let previous = tail
         let task = Task { @MainActor in
             _ = try? await previous?.value
             try Task.checkCancellation()
             if let cached = self.cache[request.cacheKey] { return cached }
-            let result = try await self.worker.render(request)
+            let result = try await PerformanceTrace.$parentID.withValue(trace?.id ?? PerformanceTrace.parentID) {
+                try await PerformanceTrace.measureAsync("resource.render.\(request.kind)", bytes: request.source.utf8.count) {
+                    try await self.worker.render(request)
+                }
+            }
             self.cache[request.cacheKey] = result
             self.order.append(request.cacheKey)
             while self.order.count > 64 { self.cache.removeValue(forKey: self.order.removeFirst()) }
@@ -125,6 +132,7 @@ final class JavaScriptRenderService {
             task.cancel()
         }
         try Task.checkCancellation()
+        outcome = "completed"
         return value
     }
 }

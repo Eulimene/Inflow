@@ -82,6 +82,27 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertNil(css.value("color", on: "pre"), "Cyclic variables must not hang rendering")
         XCTAssertEqual(NativeCSSStyles.colorHex("rgba(10,20,30,0.5)"), "#0a141e80")
         XCTAssertFalse(NativeCSSStyles(css: "body { color: red;").isValid)
+        let cascade = NativeCSSStyles(css: """
+        :root { --ink: #111; --ink: #222 !important; }
+        body { --ink: #333; color: var(--ink); }
+        #write { color: #444; }
+        p { color: red; color: blue; }
+        #write p { color: green; }
+        p { color: orange !important; }
+        ::selection { color: #555; }
+        #write::selection { color: #666; }
+        a { color: var(--missing, var(--ink)); }
+        """)
+        for _ in 0..<20 {
+            XCTAssertEqual(cascade.value("color"), "#444")
+            XCTAssertEqual(cascade.value("color", on: "p"), "orange")
+            XCTAssertEqual(cascade.value("color", on: "::selection"), "#666")
+            XCTAssertEqual(cascade.value("color", on: "a"), "#222")
+            XCTAssertNil(cascade.value("missing", on: "p"))
+        }
+        let reloaded = NativeCSSStyles(css: "p { color: purple; }")
+        XCTAssertEqual(reloaded.value("color", on: "p"), "purple")
+        XCTAssertEqual(cascade.value("color", on: "p"), "orange", "Existing snapshots remain immutable")
     }
 
     func testCSSThemeReloadPersistsSelectionAndFreezesExportSnapshot() throws {

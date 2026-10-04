@@ -289,6 +289,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         for source: String,
         configuration: PreviewAppearanceConfiguration
     ) async -> EditorEngineDerivedContent? {
+        await PerformanceTrace.measureAsync("editor.derive", bytes: source.utf8.count) {
+            await deriveContentMeasured(for: source, configuration: configuration)
+        }
+    }
+
+    private func deriveContentMeasured(for source: String, configuration: PreviewAppearanceConfiguration) async -> EditorEngineDerivedContent? {
         latestRenderConfiguration = configuration
         textView.readingColumnWidth = min(CGFloat(configuration.contentWidth),
             max(240, configuration.theme.styles.length("max-width") ?? CGFloat(configuration.contentWidth)))
@@ -856,6 +862,12 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             return
         }
 
+        PerformanceTrace.measure("editor.presentation", bytes: source.utf8.count) {
+            applyRenderedPresentationMeasured(source: source, selection: selection)
+        }
+    }
+
+    private func applyRenderedPresentationMeasured(source: String, selection: NSRange) {
         invalidateSyntaxApplication()
         guard var plan = engineRenderedPlan,
               plan.exactlyMatches(source)
@@ -1235,8 +1247,10 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         styleSheet.applyBlockSpacing(plan.blockSpacingBoundaries, storage: storage)
         textView.endRenderedOverlayUpdate()
         storage.endEditing()
-        renderedAttributePatchRanges = RenderedAttributePatch.apply(storage, to: liveStorage)
-        textView.layoutRenderedImages()
+        renderedAttributePatchRanges = PerformanceTrace.measure("editor.attribute_patch", bytes: source.utf8.count) {
+            RenderedAttributePatch.apply(storage, to: liveStorage)
+        }
+        PerformanceTrace.measure("editor.overlay_layout") { textView.layoutRenderedImages() }
         textView.renderedAnchorSourceRanges = anchoredRanges + mathAnchors
         textView.renderedCollapsedSourceRanges = collapsedRanges
         renderedAppliedAppearance = sourceAppearance

@@ -229,7 +229,7 @@ final class EditorEngineClientTests: XCTestCase {
         )
         XCTAssertEqual(
             previewHeadingFont.pointSize,
-            previewBaseFontSize * MarkdownRenderMetrics.heading(level: 1).scale,
+            try XCTUnwrap(PreviewTheme.standard.styles.length("font-size", on: "h1", relativeTo: previewBaseFontSize)),
             accuracy: 0.001
         )
         XCTAssertFalse(previewSession.textView.isEditable)
@@ -249,6 +249,14 @@ final class EditorEngineClientTests: XCTestCase {
 
     @MainActor
     func testUnifiedDerivationReturnsOneRevisionBoundResult() async throws {
+        var metadataEvaluations = 0
+        func metadata() -> Int { metadataEvaluations += 1; return 42 }
+        let previousParent = PerformanceTrace.parentID
+        let measured = PerformanceTrace.measure("test.trace", bytes: metadata()) { 7 }
+        XCTAssertEqual(measured, 7)
+        XCTAssertEqual(metadataEvaluations, PerformanceTrace.enabled ? 1 : 0,
+                       "Disabled tracing must not even compute source metadata")
+        XCTAssertEqual(PerformanceTrace.parentID, previousParent)
         let queue = EditorEngineClient()
         let source = "# 标题\n\n正文 **加粗** [链接](note.md)"
 
@@ -269,6 +277,31 @@ final class EditorEngineClientTests: XCTestCase {
         XCTAssertTrue(derived.renderBlocks.contains { $0.visibleText.contains("正文 加粗 链接") })
         XCTAssertTrue(derived.nativeRenderPlan.contentStyles.contains { $0.kind == .strong })
         XCTAssertEqual(derived.nativeRenderPlan.links.map(\.target), ["note.md"])
+
+        // Deterministic representative load: mixed Unicode plus many source
+        // ranges. Timings are diagnostic; correctness never depends on CPU speed.
+        if ProcessInfo.processInfo.environment["INFLOW_LOAD_BENCHMARK"] == "1" {
+            for count in [100, 400] {
+                let fixture = (0..<count).map { "## 标题 \($0) 😀\n\n正文 **加粗** e\u{301} 与 [链接](note.md)，用于加载验证。\n\n" }.joined()
+                let start = ContinuousClock.now
+                let result = await EditorEngineClient().derive(text: fixture,
+                    selectionUTF16: NSRange(location: 0, length: 0), configuration: .default)
+                XCTAssertEqual(result?.analysis.headings.count, count)
+                XCTAssertEqual(result?.sourceSnapshot, fixture)
+                print("LOAD_BENCHMARK paragraphs=\(count) bytes=\(fixture.utf8.count) elapsed=\(start.duration(to: .now))")
+                let session = MarkdownSourceEditorSession()
+                session.scrollView.frame = NSRect(x: 0, y: 0, width: 1000, height: 700)
+                session.scrollView.layoutSubtreeIfNeeded()
+                session.textView.string = fixture
+                _ = await session.deriveContent(for: fixture, configuration: .default)
+                let paintStart = ContinuousClock.now
+                session.setPresentation(.rendered, source: fixture, onLinkClick: nil)
+                session.textView.layoutSubtreeIfNeeded()
+                session.textView.layoutRenderedImages()
+                XCTAssertEqual(session.textView.string, fixture)
+                print("LOAD_PRESENTATION paragraphs=\(count) elapsed=\(paintStart.duration(to: .now))")
+            }
+        }
     }
 
     @MainActor

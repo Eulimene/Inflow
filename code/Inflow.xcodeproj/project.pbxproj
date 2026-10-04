@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D91000000000000000000001 /* PerformanceTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = D92000000000000000000001 /* PerformanceTrace.swift */; };
 		069C71A03B2B4AD78C77A8C2 /* InflowTestBootstrap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61EBDC3D8E9549FEB7B18BD3 /* InflowTestBootstrap.swift */; };
 		A10000000000000000000001 /* InflowApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* InflowApp.swift */; };
 		A10000000000000000000002 /* MarkdownEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* MarkdownEditorView.swift */; };
@@ -115,6 +116,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		D92000000000000000000001 /* PerformanceTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Diagnostics/PerformanceTrace.swift; sourceTree = "<group>"; };
 		61EBDC3D8E9549FEB7B18BD3 /* InflowTestBootstrap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InflowTestBootstrap.swift; sourceTree = "<group>"; };
 		A20000000000000000000001 /* InflowApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InflowApp.swift; sourceTree = "<group>"; };
 		A20000000000000000000002 /* MarkdownEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Editor/MarkdownEditorView.swift; sourceTree = "<group>"; };
@@ -286,6 +288,7 @@
 				A2000000000000000000003F /* RecentDocuments.swift */,
 				A20000000000000000000045 /* FolderBrowser.swift */,
 				B20000000000000000000001 /* LocalFailureLog.swift */,
+				D92000000000000000000001 /* PerformanceTrace.swift */,
 				A2000000000000000000002E /* DocumentRelocationView.swift */,
 				A20000000000000000000030 /* AppPreferences.swift */,
 				A20000000000000000000031 /* InflowSettingsView.swift */,
@@ -567,6 +570,7 @@
 				A1000000000000000000003A /* RecentDocuments.swift in Sources */,
 				A10000000000000000000040 /* FolderBrowser.swift in Sources */,
 				B10000000000000000000001 /* LocalFailureLog.swift in Sources */,
+				D91000000000000000000001 /* PerformanceTrace.swift in Sources */,
 				B1000000000000000000000B /* MarkdownInlineProjection.swift in Sources */,
 				B1000000000000000000000C /* MarkdownEditingTransactions.swift in Sources */,
 				B1000000000000000000000D /* MarkdownClipboard.swift in Sources */,
