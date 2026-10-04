@@ -2128,7 +2128,7 @@ private struct DocumentTitlebarContent: View {
                                             .lineLimit(1)
                                             .padding(.horizontal, 8)
                                     }
-                                    Button { window.performClose(nil) } label: { Image(systemName: "xmark") }
+                                    Button { tabs.closeWindowTab(window) } label: { Image(systemName: "xmark") }
                                         .help("关闭标签页并保留本地草稿；按 ⌘S 才会写入原文件")
                                         .accessibilityLabel("关闭标签页：" + window.title)
                                 }

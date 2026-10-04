@@ -190,8 +190,15 @@ final class DocumentWindowTabs: ObservableObject {
     @Published private(set) var selected: ObjectIdentifier?
     private var titleObservers: [ObjectIdentifier: NSKeyValueObservation] = [:]
     private var observers: [NSObjectProtocol] = []
+    private var closingTabIDs: Set<ObjectIdentifier> = []
+    private let createEmptyDocument: () throws -> NSDocument
+    private let reportCloseFailure: (Error) -> Void
 
-    init() {
+    init(createEmptyDocument: @escaping () throws -> NSDocument = {
+        try NSDocumentController.shared.openUntitledDocumentAndDisplay(false)
+    }, reportCloseFailure: @escaping (Error) -> Void = { NSApp.presentError($0) }) {
+        self.createEmptyDocument = createEmptyDocument
+        self.reportCloseFailure = reportCloseFailure
         observers = [NSWindow.didBecomeKeyNotification, NSWindow.willCloseNotification].map { name in
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] event in
                 guard let window = event.object as? NSWindow else { return }
@@ -287,13 +294,61 @@ final class DocumentWindowTabs: ObservableObject {
                 + pending.map { .pending($0.id) })
     }
 
+    /// A tab close keeps an editing surface available. Native window closing
+    /// never enters this path, so the red traffic light and Quit stay native.
+    func closeWindowTab(_ window: NSWindow) {
+        let id = ObjectIdentifier(window)
+        guard items.contains(where: { $0.id == id }), !closingTabIDs.contains(id),
+              !TemporaryDocumentDrafts.isTerminating else { return }
+        guard !items.contains(where: { $0.id != id && $0.window != nil }) else {
+            window.performClose(nil)
+            return
+        }
+        closingTabIDs.insert(id)
+        let document = window.windowController?.document as? NSDocument
+        let wasEdited = document?.isDocumentEdited == true
+        DocumentCloseAuthorization.request(for: document) { [weak self, weak window, weak document] approved in
+            guard let self else { return }
+            defer { self.closingTabIDs.remove(id) }
+            guard approved, let window, self.items.contains(where: { $0.id == id }),
+                  !TemporaryDocumentDrafts.isTerminating else { return }
+            // Another document may have opened while close review was visible.
+            if !self.items.contains(where: { $0.id != id && $0.window != nil }) {
+                var replacement: NSDocument?
+                do {
+                    let blank = try self.createEmptyDocument()
+                    replacement = blank
+                    if blank.windowControllers.isEmpty { blank.makeWindowControllers() }
+                    guard let nextWindow = blank.windowControllers.first?.window else {
+                        throw CocoaError(.fileReadUnknown)
+                    }
+                    nextWindow.setFrame(window.frame, display: false)
+                    self.register(nextWindow)
+                    self.select(Item(id: ObjectIdentifier(nextWindow), window: nextWindow))
+                } catch {
+                    replacement?.close()
+                    // The manual-close host clears its change count after a
+                    // protected close is approved. A failed replacement aborts
+                    // that close, so restore the unsaved indicator as well.
+                    if wasEdited, document?.isDocumentEdited == false { document?.updateChangeCount(.changeDone) }
+                    window.makeKeyAndOrderFront(nil)
+                    self.reportCloseFailure(error)
+                    return
+                }
+            }
+            // Authorization has already checkpointed/reviewed the old document;
+            // only commit after its replacement window is ready.
+            if let document { document.close() } else { window.close() }
+        }
+    }
+
     func close(_ scope: ProjectDocumentTabSelection.CloseScope, relativeTo anchor: TabID) {
         let targets = targets(scope, relativeTo: anchor)
         // Persist each unloaded draft's dismissal before removing its tab.
         // Native windows continue through AppKit's document close lifecycle.
         for case let .pending(id) in targets { closePending(id) }
         for case let .window(id) in targets {
-            items.first(where: { $0.id == id })?.window?.performClose(nil)
+            if let window = items.first(where: { $0.id == id })?.window { closeWindowTab(window) }
         }
     }
 }

@@ -72,6 +72,130 @@ final class RecentDocumentsTests: XCTestCase {
 
     }
 
+    func testLastTabCloseKeepsBlankWindowVisibleAtSameFrameWithoutOpeningRecovery() {
+        let (original, window) = makeTabDocument()
+        let (blank, nextWindow) = makeTabDocument()
+        var creates = 0
+        let tabs = DocumentWindowTabs(createEmptyDocument: {
+            creates += 1
+            XCTAssertTrue(window.isVisible, "Keep original visible until replacement exists")
+            return blank
+        }, reportCloseFailure: { XCTFail("Unexpected close failure: \($0)") })
+        defer { original.close(); blank.close() }
+        tabs.register(window)
+        window.makeKeyAndOrderFront(nil)
+        let frame = window.frame
+        let draft = RecoveryDraftPlaceholder(id: UUID(), targetID: UUID(), locations: [], title: "Pending")
+        tabs.addPending(draft) { XCTFail("Closing last editor must not load a recovery draft") }
+        tabs.close(.current, relativeTo: .window(ObjectIdentifier(window)))
+        XCTAssertEqual(creates, 1)
+        XCTAssertFalse(window.isVisible)
+        XCTAssertTrue(nextWindow.isVisible)
+        XCTAssertFalse(nextWindow.isMiniaturized)
+        XCTAssertEqual(nextWindow.frame, frame)
+        XCTAssertEqual(tabs.selected, ObjectIdentifier(nextWindow))
+        XCTAssertEqual(tabs.items.map(\.id), [ObjectIdentifier(nextWindow)])
+        XCTAssertEqual(tabs.pending.map(\.id), [draft.id])
+        XCTAssertNil(blank.fileURL)
+        XCTAssertFalse(blank.isDocumentEdited)
+    }
+
+    func testLastTabCloseCancellationKeepsDocumentAndDoubleClickReviewsOnce() throws {
+        let original = DeferredCloseAuthorizationDocument()
+        let (_, window) = makeTabDocument(document: original)
+        let (blank, nextWindow) = makeTabDocument()
+        var creates = 0
+        let tabs = DocumentWindowTabs(createEmptyDocument: { creates += 1; return blank })
+        defer { original.close(); blank.close() }
+        tabs.register(window)
+        window.makeKeyAndOrderFront(nil)
+        original.updateChangeCount(.changeDone)
+        tabs.closeWindowTab(window)
+        tabs.closeWindowTab(window)
+        XCTAssertEqual(original.requestCount, 1)
+        XCTAssertEqual(creates, 0)
+        try original.finishRequest(shouldClose: false)
+        XCTAssertTrue(window.isVisible)
+        XCTAssertTrue(original.isDocumentEdited)
+        XCTAssertEqual(tabs.items.count, 1)
+        tabs.closeWindowTab(window)
+        try original.finishRequest(shouldClose: true)
+        XCTAssertEqual(creates, 1)
+        XCTAssertTrue(nextWindow.isVisible)
+        XCTAssertFalse(window.isVisible)
+    }
+
+    func testLastTabCloseFailureRetainsOriginalWindowAndAllowsRetry() throws {
+        let original = DeferredCloseAuthorizationDocument()
+        let (_, window) = makeTabDocument(document: original)
+        let (blank, nextWindow) = makeTabDocument()
+        var shouldFail = true
+        var failures = 0
+        let tabs = DocumentWindowTabs(createEmptyDocument: {
+            if shouldFail { throw CocoaError(.fileWriteUnknown) }
+            return blank
+        }, reportCloseFailure: { _ in failures += 1 })
+        defer { original.close(); blank.close() }
+        tabs.register(window)
+        window.makeKeyAndOrderFront(nil)
+        original.updateChangeCount(.changeDone)
+        tabs.closeWindowTab(window)
+        original.updateChangeCount(.changeCleared) // Production host approves a protected draft close.
+        try original.finishRequest(shouldClose: true)
+        XCTAssertTrue(original.isDocumentEdited, "Failed replacement must restore the unsaved indicator")
+        XCTAssertEqual(failures, 1)
+        XCTAssertTrue(window.isVisible)
+        XCTAssertEqual(tabs.items.map(\.id), [ObjectIdentifier(window)])
+        shouldFail = false
+        tabs.closeWindowTab(window)
+        original.updateChangeCount(.changeCleared)
+        try original.finishRequest(shouldClose: true)
+        XCTAssertTrue(nextWindow.isVisible)
+        XCTAssertFalse(window.isVisible)
+    }
+
+    func testNativeLastWindowCloseDoesNotCreateReplacementTab() {
+        let (document, window) = makeTabDocument()
+        var creates = 0
+        let tabs = DocumentWindowTabs(createEmptyDocument: { creates += 1; return NSDocument() })
+        defer { document.close() }
+        tabs.register(window)
+        window.makeKeyAndOrderFront(nil)
+        window.performClose(nil)
+        XCTAssertEqual(creates, 0)
+        XCTAssertFalse(window.isVisible)
+        XCTAssertTrue(tabs.items.isEmpty)
+    }
+
+    func testLastTabReviewUsesNewlyOpenedNeighborInsteadOfCreatingBlank() throws {
+        let original = DeferredCloseAuthorizationDocument()
+        let (_, window) = makeTabDocument(document: original)
+        let (neighbor, neighborWindow) = makeTabDocument()
+        var creates = 0
+        let tabs = DocumentWindowTabs(createEmptyDocument: { creates += 1; return NSDocument() })
+        defer { original.close(); neighbor.close() }
+        tabs.register(window)
+        window.makeKeyAndOrderFront(nil)
+        original.updateChangeCount(.changeDone)
+        tabs.closeWindowTab(window)
+        tabs.register(neighborWindow)
+        tabs.select(DocumentWindowTabs.Item(id: ObjectIdentifier(neighborWindow), window: neighborWindow))
+        try original.finishRequest(shouldClose: true)
+        XCTAssertEqual(creates, 0)
+        XCTAssertTrue(neighborWindow.isVisible)
+        XCTAssertFalse(window.isVisible)
+        XCTAssertEqual(tabs.items.map(\.id), [ObjectIdentifier(neighborWindow)])
+    }
+
+    private func makeTabDocument(document: NSDocument? = nil) -> (NSDocument, NSWindow) {
+        let document = document ?? NSDocument()
+        let window = NSWindow(contentRect: NSRect(x: 120, y: 100, width: 800, height: 500),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        document.addWindowController(NSWindowController(window: window))
+        return (document, window)
+    }
+
     func testRecoveryTabPlaceholdersOpenOnlyWhenSelected() {
         let tabs = DocumentWindowTabs()
         var opens = 0
