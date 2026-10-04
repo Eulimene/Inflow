@@ -190,7 +190,8 @@ final class DocumentWindowTabs: ObservableObject {
     @Published private(set) var selected: ObjectIdentifier?
     private var titleObservers: [ObjectIdentifier: NSKeyValueObservation] = [:]
     private var observers: [NSObjectProtocol] = []
-    private var closingTabIDs: Set<ObjectIdentifier> = []
+    @Published private var closingTabIDs: Set<ObjectIdentifier> = []
+    @Published private(set) var isClosingAllTabs = false
     private let createEmptyDocument: () throws -> NSDocument
     private let reportCloseFailure: (Error) -> Void
 
@@ -278,8 +279,25 @@ final class DocumentWindowTabs: ObservableObject {
         if pending.contains(where: { $0.id == id }) { pending.removeAll { $0.id == id } }
     }
 
+    /// Count both mounted editors and lightweight recovery tabs. Reserve tabs
+    /// already awaiting close approval so concurrent closes cannot remove all.
+    func canCloseTab(_ tab: TabID) -> Bool {
+        let windows = items.filter { $0.window != nil }
+        let exists: Bool
+        let reserved: Int
+        switch tab {
+        case .window(let id):
+            exists = windows.contains { $0.id == id }
+            reserved = windows.filter { $0.id != id && closingTabIDs.contains($0.id) }.count
+        case .pending(let id):
+            exists = pending.contains { $0.id == id }
+            reserved = windows.filter { closingTabIDs.contains($0.id) }.count
+        }
+        return !isClosingAllTabs && exists && windows.count + pending.count - reserved > 1
+    }
+
     func closePending(_ id: UUID) {
-        guard let draft = pending.first(where: { $0.id == id }), draft.dismiss() else { return }
+        guard canCloseTab(.pending(id)), let draft = pending.first(where: { $0.id == id }), draft.dismiss() else { return }
         removePending(id)
     }
 
@@ -294,16 +312,89 @@ final class DocumentWindowTabs: ObservableObject {
                 + pending.map { .pending($0.id) })
     }
 
-    /// A tab close keeps an editing surface available. Native window closing
+    /// An explicit reset is different from clicking the disabled last-tab X.
+    /// Review every document before changing the workspace, then mount one blank
+    /// editor before closing the old windows. Hidden project documents join the
+    /// same review rather than being abandoned when their host closes.
+    func closeAllTabs(additionalDocuments: [NSDocument] = [], didClose: @escaping () -> Void = {}) {
+        guard !isClosingAllTabs, closingTabIDs.isEmpty, !DocumentCloseAuthorization.hasPendingRequests,
+              !TemporaryDocumentDrafts.isTerminating else { return }
+        let windows = items.compactMap(\.window)
+        let drafts = pending
+        let unmanagedWindows = windows.filter { $0.windowController?.document == nil }
+        let initialWindowIDs = Set(windows.map(ObjectIdentifier.init))
+        let initialDraftIDs = Set(drafts.map(\.id))
+        var seen: Set<ObjectIdentifier> = []
+        let documents = (windows.compactMap { $0.windowController?.document as? NSDocument } + additionalDocuments)
+            .filter { seen.insert(ObjectIdentifier($0)).inserted }
+        let edited = documents.filter(\.isDocumentEdited)
+        var approvedEditedStates: [ObjectIdentifier: Bool] = [:]
+        let anchor = windows.first { ObjectIdentifier($0) == selected } ?? windows.first
+        isClosingAllTabs = true
+        func cancel() {
+            for document in edited where !document.isDocumentEdited { document.updateChangeCount(.changeDone) }
+            self.isClosingAllTabs = false
+        }
+        func review(_ index: Int) {
+            guard !TemporaryDocumentDrafts.isTerminating else { cancel(); return }
+            if index < documents.count {
+                DocumentCloseAuthorization.request(for: documents[index]) { approved in
+                    if approved {
+                        approvedEditedStates[ObjectIdentifier(documents[index])] = documents[index].isDocumentEdited
+                        review(index + 1)
+                    } else { cancel() }
+                }
+                return
+            }
+            // Do not close a document/tab that appeared during a native review.
+            guard Set(self.items.compactMap(\.window).map(ObjectIdentifier.init)) == initialWindowIDs,
+                  Set(self.pending.map(\.id)) == initialDraftIDs,
+                  !documents.contains(where: { approvedEditedStates[ObjectIdentifier($0)] == false && $0.isDocumentEdited })
+            else { cancel(); return }
+            do {
+                let blank = try self.makeEmptyTab(frame: anchor?.frame)
+                for draft in drafts {
+                    guard draft.dismiss() else {
+                        blank.close()
+                        anchor?.makeKeyAndOrderFront(nil)
+                        cancel()
+                        return
+                    }
+                    self.removePending(draft.id)
+                }
+                didClose()
+                for document in documents { document.close() }
+                for window in unmanagedWindows { window.close() }
+                self.isClosingAllTabs = false
+            } catch {
+                anchor?.makeKeyAndOrderFront(nil)
+                cancel()
+                self.reportCloseFailure(error)
+            }
+        }
+        review(0)
+    }
+
+    @discardableResult
+    private func makeEmptyTab(frame: NSRect?) throws -> NSDocument {
+        let blank = try createEmptyDocument()
+        if blank.windowControllers.isEmpty { blank.makeWindowControllers() }
+        guard let window = blank.windowControllers.first?.window else {
+            blank.close()
+            throw CocoaError(.fileReadUnknown)
+        }
+        if let frame { window.setFrame(frame, display: false) }
+        register(window)
+        select(Item(id: ObjectIdentifier(window), window: window))
+        return blank
+    }
+
+    /// Keep the last tab in place. Native window closing
     /// never enters this path, so the red traffic light and Quit stay native.
     func closeWindowTab(_ window: NSWindow) {
         let id = ObjectIdentifier(window)
-        guard items.contains(where: { $0.id == id }), !closingTabIDs.contains(id),
+        guard canCloseTab(.window(id)), !closingTabIDs.contains(id),
               !TemporaryDocumentDrafts.isTerminating else { return }
-        guard !items.contains(where: { $0.id != id && $0.window != nil }) else {
-            window.performClose(nil)
-            return
-        }
         closingTabIDs.insert(id)
         let document = window.windowController?.document as? NSDocument
         let wasEdited = document?.isDocumentEdited == true
@@ -312,21 +403,15 @@ final class DocumentWindowTabs: ObservableObject {
             defer { self.closingTabIDs.remove(id) }
             guard approved, let window, self.items.contains(where: { $0.id == id }),
                   !TemporaryDocumentDrafts.isTerminating else { return }
+            guard self.canCloseTab(.window(id)) else {
+                if wasEdited, document?.isDocumentEdited == false { document?.updateChangeCount(.changeDone) }
+                return
+            }
             // Another document may have opened while close review was visible.
             if !self.items.contains(where: { $0.id != id && $0.window != nil }) {
-                var replacement: NSDocument?
                 do {
-                    let blank = try self.createEmptyDocument()
-                    replacement = blank
-                    if blank.windowControllers.isEmpty { blank.makeWindowControllers() }
-                    guard let nextWindow = blank.windowControllers.first?.window else {
-                        throw CocoaError(.fileReadUnknown)
-                    }
-                    nextWindow.setFrame(window.frame, display: false)
-                    self.register(nextWindow)
-                    self.select(Item(id: ObjectIdentifier(nextWindow), window: nextWindow))
+                    try self.makeEmptyTab(frame: window.frame)
                 } catch {
-                    replacement?.close()
                     // The manual-close host clears its change count after a
                     // protected close is approved. A failed replacement aborts
                     // that close, so restore the unsaved indicator as well.

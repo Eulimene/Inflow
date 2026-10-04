@@ -678,6 +678,7 @@ final class LightweightProjectCoordinator: ObservableObject {
     private let createProjectDocument: () throws -> NSDocument
     private let detailedDocumentOpener: ProjectDocumentDetailedOpener?
     private let willActivateDocumentSurface: (NSDocument) -> Void
+    private let documentTabs: DocumentWindowTabs
     private let documentSwitchGate = ProjectDocumentSwitchGate()
     private let reservationRegistry = ProjectDocumentReservationRegistry()
     private var projectPreparationTasks: [UUID: Task<Void, Never>] = [:]
@@ -724,12 +725,14 @@ final class LightweightProjectCoordinator: ObservableObject {
         browser: FolderBrowserController,
         createProjectDocument: @escaping () throws -> NSDocument,
         detailedDocumentOpener: ProjectDocumentDetailedOpener? = nil,
-        willActivateDocumentSurface: @escaping (NSDocument) -> Void = { _ in }
+        willActivateDocumentSurface: @escaping (NSDocument) -> Void = { _ in },
+        documentTabs: DocumentWindowTabs = .shared
     ) {
         self.browser = browser
         self.createProjectDocument = createProjectDocument
         self.detailedDocumentOpener = detailedDocumentOpener
         self.willActivateDocumentSurface = willActivateDocumentSurface
+        self.documentTabs = documentTabs
     }
 
     var openedProjectURLs: [URL] {
@@ -1372,7 +1375,37 @@ final class LightweightProjectCoordinator: ObservableObject {
         focusEditorWhenMounted(surface)
     }
 
+    func closeAllTabs() {
+        guard !documentSwitchGate.isBusy else { return }
+        let surfaces = documentSurfaces
+        documentTabs.closeAllTabs(additionalDocuments: surfaces.map(\.nativeDocument)) { [weak self] in
+            guard let self else { return }
+            for surface in surfaces {
+                self.browser.dissociateProjectWindow(surface.nativeDocument)
+                NativeDocumentLoadedFileRegistry.clear(surface.nativeDocument)
+            }
+            self.browser.dissociateProjectWindow(self.projectHostDocument)
+            self.workspaceSurfaceState = WorkspaceSurfaceState()
+            self.projectDocument = nil
+            self.projectHostDocument = nil
+            self.pendingSurfaceActivation = nil
+        }
+    }
+
+    private var hasOtherDocumentTabs: Bool {
+        let tabs = documentTabs
+        return !tabs.pending.isEmpty || tabs.items.contains { item in
+            guard let window = item.window else { return false }
+            return (window.windowController?.document as? NSDocument) !== projectHostDocument
+        }
+    }
+
+    func canCloseDocumentSurface(_ identifier: ObjectIdentifier) -> Bool {
+        (documentSurfaces.count > 1 || hasOtherDocumentTabs) && documentSurfaces.contains { $0.id == identifier }
+    }
+
     func closeDocumentSurface(_ identifier: ObjectIdentifier) {
+        guard canCloseDocumentSurface(identifier) else { return }
         closeDocumentSurfaces(
             ProjectDocumentTabSelection.targetIDs(
                 for: .current,
@@ -1402,7 +1435,7 @@ final class LightweightProjectCoordinator: ObservableObject {
 
         let requestedIDs = Set(identifiers)
         let surfaces = documentSurfaces.filter { requestedIDs.contains($0.id) }
-        guard !surfaces.isEmpty else { return }
+        guard !surfaces.isEmpty, surfaces.count < documentSurfaces.count || hasOtherDocumentTabs else { return }
 
         authorizeClosing(surfaces, at: 0) { [weak self] authorized in
             guard authorized else { return }
@@ -1434,7 +1467,7 @@ final class LightweightProjectCoordinator: ObservableObject {
         guard !documentSwitchGate.isBusy else { return }
         let currentSurfaceIDs = Set(documentSurfaces.map(\.id))
         let surfaces = authorizedSurfaces.filter { currentSurfaceIDs.contains($0.id) }
-        guard !surfaces.isEmpty else { return }
+        guard !surfaces.isEmpty, surfaces.count < documentSurfaces.count || hasOtherDocumentTabs else { return }
 
         let closingIDs = Set(surfaces.map(\.id))
         let orderedIDs = documentSurfaces.map(\.id)
@@ -1963,6 +1996,7 @@ private struct ProjectWorkspaceScene: View {
 @MainActor
 private struct ProjectDocumentTabBar: View {
     @ObservedObject var projectCoordinator: LightweightProjectCoordinator
+    @ObservedObject private var tabs = DocumentWindowTabs.shared
     var body: some View {
         HStack(spacing: 4) {
             Button { projectCoordinator.navigateReadingHistory(backward: true) } label: { Image(systemName: "chevron.left") }
@@ -2000,11 +2034,13 @@ private struct ProjectDocumentTabBar: View {
                     } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(projectCoordinator.canCloseDocumentSurface(surface.id) ? Color.primary : Color.secondary.opacity(0.4))
                             .frame(width: 18, height: 18)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .padding(.trailing, 5)
+                    .disabled(!projectCoordinator.canCloseDocumentSurface(surface.id))
                     .help("关闭 \(surface.title) 并保留本地草稿；按 ⌘S 才会写入原文件")
                     .accessibilityLabel("关闭文档：\(surface.title)")
                 }
@@ -2027,12 +2063,16 @@ private struct ProjectDocumentTabBar: View {
                         FinderRevealAction.perform(for: surface.fileURL)
                     }
                     Divider()
+                    Button("关闭所有标签") { projectCoordinator.closeAllTabs() }
+                        .disabled(tabs.isClosingAllTabs)
+                    Divider()
                     Button("关闭当前文件") {
                         projectCoordinator.closeDocumentSurfaces(
                             in: .current,
                             relativeTo: surface.id
                         )
                     }
+                    .disabled(!projectCoordinator.canCloseDocumentSurface(surface.id))
                     Divider()
                     Button("关闭其他文件") {
                         projectCoordinator.closeDocumentSurfaces(
@@ -2129,6 +2169,7 @@ private struct DocumentTitlebarContent: View {
                                             .padding(.horizontal, 8)
                                     }
                                     Button { tabs.closeWindowTab(window) } label: { Image(systemName: "xmark") }
+                                        .disabled(!tabs.canCloseTab(.window(item.id)))
                                         .help("关闭标签页并保留本地草稿；按 ⌘S 才会写入原文件")
                                         .accessibilityLabel("关闭标签页：" + window.title)
                                 }
@@ -2142,7 +2183,7 @@ private struct DocumentTitlebarContent: View {
                                         Button(FinderRevealAction.title) { FinderRevealAction.perform(for: url) }
                                         Divider()
                                     }
-                                    DocumentTabCloseMenu(tabs: tabs, anchor: .window(item.id))
+                                    DocumentTabCloseMenu(tabs: tabs, projectCoordinator: projectCoordinator, anchor: .window(item.id))
                                 }
                             }
                         }
@@ -2155,11 +2196,12 @@ private struct DocumentTitlebarContent: View {
                             .help("恢复草稿：" + draft.title)
                             .disabled(draft.isOpening)
                             Button { tabs.closePending(draft.id) } label: { Image(systemName: "xmark") }
+                                .disabled(!tabs.canCloseTab(.pending(draft.id)))
                                 .help("关闭恢复标签页，下次启动不再恢复")
                                 .accessibilityLabel("关闭恢复标签页：" + draft.title)
                         }
                         .buttonStyle(.borderless)
-                        .contextMenu { DocumentTabCloseMenu(tabs: tabs, anchor: .pending(draft.id)) }
+                        .contextMenu { DocumentTabCloseMenu(tabs: tabs, projectCoordinator: projectCoordinator, anchor: .pending(draft.id)) }
                     }
                 }
             }
@@ -2183,10 +2225,15 @@ private struct DocumentTitlebarContent: View {
 
 private struct DocumentTabCloseMenu: View {
     @ObservedObject var tabs: DocumentWindowTabs
+    let projectCoordinator: LightweightProjectCoordinator
     let anchor: DocumentWindowTabs.TabID
 
     var body: some View {
+        Button("关闭所有标签") { projectCoordinator.closeAllTabs() }
+            .disabled(tabs.isClosingAllTabs)
+        Divider()
         Button("关闭当前标签") { tabs.close(.current, relativeTo: anchor) }
+            .disabled(!tabs.canCloseTab(anchor))
         Divider()
         Button("关闭其他标签") { tabs.close(.others, relativeTo: anchor) }
             .disabled(tabs.targets(.others, relativeTo: anchor).isEmpty)

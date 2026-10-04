@@ -72,6 +72,162 @@ final class RecentDocumentsTests: XCTestCase {
 
     }
 
+    func testCloseAllTabsLeavesExactlyOneBlankForSingleAndMultipleDocuments() {
+        for count in [1, 3] {
+            let originals = (0..<count).map { _ in makeTabDocument() }
+            let (blank, blankWindow) = makeTabDocument()
+            var creations = 0
+            let tabs = DocumentWindowTabs(createEmptyDocument: { creations += 1; return blank })
+            defer { originals.forEach { $0.0.close() }; blank.close() }
+            originals.forEach { tabs.register($0.1) }
+            originals[0].1.makeKeyAndOrderFront(nil)
+            let frame = originals[0].1.frame
+            let draft = RecoveryDraftPlaceholder(id: UUID(), targetID: UUID(), locations: [], title: "Pending")
+            var dismissals = 0
+            tabs.addPending(draft, dismiss: { dismissals += 1; return true }) { XCTFail("Do not load closed recovery tabs") }
+            tabs.closeAllTabs()
+            XCTAssertEqual(creations, 1)
+            XCTAssertEqual(dismissals, 1)
+            XCTAssertTrue(tabs.pending.isEmpty)
+            XCTAssertEqual(tabs.items.map(\.id), [ObjectIdentifier(blankWindow)])
+            XCTAssertTrue(blankWindow.isVisible)
+            XCTAssertEqual(blankWindow.frame, frame)
+            XCTAssertNil(blank.fileURL)
+            XCTAssertFalse(blank.isDocumentEdited)
+            XCTAssertFalse(tabs.canCloseTab(.window(ObjectIdentifier(blankWindow))))
+            XCTAssertFalse(tabs.isClosingAllTabs)
+        }
+    }
+
+    func testCloseAllTabsCancellationPreservesWindowsAndPendingDrafts() throws {
+        let original = DeferredCloseAuthorizationDocument()
+        let (_, window) = makeTabDocument(document: original)
+        let tabs = DocumentWindowTabs(createEmptyDocument: { XCTFail("Cancelled close must not create a blank"); return NSDocument() })
+        defer { original.close() }
+        tabs.register(window)
+        window.makeKeyAndOrderFront(nil)
+        original.updateChangeCount(.changeDone)
+        let draft = RecoveryDraftPlaceholder(id: UUID(), targetID: UUID(), locations: [], title: "Pending")
+        tabs.addPending(draft, dismiss: { XCTFail("Cancelled close must not discard drafts"); return true }) {}
+        tabs.closeAllTabs()
+        tabs.closeAllTabs()
+        XCTAssertTrue(tabs.isClosingAllTabs)
+        XCTAssertEqual(original.requestCount, 1)
+        try original.finishRequest(shouldClose: false)
+        XCTAssertTrue(window.isVisible)
+        XCTAssertTrue(original.isDocumentEdited)
+        XCTAssertEqual(tabs.pending.map(\.id), [draft.id])
+        XCTAssertFalse(tabs.isClosingAllTabs)
+    }
+
+    func testCloseAllTabsCreationFailureRestoresEditedStateAndRetainsDrafts() throws {
+        let original = DeferredCloseAuthorizationDocument()
+        let (_, window) = makeTabDocument(document: original)
+        var errors = 0
+        let tabs = DocumentWindowTabs(createEmptyDocument: { throw CocoaError(.fileWriteUnknown) },
+            reportCloseFailure: { _ in errors += 1 })
+        defer { original.close() }
+        tabs.register(window)
+        window.makeKeyAndOrderFront(nil)
+        original.updateChangeCount(.changeDone)
+        let draft = RecoveryDraftPlaceholder(id: UUID(), targetID: UUID(), locations: [], title: "Pending")
+        tabs.addPending(draft, dismiss: { XCTFail("Failed replacement must not discard drafts"); return true }) {}
+        tabs.closeAllTabs()
+        original.updateChangeCount(.changeCleared)
+        try original.finishRequest(shouldClose: true)
+        XCTAssertEqual(errors, 1)
+        XCTAssertTrue(window.isVisible)
+        XCTAssertTrue(original.isDocumentEdited)
+        XCTAssertEqual(tabs.items.map(\.id), [ObjectIdentifier(window)])
+        XCTAssertEqual(tabs.pending.map(\.id), [draft.id])
+        XCTAssertFalse(tabs.isClosingAllTabs)
+    }
+
+    func testCloseAllTabsReviewsHiddenProjectDocumentsBeforeCommitting() throws {
+        let (original, window) = makeTabDocument()
+        let hidden = DeferredCloseAuthorizationDocument()
+        hidden.updateChangeCount(.changeDone)
+        let (blank, blankWindow) = makeTabDocument()
+        let tabs = DocumentWindowTabs(createEmptyDocument: { blank })
+        var committed = false
+        defer { original.close(); hidden.close(); blank.close() }
+        tabs.register(window)
+        window.makeKeyAndOrderFront(nil)
+        tabs.closeAllTabs(additionalDocuments: [hidden]) { committed = true }
+        XCTAssertEqual(hidden.requestCount, 1)
+        XCTAssertFalse(committed)
+        XCTAssertTrue(window.isVisible)
+        original.updateChangeCount(.changeDone) // New edit while a different document is under review.
+        try hidden.finishRequest(shouldClose: true)
+        XCTAssertFalse(committed, "Do not discard an edit made after that document was approved")
+        XCTAssertTrue(window.isVisible)
+        XCTAssertFalse(tabs.isClosingAllTabs)
+        original.updateChangeCount(.changeCleared)
+        tabs.closeAllTabs(additionalDocuments: [hidden]) { committed = true }
+        try hidden.finishRequest(shouldClose: true)
+        XCTAssertTrue(committed)
+        XCTAssertEqual(tabs.items.map(\.id), [ObjectIdentifier(blankWindow)])
+        XCTAssertTrue(blankWindow.isVisible)
+    }
+
+    func testLastRemainingTabIsDisabledAndTwoTabsEnableClosing() async {
+        let (original, window) = makeTabDocument()
+        let (neighbor, nextWindow) = makeTabDocument()
+        let tabs = DocumentWindowTabs(createEmptyDocument: { XCTFail("Last tab must stay in place"); return NSDocument() })
+        defer { original.close(); neighbor.close() }
+        tabs.register(window)
+        window.makeKeyAndOrderFront(nil)
+        let first = DocumentWindowTabs.TabID.window(ObjectIdentifier(window))
+        XCTAssertFalse(tabs.canCloseTab(first))
+        tabs.closeWindowTab(window)
+        tabs.close(.current, relativeTo: first)
+        XCTAssertTrue(window.isVisible)
+        XCTAssertEqual(tabs.items.count, 1)
+        tabs.register(nextWindow)
+        XCTAssertTrue(tabs.canCloseTab(first))
+        XCTAssertTrue(tabs.canCloseTab(.window(ObjectIdentifier(nextWindow))))
+        tabs.closeWindowTab(window)
+        await drainMainActorTurns()
+        XCTAssertTrue(nextWindow.isVisible)
+        XCTAssertFalse(tabs.canCloseTab(.window(ObjectIdentifier(nextWindow))))
+        var dismissed = 0
+        let draft = RecoveryDraftPlaceholder(id: UUID(), targetID: UUID(), locations: [], title: "Pending")
+        tabs.addPending(draft, dismiss: { dismissed += 1; return true }) {}
+        XCTAssertTrue(tabs.canCloseTab(.pending(draft.id)))
+        tabs.closePending(draft.id)
+        XCTAssertEqual(dismissed, 1)
+        XCTAssertFalse(tabs.canCloseTab(.window(ObjectIdentifier(nextWindow))))
+        let unloaded = DocumentWindowTabs()
+        unloaded.addPending(draft, dismiss: { dismissed += 1; return true }) {}
+        XCTAssertFalse(unloaded.canCloseTab(.pending(draft.id)))
+        unloaded.closePending(draft.id)
+        XCTAssertEqual(dismissed, 1)
+        XCTAssertEqual(unloaded.pending.count, 1)
+    }
+
+    func testConcurrentCloseReviewCannotRemoveLastRemainingTab() throws {
+        let original = DeferredCloseAuthorizationDocument()
+        let (_, window) = makeTabDocument(document: original)
+        let (neighbor, nextWindow) = makeTabDocument()
+        let tabs = DocumentWindowTabs(createEmptyDocument: { XCTFail("Do not replace the last tab"); return NSDocument() })
+        defer { original.close(); neighbor.close() }
+        tabs.register(window)
+        tabs.register(nextWindow)
+        window.makeKeyAndOrderFront(nil)
+        original.updateChangeCount(.changeDone)
+        tabs.closeWindowTab(window)
+        XCTAssertFalse(tabs.canCloseTab(.window(ObjectIdentifier(nextWindow))))
+        tabs.closeWindowTab(nextWindow)
+        XCTAssertEqual(tabs.items.count, 2, "Reserve a tab while another close is awaiting approval")
+        neighbor.close() // Native window closing can still remove the neighbor.
+        original.updateChangeCount(.changeCleared)
+        try original.finishRequest(shouldClose: true)
+        XCTAssertTrue(original.isDocumentEdited)
+        XCTAssertTrue(window.isVisible)
+        XCTAssertEqual(tabs.items.map(\.id), [ObjectIdentifier(window)])
+        XCTAssertFalse(tabs.canCloseTab(.window(ObjectIdentifier(window))))
+    }
+
     func testLastTabCloseKeepsBlankWindowVisibleAtSameFrameWithoutOpeningRecovery() {
         let (original, window) = makeTabDocument()
         let (blank, nextWindow) = makeTabDocument()
@@ -108,6 +264,7 @@ final class RecentDocumentsTests: XCTestCase {
         let tabs = DocumentWindowTabs(createEmptyDocument: { creates += 1; return blank })
         defer { original.close(); blank.close() }
         tabs.register(window)
+        tabs.addPending(RecoveryDraftPlaceholder(id: UUID(), targetID: UUID(), locations: [], title: "Pending")) {}
         window.makeKeyAndOrderFront(nil)
         original.updateChangeCount(.changeDone)
         tabs.closeWindowTab(window)
@@ -137,6 +294,7 @@ final class RecentDocumentsTests: XCTestCase {
         }, reportCloseFailure: { _ in failures += 1 })
         defer { original.close(); blank.close() }
         tabs.register(window)
+        tabs.addPending(RecoveryDraftPlaceholder(id: UUID(), targetID: UUID(), locations: [], title: "Pending")) {}
         window.makeKeyAndOrderFront(nil)
         original.updateChangeCount(.changeDone)
         tabs.closeWindowTab(window)
@@ -175,6 +333,7 @@ final class RecentDocumentsTests: XCTestCase {
         let tabs = DocumentWindowTabs(createEmptyDocument: { creates += 1; return NSDocument() })
         defer { original.close(); neighbor.close() }
         tabs.register(window)
+        tabs.addPending(RecoveryDraftPlaceholder(id: UUID(), targetID: UUID(), locations: [], title: "Pending")) {}
         window.makeKeyAndOrderFront(nil)
         original.updateChangeCount(.changeDone)
         tabs.closeWindowTab(window)

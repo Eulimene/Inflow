@@ -369,13 +369,15 @@ final class FolderBrowserTests: XCTestCase {
             pendingOpen = completion
         }
         var onSurfaceActivation: ((NSDocument) -> Void)?
+        let documentTabs = DocumentWindowTabs()
         let coordinator = LightweightProjectCoordinator(
             browser: browser,
             createProjectDocument: { ClosingTrackingDocument() },
             detailedDocumentOpener: detailedOpener,
             willActivateDocumentSurface: { document in
                 onSurfaceActivation?(document)
-            }
+            },
+            documentTabs: documentTabs
         )
         let recentDocuments = RecentDocumentsController(
             persistence: EmptyRecentDocumentPersistence(),
@@ -772,11 +774,21 @@ final class FolderBrowserTests: XCTestCase {
         XCTAssertTrue(coordinator.activeDocumentSurface?.nativeDocument === secondDocument)
         XCTAssertFalse(browser.isAssociatedProjectDocument(replacementDocument))
 
+        XCTAssertFalse(coordinator.canCloseDocumentSurface(ObjectIdentifier(secondDocument)))
+        coordinator.closeDocumentSurface(ObjectIdentifier(secondDocument))
+        coordinator.closeDocumentSurfaces(in: .current, relativeTo: ObjectIdentifier(secondDocument))
+        XCTAssertEqual(secondDocument.closeCount, 0)
+        XCTAssertEqual(coordinator.documentSurfaces.count, 1)
+        XCTAssertEqual(coordinator.activeSurfaceID, ObjectIdentifier(secondDocument))
+        XCTAssertTrue(coordinator.isProjectHostDocument(oldDocument))
+        // A recovery tab in the same titlebar also counts as another tab.
+        let pending = RecoveryDraftPlaceholder(id: UUID(), targetID: UUID(), locations: [], title: "Pending")
+        documentTabs.addPending(pending) {}
+        defer { documentTabs.removePending(pending.id) }
+        XCTAssertTrue(coordinator.canCloseDocumentSurface(ObjectIdentifier(secondDocument)))
         coordinator.closeDocumentSurface(ObjectIdentifier(secondDocument))
         XCTAssertEqual(secondDocument.closeCount, 1)
         XCTAssertTrue(coordinator.documentSurfaces.isEmpty)
-        XCTAssertNil(coordinator.activeSurfaceID)
-        XCTAssertTrue(coordinator.isProjectHostDocument(oldDocument))
     }
 
     func testCoordinatorReleaseCleanupClosesOnlyUnownedNewHiddenDocuments() async throws {
