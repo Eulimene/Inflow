@@ -76,6 +76,18 @@ final class InflowHelpTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(items.first).isEnabled)
         XCTAssertTrue(try XCTUnwrap(items.first).keyEquivalent.isEmpty)
 
+        // A hand-built replacement Window submenu used to discard this scene
+        // command. Check the real application menu after deferred launch work,
+        // rather than inserting fake Center/Fill items into a test-only menu.
+        let windowMenu = try XCTUnwrap(NSApp.windowsMenu)
+        XCTAssertEqual(mainMenu.items.filter { $0.submenu === windowMenu }.count, 1)
+        XCTAssertEqual(windowMenu.items.filter { $0.title == "Inflow 帮助" }.count, 1)
+        for action in [#selector(NSWindow.performMiniaturize(_:)),
+                       #selector(NSWindow.performZoom(_:)),
+                       #selector(NSApplication.arrangeInFront(_:))] {
+            XCTAssertEqual(windowMenu.items.filter { $0.action == action }.count, 1)
+        }
+
         let appMenu = try XCTUnwrap(mainMenu.items.first?.submenu)
         XCTAssertEqual(
             appMenu.items.filter { $0.title == "检查更新…" && $0.submenu == nil }.count,

@@ -2232,7 +2232,6 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     // Views and individual Commands observe only the services they display.
     lazy var recoveryCoordinator = DocumentRecoveryRuntime.makeCoordinator()
     lazy var preferences = AppPreferences()
-    private let nativeWindowMenu = NativeWindowMenuController()
     let failureLog = LocalFailureLogController.shared
     let recentDocuments: RecentDocumentsController
     let folderBrowser: FolderBrowserController
@@ -2319,7 +2318,6 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
         hasInstalledLaunchIntegrations = true
         NSWindow.allowsAutomaticWindowTabbing = false
         installLaunchIntegrations(recentDocuments)
-        nativeWindowMenu.install()
         scheduleInitialDocumentIfNeeded()
     }
 
@@ -2480,6 +2478,10 @@ struct InflowApp: App {
     @NSApplicationDelegateAdaptor(InflowApplicationDelegate.self)
     private var applicationDelegate
 
+    // The scene owns the standard Window menu and AppKit supplies its dynamic
+    // sizing/tiling commands. Do not replace its NSMenu or observe menu changes
+    // to reinstall one: that competes with SwiftUI command reconciliation and
+    // drops system items (including Window scenes) during later updates.
     var body: some Scene {
         DocumentGroup(newDocument: MarkdownDocument()) { configuration in
             ManualSaveDocumentGate {

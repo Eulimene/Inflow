@@ -288,7 +288,7 @@ final class RecentDocumentsTests: XCTestCase {
         XCTAssertTrue(minimize.isEnabled)
     }
 
-    func testDocumentWindowRefreshDoesNotInvalidateNativeWindowCommands() async throws {
+    func testDocumentWindowRefreshDoesNotInvalidateNativeWindowCommands() {
         let window = WindowConfigurationProbe(
             contentRect: NSRect(x: 100, y: 100, width: 640, height: 480),
             styleMask: [.titled, .closable, .resizable],
@@ -323,46 +323,6 @@ final class RecentDocumentsTests: XCTestCase {
         other.contentView = controls
         XCTAssertTrue(other.styleMask.contains(.miniaturizable))
         XCTAssertTrue(other.collectionBehavior.contains(.fullScreenPrimary))
-
-        let previousMainMenu = NSApp.mainMenu
-        let previousWindowMenu = NSApp.windowsMenu
-        let controller = NativeWindowMenuController()
-        defer {
-            controller.stop()
-            NSApp.mainMenu = previousMainMenu
-            NSApp.windowsMenu = previousWindowMenu
-        }
-        let mainMenu = NSMenu(title: "Test application")
-        let windowItem = mainMenu.addItem(withTitle: "窗口", action: nil, keyEquivalent: "")
-        let generated = NSMenu(title: "窗口")
-        generated.addItem(withTitle: "缩放", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
-        windowItem.submenu = generated
-        NSApp.mainMenu = mainMenu
-        NSApp.windowsMenu = generated
-        controller.install()
-        controller.attachToMainMenu()
-        let native = try XCTUnwrap(controller.menu)
-        XCTAssertFalse(native === generated)
-        XCTAssertIdentical(windowItem.submenu, native)
-        XCTAssertIdentical(NSApp.windowsMenu, native)
-        // Stand-ins for items AppKit inserts after menu tracking starts.
-        let fill = native.addItem(withTitle: "填充", action: nil, keyEquivalent: "")
-        let center = native.addItem(withTitle: "居中", action: nil, keyEquivalent: "")
-        generated.removeAllItems()
-        XCTAssertTrue(native.items.contains { $0 === fill })
-        XCTAssertTrue(native.items.contains { $0 === center })
-
-        // A scene change may also replace the generated submenu itself.
-        let replacement = NSMenu(title: "窗口")
-        windowItem.submenu = replacement
-        NSApp.windowsMenu = replacement
-        for _ in 0..<50 where windowItem.submenu !== native || NSApp.windowsMenu !== native {
-            try await Task.sleep(for: .milliseconds(2))
-        }
-        XCTAssertIdentical(windowItem.submenu, native)
-        XCTAssertIdentical(NSApp.windowsMenu, native)
-        XCTAssertTrue(native.items.contains { $0 === fill })
-        XCTAssertTrue(native.items.contains { $0 === center })
     }
 
     func testProjectDocumentsReuseTheSelectedFolderSecurityScope() {
