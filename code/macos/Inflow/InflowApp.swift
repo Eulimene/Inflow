@@ -2230,7 +2230,11 @@ final class InflowApplicationDelegate: NSObject, NSApplicationDelegate {
     // Background checkpoints must not invalidate the scene/Commands tree while
     // AppKit is tracking its dynamically inserted Window arrangement items.
     // Views and individual Commands observe only the services they display.
-    lazy var recoveryCoordinator = DocumentRecoveryRuntime.makeCoordinator()
+    lazy var recoveryCoordinator: DocumentRecoveryCoordinator = {
+        let coordinator = DocumentRecoveryRuntime.makeCoordinator()
+        coordinator.bindDraftCachePreferences(preferences)
+        return coordinator
+    }()
     lazy var preferences = AppPreferences()
     let failureLog = LocalFailureLogController.shared
     let recentDocuments: RecentDocumentsController
@@ -2517,7 +2521,7 @@ struct InflowApp: App {
         }
 
         Settings {
-            InflowSettingsView(preferences: applicationDelegate.preferences)
+            InflowSettingsView(preferences: applicationDelegate.preferences, recoveryCoordinator: applicationDelegate.recoveryCoordinator)
         }
 
         Window("Inflow 帮助", id: InflowHelpWindow.identifier) {

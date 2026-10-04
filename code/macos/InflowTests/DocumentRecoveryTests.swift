@@ -5,6 +5,117 @@ import XCTest
 @testable import Inflow
 
 final class DocumentRecoveryTests: XCTestCase {
+    func testDraftCacheTrimsOldestAcrossStoresAndCountsDuplicateOnce() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let temporary = TemporaryDocumentDraftStore(rootURL: fixture.root.appendingPathComponent("SessionDrafts"))
+        let store = PlaintextDocumentRecoveryStore(rootURL: fixture.recoveryRoot)
+        let old = recoveryRecord(text: "old", updatedAt: Date())
+        let recent = recoveryRecord(text: "recent", updatedAt: Date())
+        let newest = recoveryRecord(text: "newest", updatedAt: Date())
+        for (index, record) in [old, recent, newest].enumerated() {
+            try temporary.write(record)
+            try await store.importTemporaryDraft(record)
+            for root in [temporary.rootURL, fixture.recoveryRoot] {
+                try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: Double(index))],
+                    ofItemAtPath: root.appendingPathComponent(record.id.uuidString + ".json").path)
+            }
+        }
+        let unrelated = temporary.rootURL.appendingPathComponent("notes.json")
+        try Data("not a recovery file".utf8).write(to: unrelated)
+        let result = try await store.trimCachedDrafts(limit: 2, temporaryRoot: temporary.rootURL, protectedIDs: [])
+        XCTAssertEqual(result.removedIDs, [old.id])
+        XCTAssertFalse(result.hadFailure)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelated.path))
+        for root in [temporary.rootURL, fixture.recoveryRoot] {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(old.id.uuidString + ".json").path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(recent.id.uuidString + ".json").path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(newest.id.uuidString + ".json").path))
+        }
+        // A previously captured candidate cannot resurrect an evicted draft.
+        do { _ = try await store.claimStartup(old, targetRecordID: UUID()); XCTFail("Evicted source must stay discarded") }
+        catch { XCTAssertEqual(error as? DocumentRecoveryError, .staleClaim) }
+    }
+
+    func testDraftCacheExcludesLiveEditorsAndTheirTransferSources() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let witness = DocumentProcessWitness(directory: fixture.root.appendingPathComponent("Owners"), instance: UUID(), isAlive: { _ in true })
+        let live = recoveryRecord(text: "live editor", updatedAt: Date())
+        let source = recoveryRecord(text: "transfer source", updatedAt: Date())
+        let targetID = UUID()
+        try witness.publish(DocumentProcessClaim(instance: witness.instance, pid: 1, activatedAt: 1, recoveryIDs: [live.id, targetID]))
+        let store = PlaintextDocumentRecoveryStore(rootURL: fixture.recoveryRoot, witness: witness)
+        for record in [live, source] { try await store.importTemporaryDraft(record) }
+        _ = try await store.claim(source, targetRecordID: targetID)
+        let protected = recoveryRecord(text: "local active editor", updatedAt: Date())
+        let newest = recoveryRecord(text: "latest history", updatedAt: Date())
+        for record in [protected, newest] { try await store.importTemporaryDraft(record) }
+        try FileManager.default.setAttributes([.modificationDate: Date.distantFuture],
+            ofItemAtPath: fixture.recoveryRoot.appendingPathComponent(newest.id.uuidString + ".json").path)
+        let result = try await store.trimCachedDrafts(limit: 1, temporaryRoot: nil, protectedIDs: [protected.id])
+        XCTAssertTrue(result.removedIDs.isEmpty)
+        for id in [live.id, source.id, protected.id, newest.id] {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.recoveryRoot.appendingPathComponent(id.uuidString + ".json").path))
+        }
+    }
+
+    @MainActor
+    func testDraftCacheSettingUpdatesPendingTabsAndRetainsActiveCheckpoint() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let temporary = TemporaryDocumentDraftStore(rootURL: fixture.root.appendingPathComponent("SessionDrafts"))
+        let old = recoveryRecord(text: "older history", updatedAt: Date())
+        let new = recoveryRecord(text: "newer history", updatedAt: Date())
+        for (index, record) in [old, new].enumerated() {
+            try temporary.write(record)
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: Double(index))],
+                ofItemAtPath: temporary.rootURL.appendingPathComponent(record.id.uuidString + ".json").path)
+        }
+        let coordinator = DocumentRecoveryCoordinator(rootURL: fixture.recoveryRoot, temporaryDraftStore: temporary, usesPlaintext: true)
+        let ready = expectation(description: "Both historical tabs ready")
+        ready.expectedFulfillmentCount = 2
+        await coordinator.beginStartupRestoration { _ in ready.fulfill() }
+        await fulfillment(of: [ready], timeout: 2)
+        let active = recoveryRecord(text: "active text", updatedAt: Date())
+        coordinator.update(active)
+        await coordinator.flush(active.id)
+        defer { coordinator.close(active.id) }
+        let oldPlaceholder = try XCTUnwrap(coordinator.startupDrafts.first { $0.id == old.id })
+        let suite = "Inflow.DraftLimitTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = AppPreferences(defaults: defaults)
+        coordinator.bindDraftCachePreferences(preferences)
+        preferences.draftCacheLimit = 1
+        await coordinator.waitForDraftCacheMaintenance()
+        XCTAssertNil(coordinator.draftCacheErrorMessage)
+        XCTAssertEqual(coordinator.startupPhases[old.id], .unnecessary)
+        XCTAssertEqual(coordinator.startupPhases[new.id], .ready)
+        let stale = await coordinator.materializeStartupDraft(oldPlaceholder)
+        XCTAssertNil(stale)
+        XCTAssertEqual(try temporary.records().map(\.id), [new.id])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.recoveryRoot.appendingPathComponent(active.id.uuidString + ".json").path))
+        let restored = await coordinator.materializeStartupDraft(try XCTUnwrap(coordinator.startupDrafts.first { $0.id == new.id }))
+        XCTAssertEqual(restored?.text, new.text)
+    }
+
+    @MainActor
+    func testDraftCacheMaintenanceReportsStorageFailureAndCanRetry() async throws {
+        let fixture = try RecoveryFixture()
+        defer { fixture.remove() }
+        let root = fixture.root.appendingPathComponent("not-a-directory")
+        try Data("blocked".utf8).write(to: root)
+        let coordinator = DocumentRecoveryCoordinator(rootURL: root, usesPlaintext: true)
+        coordinator.setDraftCacheLimit(5)
+        await coordinator.waitForDraftCacheMaintenance()
+        XCTAssertNotNil(coordinator.draftCacheErrorMessage)
+        try FileManager.default.removeItem(at: root)
+        coordinator.scheduleDraftCacheMaintenance()
+        await coordinator.waitForDraftCacheMaintenance()
+        XCTAssertNil(coordinator.draftCacheErrorMessage)
+    }
+
     @MainActor
     func testPlaintextCheckpointArrivesPromptlyAndUnchangedSnapshotsDoNotRewrite() async throws {
         let fixture = try RecoveryFixture()

@@ -1,3 +1,4 @@
+import Combine
 import CryptoKit
 import Darwin
 import Foundation
@@ -1908,6 +1909,52 @@ actor PlaintextDocumentRecoveryStore: DocumentRecoveryStoring {
         try DurableRecoveryWriter.removeIfPresent(at: url(id))
     }
 
+    /// Runs on the storage actor, serialized with writes and claims. Inventory
+    /// reads metadata only; bodies are read only for overflow transfer checks.
+    func trimCachedDrafts(limit: Int, temporaryRoot: URL?, protectedIDs: Set<UUID>) throws -> DraftCacheTrimResult {
+        try requireWriter()
+        return try PerformanceTrace.measure("recovery.cacheRetention") {
+            let manager = FileManager.default
+            let roots = Set([rootURL, temporaryRoot].compactMap { $0 })
+            var dates: [UUID: Date] = [:]
+            var locations: [UUID: [URL]] = [:]
+            let liveIDs = Set(witness?.liveClaims().flatMap(\.recoveryIDs) ?? []).union(protectedIDs)
+            for root in roots where manager.fileExists(atPath: root.path) {
+                for file in try manager.contentsOfDirectory(at: root,
+                    includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey, .isSymbolicLinkKey]) {
+                    guard file.pathExtension == "json", let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent),
+                          !liveIDs.contains(id) else { continue }
+                    let values = try file.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey, .isSymbolicLinkKey])
+                    guard values.isRegularFile == true, values.isSymbolicLink != true else { continue }
+                    locations[id, default: []].append(file)
+                    dates[id] = max(dates[id] ?? .distantPast, values.contentModificationDate ?? .distantPast)
+                }
+            }
+            let ordered = locations.keys.sorted {
+                let left = dates[$0] ?? .distantPast, right = dates[$1] ?? .distantPast
+                return left == right ? $0.uuidString < $1.uuidString : left > right
+            }
+            var result = DraftCacheTrimResult()
+            for id in ordered.dropFirst(DraftCachePolicy.clamp(limit)) {
+                try Task.checkCancellation()
+                guard canWrite else { result.hadFailure = true; break }
+                if witness?.isLiveRecovery(id) == true { continue }
+                // A live editor may still depend on its transfer source until
+                // its first durable checkpoint. Never evict that source.
+                if let record = try? read(id), let target = record.transferTargetRecordID,
+                   liveIDs.contains(target) || witness?.isLiveRecovery(target) == true { continue }
+                do {
+                    try discardSession(id)
+                    result.removedIDs.insert(id)
+                    for file in locations[id] ?? [] where manager.fileExists(atPath: file.path) {
+                        try manager.removeItem(at: file)
+                    }
+                } catch { result.hadFailure = true }
+            }
+            return result
+        }
+    }
+
     func removeAll() throws {
         try requireWriter()
         guard FileManager.default.fileExists(atPath: rootURL.path) else { return }
@@ -1955,6 +2002,14 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     private var startupLoader: RecoveryStartupLoader?
     private var startupStarted = false
     private var startupGeneration: UInt64 = 0
+    @Published private(set) var draftCacheErrorMessage: String?
+    private var draftCacheLimit: Int?
+    private var draftCachePreferenceSubscription: AnyCancellable?
+    private var draftCacheTask: Task<Void, Never>?
+    private var draftCacheRevision: UInt64 = 0
+    // Bridge the interval between returning a restored document and the editor
+    // registering its first active session; cleanup must preserve that source.
+    private var claimedDraftSources: Set<UUID> = []
     private var startupPrefetch: Task<Void, Never>?
     private var startupReadTasks: [UUID: Task<PreparedStartupDraft?, Error>] = [:]
     private var preparedStartupDrafts: [UUID: PreparedStartupDraft] = [:]
@@ -2034,6 +2089,55 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         }
     }
 
+    func bindDraftCachePreferences(_ preferences: AppPreferences) {
+        draftCachePreferenceSubscription = preferences.$draftCacheLimit.removeDuplicates().sink { [weak self] limit in
+            self?.setDraftCacheLimit(limit)
+        }
+    }
+
+    func setDraftCacheLimit(_ limit: Int) {
+        draftCacheLimit = DraftCachePolicy.clamp(limit)
+        scheduleDraftCacheMaintenance()
+    }
+
+    /// Coalesce requests from settings and document closes. No scan is performed
+    /// on keystrokes or periodic checkpoints, and UI never waits synchronously.
+    func scheduleDraftCacheMaintenance() {
+        guard draftCacheLimit != nil, store is PlaintextDocumentRecoveryStore else { return }
+        draftCacheRevision &+= 1
+        guard draftCacheTask == nil else { return }
+        draftCacheTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            repeat {
+                let revision = self.draftCacheRevision
+                await self.enforceDraftCacheLimit()
+                if revision == self.draftCacheRevision { break }
+            } while !Task.isCancelled
+            self.draftCacheTask = nil
+        }
+    }
+
+    func waitForDraftCacheMaintenance() async {
+        await draftCacheTask?.value
+    }
+
+    private func enforceDraftCacheLimit() async {
+        guard let limit = draftCacheLimit, let store = store as? PlaintextDocumentRecoveryStore, store.canWrite else { return }
+        var protected = Set(activeSessions.keys).union(startupMaterializationTasks.keys).union(materializedStartupDrafts.keys).union(claimedDraftSources)
+        for session in activeSessions.values {
+            if let source = session.latestRecord.transferSourceRecordID { protected.insert(source) }
+            if let target = session.latestRecord.transferTargetRecordID { protected.insert(target) }
+        }
+        do {
+            let result = try await store.trimCachedDrafts(limit: limit, temporaryRoot: temporaryDraftStore?.rootURL, protectedIDs: protected)
+            for id in result.removedIDs { dismissStartupDraft(id) }
+            recoveredRecords.removeAll { result.removedIDs.contains($0.id) }
+            draftCacheErrorMessage = result.hadFailure ? "部分历史草稿暂时无法清理，缓存可能超过上限。可稍后重试。" : nil
+        } catch {
+            draftCacheErrorMessage = "暂时无法清理草稿缓存，已有草稿仍保留。可稍后重试。"
+        }
+    }
+
     /// Discover privately, then publish only verified drafts (or retryable errors).
     /// File reads stay off the main thread and never allocate an editor.
     func beginStartupRestoration(anchor: NSWindow? = nil, open: @escaping @MainActor (MarkdownDocument) -> Void) async {
@@ -2048,6 +2152,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
         }
         hasClaimedAutomaticRestoration = true
         do {
+            await waitForDraftCacheMaintenance()
             let placeholders = try await Task.detached(priority: .utility) { try loader.discover() }.value
             guard !Task.isCancelled, startupGeneration == generation else { return }
             startupDrafts = placeholders
@@ -2143,6 +2248,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     }
 
     func materializeStartupDraft(_ placeholder: RecoveryDraftPlaceholder) async -> MarkdownDocument? {
+        await waitForDraftCacheMaintenance()
         if let restored = materializedStartupDrafts[placeholder.id] { return restored }
         if let task = startupMaterializationTasks[placeholder.id] { return await task.value }
         let task = Task { await self.claimPreparedStartupDraft(placeholder) }
@@ -2175,6 +2281,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     }
 
     func completeStartupDraft(_ id: UUID) {
+        claimedDraftSources.insert(id)
         startupPhases[id] = .opened
         preparedStartupDrafts.removeValue(forKey: id)
         materializedStartupDrafts.removeValue(forKey: id)
@@ -2271,6 +2378,7 @@ final class DocumentRecoveryCoordinator: ObservableObject {
             generation: generation,
             task: task
         )
+        if let source = record.transferSourceRecordID { claimedDraftSources.remove(source) }
     }
 
     func flush(_ id: UUID) async {
@@ -2323,9 +2431,11 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     }
 
     func close(_ id: UUID, discardingDraft: Bool = false) {
+        defer { scheduleDraftCacheMaintenance() }
         protectionState.records.removeValue(forKey: id)
         processOwnership?.unregisterRecovery(id)
         guard let closedSession = activeSessions.removeValue(forKey: id) else { return }
+        if let source = closedSession.latestRecord.transferSourceRecordID { claimedDraftSources.remove(source) }
         closedSession.task.cancel()
         clearedContentIdentities.removeValue(forKey: id)
         guard let store else {
@@ -2410,12 +2520,17 @@ final class DocumentRecoveryCoordinator: ObservableObject {
     func claimForRestoration(_ record: DocumentRecoveryRecord) async throws
         -> MarkdownDocument
     {
+        await waitForDraftCacheMaintenance()
         guard let store else { throw DocumentRecoveryError.unavailableStorage }
+        claimedDraftSources.insert(record.id)
+        var succeeded = false
+        defer { if !succeeded { claimedDraftSources.remove(record.id) } }
         let targetID = UUID()
         let transfer = try await store.claim(record, targetRecordID: targetID)
         let document = try await Task.detached(priority: .userInitiated) { try record.restoredDocument(transfer: transfer) }.value
         if startupPhases[record.id] != nil { dismissStartupDraft(record.id) }
         recoveredRecords.removeAll { $0.id == record.id }
+        succeeded = true
         return document
     }
 

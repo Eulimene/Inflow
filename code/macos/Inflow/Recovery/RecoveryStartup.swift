@@ -1,6 +1,29 @@
 import AppKit
 import SwiftUI
 
+/// Historical drafts share one budget across the durable and temporary stores.
+/// Live editing checkpoints are never part of that budget.
+enum DraftCachePolicy {
+    static let preferenceKey = "preferences.documents.draftCacheLimit"
+    static let defaultLimit = 50
+    static let allowedLimits = 1...1_000
+
+    static func clamp(_ value: Int) -> Int {
+        min(allowedLimits.upperBound, max(allowedLimits.lowerBound, value))
+    }
+
+    static func load(from defaults: UserDefaults) -> Int {
+        guard let number = defaults.object(forKey: preferenceKey) as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(), number.doubleValue.isFinite else { return defaultLimit }
+        return Int(min(Double(allowedLimits.upperBound), max(Double(allowedLimits.lowerBound), number.doubleValue)))
+    }
+}
+
+struct DraftCacheTrimResult: Sendable {
+    var removedIDs: Set<UUID> = []
+    var hadFailure = false
+}
+
 struct RecoveryDraftPlaceholder: Identifiable, Equatable, Sendable {
     let id: UUID
     let targetID: UUID

@@ -6,6 +6,48 @@ import XCTest
 
 @MainActor
 final class AppPreferencesTests: XCTestCase {
+    func testDraftCacheLimitPersistsClampsAndResetsOnlyWithGeneralSettings() {
+        withDefaults { defaults in
+            let preferences = AppPreferences(defaults: defaults)
+            XCTAssertEqual(preferences.draftCacheLimit, 50)
+            preferences.draftCacheLimit = 17
+            XCTAssertEqual(AppPreferences(defaults: defaults).draftCacheLimit, 17)
+            preferences.reset(.writing)
+            XCTAssertEqual(preferences.draftCacheLimit, 17)
+            preferences.draftCacheLimit = 0
+            XCTAssertEqual(preferences.draftCacheLimit, 1)
+            XCTAssertEqual(defaults.integer(forKey: DraftCachePolicy.preferenceKey), 1)
+            preferences.draftCacheLimit = Int.max
+            XCTAssertEqual(preferences.draftCacheLimit, 1_000)
+            preferences.reset(.general)
+            XCTAssertEqual(preferences.draftCacheLimit, 50)
+            preferences.draftCacheLimit = 12
+            preferences.resetAll()
+            XCTAssertEqual(AppPreferences(defaults: defaults).draftCacheLimit, 50)
+            XCTAssertTrue(AppPreferences.Registry.knownKeys.contains(DraftCachePolicy.preferenceKey))
+        }
+    }
+
+    func testDraftCacheLimitRejectsMalformedStoredValuesAndRetriesPersistence() {
+        withDefaults { defaults in
+            for value: Any in ["invalid", true, Double.infinity] {
+                defaults.set(value, forKey: DraftCachePolicy.preferenceKey)
+                XCTAssertEqual(DraftCachePolicy.load(from: defaults), 50)
+            }
+            defaults.set(Int.max, forKey: DraftCachePolicy.preferenceKey)
+            XCTAssertEqual(DraftCachePolicy.load(from: defaults), 1_000)
+            let persistence = ControlledPreferencePersistence(defaults: defaults)
+            let preferences = AppPreferences(defaults: defaults, persistence: persistence)
+            persistence.shouldFail = true
+            preferences.draftCacheLimit = 8
+            XCTAssertNotNil(preferences.persistenceFailure)
+            persistence.shouldFail = false
+            preferences.retryPersistence()
+            XCTAssertNil(preferences.persistenceFailure)
+            XCTAssertEqual(defaults.integer(forKey: DraftCachePolicy.preferenceKey), 8)
+        }
+    }
+
     func testCSSSelectionColorsReachNativeTextAndTableCells() async throws {
         let theme = PreviewTheme(id: "selection", label: "Selection", css: """
         :root { --selection-color: #abcdee; --md-selection-overlay: #11223355; }
@@ -739,7 +781,7 @@ h2 { font-weight: 500; }
         XCTAssertEqual(SettingsResetPrompt.title, "恢复默认设置？")
         XCTAssertEqual(
             SettingsResetPrompt.message,
-            "只会重置所选偏好，不会删除任何用户内容或记录。"
+            "重置所选偏好。恢复草稿缓存上限时，超出的历史草稿会按时间清理；原始文档不受影响。"
         )
         XCTAssertEqual(SettingsResetPrompt.confirmTitle, "恢复默认")
         XCTAssertEqual(SettingsResetPrompt.cancelTitle, "取消")

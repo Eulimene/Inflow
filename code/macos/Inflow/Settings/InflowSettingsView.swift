@@ -36,7 +36,7 @@ enum SettingsResetScope: Equatable, Sendable {
 
 enum SettingsResetPrompt {
     static let title = "恢复默认设置？"
-    static let message = "只会重置所选偏好，不会删除任何用户内容或记录。"
+    static let message = "重置所选偏好。恢复草稿缓存上限时，超出的历史草稿会按时间清理；原始文档不受影响。"
     static let confirmTitle = "恢复默认"
     static let cancelTitle = "取消"
 }
@@ -51,6 +51,7 @@ enum SettingsPersistencePrompt {
 
 struct InflowSettingsView: View {
     @ObservedObject var preferences: AppPreferences
+    @ObservedObject var recoveryCoordinator: DocumentRecoveryCoordinator
     @State private var selectedSection = InflowSettingsSection.general
     @State private var pendingResetScope: SettingsResetScope?
 
@@ -74,7 +75,7 @@ struct InflowSettingsView: View {
 
         }
         .padding(20)
-        .frame(width: 680, height: selectedSection == .general ? 320 : 560)
+        .frame(width: 680, height: selectedSection == .general ? 430 : 560)
         .toolbar {
             ToolbarItem(placement: .automatic) {
                 Menu {
@@ -152,6 +153,18 @@ struct InflowSettingsView: View {
                 Text("按 ⌘S 将内容写入 Markdown 文件。“草稿已保护”仅表示恢复副本可用。关闭文档不会自动保存到原文件；可点击编辑器底部的保存状态查看详情。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            }
+            Section("草稿缓存") {
+                Stepper(value: $preferences.draftCacheLimit, in: DraftCachePolicy.allowedLimits) {
+                    LabeledContent("最多缓存历史草稿", value: "\(preferences.draftCacheLimit) 份")
+                }
+                Text("超过上限时自动清理最旧的历史草稿，保留最近的草稿。正在编辑的文档不计入上限，继续保留恢复保护。调整上限后立即在后台清理，已清理的草稿无法恢复；原始文件不受影响。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let message = recoveryCoordinator.draftCacheErrorMessage {
+                    Text(message).font(.caption).foregroundStyle(.secondary)
+                    Button("重试清理") { recoveryCoordinator.scheduleDraftCacheMaintenance() }
+                }
             }
         }
         .formStyle(.grouped)

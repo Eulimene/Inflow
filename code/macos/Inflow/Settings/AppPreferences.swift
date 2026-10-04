@@ -498,6 +498,7 @@ final class AppPreferences: ObservableObject {
             Key.autosaveEnabled,
             Key.autosaveDelay,
             Key.existingImagePlacement,
+            DraftCachePolicy.preferenceKey,
             RecentDocumentPolicy.capacityKey,
             RecentDocumentPolicy.openBehaviorKey,
         ]
@@ -772,6 +773,14 @@ final class AppPreferences: ObservableObject {
         }
     }
 
+    @Published var draftCacheLimit: Int {
+        didSet {
+            let clamped = DraftCachePolicy.clamp(draftCacheLimit)
+            if draftCacheLimit != clamped { draftCacheLimit = clamped }
+            persist(clamped, forKey: DraftCachePolicy.preferenceKey)
+        }
+    }
+
     @Published var recentDocumentCapacity: Int {
         didSet {
             let clamped = RecentDocumentPolicy.clampCapacity(recentDocumentCapacity)
@@ -921,6 +930,7 @@ final class AppPreferences: ObservableObject {
             defaultValue: LaunchFixed.workspaceOutlineWidth,
             range: Limits.outlineWidth
         )
+        draftCacheLimit = DraftCachePolicy.load(from: defaults)
         recentDocumentCapacity = LaunchFixed.recentDocumentCapacity
         markdownOpenBehavior = LaunchFixed.markdownOpenBehavior
         autosaveEnabled = LaunchFixed.autosaveEnabled
@@ -1044,6 +1054,7 @@ final class AppPreferences: ObservableObject {
     func reset(_ group: AppPreferenceGroup) {
         switch group {
         case .general:
+            draftCacheLimit = DraftCachePolicy.defaultLimit
             autosaveEnabled = LaunchFixed.autosaveEnabled
             autosaveDelay = .oneSecond
             recentDocumentCapacity = RecentDocumentPolicy.defaultCapacity
@@ -1131,6 +1142,7 @@ final class AppPreferences: ObservableObject {
                 Key.workspaceSplitFraction: workspaceSplitFraction,
                 Key.workspaceProjectSidebarWidth: workspaceProjectSidebarWidth,
                 Key.workspaceOutlineWidth: workspaceOutlineWidth,
+                DraftCachePolicy.preferenceKey: draftCacheLimit,
                 RecentDocumentPolicy.capacityKey: recentDocumentCapacity,
                 RecentDocumentPolicy.openBehaviorKey: markdownOpenBehavior.rawValue,
                 Key.autosaveEnabled: autosaveEnabled,
