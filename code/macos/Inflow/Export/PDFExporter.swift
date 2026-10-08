@@ -99,10 +99,11 @@ enum PDFExporter {
             try Task.checkCancellation()
         } while pageOriginY < view.bounds.height
 
-        let palette = MarkdownRenderPalette.resolved(for: view.effectiveAppearance)
+        // Reuse the rendered document's resolved surface, including custom CSS.
+        // Resolving a default palette here would paint different-colored margins.
         let composed = try composeA4Document(
             from: sourcePages,
-            pageBackgroundColor: palette.canvasColor.cgColor
+            pageBackgroundColor: view.backgroundColor.cgColor
         )
         let output = try addingSafeLinkAnnotations(
             to: composed,

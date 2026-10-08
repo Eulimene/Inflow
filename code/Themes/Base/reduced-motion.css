@@ -1,1 +1,6 @@
-*, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+/* Generated from ThemeSources; do not edit. Run `cargo xtask themes`. */
+*, *::before, *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}

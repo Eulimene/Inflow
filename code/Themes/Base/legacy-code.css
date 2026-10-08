@@ -1,1 +1,5 @@
-body { font-family: ui-monospace, Menlo, monospace; line-height: 1.58; }
+/* Generated from ThemeSources; do not edit. Run `cargo xtask themes`. */
+body {
+  font-family: ui-monospace, Menlo, monospace;
+  line-height: 1.58;
+}

@@ -379,6 +379,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = A90000000000000000000002 /* Build configuration list for PBXNativeTarget "Inflow" */;
 			buildPhases = (
+				E57000000000000000000001 /* Compile SCSS Themes */,
 				A70000000000000000000001 /* Build Rust Core */,
 				A60000000000000000000001 /* Sources */,
 				A30000000000000000000001 /* Frameworks */,
@@ -472,6 +473,18 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+        E57000000000000000000001 /* Compile SCSS Themes */ = {
+            isa = PBXShellScriptBuildPhase;
+            alwaysOutOfDate = 1;
+            buildActionMask = 2147483647;
+            files = ();
+            inputPaths = ();
+            name = "Compile SCSS Themes";
+            outputPaths = ("$(PROJECT_DIR)/Themes",);
+            runOnlyForDeploymentPostprocessing = 0;
+            shellPath = /bin/sh;
+            shellScript = "\"$PROJECT_DIR/scripts/build-themes.sh\"\n";
+        };
 		A70000000000000000000001 /* Build Rust Core */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;

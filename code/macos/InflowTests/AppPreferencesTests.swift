@@ -1090,9 +1090,7 @@ h2 { font-weight: 500; }
         XCTAssertTrue(session.textView.engineCanUndo)
         XCTAssertFalse(try XCTUnwrap(session.textView.undoManager).canUndo)
         session.textView.undo(nil)
-        for _ in 0..<20 where session.textView.string != "first\nsecond\n" {
-            await Task.yield()
-        }
+        try await waitForEditorCondition { session.textView.string == "first\nsecond\n" }
         XCTAssertEqual(ruler.lineCount, 3)
         XCTAssertEqual(session.textView.string, "first\nsecond\n")
     }

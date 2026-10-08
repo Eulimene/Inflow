@@ -6,3 +6,4 @@ publish = false
 
 [dependencies]
 cbindgen = "=0.29.4"
+grass = { version = "=0.13.4", default-features = false }

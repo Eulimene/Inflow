@@ -653,9 +653,7 @@ final class DocumentFileSafetyTests: XCTestCase {
         XCTAssertTrue(editor.textView.engineCanUndo)
         XCTAssertFalse(editor.textView.undoManager?.canUndo == true)
         editor.resetAfterExternalReload(result.decoded.text)
-        for _ in 0..<20 where editor.textView.engineCanUndo {
-            await Task.yield()
-        }
+        try await waitForEditorCondition { !editor.textView.engineCanUndo }
         XCTAssertEqual(editor.textView.string, "external 🌍\n")
         XCTAssertFalse(editor.textView.engineCanUndo)
         session.stopMonitoring()

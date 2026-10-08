@@ -428,36 +428,53 @@ final class HTMLExporterTests: XCTestCase {
     }
 
     @MainActor
-    func testDarkPDFPaintsTheEntireMediaBoxIncludingEveryPageCorner() async throws {
-        let darkAppearance = PreviewAppearanceConfiguration(
-            contentWidth: 760,
-            zoom: 1,
-            colorScheme: .dark,
-            theme: .standard,
-            increasedContrast: false,
-            reduceMotion: false
-        )
-        let snapshot = HTMLExportSnapshot(
-            markdown: "# Dark delivery\n\nThe page edge must use the selected theme.",
-            appearance: darkAppearance
-        )
-        let data = try await PDFExporter.generate(snapshot: snapshot)
-        let page = try XCTUnwrap(PDFDocument(data: data)?.page(at: 0))
-        let thumbnail = page.thumbnail(of: NSSize(width: 160, height: 226), for: .mediaBox)
-        let tiff = try XCTUnwrap(thumbnail.tiffRepresentation)
-        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: tiff))
-        let points = [
-            (1, 1),
-            (bitmap.pixelsWide - 2, 1),
-            (1, bitmap.pixelsHigh - 2),
-            (bitmap.pixelsWide - 2, bitmap.pixelsHigh - 2),
+    func testPDFPaintsSelectedThemeAcrossEveryPageCorner() async throws {
+        let cases: [(PreviewTheme, PreviewColorScheme, [CGFloat])] = [
+            (.standard, .dark, [1, 1, 1]),
+            (try XCTUnwrap(PreviewTheme(rawValue: "night")), .light, [54 / 255, 59 / 255, 64 / 255]),
+            (PreviewTheme(id: "custom-paper", label: "Custom", css: "body { background-color: #184c72; }"),
+             .dark, [24 / 255, 76 / 255, 114 / 255]),
         ]
-        for (x, y) in points {
-            let color = try XCTUnwrap(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
-            XCTAssertEqual(color.redComponent, 0x10 / 255.0, accuracy: 0.04)
-            XCTAssertEqual(color.greenComponent, 0x12 / 255.0, accuracy: 0.04)
-            XCTAssertEqual(color.blueComponent, 0x14 / 255.0, accuracy: 0.04)
-            XCTAssertEqual(color.alphaComponent, 1, accuracy: 0.01)
+        for (theme, scheme, expected) in cases {
+            let appearance = PreviewAppearanceConfiguration(
+                contentWidth: 760,
+                zoom: 1,
+                colorScheme: scheme,
+                theme: theme,
+                increasedContrast: false,
+                reduceMotion: false
+            )
+            let snapshot = HTMLExportSnapshot(
+                markdown: String(repeating: "# Theme delivery\n\nEvery page edge must match the document surface.\n\n", count: 24),
+                appearance: appearance
+            )
+            let data = try await PDFExporter.generate(snapshot: snapshot)
+            let document = try XCTUnwrap(PDFDocument(data: data))
+            XCTAssertGreaterThan(document.pageCount, 1)
+            for pageIndex in 0..<document.pageCount {
+                let page = try XCTUnwrap(document.page(at: pageIndex))
+                // Render into a declared color space; PDFKit thumbnails may use
+                // a display-dependent profile and are not numeric color samples.
+                let context = try XCTUnwrap(CGContext(
+                    data: nil, width: 160, height: 226, bitsPerComponent: 8, bytesPerRow: 0,
+                    space: try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB)),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ))
+                let bounds = page.bounds(for: .mediaBox)
+                context.scaleBy(x: 160 / bounds.width, y: 226 / bounds.height)
+                context.drawPDFPage(try XCTUnwrap(page.pageRef))
+                let pixels = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+                let points = [(1, 1), (158, 1), (1, 224), (158, 224)]
+                for (x, y) in points {
+                    let offset = y * context.bytesPerRow + x * 4
+                    let message = "\(theme.id), page \(pageIndex + 1), corner (\(x), \(y))"
+                    for channel in 0..<3 {
+                        XCTAssertEqual(CGFloat(pixels[offset + channel]) / 255, expected[channel],
+                                       accuracy: 0.02, message)
+                    }
+                    XCTAssertEqual(pixels[offset + 3], 255, message)
+                }
+            }
         }
     }
 
@@ -752,11 +769,20 @@ final class HTMLExporterTests: XCTestCase {
         )
         let html = try XCTUnwrap(String(data: data, encoding: .utf8))
 
-        XCTAssertTrue(html.contains("$x$"))
-        XCTAssertFalse(html.contains("<math"))
-        XCTAssertTrue(html.contains("language-mermaid"))
-        XCTAssertFalse(html.contains("<figure class=\"mermaid-diagram\""))
-        XCTAssertFalse(html.contains("<svg"))
+        // Disabled diagrams still use the code highlighter. Its bundled scripts
+        // contain MathJax/SVG string literals, which are not document elements.
+        let script = try XCTUnwrap(html.range(of: "<script nonce="))
+        let markup = html[..<script.lowerBound]
+        XCTAssertTrue(markup.contains("$x$"))
+        XCTAssertTrue(markup.contains("language-mermaid"))
+        XCTAssertTrue(markup.contains("flowchart TD"))
+        XCTAssertTrue(markup.contains("A --&gt; B"))
+        XCTAssertTrue(markup.contains("data-inflow-render=\"code\""))
+        XCTAssertFalse(markup.contains("data-inflow-render=\"math\""))
+        XCTAssertFalse(markup.contains("data-inflow-render=\"mermaid\""))
+        XCTAssertFalse(markup.contains("<math"))
+        XCTAssertFalse(markup.contains("<figure class=\"mermaid-diagram\""))
+        XCTAssertFalse(markup.contains("<svg"))
     }
 
     func testWriterCreatesNewFileWithoutLeavingTemporaryArtifacts() throws {

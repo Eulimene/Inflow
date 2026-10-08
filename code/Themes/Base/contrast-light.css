@@ -1,1 +1,8 @@
-:root { --md-text: #111111; --md-heading: #111111; --md-secondary: #444444; --md-border: #666666; --md-quote-bar: #666666; }
+/* Generated from ThemeSources; do not edit. Run `cargo xtask themes`. */
+:root {
+  --md-text: #111111;
+  --md-heading: #111111;
+  --md-secondary: #444444;
+  --md-border: #666666;
+  --md-quote-bar: #666666;
+}

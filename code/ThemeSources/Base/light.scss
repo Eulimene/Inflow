@@ -1,0 +1,2 @@
+@use "../shared/palettes";
+:root { @include palettes.emit(palettes.$light); }

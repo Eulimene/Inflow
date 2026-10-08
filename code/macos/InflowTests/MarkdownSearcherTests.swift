@@ -682,9 +682,7 @@ final class MarkdownSearcherTests: XCTestCase {
         )
         XCTAssertTrue(replaced)
         renderPendingUI()
-        for _ in 0..<20 where !session.textView.engineCanUndo {
-            await Task.yield()
-        }
+        try await waitForEditorCondition { session.textView.engineCanUndo }
         XCTAssertEqual(model.text, "beta alpha 中文 beta alpha\nbeta alpha")
         XCTAssertEqual(model.textUpdateCount, 1)
         XCTAssertTrue(session.textView.engineCanUndo)

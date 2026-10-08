@@ -1,35 +1,132 @@
+/* Generated from ThemeSources; do not edit. Run `cargo xtask themes`. */
 /* Inflow native adaptation. Reference: https://github.com/typora/typora-default-themes/blob/master/themes/pixyll.css
    Uses installed font fallbacks; keeps the user's reading-width preference. */
 :root {
-  --bg-color: #ffffff; --text-color: #333333; --primary-color: #463f5c;
-  --md-heading: #333333; --md-secondary: #555555; --md-border: #333333;
-  --md-quote-bar: #333333; --md-surface: #ffffff; --md-surface-strong: #ffffff;
-  --md-table-stripe: #ffffff; --md-inline-code: #f8f8f8;
+  --bg-color: #ffffff;
+  --text-color: #333333;
+  --primary-color: #463f5c;
+  --md-heading: #333333;
+  --md-secondary: #555555;
+  --md-border: #333333;
+  --md-quote-bar: #333333;
+  --md-surface: #ffffff;
+  --md-surface-strong: #ffffff;
+  --md-table-stripe: #ffffff;
+  --md-inline-code: #f8f8f8;
 }
+
 body {
-  background-color: var(--bg-color); color: var(--text-color);
-  font-family: Merriweather, Georgia, "Songti SC", serif; font-size: 20px; line-height: 1.8;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  font-family: Merriweather, Georgia, "Songti SC", serif;
+  font-size: 20px;
+  line-height: 1.8;
   color-scheme: light;
 }
-a { color: var(--primary-color); }
-blockquote { color: var(--md-secondary); }
-pre { background-color: var(--md-surface); font-family: Menlo, monospace; }
-code { background-color: var(--md-inline-code); font-family: Menlo, monospace; font-size: .9em; }
-th { background-color: var(--md-surface-strong); }
-td { border-color: var(--md-border); }
-tr:nth-child(even) { background-color: var(--md-table-stripe); }
-li { margin-bottom: .3125rem; }
-h1 { font-size: 2.6em; }
-h2 { font-size: 1.84em; }
-h3 { font-size: 1.3em; }
-h4 { font-size: 1.04em; }
-h5 { font-size: 1em; }
-h6 { font-size: 1em; }
-h1, h2, h3, h4, h5, h6 { border-bottom: 0 solid transparent; font-family: Lato, "Helvetica Neue", "PingFang SC", sans-serif; font-weight: 700; line-height: 1.2; margin: 1.5rem 0 .8rem; }
-p { margin: 0 0 1.25rem; }
-a { text-decoration: underline; }
-blockquote { font-style: italic; border-left: 5px solid #7a7a7a; padding-left: 1.33em; margin: 1rem 0; }
-pre { font-size: .8em; color: #7a7a7a; border: 1px solid #7a7a7a; border-radius: 0; }
-table { --md-table-grid: rows; border: 0; border-radius: 0; width: 100%; }
-th, td { border: 0; border-top: 1px solid #333333; padding: 12px; line-height: 1.2; }
-th { border-bottom: 2px solid #333333; }
+
+a {
+  color: var(--primary-color);
+}
+
+blockquote {
+  color: var(--md-secondary);
+}
+
+pre {
+  background-color: var(--md-surface);
+  font-family: Menlo, monospace;
+}
+
+code {
+  background-color: var(--md-inline-code);
+  font-family: Menlo, monospace;
+  font-size: 0.9em;
+}
+
+th {
+  background-color: var(--md-surface-strong);
+}
+
+td {
+  border-color: var(--md-border);
+}
+
+tr:nth-child(even) {
+  background-color: var(--md-table-stripe);
+}
+
+li {
+  margin-bottom: 0.3125rem;
+}
+
+h1 {
+  font-size: 2.6em;
+}
+
+h2 {
+  font-size: 1.84em;
+}
+
+h3 {
+  font-size: 1.3em;
+}
+
+h4 {
+  font-size: 1.04em;
+}
+
+h5 {
+  font-size: 1em;
+}
+
+h6 {
+  font-size: 1em;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  border-bottom: 0 solid transparent;
+  font-family: Lato, "Helvetica Neue", "PingFang SC", sans-serif;
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 1.5rem 0 0.8rem;
+}
+
+p {
+  margin: 0 0 1.25rem;
+}
+
+a {
+  text-decoration: underline;
+}
+
+blockquote {
+  font-style: italic;
+  border-left: 5px solid #7a7a7a;
+  padding-left: 1.33em;
+  margin: 1rem 0;
+}
+
+pre {
+  font-size: 0.8em;
+  color: #7a7a7a;
+  border: 1px solid #7a7a7a;
+  border-radius: 0;
+}
+
+table {
+  --md-table-grid: rows;
+  border: 0;
+  border-radius: 0;
+  width: 100%;
+}
+
+th, td {
+  border: 0;
+  border-top: 1px solid #333333;
+  padding: 12px;
+  line-height: 1.2;
+}
+
+th {
+  border-bottom: 2px solid #333333;
+}

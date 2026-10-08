@@ -269,7 +269,7 @@ final class MarkdownRendererTests: XCTestCase {
     func testPreviewStyleMatchesInlineQuoteLinkAndTablePresentationContract() {
         let html = MarkdownRenderer.htmlDocument(
             for: "`草稿`\n\n> 注意\n\n[链接](https://example.com)\n\n| 标题 |\n| --- |\n| 内容 |"
-        )
+        ).replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
 
         for palette in [MarkdownRenderPalette.light, .dark] {
             for declaration in palette.cssVariables.split(separator: ";") {
@@ -277,9 +277,9 @@ final class MarkdownRendererTests: XCTestCase {
             }
         }
         XCTAssertTrue(html.contains(
-            "font: \(MarkdownRenderMetrics.bodyFontSize)px/\(MarkdownRenderMetrics.bodyLineHeight)"
+            "font: \(String(format: "%g", MarkdownRenderMetrics.bodyFontSize))px/\(MarkdownRenderMetrics.bodyLineHeight)"
         ))
-        XCTAssertTrue(html.contains("max-width: \(MarkdownRenderMetrics.readingWidth)px;"))
+        XCTAssertTrue(html.contains("max-width: \(String(format: "%g", MarkdownRenderMetrics.readingWidth))px;"))
         XCTAssertTrue(html.contains("cursor: pointer;"))
         XCTAssertTrue(html.contains(
             "a:hover { text-decoration: underline; background: transparent; }"
@@ -326,7 +326,8 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertFalse(fragment.contains("<tag>你好</tag>"))
 
         let document = MarkdownRenderer.document(containing: fragment)
-        XCTAssertTrue(document.contains(".tok-keyword { color:"))
+        XCTAssertTrue(document.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .contains(".tok-keyword { color:"))
         XCTAssertTrue(document.contains("@media (prefers-color-scheme: dark)"))
         XCTAssertTrue(document.contains("script nonce="))
 
@@ -359,7 +360,8 @@ final class MarkdownRendererTests: XCTestCase {
             )
         )
         XCTAssertTrue(highContrast.contains("--md-accent: LinkText;"))
-        XCTAssertTrue(highContrast.contains(".tok-comment { text-decoration: underline dotted; }"))
+        XCTAssertTrue(highContrast.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .contains(".tok-comment { text-decoration: underline dotted; }"))
     }
 
     func testPresentationOptionsUseNamedEngineFields() {

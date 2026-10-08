@@ -871,12 +871,12 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: asset.destinationURL.path))
 
         session.textView.undo(nil)
-        for _ in 0..<20 where session.textView.string != "Before " { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == "Before " }
         XCTAssertEqual(session.textView.string, "Before ")
         XCTAssertEqual(try Data(contentsOf: asset.destinationURL), image.data)
 
         session.textView.redo(nil)
-        for _ in 0..<20 where session.textView.string != plan.resultingSource { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == plan.resultingSource }
         XCTAssertEqual(session.textView.string, "Before ![photo](<assets/photo.png>)")
         XCTAssertEqual(try Data(contentsOf: asset.destinationURL), image.data)
     }
@@ -924,7 +924,7 @@ final class MarkdownInsertionTests: XCTestCase {
         let externalChange = Data("external change".utf8)
         try externalChange.write(to: asset.destinationURL, options: .atomic)
         session.textView.undo(nil)
-        for _ in 0..<20 where !session.textView.string.isEmpty { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string.isEmpty }
         XCTAssertEqual(try Data(contentsOf: asset.destinationURL), externalChange)
     }
 
@@ -1041,7 +1041,7 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertTrue(unique.resultingSource.hasSuffix("[^note-2]: 脚注内容\n"))
     }
 
-    func testMathPlanCreatesInlineAndDisplayMathML() throws {
+    func testMathPlanCreatesInlineAndDisplayRenderingRequests() throws {
         let source = "Euler e^{i\\pi}+1=0 end"
         let inline = try MarkdownFormatter.mathPlan(
             source: source,
@@ -1050,8 +1050,8 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertEqual(inline.resultingSource, "Euler $e^{i\\pi}+1=0$ end")
         let inlineHTML = try MarkdownRenderer.htmlFragment(for: inline.resultingSource)
         XCTAssertTrue(inlineHTML.contains("data-inflow-render=\"math\""))
-        XCTAssertTrue(inlineHTML.contains("display=\"inline\""))
-        XCTAssertTrue(inlineHTML.contains("<msup>"))
+        XCTAssertTrue(inlineHTML.contains("data-display=\"false\""))
+        XCTAssertTrue(inlineHTML.contains("e^{i\\pi}+1=0"))
 
         let display = try MarkdownFormatter.mathPlan(
             source: "",
@@ -1066,7 +1066,7 @@ final class MarkdownInsertionTests: XCTestCase {
         )
         XCTAssertEqual((display.resultingSource as NSString).substring(with: target.revealRange), "公式内容")
         XCTAssertTrue(try MarkdownRenderer.htmlFragment(for: display.resultingSource).contains(
-            "display=\"block\""
+            "data-display=\"true\""
         ))
     }
 
@@ -1091,7 +1091,8 @@ final class MarkdownInsertionTests: XCTestCase {
         )
         let html = try MarkdownRenderer.htmlFragment(for: template.resultingSource)
         XCTAssertTrue(html.contains("class=\"mermaid-diagram\""))
-        XCTAssertTrue(html.contains("<svg"))
+        XCTAssertTrue(html.contains("data-inflow-render=\"mermaid\""))
+        XCTAssertTrue(html.contains("A[开始] --&gt; B[结束]"))
         XCTAssertFalse(html.contains("<script"))
     }
 
@@ -1116,10 +1117,10 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertTrue(linked)
         XCTAssertEqual(session.textView.string, "Read [docs](<https://example.com>)")
         session.textView.undo(nil)
-        for _ in 0..<20 where session.textView.string != source { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == source }
         XCTAssertEqual(session.textView.string, source)
         session.textView.redo(nil)
-        for _ in 0..<20 where session.textView.string != plan.resultingSource { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == plan.resultingSource }
         XCTAssertEqual(session.textView.string, "Read [docs](<https://example.com>)")
 
         session.resetAfterExternalReload("Header")
@@ -1138,10 +1139,10 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertTrue(tableInserted)
         XCTAssertTrue(session.textView.string.hasPrefix("| Header | 标题 2 |"))
         session.textView.undo(nil)
-        for _ in 0..<20 where session.textView.string != "Header" { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == "Header" }
         XCTAssertEqual(session.textView.string, "Header")
         session.textView.redo(nil)
-        for _ in 0..<20 where session.textView.string != table.resultingSource { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == table.resultingSource }
         XCTAssertTrue(session.textView.string.hasPrefix("| Header | 标题 2 |"))
 
         session.resetAfterExternalReload("Before")
@@ -1160,10 +1161,10 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertTrue(ruleInserted)
         XCTAssertEqual(session.textView.string, "Before\n\n---\n\n")
         session.textView.undo(nil)
-        for _ in 0..<20 where session.textView.string != "Before" { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == "Before" }
         XCTAssertEqual(session.textView.string, "Before")
         session.textView.redo(nil)
-        for _ in 0..<20 where session.textView.string != horizontalRule.resultingSource { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == horizontalRule.resultingSource }
         XCTAssertEqual(session.textView.string, "Before\n\n---\n\n")
 
         session.resetAfterExternalReload("Anchor")
@@ -1182,10 +1183,10 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertTrue(footnoteInserted)
         XCTAssertEqual(session.textView.string, "Anchor[^note-1]\n\n[^note-1]: 脚注内容\n")
         session.textView.undo(nil)
-        for _ in 0..<20 where session.textView.string != "Anchor" { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == "Anchor" }
         XCTAssertEqual(session.textView.string, "Anchor")
         session.textView.redo(nil)
-        for _ in 0..<20 where session.textView.string != footnote.resultingSource { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == footnote.resultingSource }
         XCTAssertEqual(session.textView.string, "Anchor[^note-1]\n\n[^note-1]: 脚注内容\n")
 
         session.resetAfterExternalReload("x^2")
@@ -1204,10 +1205,10 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertTrue(formulaInserted)
         XCTAssertEqual(session.textView.string, "$x^2$")
         session.textView.undo(nil)
-        for _ in 0..<20 where session.textView.string != "x^2" { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == "x^2" }
         XCTAssertEqual(session.textView.string, "x^2")
         session.textView.redo(nil)
-        for _ in 0..<20 where session.textView.string != formula.resultingSource { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == formula.resultingSource }
         XCTAssertEqual(session.textView.string, "$x^2$")
 
         session.resetAfterExternalReload("")
@@ -1226,10 +1227,10 @@ final class MarkdownInsertionTests: XCTestCase {
         XCTAssertTrue(diagramInserted)
         XCTAssertTrue(session.textView.string.hasPrefix("```mermaid\nflowchart TD"))
         session.textView.undo(nil)
-        for _ in 0..<20 where !session.textView.string.isEmpty { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string.isEmpty }
         XCTAssertEqual(session.textView.string, "")
         session.textView.redo(nil)
-        for _ in 0..<20 where session.textView.string != diagram.resultingSource { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == diagram.resultingSource }
         XCTAssertTrue(session.textView.string.hasPrefix("```mermaid\nflowchart TD"))
     }
 

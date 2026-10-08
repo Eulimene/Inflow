@@ -115,11 +115,15 @@ final class LaunchJourneyTests: XCTestCase {
         XCTAssertTrue(preview.html.contains("data-inflow-render=\"math\""))
         XCTAssertTrue(preview.html.contains("class=\"mermaid-diagram\""))
         XCTAssertTrue(deliveredHTML.contains("data-inflow-render=\"math\""))
-        XCTAssertTrue(deliveredHTML.contains("<svg"))
-        XCTAssertTrue(deliveredHTML.contains("script-src 'none'"))
+        XCTAssertTrue(deliveredHTML.contains("data-inflow-render=\"mermaid\""))
+        XCTAssertTrue(deliveredHTML.contains("script-src 'nonce-"))
         XCTAssertTrue(deliveredHTML.contains("connect-src 'none'"))
-        XCTAssertFalse(deliveredHTML.contains("<script"))
-        XCTAssertFalse(deliveredHTML.localizedCaseInsensitiveContains("cdn"))
+        XCTAssertTrue(deliveredHTML.contains("<script nonce="))
+        XCTAssertTrue(deliveredHTML.contains("InflowRender.renderDocument()"))
+        // Libraries can mention CDNs in their source without loading them.
+        // The delivered page must embed its adapters and prohibit connections.
+        XCTAssertNil(deliveredHTML.range(of: #"<script\b[^>]*\bsrc\s*="#,
+                                        options: [.regularExpression, .caseInsensitive]))
     }
 
     func testResourceFixtureInlinesValidatedImageAndFailsClosedWhenMissing() throws {

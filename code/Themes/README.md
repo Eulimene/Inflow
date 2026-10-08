@@ -33,9 +33,32 @@ GitHub、Whitey、Night、Newsprint、Pixyll、Gothic 均来自同目录下的 C
 
 中文衬线字体通过 CSS 的 `Songti SC` 回退链参与排版；加粗会同时作用于回退字体。未安装 Typora 使用的专用字体时，使用 CSS 中的本机替代字体。阅读宽度继续遵从用户设置，主题不把宽屏重新限制为窄栏。
 
-## 样式集中维护
+## 使用 SCSS 集中维护内置样式
 
-项目中所有主题与正文渲染的样式资源放在 `code/Themes`，新增视觉样式应修改这里的 CSS，不应在 Swift 中按主题名增加颜色、字体或布局分支：
+仓库内的样式源码统一放在 `code/ThemeSources`，`code/Themes` 中的 CSS 是生成产物，随源码一起提交。修改内置样式时只编辑 SCSS，不手改生成的 CSS，也不在 Swift 中按主题名增加颜色、字体或布局分支。用户主题目录中的自定义 CSS 仍可直接编辑，不受此构建流程影响。
+
+源码和产物保持相同的相对路径，例如 `ThemeSources/github.scss` 生成 `Themes/github.css`。维护时优先选择最小的修改范围：
+
+- `shared/_fonts.scss`：集中维护正文、代码和各主题的字体回退链。
+- `shared/_theme.scss`：共享正文、链接、代码、表格基础规则及标题字号生成逻辑。主题通过 `foundation`、`headings` 和 `row-table` mixin 传入差异。
+- `shared/_palettes.scss`：共享浅色、深色默认配色；原生基础样式和 HTML 基础样式引用同一份定义。
+- 根目录六份 `.scss`：只维护各主题的配色、字号参数和独有规则。标题色默认跟随正文，引用线默认跟随边框，代码和表格背景默认跟随表面色；只有不同的值才需覆盖。
+- `Base/*.scss`：公共基础、HTML 布局、辅助功能与兼容规则。
+
+例如修改所有主题的代码字体，只需改 `shared/_fonts.scss` 中的 `$code`；调整 GitHub 的配色，只需改 `github.scss` 传给 `theme.foundation` 的 `$palette`。主题特有规则放在 mixin 调用之后，以保持覆盖顺序。共享模块用下划线开头，不会独立生成 CSS。新增内置菜单选项仍需注册主题，新增 SCSS 文件本身不会改变菜单。
+
+在 `code` 目录执行：
+
+```sh
+cargo xtask themes         # 编译所有入口，只写入有变化的 CSS
+cargo xtask verify-themes  # 检查生成物是否最新，不修改文件
+```
+
+Xcode 构建会在资源复制前自动执行编译；`cargo xtask test` 和三平台 CI 会校验生成物，并运行构建工具测试。请将 SCSS 和生成的 CSS 一起提交。编译器会先编译全部入口，语法错误时不写入任何输出；删除入口后需明确删除对应的旧 CSS，校验会报告遗漏。
+
+预处理使用锁定版本的纯 Rust [grass](https://docs.rs/grass/0.13.4/grass/) 构建工具，不需要 Node.js 或 Dart 环境。源码采用 Sass 的 [`@use`](https://sass-lang.com/documentation/at-rules/use/) 模块和 [mixin](https://sass-lang.com/documentation/at-rules/mixin/)；引入其他 Sass 语法时以锁定编译器的实际支持为准。SCSS 仅在构建时编译，不打包进应用，也不参与打开文件或切换主题的运行时路径。macOS、Windows、Linux 共用生成的标准 CSS 和 Rust 解析合同，字体与原生绘制仍由各宿主适配。
+
+以下是生成资源的职责：
 
 - 根目录的六份 CSS：主题各自的视觉差异，也用于用户主题目录和 HTML 导出。
 - `Base/default.css`：共同的字体、标题、间距、圆角、代码、引用、表格等默认值。原生渲染和 HTML 导出共同加载。
@@ -108,4 +131,4 @@ HTML 导出会嵌入选中主题的 CSS，并提供 `body#write`；浏览器可�
 
 `profile.json` 当前声明 `inflow-native-legacy` 版本 0。这是现有主题的兼容合同，不是设计中的完整 v1 语义树支持。Rust 编译结果通过 ABI 3.1 的 `portable_presentation` capability 输出；规则、值和诊断的含义由所有宿主共享。`pt` 按 96/72 转为逻辑像素，`em/rem/%` 保留单位类型，供宿主提供最终度量；版本 0 的百分比仍沿用现有调用处的基准，不承诺完整 Web 百分比布局。
 
-源码只维护此目录的一份 CSS。macOS 从此目录打包名为 Themes 的资源目录；Windows/Linux 应使用相同资源和 Rust 合同，不能重新实现解析器。三 OS 的 CI 工作流已配置，本机 Windows/Linux Rust 目标交叉编译检查通过，目标 OS 的测试执行及原生呈现尚未验收。共享核心测试通过不能替代字体、输入法与实际画面的验收。
+样式源码只维护 `ThemeSources` 中的一份 SCSS，构建后生成此目录的 CSS。macOS 从此目录打包名为 Themes 的资源目录；Windows/Linux 应使用相同资源和 Rust 合同，不能重新实现解析器。三 OS 的 CI 工作流已配置，本机 Windows/Linux Rust 目标交叉编译检查通过，目标 OS 的测试执行及原生呈现尚未验收。共享核心测试通过不能替代字体、输入法与实际画面的验收。

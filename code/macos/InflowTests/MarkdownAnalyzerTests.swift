@@ -146,9 +146,7 @@ final class MarkdownAnalyzerTests: XCTestCase {
 
         XCTAssertEqual(textView.string, "Title!")
         XCTAssertIdentical(session.textView, textView)
-        for _ in 0..<20 where !textView.engineCanUndo {
-            await Task.yield()
-        }
+        try await waitForEditorCondition { textView.engineCanUndo }
         XCTAssertTrue(textView.engineCanUndo)
         XCTAssertFalse(try XCTUnwrap(textView.undoManager).canUndo)
 
@@ -162,9 +160,7 @@ final class MarkdownAnalyzerTests: XCTestCase {
         XCTAssertTrue(textView.engineCanUndo)
 
         textView.undo(nil)
-        for _ in 0..<20 where textView.string != "Title" {
-            await Task.yield()
-        }
+        try await waitForEditorCondition { textView.string == "Title" }
         XCTAssertEqual(textView.string, "Title")
         XCTAssertEqual(textView.selectedRange().location, 5)
     }
@@ -185,9 +181,7 @@ final class MarkdownAnalyzerTests: XCTestCase {
         textView.insertText("!", replacementRange: textView.selectedRange())
         _ = await session.authoritativeSnapshot()
         renderPendingUI()
-        for _ in 0..<20 where !textView.engineCanUndo {
-            await Task.yield()
-        }
+        try await waitForEditorCondition { textView.engineCanUndo }
         XCTAssertEqual(model.text, "Body!")
 
         model.showsOutline = false

@@ -3130,15 +3130,13 @@ final class RenderedMarkdownEditorTests: XCTestCase {
         try assertStrongTextIsRendered(in: session, source: session.textView.string)
 
         session.textView.undo(nil)
-        for _ in 0..<20 where session.textView.string != "plain" { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == "plain" }
         _ = await session.deriveContent(for: "plain", configuration: .default)
         await settleRenderedPresentation()
         XCTAssertEqual(session.textView.string, "plain")
 
         session.textView.redo(nil)
-        for _ in 0..<20 where session.textView.string != "plain **bold**" {
-            await Task.yield()
-        }
+        try await waitForEditorCondition { session.textView.string == "plain **bold**" }
         _ = await session.deriveContent(
             for: "plain **bold**",
             configuration: .default

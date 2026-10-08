@@ -478,10 +478,10 @@ final class MarkdownFormatterTests: XCTestCase {
         )
 
         session.textView.undo(nil)
-        for _ in 0..<20 where session.textView.string != source { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == source }
         XCTAssertEqual(session.textView.string, source)
         session.textView.redo(nil)
-        for _ in 0..<20 where session.textView.string != plan.resultingSource { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == plan.resultingSource }
         XCTAssertEqual(session.textView.string, "标题👩‍💻 and code\n")
     }
 
@@ -514,10 +514,10 @@ final class MarkdownFormatterTests: XCTestCase {
         )
 
         session.textView.undo(nil)
-        for _ in 0..<20 where session.textView.string != source { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == source }
         XCTAssertEqual(session.textView.string, source)
         session.textView.redo(nil)
-        for _ in 0..<20 where session.textView.string != plan.resultingSource { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == plan.resultingSource }
         XCTAssertEqual(session.textView.string, "Hello **世界**")
 
         session.resetAfterExternalReload("Title\nBody\n")
@@ -537,7 +537,7 @@ final class MarkdownFormatterTests: XCTestCase {
         XCTAssertTrue(headed)
         XCTAssertEqual(session.textView.string, "## Title\nBody\n")
         session.textView.undo(nil)
-        for _ in 0..<20 where session.textView.string != "Title\nBody\n" { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == "Title\nBody\n" }
         XCTAssertEqual(session.textView.string, "Title\nBody\n")
 
         session.resetAfterExternalReload("one\ntwo\n")
@@ -559,10 +559,10 @@ final class MarkdownFormatterTests: XCTestCase {
         XCTAssertTrue(listed)
         XCTAssertEqual(session.textView.string, "1. one\n1. two\n")
         session.textView.undo(nil)
-        for _ in 0..<20 where session.textView.string != "one\ntwo\n" { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == "one\ntwo\n" }
         XCTAssertEqual(session.textView.string, "one\ntwo\n")
         session.textView.redo(nil)
-        for _ in 0..<20 where session.textView.string != list.resultingSource { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == list.resultingSource }
         XCTAssertEqual(session.textView.string, "1. one\n1. two\n")
 
         session.resetAfterExternalReload("let value = `raw`;\n")
@@ -584,10 +584,10 @@ final class MarkdownFormatterTests: XCTestCase {
         XCTAssertTrue(fenced)
         XCTAssertEqual(session.textView.string, "```\nlet value = `raw`;\n```\n")
         session.textView.undo(nil)
-        for _ in 0..<20 where session.textView.string != "let value = `raw`;\n" { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == "let value = `raw`;\n" }
         XCTAssertEqual(session.textView.string, "let value = `raw`;\n")
         session.textView.redo(nil)
-        for _ in 0..<20 where session.textView.string != codeBlock.resultingSource { await Task.yield() }
+        try await waitForEditorCondition { session.textView.string == codeBlock.resultingSource }
         XCTAssertEqual(session.textView.string, "```\nlet value = `raw`;\n```\n")
     }
 

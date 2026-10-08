@@ -510,16 +510,12 @@ final class EditorEngineClientTests: XCTestCase {
         XCTAssertTrue(session.textView.engineCanUndo)
 
         session.textView.undo(nil)
-        for _ in 0..<20 where session.textView.string != "Hello 世界" {
-            await Task.yield()
-        }
+        try await waitForEditorCondition { session.textView.string == "Hello 世界" }
         XCTAssertEqual(session.textView.string, "Hello 世界")
         XCTAssertTrue(session.textView.engineCanRedo)
 
         session.textView.redo(nil)
-        for _ in 0..<20 where session.textView.string != "Hello **世界**" {
-            await Task.yield()
-        }
+        try await waitForEditorCondition { session.textView.string == "Hello **世界**" }
         XCTAssertEqual(session.textView.string, "Hello **世界**")
     }
 
@@ -541,9 +537,7 @@ final class EditorEngineClientTests: XCTestCase {
         XCTAssertFalse(session.textView.undoManager?.canUndo == true)
 
         session.textView.undo(nil)
-        for _ in 0..<20 where session.textView.string != "alpha" {
-            await Task.yield()
-        }
+        try await waitForEditorCondition { session.textView.string == "alpha" }
         XCTAssertEqual(session.textView.string, "alpha")
         XCTAssertTrue(session.textView.engineCanRedo)
 
@@ -900,5 +894,23 @@ final class EditorEngineClientTests: XCTestCase {
 
     func testDiffReturnsNilOnlyForByteIdenticalText() {
         XCTAssertNil(EditorEngineTextDiff.replacement(from: "你好", to: "你好"))
+    }
+}
+
+// Engine operations run off the main actor. Yield counts do not establish that
+// an operation finished; wait for the observable result with a bounded deadline.
+extension XCTestCase {
+    @MainActor
+    func waitForEditorCondition(
+        timeout: Duration = .seconds(2),
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ condition: @MainActor () -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(condition(), "Timed out waiting for the editor state", file: file, line: line)
     }
 }

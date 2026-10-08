@@ -1,3 +1,5 @@
+mod themes;
+
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
@@ -17,6 +19,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .ok_or_else(|| io::Error::other("xtask has no repository parent"))?;
 
     match command.as_str() {
+        "themes" => themes::build(root, false),
+        "verify-themes" => themes::build(root, true),
         "bindings" => write_bindings(root),
         "verify-bindings" => verify_bindings(root),
         "test" => test_all(root),
@@ -26,7 +30,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             test_all(root)
         }
         _ => {
-            eprintln!("usage: cargo xtask <bindings|verify-bindings|test|xcframework|verify>");
+            eprintln!(
+                "usage: cargo xtask <themes|verify-themes|bindings|verify-bindings|test|xcframework|verify>"
+            );
             Ok(())
         }
     }
@@ -130,6 +136,12 @@ fn test_all(root: &Path) -> Result<(), Box<dyn Error>> {
             "-D",
             "warnings",
         ],
+    )?;
+    themes::build(root, true)?;
+    run(
+        root,
+        "cargo test (xtask)",
+        ["test", "--manifest-path", "xtask/Cargo.toml", "--locked"],
     )?;
     test_core(root)
 }
