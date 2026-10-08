@@ -398,7 +398,7 @@ final class RecentDocumentsTests: XCTestCase {
     }
 
     func testTitlebarTabsShareWindowControlRowAndPreserveWindowGeometry() async throws {
-        let first = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 900, height: 600),
+        let first = TitlebarLifecycleWindow(contentRect: NSRect(x: 100, y: 100, width: 900, height: 600),
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         let second = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 820, height: 520),
             styleMask: first.styleMask, backing: .buffered, defer: false)
@@ -429,13 +429,25 @@ final class RecentDocumentsTests: XCTestCase {
         }
         // During a native full-screen transition the style mask can lag the
         // notification. A resize must not move controls back to the hidden row.
-        NotificationCenter.default.post(name: NSWindow.willEnterFullScreenNotification, object: first)
-        NotificationCenter.default.post(name: NSWindow.didResizeNotification, object: first)
-        XCTAssertEqual(accessory.layoutAttribute, .bottom)
-        XCTAssertEqual(accessory.fullScreenMinHeight, accessory.view.frame.height)
-        NotificationCenter.default.post(name: NSWindow.didExitFullScreenNotification, object: first)
-        XCTAssertEqual(accessory.layoutAttribute, .left)
-        XCTAssertEqual(accessory.fullScreenMinHeight, 0)
+        let host = accessory.view
+        for _ in 0..<3 {
+            first.removedPlacements.removeAll()
+            NotificationCenter.default.post(name: NSWindow.willEnterFullScreenNotification, object: first)
+            NotificationCenter.default.post(name: NSWindow.didEnterFullScreenNotification, object: first)
+            NotificationCenter.default.post(name: NSWindow.didResizeNotification, object: first)
+            XCTAssertEqual(first.removedPlacements, [.left],
+                "Remove the old titlebar container before changing its placement")
+            XCTAssertEqual(first.titlebarAccessoryViewControllers, [accessory])
+            XCTAssertTrue(accessory.view === host, "Reuse the tab content when moving it")
+            XCTAssertEqual(accessory.layoutAttribute, .bottom)
+            XCTAssertEqual(accessory.fullScreenMinHeight, accessory.view.frame.height)
+            NotificationCenter.default.post(name: NSWindow.didExitFullScreenNotification, object: first)
+            NotificationCenter.default.post(name: NSWindow.didResizeNotification, object: first)
+            XCTAssertEqual(first.removedPlacements, [.left, .bottom])
+            XCTAssertEqual(first.titlebarAccessoryViewControllers, [accessory])
+            XCTAssertEqual(accessory.layoutAttribute, .left)
+            XCTAssertEqual(accessory.fullScreenMinHeight, 0)
+        }
         let tabs = DocumentWindowTabs.shared
         tabs.register(second)
         let item = try XCTUnwrap(tabs.items.first { $0.window === second })
@@ -445,6 +457,30 @@ final class RecentDocumentsTests: XCTestCase {
         XCTAssertTrue(second.isVisible)
         XCTAssertEqual(second.frame, frame)
         XCTAssertFalse(second.tabGroup?.isTabBarVisible == true)
+    }
+
+    func testTitlebarDetachCancelsPendingConfigurationAndRemovesAccessory() async throws {
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 900, height: 600),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = NSView(frame: window.contentView!.bounds)
+        window.contentView = root
+        let titlebar = DocumentTitlebar<Text>.TitlebarView()
+        titlebar.content = AnyView(Text("Tabs"))
+        root.addSubview(titlebar)
+        titlebar.detach()
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(window.titlebarAccessoryViewControllers.isEmpty,
+            "A dismantled representable must not attach from a previously queued update")
+
+        titlebar.configure()
+        try await waitForEditorCondition { window.titlebarAccessoryViewControllers.count == 1 }
+        titlebar.configure()
+        titlebar.removeFromSuperview()
+        XCTAssertTrue(window.titlebarAccessoryViewControllers.isEmpty)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(window.titlebarAccessoryViewControllers.isEmpty)
     }
 
     func testTerminationDelegateNeverCancelsAnApprovedDisposableDraftQuit() throws {
@@ -2043,5 +2079,15 @@ private final class WindowConfigurationProbe: NSWindow {
 
     override var collectionBehavior: NSWindow.CollectionBehavior {
         didSet { behaviorWrites += 1 }
+    }
+}
+
+@MainActor
+private final class TitlebarLifecycleWindow: NSWindow {
+    var removedPlacements: [NSLayoutConstraint.Attribute] = []
+
+    override func removeTitlebarAccessoryViewController(at index: Int) {
+        removedPlacements.append(titlebarAccessoryViewControllers[index].layoutAttribute)
+        super.removeTitlebarAccessoryViewController(at: index)
     }
 }

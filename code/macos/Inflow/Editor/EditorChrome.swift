@@ -463,7 +463,10 @@ struct DocumentTitlebar<Content: View>: NSViewRepresentable {
         private var isFullScreen = false
         private var isResizing = false
 
-        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); configure() }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil { detach() } else { configure() }
+        }
         func configure() {
             configurationTask?.cancel()
             configurationTask = Task { @MainActor [weak self] in
@@ -516,14 +519,28 @@ struct DocumentTitlebar<Content: View>: NSViewRepresentable {
             // Keep the tab/side-panel controls visible when the system hides
             // traffic lights in full screen; normal windows still use one row.
             let attribute: NSLayoutConstraint.Attribute = fullScreen ? .bottom : .left
-            if accessory.layoutAttribute != attribute { accessory.layoutAttribute = attribute }
+            // AppKit builds different titlebar containers for side and bottom
+            // accessories. Move through its removal/addition lifecycle rather
+            // than changing placement while the old container is still mounted
+            // (and potentially mirrored in the full-screen titlebar).
+            let changesPlacement = accessory.layoutAttribute != attribute
+            let index = window.titlebarAccessoryViewControllers.firstIndex(of: accessory)
+            if changesPlacement, let index {
+                window.removeTitlebarAccessoryViewController(at: index)
+            }
+            if changesPlacement { accessory.layoutAttribute = attribute }
             let minimumHeight = fullScreen ? height : 0
             if accessory.fullScreenMinHeight != minimumHeight { accessory.fullScreenMinHeight = minimumHeight }
             let reserved = fullScreen ? 0 : ThemeStyleResources.defaults.token("titlebar-controls-width")
             let size = NSSize(width: max(0, window.frame.width - reserved), height: height)
             if host?.frame.size != size { host?.setFrameSize(size) }
+            if changesPlacement, let index {
+                window.insertTitlebarAccessoryViewController(accessory, at: index)
+            }
         }
         func detach() {
+            configurationTask?.cancel()
+            configurationTask = nil
             layoutObservers.forEach { NotificationCenter.default.removeObserver($0) }
             layoutObservers.removeAll()
             if let window = attachedWindow {
