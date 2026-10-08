@@ -2,9 +2,33 @@
 /* Inflow native adaptation. Reference: https://github.com/typora/typora-default-themes/blob/master/themes/pixyll.css
    Uses installed font fallbacks; keeps the user's reading-width preference. */
 :root {
+  --md-canvas: #ffffff;
+  --md-text: #333333;
+  --md-heading: #333333;
+  --md-secondary: #737982;
+  --md-accent: #2f6fda;
+  --md-border: #dfe3e8;
+  --md-quote-bar: #c3cad5;
+  --md-surface: #f8f8f8;
+  --md-surface-strong: #eef1f5;
+  --md-table-stripe: #fafbfc;
+  --md-inline-code: #edf0f4;
+  --md-keyword: #b42318;
+  --md-type: #6941c6;
+  --md-string: #175cd3;
+  --md-number: #026aa2;
+  --md-comment: #697386;
+  --md-tag: #067647;
+  --md-warning: #9a6700;
+  --md-selection-background: #b6d6fc;
+  --md-selection-text: #172b4d;
+  --md-selection-overlay: #2979df55;
   --bg-color: #ffffff;
   --text-color: #333333;
   --primary-color: #463f5c;
+  --md-canvas: #ffffff;
+  --md-text: #333333;
+  --md-accent: #463f5c;
   --md-heading: #333333;
   --md-secondary: #555555;
   --md-border: #333333;
@@ -13,6 +37,12 @@
   --md-surface-strong: #ffffff;
   --md-table-stripe: #ffffff;
   --md-inline-code: #f8f8f8;
+  --md-link: #463f5c;
+  --md-code-text: #333333;
+  --md-code-border: #333333;
+  --md-heading-border: #333333;
+  --md-divider-color: #333333;
+  --md-heading-strong: #333333;
 }
 
 body {
@@ -24,8 +54,56 @@ body {
   color-scheme: light;
 }
 
+@media (prefers-color-scheme: dark) {
+  :root {
+    --md-canvas: #0f1115;
+    --md-text: #dfe4ea;
+    --md-heading: #f1f4f7;
+    --md-secondary: #9ba7b4;
+    --md-accent: #79a8ff;
+    --md-border: #303744;
+    --md-quote-bar: #4a5565;
+    --md-surface: #171b22;
+    --md-surface-strong: #202630;
+    --md-table-stripe: #141820;
+    --md-inline-code: #252b35;
+    --md-keyword: #ff8a80;
+    --md-type: #c4a7ff;
+    --md-string: #9cc2ff;
+    --md-number: #7cd4fd;
+    --md-comment: #9ba7b4;
+    --md-tag: #75e0a7;
+    --md-warning: #e0b450;
+    --md-selection-background: #285f98;
+    --md-selection-text: #ffffff;
+    --md-selection-overlay: #69aaff66;
+    --bg-color: #202026;
+    --text-color: #e9e5ef;
+    --primary-color: #c5b1eb;
+    --md-canvas: #202026;
+    --md-text: #e9e5ef;
+    --md-accent: #c5b1eb;
+    --md-heading: #e9e5ef;
+    --md-secondary: #b7afc4;
+    --md-border: #655d73;
+    --md-quote-bar: #655d73;
+    --md-surface: #28272f;
+    --md-surface-strong: #28272f;
+    --md-table-stripe: #2d2b35;
+    --md-inline-code: #34303e;
+    --md-link: #c5b1eb;
+    --md-code-text: #e9e5ef;
+    --md-code-border: #655d73;
+    --md-heading-border: #655d73;
+    --md-divider-color: #e9e5ef;
+    --md-heading-strong: #e9e5ef;
+  }
+  body {
+    color-scheme: dark;
+  }
+}
 a {
-  color: var(--primary-color);
+  color: var(--md-link);
 }
 
 blockquote {
@@ -101,15 +179,15 @@ a {
 
 blockquote {
   font-style: italic;
-  border-left: 5px solid #7a7a7a;
+  border-left: 5px solid var(--md-quote-bar);
   padding-left: 1.33em;
   margin: 1rem 0;
 }
 
 pre {
   font-size: 0.8em;
-  color: #7a7a7a;
-  border: 1px solid #7a7a7a;
+  color: var(--md-secondary);
+  border: 1px solid var(--md-quote-bar);
   border-radius: 0;
 }
 
@@ -122,11 +200,11 @@ table {
 
 th, td {
   border: 0;
-  border-top: 1px solid #333333;
+  border-top: 1px solid var(--md-border);
   padding: 12px;
   line-height: 1.2;
 }
 
 th {
-  border-bottom: 2px solid #333333;
+  border-bottom: 2px solid var(--md-border);
 }

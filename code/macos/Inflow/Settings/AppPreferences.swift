@@ -105,10 +105,11 @@ struct MarkdownRenderPalette: Equatable, Sendable {
 
     @MainActor
     static func resolved(for appearance: NSAppearance, theme: PreviewTheme = .standard) -> Self {
+        let theme = theme.resolved(for: appearance)
         let scheme = theme.styles.value("color-scheme")
         let isDark = scheme == "dark" || (scheme != "light" && appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
         var palette: Self = isDark ? .dark : .light
-        if theme == .highContrast {
+        if theme.rawValue == PreviewTheme.highContrast.rawValue {
             palette = ThemeStyleResources.styles(isDark ? "contrast-dark" : "contrast-light").applying(to: palette)
         }
         return theme.styles.applying(to: palette)

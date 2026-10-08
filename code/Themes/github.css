@@ -2,17 +2,47 @@
 /* Inflow native adaptation. Reference: https://github.com/typora/typora-default-themes/blob/master/themes/github.css
    Uses installed font fallbacks; keeps the user's reading-width preference. */
 :root {
+  --md-canvas: #ffffff;
+  --md-text: #333333;
+  --md-heading: #333333;
+  --md-secondary: #737982;
+  --md-accent: #2f6fda;
+  --md-border: #dfe3e8;
+  --md-quote-bar: #c3cad5;
+  --md-surface: #f8f8f8;
+  --md-surface-strong: #eef1f5;
+  --md-table-stripe: #fafbfc;
+  --md-inline-code: #edf0f4;
+  --md-keyword: #b42318;
+  --md-type: #6941c6;
+  --md-string: #175cd3;
+  --md-number: #026aa2;
+  --md-comment: #697386;
+  --md-tag: #067647;
+  --md-warning: #9a6700;
+  --md-selection-background: #b6d6fc;
+  --md-selection-text: #172b4d;
+  --md-selection-overlay: #2979df55;
   --bg-color: #ffffff;
   --text-color: #333333;
-  --primary-color: #4183c4;
+  --primary-color: #326fab;
+  --md-canvas: #ffffff;
+  --md-text: #333333;
+  --md-accent: #326fab;
   --md-heading: #333333;
-  --md-secondary: #777777;
+  --md-secondary: #737373;
   --md-border: #dfe2e5;
   --md-quote-bar: #dddddd;
   --md-surface: #f8f8f8;
   --md-surface-strong: #f8f8f8;
   --md-table-stripe: #f8f8f8;
   --md-inline-code: #f3f3f3;
+  --md-link: #326fab;
+  --md-code-text: #333333;
+  --md-code-border: #dfe2e5;
+  --md-heading-border: #dfe2e5;
+  --md-divider-color: #333333;
+  --md-heading-strong: #333333;
 }
 
 body {
@@ -24,8 +54,56 @@ body {
   color-scheme: light;
 }
 
+@media (prefers-color-scheme: dark) {
+  :root {
+    --md-canvas: #0f1115;
+    --md-text: #dfe4ea;
+    --md-heading: #f1f4f7;
+    --md-secondary: #9ba7b4;
+    --md-accent: #79a8ff;
+    --md-border: #303744;
+    --md-quote-bar: #4a5565;
+    --md-surface: #171b22;
+    --md-surface-strong: #202630;
+    --md-table-stripe: #141820;
+    --md-inline-code: #252b35;
+    --md-keyword: #ff8a80;
+    --md-type: #c4a7ff;
+    --md-string: #9cc2ff;
+    --md-number: #7cd4fd;
+    --md-comment: #9ba7b4;
+    --md-tag: #75e0a7;
+    --md-warning: #e0b450;
+    --md-selection-background: #285f98;
+    --md-selection-text: #ffffff;
+    --md-selection-overlay: #69aaff66;
+    --bg-color: #0d1117;
+    --text-color: #e6edf3;
+    --primary-color: #79b8ff;
+    --md-canvas: #0d1117;
+    --md-text: #e6edf3;
+    --md-accent: #79b8ff;
+    --md-heading: #e6edf3;
+    --md-secondary: #a4aeba;
+    --md-border: #3d4652;
+    --md-quote-bar: #3d4652;
+    --md-surface: #161b22;
+    --md-surface-strong: #161b22;
+    --md-table-stripe: #19212b;
+    --md-inline-code: #232c38;
+    --md-link: #79b8ff;
+    --md-code-text: #e6edf3;
+    --md-code-border: #3d4652;
+    --md-heading-border: #3d4652;
+    --md-divider-color: #e6edf3;
+    --md-heading-strong: #e6edf3;
+  }
+  body {
+    color-scheme: dark;
+  }
+}
 a {
-  color: var(--primary-color);
+  color: var(--md-link);
 }
 
 blockquote {
@@ -91,12 +169,12 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 h1, h2 {
-  border-bottom: 1px solid #eeeeee;
+  border-bottom: 1px solid var(--md-heading-border);
   padding-bottom: 0.25em;
 }
 
 h6 {
-  color: #777777;
+  color: var(--md-secondary);
 }
 
 p {
@@ -104,17 +182,17 @@ p {
 }
 
 blockquote {
-  border-left: 4px solid #dfe2e5;
+  border-left: 4px solid var(--md-border);
   padding-left: 1em;
 }
 
 pre {
-  border: 1px solid #e7e7e7;
+  border: 1px solid var(--md-code-border);
   border-radius: 3px;
 }
 
 th, td {
-  border: 1px solid #dfe2e5;
+  border: 1px solid var(--md-border);
   padding: 6px 13px;
 }
 

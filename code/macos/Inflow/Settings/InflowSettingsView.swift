@@ -74,6 +74,8 @@ struct InflowSettingsView: View {
                 .tag(InflowSettingsSection.preview)
 
         }
+        .preferredColorScheme(preferences.previewColorScheme == .system ? nil :
+            preferences.previewColorScheme == .dark ? .dark : .light)
         .padding(20)
         .frame(width: 680, height: selectedSection == .general ? 430 : 560)
         .toolbar {
@@ -282,11 +284,13 @@ struct InflowSettingsView: View {
             if let message = preferences.themeLoadMessage {
                 Text(message).font(.caption).foregroundStyle(.secondary)
             }
-            Picker("外观", selection: $preferences.previewColorScheme) {
+            Picker("浅色与深色模式", selection: $preferences.previewColorScheme) {
                 ForEach(PreviewColorScheme.allCases) { scheme in
                     Text(scheme.label).tag(scheme)
                 }
             }
+            Text("跟随系统会自动切换；选择浅色或深色可立即固定外观。所有内置主题均支持两种模式。")
+                .font(.caption).foregroundStyle(.secondary)
             Toggle("编辑器到预览滚动同步", isOn: $preferences.scrollSyncEnabled)
                 .help("手动滚动预览后会暂停跟随，直到再次滚动源码编辑器。")
             Toggle("点击预览标题定位源码", isOn: $preferences.headingNavigationEnabled)

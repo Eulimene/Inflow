@@ -7,6 +7,15 @@ $surface: #fcfcfc;
 /* Inflow native adaptation. Reference: https://github.com/typora/typora-default-themes/blob/master/themes/gothic.css
    Uses installed font fallbacks; keeps the user's reading-width preference. */
 @include theme.foundation(
+  $dark-palette: (
+    bg-color: #211f20,
+    text-color: #eae6e7,
+    primary-color: #ff9d9d,
+    md-secondary: #bcb1b4,
+    md-border: #5d4c51,
+    md-surface: #2b2628,
+    md-table-stripe: #30292c,
+  ),
   $palette: (
     bg-color: $surface,
     text-color: #111111,
@@ -34,9 +43,9 @@ h1 { line-height: 4rem; margin: 4rem 0 1.75rem; padding: 20px 30px; }
 h2 { line-height: 3rem; margin: 3rem 0 1.9375rem; padding: 0 30px; }
 h6 { font-weight: 700; }
 p { text-align: justify; margin: 0 0 1.25rem; }
-blockquote { border-left: 1px solid #808080; padding-left: 1.05556em; }
-pre { border: 1px solid #cccccc; border-radius: 0; }
+blockquote { border-left: 1px solid var(--md-quote-bar); padding-left: 1.05556em; }
+pre { border: 1px solid var(--md-code-border); border-radius: 0; }
 @include theme.row-table;
-th, td { border: 0; border-top: 1px solid $border; padding: 8px; line-height: 1.25rem; }
+th, td { border: 0; border-top: 1px solid var(--md-border); padding: 8px; line-height: 1.25rem; }
 h1:first-child { margin-top: 2.75rem; }
 h2:first-child { margin-top: 1.75rem; }

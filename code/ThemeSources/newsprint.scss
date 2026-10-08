@@ -7,6 +7,15 @@ $surface: #dadada;
 /* Inflow native adaptation. Reference: https://github.com/typora/typora-default-themes/blob/master/themes/newsprint.css
    Uses installed font fallbacks; keeps the user's reading-width preference. */
 @include theme.foundation(
+  $dark-palette: (
+    bg-color: #25231f,
+    text-color: #e7e0d1,
+    primary-color: #91bed6,
+    md-secondary: #bcb19d,
+    md-border: #605847,
+    md-surface: #343027,
+    md-table-stripe: #2c2923,
+  ),
   $palette: (
     bg-color: #f3f2ee,
     text-color: #1f0909,
@@ -29,9 +38,9 @@ $surface: #dadada;
 );
 
 // Only this theme’s differences belong below.
-h1 { font-weight: 400; border-bottom: 1px solid $border; padding-bottom: .8125em; }
+h1 { font-weight: 400; border-bottom: 1px solid var(--md-border); padding-bottom: .8125em; }
 h3 { font-weight: 400; }
 p { margin: 0 0 1.5rem; }
-blockquote { font-style: italic; border-left: 5px solid #bababa; margin-left: 2em; padding-left: 1em; }
-pre { font-size: .875em; border: 0 solid $surface; border-radius: 0; }
-th, td { border: 1px solid $border; padding: .25em .25em .25em .4em; }
+blockquote { font-style: italic; border-left: 5px solid var(--md-quote-bar); margin-left: 2em; padding-left: 1em; }
+pre { font-size: .875em; border: 0 solid var(--md-surface); border-radius: 0; }
+th, td { border: 1px solid var(--md-border); padding: .25em .25em .25em .4em; }

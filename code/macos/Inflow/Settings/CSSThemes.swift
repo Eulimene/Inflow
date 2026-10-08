@@ -17,22 +17,36 @@ struct PreviewTheme: RawRepresentable, Hashable, Identifiable, Sendable, CaseIte
     let rawValue: String
     let label: String
     let css: String
-    let styles: NativeCSSStyles
+    private let lightStyles: NativeCSSStyles
+    private let darkStyles: NativeCSSStyles
+    private var dark = false
+    var styles: NativeCSSStyles { dark ? darkStyles : lightStyles }
+    func resolved(dark: Bool) -> Self {
+        var result = self
+        result.dark = dark
+        return result
+    }
+    @MainActor
+    func resolved(for appearance: NSAppearance) -> Self {
+        resolved(dark: appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
+    }
     var id: String { rawValue }
     // RawRepresentable's default equality compares only the identifier. CSS
     // content must participate so edits invalidate the native render snapshot.
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.rawValue == rhs.rawValue && lhs.label == rhs.label && lhs.css == rhs.css
+        lhs.rawValue == rhs.rawValue && lhs.label == rhs.label && lhs.css == rhs.css && lhs.dark == rhs.dark
     }
     func hash(into hasher: inout Hasher) {
-        hasher.combine(rawValue); hasher.combine(label); hasher.combine(css)
+        hasher.combine(rawValue); hasher.combine(label); hasher.combine(css); hasher.combine(dark)
     }
 
     init(id: String, label: String, css: String) {
         rawValue = id
         self.label = label
         self.css = css
-        styles = NativeCSSStyles(css: ThemeStyleResources.defaultCSS + "\n" + css)
+        let source = ThemeStyleResources.defaultCSS + "\n" + css
+        lightStyles = NativeCSSStyles(css: source)
+        darkStyles = NativeCSSStyles(css: source, dark: true)
     }
 
     init?(rawValue: String) {
@@ -129,7 +143,7 @@ struct ThemeCatalog {
                 guard PreviewTheme(rawValue: id) != nil else { throw ThemeError.invalidFile }
                 let label = PreviewTheme.allCases.first(where: { $0.rawValue == id })?.label ?? PreviewTheme.displayName(id)
                 let theme = PreviewTheme(id: id, label: label, css: css)
-                guard theme.styles.isValid else { throw ThemeError.invalidFile }
+                guard theme.styles.isValid, theme.resolved(dark: true).styles.isValid else { throw ThemeError.invalidFile }
                 themes.append(theme)
                 if styles.hasUnsupportedRules { issues.append("\(file.lastPathComponent)：包含当前主题规范未支持的 CSS 规则") }
             } catch {
@@ -157,8 +171,8 @@ struct NativeCSSStyles: Hashable, Sendable {
     var hasUnsupportedRules: Bool { snapshot.hasUnsupportedRules }
     var diagnostics: [CoreThemeSnapshot.Diagnostic] { snapshot.diagnostics }
 
-    init(css: String) {
-        snapshot = (try? EditorEnginePresentation.compileTheme(css)) ?? .unavailable
+    init(css: String, dark: Bool = false) {
+        snapshot = (try? EditorEnginePresentation.compileTheme(css, dark: dark)) ?? .unavailable
         NativeThemeColorCache.shared.include(snapshot.colors)
     }
 

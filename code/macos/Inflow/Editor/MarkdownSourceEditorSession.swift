@@ -44,6 +44,7 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
     private var engineRenderedPlan: RenderedMarkdownPlan?
     private var renderedEditingRange: NSRange?
     private var renderedAppliedAppearance: SourceEditorAppearance?
+    private var requestedRenderedTheme = PreviewTheme.standard
     private var renderedTheme = PreviewTheme.standard
     private var renderedAppliedTheme: PreviewTheme?
     private var renderedLinkHandler: ((String) -> Void)?
@@ -207,6 +208,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         textView.retryRenderingHandler = { [weak self] in self?.retryRenderedResources() }
         textView.effectiveAppearanceDidChangeHandler = { [weak self] in
             guard let self, self.presentation == .rendered else { return }
+            self.renderedTheme = self.requestedRenderedTheme.resolved(for: self.textView.effectiveAppearance)
+            self.textView.renderedTheme = self.renderedTheme
             self.applyRenderedPresentation(source: self.textView.string, force: true)
             self.retryRenderedResources()
         }
@@ -630,6 +633,8 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
         theme: PreviewTheme = .standard
     ) {
         guard !textView.hasActiveComposition else { return }
+        requestedRenderedTheme = theme
+        let theme = theme.resolved(for: textView.effectiveAppearance)
         let changed = self.presentation != presentation
         let resourceContextChanged = renderedResourceContext != resourceContext
         let linkActivationChanged = renderedLinkActivation != linkActivation
@@ -2067,7 +2072,10 @@ final class MarkdownSourceEditorSession: NSObject, ObservableObject {
             else { return }
             self.syntaxApplicationIsComplete = true
             self.syntaxApplicationTask = nil
-            let plan = RenderedMarkdownEditor.plan(for: self.textView.string)
+            let source = self.textView.string
+            let plan = PerformanceTrace.measure("editor.syntax_resources", bytes: source.utf8.count) {
+                RenderedMarkdownEditor.plan(for: source)
+            }
             self.applyCodeMirrorTokens(plan, storage: self.textView.textStorage)
             self.scheduleJavaScriptResources(for: plan)
         }

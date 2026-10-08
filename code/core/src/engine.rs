@@ -68,6 +68,8 @@ pub struct CommandEnvelope {
 pub enum EditorCommand {
     CompileTheme {
         css: String,
+        #[serde(default)]
+        dark: bool,
     },
     InspectThemeColor {
         value: String,
@@ -445,9 +447,11 @@ impl EditorEngine {
 
     fn dispatch_command(&mut self, command: EditorCommand) -> Result<StatePatch, EngineError> {
         let patch = match command {
-            EditorCommand::CompileTheme { css } => {
+            EditorCommand::CompileTheme { css, dark } => {
                 self.presentation_effect(HostEffect::ThemeCompiled {
-                    theme: crate::theme::compile(&css).as_ref().clone(),
+                    theme: crate::theme::compile_for_scheme(&css, dark)
+                        .as_ref()
+                        .clone(),
                 })
             }
             EditorCommand::InspectThemeColor { value } => {
@@ -1203,6 +1207,7 @@ mod tests {
         for command in [
             EditorCommand::CompileTheme {
                 css: "body {color:#123;}".into(),
+                dark: false,
             },
             EditorCommand::LayoutTable {
                 measurements: crate::presentation_layout::TableMeasurements {

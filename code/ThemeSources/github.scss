@@ -2,15 +2,25 @@
 @use "shared/theme";
 
 $border: #dfe2e5;
-$secondary: #777777;
+$secondary: #737373;
 
 /* Inflow native adaptation. Reference: https://github.com/typora/typora-default-themes/blob/master/themes/github.css
    Uses installed font fallbacks; keeps the user's reading-width preference. */
 @include theme.foundation(
+  $dark-palette: (
+    bg-color: #0d1117,
+    text-color: #e6edf3,
+    primary-color: #79b8ff,
+    md-secondary: #a4aeba,
+    md-border: #3d4652,
+    md-surface: #161b22,
+    md-table-stripe: #19212b,
+    md-inline-code: #232c38,
+  ),
   $palette: (
     bg-color: #ffffff,
     text-color: #333333,
-    primary-color: #4183c4,
+    primary-color: #326fab,
     md-secondary: $secondary,
     md-border: $border,
     md-quote-bar: #dddddd,
@@ -30,12 +40,12 @@ $secondary: #777777;
 );
 
 // Only this theme’s differences belong below.
-h1, h2 { border-bottom: 1px solid #eeeeee; padding-bottom: .25em; }
-h6 { color: $secondary; }
+h1, h2 { border-bottom: 1px solid var(--md-heading-border); padding-bottom: .25em; }
+h6 { color: var(--md-secondary); }
 p { margin: 0 0 .8rem; }
-blockquote { border-left: 4px solid $border; padding-left: 1em; }
-pre { border: 1px solid #e7e7e7; border-radius: 3px; }
-th, td { border: 1px solid $border; padding: 6px 13px; }
+blockquote { border-left: 4px solid var(--md-border); padding-left: 1em; }
+pre { border: 1px solid var(--md-code-border); border-radius: 3px; }
+th, td { border: 1px solid var(--md-border); padding: 6px 13px; }
 h1 { line-height: 1.2; }
 h2 { line-height: 1.225; }
 h3 { line-height: 1.43; }

@@ -1,30 +1,43 @@
 @use "sass:list";
 @use "sass:map";
 @use "fonts";
+@use "palettes";
 
-// Emit only the common structure. Theme-specific rules follow this mixin so
-// the established cascade and each theme's visual identity remain intact.
-@mixin foundation($palette, $font, $size: 16px, $line-height: 1.6,
-                  $scheme: light, $code-scale: .9em, $link: var(--primary-color),
-                  $link-decoration: null) {
-  // Derive matching colors; a theme only overrides actual differences.
+// Shared structure and a pair of palettes; typography never changes with mode.
+@mixin colors($palette, $dark: false) {
   $palette: map.merge((
     bg-color: null, text-color: null, primary-color: null,
+    md-canvas: map.get($palette, bg-color), md-text: map.get($palette, text-color),
+    md-accent: map.get($palette, primary-color),
     md-heading: map.get($palette, text-color), md-secondary: null, md-border: null,
     md-quote-bar: map.get($palette, md-border), md-surface: null,
     md-surface-strong: map.get($palette, md-surface),
-    md-table-stripe: map.get($palette, md-surface), md-inline-code: map.get($palette, md-surface)
+    md-table-stripe: map.get($palette, md-surface), md-inline-code: map.get($palette, md-surface),
+    md-link: map.get($palette, primary-color), md-code-text: map.get($palette, text-color),
+    md-code-border: map.get($palette, md-border), md-heading-border: map.get($palette, md-border),
+    md-divider-color: map.get($palette, text-color), md-heading-strong: map.get($palette, text-color)
   ), $palette);
   :root {
+    @if $dark { @include palettes.emit(palettes.$dark); }
+    @else { @include palettes.emit(palettes.$light); }
     @each $name, $value in $palette {
       @if $value == null { @error "Missing theme color: #{$name}"; }
       --#{$name}: #{$value};
     }
   }
+}
+
+@mixin foundation($palette, $dark-palette, $font, $size: 16px, $line-height: 1.6,
+                  $code-scale: .9em, $link: var(--md-link), $link-decoration: null) {
+  @include colors($palette);
   body {
     background-color: var(--bg-color); color: var(--text-color);
     font-family: $font; font-size: $size; line-height: $line-height;
-    color-scheme: $scheme;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    @include colors($dark-palette, $dark: true);
+    body { color-scheme: dark; }
   }
   a { color: $link; text-decoration: $link-decoration; }
   blockquote { color: var(--md-secondary); }

@@ -208,12 +208,75 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertTrue(html.contains("default-src 'none'"))
     }
 
+    func testEveryThemeFollowsWindowAppearanceAndSupportsImmediateManualOverride() async throws {
+        let source = "# Heading 标题\n\n正文 `code` [Link](https://example.com)\n\n| A | B |\n| --- | --- |\n| 甲 | 乙 |"
+        let session = MarkdownSourceEditorSession(role: .renderedProjection)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = session.scrollView
+        defer { window.contentView = nil; window.close() }
+        session.textView.string = source
+        let selection = NSRange(location: 2, length: 7)
+        session.textView.setSelectedRange(selection)
+        for theme in PreviewTheme.allCases {
+            window.appearance = NSAppearance(named: .aqua)
+            session.textView.appearance = nil
+            let config = PreviewAppearanceConfiguration(contentWidth: 760, zoom: 1, colorScheme: .system,
+                theme: theme, increasedContrast: false, reduceMotion: true)
+            session.applySourceAppearance(config.nativeRenderedAppearance(spellingEnabled: false), force: true)
+            _ = await session.deriveContent(for: source, configuration: config)
+            session.setPresentation(.rendered, source: source, onLinkClick: nil, theme: theme)
+            let light = MarkdownRenderPalette.resolved(for: NSAppearance(named: .aqua)!, theme: theme)
+            let dark = MarkdownRenderPalette.resolved(for: NSAppearance(named: .darkAqua)!, theme: theme)
+            XCTAssertNotEqual(light.canvas, dark.canvas, theme.id)
+            for (windowMode, manualMode, expected) in [
+                (NSAppearance.Name.darkAqua, PreviewColorScheme.system, dark),
+                (.darkAqua, .light, light),
+                (.aqua, .dark, dark),
+                (.aqua, .system, light),
+            ] {
+                window.appearance = NSAppearance(named: windowMode)
+                session.textView.appearance = manualMode.nativeAppearance
+                try await waitForEditorCondition { session.textView.backgroundColor == expected.canvasColor }
+                let table = try XCTUnwrap(session.textView.renderedTable(atUTF16Location: (source as NSString).range(of: "| A").location))
+                XCTAssertEqual(table.backgroundColor(forRow: 0), expected.mutedSurfaceColor, theme.id)
+                XCTAssertEqual(session.textView.string, source)
+                XCTAssertEqual(session.textView.selectedRange(), selection)
+                XCTAssertFalse(session.textView.engineCanUndo)
+            }
+        }
+    }
+
+    func testHTMLAppearanceFreezesManualModeAndKeepsSystemMediaRules() {
+        for theme in PreviewTheme.allCases {
+            for mode in PreviewColorScheme.allCases {
+                let config = PreviewAppearanceConfiguration(contentWidth: 760, zoom: 1, colorScheme: mode,
+                    theme: theme, increasedContrast: false, reduceMotion: false)
+                let css = PreviewAppearanceCSS.styleElement(for: config)
+                let light = theme.resolved(dark: false).styles.value("--bg-color")!
+                let dark = theme.resolved(dark: true).styles.value("--bg-color")!
+                XCTAssertEqual(css.contains("prefers-color-scheme: dark"), mode == .system)
+                let start = css.range(of: ">")!.upperBound
+                let end = css.range(of: "</style>", options: .backwards)!.lowerBound
+                let sheet = String(css[start..<end])
+                for systemDark in [false, true] {
+                    let expected = mode == .dark || (mode == .system && systemDark) ? dark : light
+                    let styles = NativeCSSStyles(css: sheet, dark: systemDark)
+                    XCTAssertTrue(styles.isValid)
+                    XCTAssertEqual(styles.value("background-color"), expected, "\(theme.id): \(mode)")
+                }
+            }
+        }
+    }
+
     func testCSSThemesReachNativeFontsColorsHeadingsAndKeepMarkdownIntact() async throws {
         let source = "# Heading 标题\n\n正文排版 Typography：这是同一份 Markdown，用来比较字体、字号与行距。**重点内容**与 `inline code`。\n\n## Section 章节\n\n> 引用文字：安静地阅读，专注于内容。 A thoughtful quotation.\n\n### Detail 细节\n\n- 列表项目 List item\n- 第二个项目 Another item\n\n[阅读链接](https://example.com)\n\n| Element 元素 | Description 说明 |\n| --- | --- |\n| **甲 Bold** | 乙 |\n| 丙 | 丁 |\n\n###### Minor 六级\n\n```javascript\nconst theme = \"Inflow\";\nconst size = 42; // comment\n```"
         let editor = MarkdownSourceEditorSession(role: .renderedProjection)
         editor.scrollView.frame = NSRect(x: 0, y: 0, width: 920, height: 1100)
         editor.textView.frame = editor.scrollView.bounds
         editor.textView.string = source
+        editor.textView.appearance = NSAppearance(named: .aqua)
         for theme in PreviewTheme.allCases {
             let configuration = PreviewAppearanceConfiguration(contentWidth: 1200, zoom: 1, colorScheme: .system,
                 theme: theme, increasedContrast: false, reduceMotion: true)
@@ -289,7 +352,7 @@ final class AppPreferencesTests: XCTestCase {
                 let quote = (source as NSString).range(of: "引用文字").location
                 let style = try XCTUnwrap(storage.attribute(.paragraphStyle, at: quote, effectiveRange: nil) as? NSParagraphStyle)
                 XCTAssertEqual(style.headIndent, 60, accuracy: 0.1)
-                XCTAssertEqual(storage.attribute(.foregroundColor, at: link, effectiveRange: nil) as? NSColor, NativeCSSStyles.color("#e0e0e0"))
+                XCTAssertEqual(storage.attribute(.foregroundColor, at: link, effectiveRange: nil) as? NSColor, NativeCSSStyles.color(theme.styles.value("color", on: "a")!))
             }
             let listMarker = try XCTUnwrap(RenderedMarkdownEditor.plan(for: source).markers.first { $0.kind == .unorderedList })
             XCTAssertEqual(listMarker.displayText(styles: theme.styles), ["whitey", "night"].contains(theme.id) ? "▪" : listMarker.replacementText)

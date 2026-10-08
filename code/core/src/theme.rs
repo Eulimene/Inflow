@@ -65,6 +65,7 @@ pub struct Diagnostic {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ThemeSnapshot {
     pub profile_version: u32,
+    pub resolved_css: String,
     pub rules: Vec<Rule>,
     pub is_valid: bool,
     pub has_unsupported_rules: bool,
@@ -77,15 +78,21 @@ pub struct ThemeSnapshot {
 
 struct CacheEntry {
     css: String,
+    dark: bool,
     snapshot: Arc<ThemeSnapshot>,
     bytes: usize,
 }
 static CACHE: OnceLock<Mutex<VecDeque<CacheEntry>>> = OnceLock::new();
 
+#[cfg(test)]
 pub fn compile(css: &str) -> Arc<ThemeSnapshot> {
+    compile_for_scheme(css, false)
+}
+
+pub fn compile_for_scheme(css: &str, dark: bool) -> Arc<ThemeSnapshot> {
     let cache = CACHE.get_or_init(|| Mutex::new(VecDeque::new()));
     if let Ok(mut entries) = cache.lock()
-        && let Some(index) = entries.iter().position(|e| e.css == css)
+        && let Some(index) = entries.iter().position(|e| e.css == css && e.dark == dark)
     {
         let entry = entries.remove(index).expect("index exists");
         let result = Arc::clone(&entry.snapshot);
@@ -93,7 +100,7 @@ pub fn compile(css: &str) -> Arc<ThemeSnapshot> {
         return result;
     }
     // Compilation never holds the global cache lock.
-    let snapshot = Arc::new(compile_uncached(css));
+    let snapshot = Arc::new(compile_uncached(css, dark));
     let bytes = css.len() + serde_json::to_vec(snapshot.as_ref()).map_or(0, |v| v.len());
     if snapshot.is_valid
         && bytes <= CACHE_BYTES
@@ -104,6 +111,7 @@ pub fn compile(css: &str) -> Arc<ThemeSnapshot> {
         }
         entries.push_back(CacheEntry {
             css: css.into(),
+            dark,
             snapshot: Arc::clone(&snapshot),
             bytes,
         });
@@ -111,7 +119,7 @@ pub fn compile(css: &str) -> Arc<ThemeSnapshot> {
     snapshot
 }
 
-fn compile_uncached(css: &str) -> ThemeSnapshot {
+fn compile_uncached(css: &str, dark: bool) -> ThemeSnapshot {
     let mut sheet = Sheet::default();
     if css.len() > MAX_CSS_BYTES || !balanced(css) {
         sheet.diagnostics.push(Diagnostic {
@@ -121,7 +129,18 @@ fn compile_uncached(css: &str) -> ThemeSnapshot {
         });
         return snapshot(Vec::new(), false, sheet.diagnostics);
     }
-    let mut parser = Parser::new(css);
+    let Ok(resolved_css) = resolve_appearance(css, dark, 0) else {
+        return snapshot(
+            Vec::new(),
+            false,
+            vec![Diagnostic {
+                code: "invalid_appearance_rules".into(),
+                line: 1,
+                column: 1,
+            }],
+        );
+    };
+    let mut parser = Parser::new(&resolved_css);
     let mut rules = Vec::new();
     let mut parse_diagnostics = Vec::new();
     for result in StyleSheetParser::new(&mut parser, &mut sheet) {
@@ -149,7 +168,10 @@ fn compile_uncached(css: &str) -> ThemeSnapshot {
     }
     sheet.diagnostics.extend(parse_diagnostics);
     let valid = !rules.is_empty();
-    snapshot(rules, valid, sheet.diagnostics)
+    let mut result = snapshot(rules, valid, sheet.diagnostics);
+    drop(parser);
+    result.resolved_css = resolved_css;
+    result
 }
 
 fn snapshot(rules: Vec<Rule>, valid: bool, diagnostics: Vec<Diagnostic>) -> ThemeSnapshot {
@@ -243,6 +265,7 @@ fn snapshot(rules: Vec<Rule>, valid: bool, diagnostics: Vec<Diagnostic>) -> Them
     }
     ThemeSnapshot {
         profile_version: 0,
+        resolved_css: String::new(),
         rules,
         is_valid: valid,
         has_unsupported_rules: !diagnostics.is_empty(),
@@ -598,9 +621,175 @@ fn balanced(css: &str) -> bool {
     stack.is_empty() && quote.is_none()
 }
 
+// Resolve only the portable appearance media feature. Keep other CSS intact
+// for browser export; the native profile continues to diagnose unsupported rules.
+struct AppearanceSheet {
+    dark: bool,
+    depth: usize,
+}
+fn raw_css(p: &mut Parser<'_>) -> String {
+    let start = p.position();
+    while p.next_including_whitespace_and_comments().is_ok() {}
+    p.slice_from(start).to_owned()
+}
+fn resolve_appearance(css: &str, dark: bool, depth: usize) -> Result<String, ()> {
+    if depth > 16 {
+        return Err(());
+    }
+    let mut parser = Parser::new(css);
+    let mut sheet = AppearanceSheet { dark, depth };
+    let mut output = String::new();
+    for result in StyleSheetParser::new(&mut parser, &mut sheet) {
+        output.push_str(&result.map_err(|_| ())?);
+        output.push('\n');
+    }
+    Ok(output)
+}
+impl<'i> QualifiedRuleParser<'i> for AppearanceSheet {
+    type Prelude = String;
+    type QualifiedRule = String;
+    type Error = ();
+    fn parse_prelude(&mut self, p: &mut Parser<'i>) -> Result<String, ParseError<()>> {
+        Ok(raw_css(p))
+    }
+    fn parse_block(
+        &mut self,
+        prelude: String,
+        _: &ParserState,
+        p: &mut Parser<'i>,
+    ) -> Result<String, ParseError<()>> {
+        Ok(format!("{prelude}{{{}}}", raw_css(p)))
+    }
+}
+impl<'i> AtRuleParser<'i> for AppearanceSheet {
+    type Prelude = (String, String);
+    type AtRule = String;
+    type Error = ();
+    fn parse_prelude(
+        &mut self,
+        name: CowRcStr<'i>,
+        p: &mut Parser<'i>,
+    ) -> Result<Self::Prelude, ParseError<()>> {
+        Ok((name.to_string(), raw_css(p)))
+    }
+    fn rule_without_block(
+        &mut self,
+        (name, prelude): Self::Prelude,
+        _: &ParserState,
+    ) -> Result<String, ()> {
+        Ok(format!("@{name} {prelude};"))
+    }
+    fn parse_block(
+        &mut self,
+        (name, prelude): Self::Prelude,
+        _: &ParserState,
+        p: &mut Parser<'i>,
+    ) -> Result<String, ParseError<()>> {
+        let body = raw_css(p);
+        let query: String = prelude
+            .chars()
+            .filter(|c| !c.is_ascii_whitespace())
+            .collect::<String>()
+            .to_ascii_lowercase();
+        let appearance = match query.as_str() {
+            "(prefers-color-scheme:dark)" => Some(true),
+            "(prefers-color-scheme:light)" => Some(false),
+            _ => None,
+        };
+        if name.eq_ignore_ascii_case("media")
+            && let Some(dark) = appearance
+        {
+            if dark != self.dark {
+                return Ok(String::new());
+            }
+            return resolve_appearance(&body, self.dark, self.depth + 1)
+                .map_err(|()| ParseError::custom(()));
+        }
+        Ok(format!("@{name} {prelude}{{{body}}}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn appearance_media_is_cached_separately_and_preserves_cascade_and_browser_css() {
+        let css = r":root {--ink:#123456} body {color:var(--ink)}
+          @media (prefers-color-scheme: dark) { :root {--ink:#fedcba} }
+          @media (prefers-color-scheme: light) { body {background-color:#fff} }
+          .browser-only > span { padding:2px }
+          @media print { body {color:black} }";
+        let light = compile(css);
+        let dark = compile_for_scheme(css, true);
+        assert_eq!(light.values["body"]["color"], "#123456");
+        assert_eq!(dark.values["body"]["color"], "#fedcba");
+        assert!(!dark.values["body"].contains_key("background-color"));
+        assert!(dark.resolved_css.contains(".browser-only > span"));
+        assert!(dark.resolved_css.contains("print"));
+        assert!(!dark.resolved_css.contains("prefers-color-scheme"));
+        assert!(Arc::ptr_eq(&dark, &compile_for_scheme(css, true)));
+        assert!(!Arc::ptr_eq(&dark, &light));
+        let nested = format!(
+            "{}body {{color:red}}{}",
+            "@media (prefers-color-scheme:dark){".repeat(18),
+            "}".repeat(18)
+        );
+        assert!(!compile_for_scheme(&nested, true).is_valid);
+    }
+
+    #[test]
+    fn all_builtin_appearances_have_readable_text_and_identical_typography() {
+        fn luminance(value: &str) -> f64 {
+            let hex = theme_values::color(value).unwrap();
+            let rgb = u32::from_str_radix(&hex[1..7], 16).unwrap();
+            [16, 8, 0]
+                .into_iter()
+                .zip([0.2126, 0.7152, 0.0722])
+                .map(|(shift, weight)| {
+                    let c = f64::from((rgb >> shift) & 255) / 255.0;
+                    weight
+                        * if c <= 0.04045 {
+                            c / 12.92
+                        } else {
+                            ((c + 0.055) / 1.055).powf(2.4)
+                        }
+                })
+                .sum()
+        }
+        for css in [
+            include_str!("../../Themes/github.css"),
+            include_str!("../../Themes/whitey.css"),
+            include_str!("../../Themes/night.css"),
+            include_str!("../../Themes/newsprint.css"),
+            include_str!("../../Themes/pixyll.css"),
+            include_str!("../../Themes/gothic.css"),
+        ] {
+            let light = compile(css);
+            let dark = compile_for_scheme(css, true);
+            assert_ne!(
+                light.values["body"]["background-color"],
+                dark.values["body"]["background-color"]
+            );
+            for theme in [&light, &dark] {
+                assert!(
+                    theme.is_valid && !theme.has_unsupported_rules,
+                    "{:?}",
+                    theme.diagnostics
+                );
+                let background = luminance(&theme.values["body"]["background-color"]);
+                for element in ["body", "a", "blockquote"] {
+                    let text = luminance(&theme.values[element]["color"]);
+                    let contrast = (text.max(background) + 0.05) / (text.min(background) + 0.05);
+                    assert!(contrast >= 4.5, "{element}: contrast={contrast}");
+                }
+            }
+            assert_eq!(light.fonts, dark.fonts);
+            for element in ["body", "h1", "h2", "pre", "code", "th", "td"] {
+                assert_eq!(light.lengths.get(element), dark.lengths.get(element));
+            }
+        }
+    }
+
     #[test]
     fn shared_theme_corpus_compiles_on_every_target() {
         let base = include_str!("../../Themes/Base/default.css");

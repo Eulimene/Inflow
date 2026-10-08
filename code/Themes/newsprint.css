@@ -2,9 +2,33 @@
 /* Inflow native adaptation. Reference: https://github.com/typora/typora-default-themes/blob/master/themes/newsprint.css
    Uses installed font fallbacks; keeps the user's reading-width preference. */
 :root {
+  --md-canvas: #ffffff;
+  --md-text: #333333;
+  --md-heading: #333333;
+  --md-secondary: #737982;
+  --md-accent: #2f6fda;
+  --md-border: #dfe3e8;
+  --md-quote-bar: #c3cad5;
+  --md-surface: #f8f8f8;
+  --md-surface-strong: #eef1f5;
+  --md-table-stripe: #fafbfc;
+  --md-inline-code: #edf0f4;
+  --md-keyword: #b42318;
+  --md-type: #6941c6;
+  --md-string: #175cd3;
+  --md-number: #026aa2;
+  --md-comment: #697386;
+  --md-tag: #067647;
+  --md-warning: #9a6700;
+  --md-selection-background: #b6d6fc;
+  --md-selection-text: #172b4d;
+  --md-selection-overlay: #2979df55;
   --bg-color: #f3f2ee;
   --text-color: #1f0909;
   --primary-color: #065588;
+  --md-canvas: #f3f2ee;
+  --md-text: #1f0909;
+  --md-accent: #065588;
   --md-heading: #1f0909;
   --md-secondary: #656565;
   --md-border: #c5c5c5;
@@ -13,6 +37,12 @@
   --md-surface-strong: #dadada;
   --md-table-stripe: #e8e7e7;
   --md-inline-code: #dadada;
+  --md-link: #065588;
+  --md-code-text: #1f0909;
+  --md-code-border: #c5c5c5;
+  --md-heading-border: #c5c5c5;
+  --md-divider-color: #1f0909;
+  --md-heading-strong: #1f0909;
 }
 
 body {
@@ -24,8 +54,56 @@ body {
   color-scheme: light;
 }
 
+@media (prefers-color-scheme: dark) {
+  :root {
+    --md-canvas: #0f1115;
+    --md-text: #dfe4ea;
+    --md-heading: #f1f4f7;
+    --md-secondary: #9ba7b4;
+    --md-accent: #79a8ff;
+    --md-border: #303744;
+    --md-quote-bar: #4a5565;
+    --md-surface: #171b22;
+    --md-surface-strong: #202630;
+    --md-table-stripe: #141820;
+    --md-inline-code: #252b35;
+    --md-keyword: #ff8a80;
+    --md-type: #c4a7ff;
+    --md-string: #9cc2ff;
+    --md-number: #7cd4fd;
+    --md-comment: #9ba7b4;
+    --md-tag: #75e0a7;
+    --md-warning: #e0b450;
+    --md-selection-background: #285f98;
+    --md-selection-text: #ffffff;
+    --md-selection-overlay: #69aaff66;
+    --bg-color: #25231f;
+    --text-color: #e7e0d1;
+    --primary-color: #91bed6;
+    --md-canvas: #25231f;
+    --md-text: #e7e0d1;
+    --md-accent: #91bed6;
+    --md-heading: #e7e0d1;
+    --md-secondary: #bcb19d;
+    --md-border: #605847;
+    --md-quote-bar: #605847;
+    --md-surface: #343027;
+    --md-surface-strong: #343027;
+    --md-table-stripe: #2c2923;
+    --md-inline-code: #343027;
+    --md-link: #91bed6;
+    --md-code-text: #e7e0d1;
+    --md-code-border: #605847;
+    --md-heading-border: #605847;
+    --md-divider-color: #e7e0d1;
+    --md-heading-strong: #e7e0d1;
+  }
+  body {
+    color-scheme: dark;
+  }
+}
 a {
-  color: var(--primary-color);
+  color: var(--md-link);
 }
 
 blockquote {
@@ -92,7 +170,7 @@ h1, h2, h3, h4, h5, h6 {
 
 h1 {
   font-weight: 400;
-  border-bottom: 1px solid #c5c5c5;
+  border-bottom: 1px solid var(--md-border);
   padding-bottom: 0.8125em;
 }
 
@@ -106,18 +184,18 @@ p {
 
 blockquote {
   font-style: italic;
-  border-left: 5px solid #bababa;
+  border-left: 5px solid var(--md-quote-bar);
   margin-left: 2em;
   padding-left: 1em;
 }
 
 pre {
   font-size: 0.875em;
-  border: 0 solid #dadada;
+  border: 0 solid var(--md-surface);
   border-radius: 0;
 }
 
 th, td {
-  border: 1px solid #c5c5c5;
+  border: 1px solid var(--md-border);
   padding: 0.25em 0.25em 0.25em 0.4em;
 }

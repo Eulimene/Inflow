@@ -4,6 +4,7 @@
   "status": "migration",
   "compiler": "rust",
   "requiredCapability": "portable_presentation",
+  "appearanceMediaFeatures": ["(prefers-color-scheme: light)", "(prefers-color-scheme: dark)"],
   "cssUnits": ["px", "pt", "em", "rem", "%"],
   "pointToLogicalPixel": "96/72",
   "unsupportedRulePolicy": "diagnose-and-skip",

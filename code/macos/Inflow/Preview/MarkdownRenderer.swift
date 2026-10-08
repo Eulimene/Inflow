@@ -175,20 +175,24 @@ enum PreviewAppearanceCSS {
         let width = decimal(configuration.contentWidth)
         let fontSize = decimal(configuration.fontSize * configuration.zoom)
         let theme = configuration.theme
-        let scheme = theme.styles.value("color-scheme")
-        let dark = scheme == "dark" || (scheme != "light" && configuration.colorScheme == .dark)
-        let palette = theme.styles.applying(to: dark ? MarkdownRenderPalette.dark : .light)
-        let themeRules = theme == .highContrast ? highContrastRules
-            : ":root { \(palette.cssVariables) }\n" + theme.safeStyleContent
-
-        let colorRules: String = switch configuration.colorScheme {
-        case .system:
-            ":root { color-scheme: light dark; }"
-        case .light:
-            ":root { color-scheme: light; \(MarkdownRenderPalette.light.cssVariables) }"
-        case .dark:
-            ":root { color-scheme: dark; \(MarkdownRenderPalette.dark.cssVariables) }"
+        func rules(dark: Bool) -> String {
+            let styles = theme.resolved(dark: dark).styles
+            let palette = styles.applying(to: dark ? MarkdownRenderPalette.dark : .light)
+            let css = styles.snapshot.resolvedCSS.replacingOccurrences(of: "<", with: "\\3C ")
+            return ":root { color-scheme: \(dark ? "dark" : "light"); \(palette.cssVariables) }\n" + css
         }
+        let themeRules: String
+        if theme.rawValue == PreviewTheme.highContrast.rawValue {
+            themeRules = highContrastRules
+        } else {
+            switch configuration.colorScheme {
+            case .system:
+                themeRules = rules(dark: false) + "\n@media (prefers-color-scheme: dark) {\n" + rules(dark: true) + "\n}"
+            case .light: themeRules = rules(dark: false)
+            case .dark: themeRules = rules(dark: true)
+            }
+        }
+        let colorRules = ":root { color-scheme: \(configuration.colorScheme == .system ? "light dark" : configuration.colorScheme.rawValue); }"
 
         let contrastRules = configuration.increasedContrast ? highContrastRules : ""
         let motionRules = configuration.reduceMotion

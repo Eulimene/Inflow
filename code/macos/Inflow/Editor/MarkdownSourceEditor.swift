@@ -103,9 +103,7 @@ struct MarkdownSourceEditor: NSViewRepresentable {
                     max(240, parent.renderedTheme.styles.length("max-width") ?? CGFloat(parent.renderedContentWidth)))
             }
             textView.appearance = parent.presentation == .rendered
-                ? (parent.renderedColorScheme.nativeAppearance
-                    ?? (parent.renderedTheme.styles.value("color-scheme") == "dark" ? NSAppearance(named: .darkAqua)
-                        : parent.renderedTheme.styles.value("color-scheme") == "light" ? NSAppearance(named: .aqua) : nil))
+                ? parent.renderedColorScheme.nativeAppearance
                 : nil
             textView.pasteImageHandler = parent.onPasteImage
             textView.dropImageHandler = parent.onDropImage

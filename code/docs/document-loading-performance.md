@@ -47,6 +47,7 @@ Instruments 的 Points of Interest 可观察 `DocumentPipeline` signpost。日�
 | `bridge.dispatch` | 单次请求的编码、Rust 调用、结果复制与解码 |
 | `bridge.encode` / `rust.dispatch` / `bridge.copy` / `bridge.decode` | JSON 编码、FFI 调用、返回数据复制、Swift DTO 解码 |
 | `bridge.validate` | 返回数据与源文档及 UTF-16 范围的校验 |
+| `editor.syntax_resources` | 源码高亮批次完成后的离线资源计划准备；同步阶段，用于区分属性应用与资源派生成本 |
 | `editor.presentation` | 同步构建/应用原生呈现属性和布局 |
 | `editor.attribute_patch` / `editor.overlay_layout` | 属性差异提交与覆盖层布局；属于 presentation 内部阶段 |
 | `resource.queue.<kind>` | 未直接命中缓存的资源请求，从入队到返回，包含排队与渲染时间 |

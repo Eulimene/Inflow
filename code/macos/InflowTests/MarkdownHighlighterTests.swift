@@ -182,20 +182,17 @@ final class MarkdownHighlighterTests: XCTestCase {
 
         XCTAssertLessThan(elapsed, 0.1)
         XCTAssertTrue(UTF8Text.isExactlyEqual(session.textView.string, source))
-        var didApplyLastCode = false
-        while ProcessInfo.processInfo.systemUptime - started < 1.5 {
-            let color = session.textView.textStorage?.attribute(
-                .foregroundColor,
-                at: lastCode.utf16Range.location,
-                effectiveRange: nil
-            ) as? NSColor
-            if color == .systemOrange {
-                didApplyLastCode = true
-                break
-            }
+        func lastCodeIsApplied() -> Bool {
+            session.textView.textStorage?.attribute(
+                .foregroundColor, at: lastCode.utf16Range.location, effectiveRange: nil
+            ) as? NSColor == .systemOrange
+        }
+        while !lastCodeIsApplied(), ProcessInfo.processInfo.systemUptime - started < 1.5 {
             try await Task.sleep(for: .milliseconds(1))
         }
-        XCTAssertTrue(didApplyLastCode)
+        // A main-actor continuation may resume after the deadline even though
+        // the last batch already finished. Inspect the actual final state.
+        XCTAssertTrue(lastCodeIsApplied())
         session.applySyntaxHighlighting([], source: source, enabled: false)
     }
 

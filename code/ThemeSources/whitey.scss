@@ -7,10 +7,20 @@ $bg-color: #fefefe;
 /* Inflow native adaptation. Reference: https://github.com/typora/typora-default-themes/blob/master/themes/whitey.css
    Uses installed font fallbacks; keeps the user's reading-width preference. */
 @include theme.foundation(
+  $dark-palette: (
+    bg-color: #242321,
+    text-color: #e8e4dc,
+    primary-color: #8fc6e8,
+    md-secondary: #bcb6ac,
+    md-border: #58534b,
+    md-surface: #2d2b28,
+    md-surface-strong: #35322e,
+    md-table-stripe: #292725,
+  ),
   $palette: (
     bg-color: $bg-color,
     text-color: #333333,
-    primary-color: #2484c1,
+    primary-color: #1b6b9e,
     md-secondary: #666666,
     md-border: $border,
     md-surface: #ffffff,
@@ -31,13 +41,13 @@ $bg-color: #fefefe;
 
 // Only this theme’s differences belong below.
 h1, h2, h3 { text-align: center; }
-h2 { --md-divider-height: 1px; --md-divider-color: #2f2f2f; --md-divider-width: 100px; padding-bottom: .4em; }
+h2 { --md-divider-height: 1px; --md-divider-color: var(--md-heading); --md-divider-width: 100px; padding-bottom: .4em; }
 h3 { font-style: italic; }
 p { text-align: justify; margin: 0 0 1rem; }
-blockquote { border-left: 1px solid $border; margin-left: 1em; padding-left: 1em; }
-pre { border: 1px solid $border; border-radius: 0; }
+blockquote { border-left: 1px solid var(--md-border); margin-left: 1em; padding-left: 1em; }
+pre { border: 1px solid var(--md-border); border-radius: 0; }
 @include theme.row-table;
-th, td { border: 0; border-top: 1px solid $border; padding: 8px; line-height: 1.333333rem; }
+th, td { border: 0; border-top: 1px solid var(--md-border); padding: 8px; line-height: 1.333333rem; }
 h1 { margin-top: 1.6em; }
 h2 { margin-top: 2em; }
 h3 { margin-top: 3em; }

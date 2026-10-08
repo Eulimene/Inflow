@@ -28,6 +28,7 @@ struct CoreThemeSnapshot: Decodable, Hashable, Sendable {
         let line: Int
         let column: Int
     }
+    let resolvedCSS: String
     let profileVersion: Int
     let rules: [Rule]
     let isValid: Bool
@@ -38,10 +39,10 @@ struct CoreThemeSnapshot: Decodable, Hashable, Sendable {
     let colors: [String: String]
     let fonts: [String: [String]]
     enum CodingKeys: String, CodingKey {
-        case profileVersion = "profile_version", rules, isValid = "is_valid"
+        case resolvedCSS = "resolved_css", profileVersion = "profile_version", rules, isValid = "is_valid"
         case hasUnsupportedRules = "has_unsupported_rules", diagnostics, values, lengths, colors, fonts
     }
-    static let unavailable = Self(profileVersion: 0, rules: [], isValid: false,
+    static let unavailable = Self(resolvedCSS: "", profileVersion: 0, rules: [], isValid: false,
         hasUnsupportedRules: false, diagnostics: [], values: [:], lengths: [:], colors: [:], fonts: [:])
 }
 

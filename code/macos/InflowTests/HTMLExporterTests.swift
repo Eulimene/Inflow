@@ -430,8 +430,8 @@ final class HTMLExporterTests: XCTestCase {
     @MainActor
     func testPDFPaintsSelectedThemeAcrossEveryPageCorner() async throws {
         let cases: [(PreviewTheme, PreviewColorScheme, [CGFloat])] = [
-            (.standard, .dark, [1, 1, 1]),
-            (try XCTUnwrap(PreviewTheme(rawValue: "night")), .light, [54 / 255, 59 / 255, 64 / 255]),
+            (.standard, .dark, [13 / 255, 17 / 255, 23 / 255]),
+            (try XCTUnwrap(PreviewTheme(rawValue: "night")), .light, [243 / 255, 245 / 255, 247 / 255]),
             (PreviewTheme(id: "custom-paper", label: "Custom", css: "body { background-color: #184c72; }"),
              .dark, [24 / 255, 76 / 255, 114 / 255]),
         ]

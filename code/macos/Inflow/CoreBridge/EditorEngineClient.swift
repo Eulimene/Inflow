@@ -50,6 +50,7 @@ enum EditorEnginePresentation {
     private struct Command: Encodable {
         let type: String
         var css: String? = nil
+        var dark: Bool? = nil
         var value: String? = nil
         var measurements: CoreTableMeasurements? = nil
     }
@@ -65,9 +66,9 @@ enum EditorEnginePresentation {
             return effect
         }
     }
-    static func compileTheme(_ css: String) throws -> CoreThemeSnapshot {
+    static func compileTheme(_ css: String, dark: Bool = false) throws -> CoreThemeSnapshot {
         try PerformanceTrace.measure("theme.compile", bytes: css.utf8.count) {
-            guard let theme = try perform(Command(type: "compile_theme", css: css)).theme else {
+            guard let theme = try perform(Command(type: "compile_theme", css: css, dark: dark)).theme else {
                 throw EditorEngineBridgeError.invalidResponse
             }
             return theme
